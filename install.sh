@@ -6,6 +6,9 @@
 #   bash install.sh --intel      在 Apple Silicon 上模擬 Intel 環境（開發測試用，
 #                                 真的 Intel Mac 不需要加這個參數）
 #   bash install.sh --no-skill   不建立 Claude Code 的 skill 捷徑
+#   bash install.sh --check-only 只檢查電腦裡已經有什麼，不安裝任何東西
+#   bash install.sh --force-download
+#                                忽略偵測結果，該下載的照樣重新下載
 #
 # 可以重複執行：已經做過的步驟會自動跳過，不會重複下載、不會刪掉已有的設定。
 set -euo pipefail
@@ -15,16 +18,46 @@ cd "$SCRIPT_DIR"
 
 INTEL_MODE=0
 NO_SKILL=0
+CHECK_ONLY=0
+FORCE_DOWNLOAD=0
 for arg in "$@"; do
   case "$arg" in
     --intel) INTEL_MODE=1 ;;
     --no-skill) NO_SKILL=1 ;;
+    --check-only) CHECK_ONLY=1 ;;
+    --force-download) FORCE_DOWNLOAD=1 ;;
     *)
-      echo "不認識的參數：$arg（可用參數：--intel、--no-skill）"
+      echo "不認識的參數：$arg（可用參數：--intel、--no-skill、--check-only、--force-download）"
       exit 1
       ;;
   esac
 done
+
+# ── [0] 先檢查電腦裡已經有什麼 ───────────────────────────────
+# 別人可能已經照其他說明裝過 CosyVoice（原始碼＋模型約 7GB）。先偵測一次，
+# 已經有的就沿用、不重抓；偵測邏輯在 bookclub/detect.py，doctor 也用同一份。
+SYS_PYTHON="$(command -v python3 || true)"
+if [ -z "$SYS_PYTHON" ]; then
+  echo "❌ 找不到 python3，請先安裝 Python 3 再跑這支腳本。"
+  exit 1
+fi
+
+echo ""
+"$SYS_PYTHON" bookclub/detect.py || true
+
+if [ "$CHECK_ONLY" = "1" ]; then
+  echo ""
+  echo "（--check-only：只檢查、沒有安裝任何東西。要正式安裝請去掉這個參數。）"
+  exit 0
+fi
+
+# 外部已有的 CosyVoice 原始碼／模型：記下路徑，後面的步驟會改成建立 symlink 沿用
+EXTERNAL_COSYVOICE_SRC=""
+EXTERNAL_COSYVOICE_MODEL=""
+if [ "$FORCE_DOWNLOAD" = "0" ]; then
+  EXTERNAL_COSYVOICE_SRC="$("$SYS_PYTHON" bookclub/detect.py --external-cosyvoice-source 2>/dev/null || true)"
+  EXTERNAL_COSYVOICE_MODEL="$("$SYS_PYTHON" bookclub/detect.py --external-cosyvoice-model 2>/dev/null || true)"
+fi
 
 TOTAL_STEPS=11
 STEP=0
@@ -162,9 +195,18 @@ step "取得聲音生成引擎原始碼（CosyVoice）"
 COSYVOICE_DIR="third_party/CosyVoice"
 COSYVOICE_SHA="074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc"
 
-if [ -d "$COSYVOICE_DIR/.git" ]; then
+if [ ! -e "$COSYVOICE_DIR" ] && [ -n "$EXTERNAL_COSYVOICE_SRC" ] && [ -d "$EXTERNAL_COSYVOICE_SRC" ]; then
+  # 電腦裡本來就有一份 CosyVoice：建 symlink 沿用，不重新 clone（原本的位置不動）
+  EXT_SHA="$(git -C "$EXTERNAL_COSYVOICE_SRC" rev-parse --short HEAD 2>/dev/null || echo '不是 git 倉庫')"
+  mkdir -p "$(dirname "$COSYVOICE_DIR")"
+  ln -s "$EXTERNAL_COSYVOICE_SRC" "$COSYVOICE_DIR"
+  echo "沿用你電腦裡原本的 CosyVoice：$EXTERNAL_COSYVOICE_SRC（commit $EXT_SHA）"
+  echo "（我們測過的版本是 ${COSYVOICE_SHA:0:7}；版本不同時先跑跑看，有問題再用 --force-download 重裝）"
+elif [ -d "$COSYVOICE_DIR/.git" ] || [ -L "$COSYVOICE_DIR" ]; then
   CURRENT_SHA="$(git -C "$COSYVOICE_DIR" rev-parse HEAD 2>/dev/null || echo '')"
-  if [ "$CURRENT_SHA" = "$COSYVOICE_SHA" ]; then
+  if [ -L "$COSYVOICE_DIR" ]; then
+    echo "CosyVoice 原始碼已經是 symlink，指向 $(readlink "$COSYVOICE_DIR")，跳過"
+  elif [ "$CURRENT_SHA" = "$COSYVOICE_SHA" ]; then
     echo "CosyVoice 原始碼已存在且版本正確，跳過"
   else
     echo "❌ $COSYVOICE_DIR 已存在，但版本不是預期的 $COSYVOICE_SHA（目前是 $CURRENT_SHA）。"
@@ -183,6 +225,18 @@ fi
 
 # ── [8/11] 下載模型 ───────────────────────────────────────────
 step "下載／確認 AI 模型（已下載的不會重抓）"
+
+MODEL_DIR_DEFAULT="$HOME/.cache/bookclub/Fun-CosyVoice3-0.5B"
+if [ ! -e "$MODEL_DIR_DEFAULT" ] && [ -n "$EXTERNAL_COSYVOICE_MODEL" ] && [ -d "$EXTERNAL_COSYVOICE_MODEL" ]; then
+  # 沿用電腦裡原本的模型權重前，先驗證關鍵檔案齊全、大小合理
+  if "$SYS_PYTHON" bookclub/detect.py --verify-cosyvoice-model "$EXTERNAL_COSYVOICE_MODEL"; then
+    mkdir -p "$(dirname "$MODEL_DIR_DEFAULT")"
+    ln -s "$EXTERNAL_COSYVOICE_MODEL" "$MODEL_DIR_DEFAULT"
+    echo "沿用你電腦裡原本的 CosyVoice3 模型：$EXTERNAL_COSYVOICE_MODEL（約 5GB，省下重抓）"
+  else
+    echo "找到的模型資料夾檢查沒過（見上一行原因），改成自己下載"
+  fi
+fi
 
 "$VENV_DIR/bin/bookclub" models download
 

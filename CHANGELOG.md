@@ -2,6 +2,14 @@
 
 版本號用 `主.次.修`，主版本 0 代表還在開發、介面與檔案格式可能改變。
 
+## 0.1.1（2026-09-24）
+
+- **安裝前先檢查電腦裡已經有什麼**：新增 `bookclub/detect.py`，偵測系統工具、CosyVoice 原始碼與模型權重、pyannote 模型、Silero VAD、現成的 Python 環境。`install.sh` 與 `bookclub doctor` 共用同一份邏輯
+- `install.sh` 新增 `--check-only`（只檢查不安裝）與 `--force-download`（忽略偵測、重新下載）
+- **已經有的沿用、不重抓**：電腦裡別處已有的 CosyVoice 原始碼與模型權重，改成建立 symlink 沿用（原位置不動）。沿用模型前會驗證關鍵檔案齊全與大小合理，驗不過才自己下載
+- `bookclub doctor` 最後會印出「現在用的原始碼與模型在哪裡」，分得出是倉庫自己的還是沿用外部
+- 新增 `tests/test_detect.py`（10 個測試）
+
 ## 0.1.0（2026-09-24）
 
 第一個給合作夥伴測試的版本。

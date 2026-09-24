@@ -1,6 +1,6 @@
 ---
 name: bookclub-edit
-description: 啟動讀書會影片隱私處理工具的網頁。觸發時機：使用者說「剪讀書會」「處理第 N 週影片」「讀書會影片隱私處理」，或給一個影片路徑說要處理。這是對話入口（thin skill），實際流程在本機網頁上進行。目前是 Phase 0（骨架與環境），還沒有網頁可用，先引導安裝與環境健檢。
+description: 啟動讀書會影片隱私處理工具的網頁。觸發時機：使用者說「剪讀書會」「處理第 N 週影片」「讀書會影片隱私處理」，或給一個影片路徑說要處理。這是對話入口（thin skill），實際流程在本機網頁上進行。0.1.1 版：轉文字與分析、挑老師參考音、名字覆核可用；聲音生成與影片輸出還沒做。
 ---
 
 # bookclub-edit Skill
@@ -13,11 +13,13 @@ description: 啟動讀書會影片隱私處理工具的網頁。觸發時機：�
 
 完整設計見這個工具開發時參考的規格文件（不在這個公開倉庫裡，是內部文件）。
 
-## 目前進度：Phase 0（骨架與環境）
+## 目前進度：0.1.1
 
-這個 skill 目前只能做兩件事：**引導安裝**、**跑環境健檢**。網頁伺服器（`bookclub serve`）
-還沒做，跑了會印出「這一步在第 N 階段才會做」。如果夥伴要處理影片，先照下面的安裝流程
-把環境弄好，實際剪輯功能要等後面的階段完成。
+做得到：`bookclub run analyze`（抽音、轉文字、認出老師、找聲音重疊、挑老師參考音、找名字候選）、
+`bookclub ref pick`／`ref use`、`bookclub serve`（本機網頁，第 1、2、4 步可操作）、`bookclub doctor`。
+
+還沒做：學員逐字稿校對、AI 聲音生成與時間格處理、成品逐筆覆核、整片輸出。網頁上這些步驟
+會顯示「這一步還沒做」。
 
 ## 觸發時機
 
@@ -27,20 +29,26 @@ description: 啟動讀書會影片隱私處理工具的網頁。觸發時機：�
 
 ## 執行流程
 
-1. **環境還沒裝好時**：引導跑 `bash install.sh`（第一次安裝，會花一些時間下載套件與
-   模型），或 `bash install.sh --no-skill` 如果不想重建這個捷徑。裝完會自動跑一次
+1. **環境還沒裝好時**：**先跑 `bash install.sh --check-only`**，看電腦裡已經有哪些工具與
+   模型（別處已經裝過的 CosyVoice 與模型會被認出來、安裝時直接沿用，不重抓約 7GB）。
+   再跑 `bash install.sh` 安裝缺的部分，或 `bash install.sh --no-skill` 如果不想重建這個
+   捷徑；想忽略偵測全部重抓用 `--force-download`。裝完會自動跑一次
    `bookclub doctor`，把結果念給夥伴聽、必要項目沒過的話照畫面上的「修法」處理。
 2. **確認環境沒問題**：跑 `.venv/bin/bookclub doctor`，必要項目全過才繼續。常見還沒
    處理的項目（這是預期的，不代表壞掉）：
    - Hugging Face 還沒登入 → 照畫面上的三步驟說明處理
    - GROQ_API_KEY 還沒設定 → 到 `~/.zshrc` 加一行，開新終端機視窗
 3. **確認影片路徑**：如果訊息裡沒有明確路徑，詢問影片在哪裡。
-4. **啟動網頁伺服器**（Phase 3 才會真的做這件事；目前會印出提示訊息，先跟夥伴說明
-   這個功能還在開發中）：
+4. **跑分析，再開網頁**：
    ```bash
    cd ~/Downloads/bookclub-edit
-   .venv/bin/bookclub serve --video "<影片路徑>"
+   .venv/bin/bookclub run analyze "<影片路徑>" ~/讀書會剪輯資料/工作區/<名稱> --roster ~/讀書會剪輯資料/名冊.csv
    ```
+   ```bash
+   .venv/bin/bookclub serve ~/讀書會剪輯資料/工作區/<名稱>
+   ```
+   網頁預設在 <http://localhost:8766>；第 1 步看進度、第 2 步確認老師參考音、第 4 步
+   逐筆覆核名字候選。其餘步驟還沒做。
 5. **出問題時**：請夥伴貼 `bookclub doctor` 的完整輸出，照畫面上每一項的「修法」處理；
    處理不了的，把輸出貼給 Claude Code 討論。
 
@@ -48,7 +56,7 @@ description: 啟動讀書會影片隱私處理工具的網頁。觸發時機：�
 
 ```bash
 cd ~/Downloads/bookclub-edit
-.venv/bin/bookclub doctor            # 一般檢查
+.venv/bin/bookclub doctor            # 一般檢查（最後會印出現在用的原始碼與模型在哪裡）
 .venv/bin/bookclub doctor --smoke    # 加碼：實際跑三個模型各處理一小段測試音檔（幾分鐘）
 .venv/bin/bookclub doctor --claude   # 加碼：實際呼叫一次 claude -p 測試有沒有反應
 ```

@@ -344,9 +344,23 @@ def run_checks(include_claude_call: bool) -> list[Check]:
     return checks
 
 
+def print_sources() -> None:
+    """印出「現在用的模型與原始碼在哪裡」：是倉庫自己的，還是 symlink 沿用別處的。
+    排錯時很常需要這個資訊（例如沿用了別人裝的版本，行為跟預期不同）。"""
+    try:
+        from bookclub import detect
+    except Exception:  # detect 壞掉不該讓 doctor 整個掛掉
+        return
+    print()
+    print("── 現在用的原始碼與模型 ──")
+    for item in (detect.describe_current_cosyvoice_source(), detect.describe_current_cosyvoice_model()):
+        print(item.line() if hasattr(item, "line") else f"{item.name}：{item.path}｜{item.detail}")
+
+
 def print_report(checks: list[Check]) -> bool:
     for c in checks:
         print(c.line())
+    print_sources()
 
     required_failed = [c for c in checks if c.required and not c.ok]
     print()
