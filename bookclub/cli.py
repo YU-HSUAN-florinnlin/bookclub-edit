@@ -1,6 +1,6 @@
 """指令列入口：`bookclub`。
 
-`doctor`、`models download`、`run analyze`、`serve` 是真的會動的指令；
+`doctor`、`models download`、`run analyze`、`serve`、`ref`、`gen teacher` 是真的會動的指令；
 `bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
 功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列
 也只有第 1、2、4 步是真的（對應 `run analyze` 的轉文字／挑參考音／找名字），
@@ -85,6 +85,19 @@ def build_parser() -> argparse.ArgumentParser:
     ref_use_parser.add_argument("rank", type=int, help="名次（第幾段）")
     ref_use_parser.add_argument("--text-file", required=True, help="修正好的逐字稿檔案路徑")
 
+    gen_parser = sub.add_parser("gen", help="流程第 5 步：生成 AI 聲音")
+    gen_sub = gen_parser.add_subparsers(dest="gen_command")
+    gen_teacher_parser = gen_sub.add_parser("teacher", help="用老師的 AI 聲音重念指定句子")
+    gen_teacher_parser.add_argument("workdir", help="工作區路徑（參考音預設讀 workdir/參考音/ref.wav、ref.txt）")
+    gen_teacher_parser.add_argument(
+        "sentences", help="句子清單：.txt 一行一句，或 .json（可附原片時間格 slot，見 bookclub/tts.py）"
+    )
+    gen_teacher_parser.add_argument("--ref-wav", help="改用別的參考音檔")
+    gen_teacher_parser.add_argument("--ref-text", help="改用別的參考音逐字稿檔案")
+    gen_teacher_parser.add_argument("--no-check", action="store_true", help="不用 Groq 轉回文字檢查（省時間、沒網路時用）")
+    gen_teacher_parser.add_argument("--no-similarity", action="store_true", help="不算聲紋相似度")
+    gen_teacher_parser.add_argument("--redo", action="store_true", help="忽略上次結果，全部重新生成")
+
     return parser
 
 
@@ -153,6 +166,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print("用法：bookclub ref pick <影片> <工作區> [--teacher-ref 檔案] [--n 5]")
         print("     bookclub ref use <工作區> <名次> --text-file <檔案>")
+        return 2
+
+    if args.command == "gen":
+        if args.gen_command == "teacher":
+            from bookclub.tts import generate_teacher
+
+            generate_teacher(
+                args.workdir, args.sentences, ref_wav=args.ref_wav, ref_text_path=args.ref_text,
+                check_content=not args.no_check, check_similarity=not args.no_similarity, redo=args.redo,
+            )
+            return 0
+        print("用法：bookclub gen teacher <工作區> <句子清單> [--ref-wav 檔案] [--ref-text 檔案] [--no-check] [--redo]")
         return 2
 
     parser.print_help()
