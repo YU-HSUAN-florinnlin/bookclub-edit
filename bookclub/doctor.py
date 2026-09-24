@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from bookclub import system_info
+
 from bookclub.config import (
     aligner_model_id,
     cosyvoice_model_dir,
@@ -59,60 +61,43 @@ class Check:
 
 
 def is_wsl() -> bool:
-    """在 Windows 的 WSL2 裡跑嗎（夥伴的環境）。取不到就當作不是。"""
-    try:
-        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
-    except OSError:
-        return False
+    return system_info.is_wsl(system_info.read_system_file("/proc/version"))
 
 
 def linux_distro_name() -> str:
-    """從 /etc/os-release 讀發行版名稱（Ubuntu 22.04 之類），讀不到回傳 Linux。"""
-    try:
-        for line in Path("/etc/os-release").read_text(encoding="utf-8").splitlines():
-            if line.startswith("PRETTY_NAME="):
-                return line.split("=", 1)[1].strip().strip('"')
-    except OSError:
-        pass
-    return "Linux"
+    return system_info.parse_os_release(system_info.read_system_file("/etc/os-release"))
 
 
 def linux_mem_gb() -> float:
-    """從 /proc/meminfo 讀總記憶體（GB），讀不到回傳 0。"""
-    try:
-        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
-            if line.startswith("MemTotal:"):
-                return int(line.split()[1]) / (1024**2)  # kB → GB
-    except (OSError, ValueError, IndexError):
-        pass
-    return 0.0
+    memory = system_info.parse_meminfo(system_info.read_system_file("/proc/meminfo"))
+    return memory / 1024**3 if memory is not None else 0.0
 
 
 def check_os_version() -> Check:
     """作業系統：macOS 顯示版本；Linux 顯示發行版，WSL2 另外標示。"""
-    if platform.system() == "Darwin":
+    if system_info.detect_os() == "Darwin":
         return Check("作業系統", True, f"macOS {platform.mac_ver()[0] or '未知'}", required=False)
     detail = linux_distro_name()
     if is_wsl():
-        detail += "（WSL2，Windows 裡的 Linux）"
+        detail += "（偵測到 WSL2，Windows 裡的 Linux）"
     return Check("作業系統", True, detail, required=False)
 
 
 def check_chip() -> Check:
     machine = platform.machine()
-    if platform.system() == "Darwin":
+    if system_info.detect_os() == "Darwin":
         label = {
             "arm64": "arm64（Apple Silicon）",
             "x86_64": "x86_64（Intel，或在 Apple Silicon 上以 Rosetta 模擬 Intel）",
         }.get(machine, machine)
     else:
         label = {"aarch64": "aarch64（ARM）", "x86_64": "x86_64"}.get(machine, machine)
-    return Check("晶片", True, label, required=False)
+    return Check("處理器架構", True, label, required=False)
 
 
 def check_memory() -> Check:
     try:
-        if platform.system() == "Darwin":
+        if system_info.detect_os() == "Darwin":
             out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
             mem_gb = int(out.stdout.strip()) / (1024**3)
         else:
@@ -151,7 +136,8 @@ def check_disk_space() -> Check:
 def check_ffmpeg() -> Check:
     if shutil.which("ffmpeg") and shutil.which("ffprobe"):
         return Check("ffmpeg／ffprobe", True, "已安裝")
-    return Check("ffmpeg／ffprobe", False, "沒有找到", "終端機執行「brew install ffmpeg」")
+    command = "sudo apt-get install ffmpeg" if system_info.detect_os() == "Linux" else "brew install ffmpeg"
+    return Check("ffmpeg／ffprobe", False, "沒有找到", f"終端機執行「{command}」")
 
 
 def check_python_version() -> Check:

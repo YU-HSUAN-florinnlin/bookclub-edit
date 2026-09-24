@@ -44,6 +44,18 @@ if [ "$OS_KIND" = "Linux" ] && grep -qi microsoft /proc/version 2>/dev/null; the
   IS_WSL=1
 fi
 
+case "$OS_KIND" in
+  Darwin|Linux) ;;
+  *) echo "❌ 不支援的作業系統：${OS_KIND}（需要 macOS 或 Linux／WSL2）"; exit 1 ;;
+esac
+if [ "$INTEL_MODE" = "1" ] && [ "$OS_KIND" != "Darwin" ]; then
+  echo "❌ --intel 只在 macOS（Apple Silicon 上模擬 Intel）有意義，這台是 ${OS_KIND}。請去掉這個參數重跑。"
+  exit 1
+fi
+if [ "$IS_WSL" = "1" ]; then
+  echo "偵測到 WSL2"
+fi
+
 SYS_PYTHON="$(command -v python3 || true)"
 if [ -z "$SYS_PYTHON" ]; then
   echo "❌ 找不到 python3，請先安裝 Python 3 再跑這支腳本。"
@@ -76,27 +88,36 @@ step() {
 }
 
 # ── [1/11] 系統檢查 ──────────────────────────────────────────
-step "檢查系統（作業系統、晶片、記憶體、剩餘空間）"
+if [ "$OS_KIND" = "Darwin" ]; then
+  step "檢查系統（macOS 版本、晶片、記憶體、剩餘空間）"
+else
+  step "檢查系統（作業系統、晶片、記憶體、剩餘空間）"
+fi
 
 NATIVE_ARCH="$(uname -m)"
 if [ "$OS_KIND" = "Darwin" ]; then
-  echo "作業系統：macOS $(sw_vers -productVersion 2>/dev/null || echo '（版本無法偵測）')"
+  echo "macOS 版本：$(sw_vers -productVersion 2>/dev/null || echo '無法偵測')"
   MEM_BYTES="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
-  MEM_GB=$(( MEM_BYTES / 1024 / 1024 / 1024 ))
+  MEM_GB=0
+  if [[ "$MEM_BYTES" =~ ^[0-9]+$ ]]; then
+    MEM_GB=$(( MEM_BYTES / 1024 / 1024 / 1024 ))
+  fi
 else
   # Linux：發行版看 /etc/os-release、記憶體看 /proc/meminfo；取不到就說無法偵測，不中斷
-  DISTRO="$( . /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-Linux}" || echo "Linux" )"
-  if [ "$IS_WSL" = "1" ]; then
-    echo "作業系統：$DISTRO（偵測到 WSL2，Windows 裡的 Linux）"
-  else
-    echo "作業系統：$DISTRO"
-  fi
-  MEM_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-  MEM_GB=$(( MEM_KB / 1024 / 1024 ))
+  DISTRO="$("$SYS_PYTHON" bookclub/system_info.py os)"
+  echo "作業系統：$DISTRO"
+  MEM_GB="$("$SYS_PYTHON" bookclub/system_info.py memory)"
+  MEM_GB="${MEM_GB:-0}"
 fi
 
-if [ "$NATIVE_ARCH" = "arm64" ] || [ "$NATIVE_ARCH" = "aarch64" ]; then
-  echo "晶片：$NATIVE_ARCH（ARM）"
+if [ "$OS_KIND" = "Darwin" ]; then
+  if [ "$NATIVE_ARCH" = "arm64" ]; then
+    echo "晶片：arm64（Apple Silicon）"
+  else
+    echo "晶片：x86_64（Intel）"
+  fi
+elif [ "$NATIVE_ARCH" = "arm64" ] || [ "$NATIVE_ARCH" = "aarch64" ]; then
+  echo "晶片：${NATIVE_ARCH}（ARM）"
 else
   echo "晶片：$NATIVE_ARCH"
 fi
@@ -111,7 +132,8 @@ if [ "$MEM_GB" -lt 8 ]; then
   echo "⚠️ 記憶體低於建議的 8GB，聲音生成等步驟可能會比較吃緊，仍繼續安裝。"
 fi
 
-AVAIL_KB=$(df -k "$HOME" | tail -1 | awk '{print $4}')
+# POSIX 格式避免長裝置名稱換行；第 4 欄在 macOS／Linux 都是可用 KiB。
+AVAIL_KB=$(df -Pk "$HOME" | tail -1 | awk '{print $4}')
 AVAIL_GB=$(( AVAIL_KB / 1024 / 1024 ))
 echo "剩餘空間：約 ${AVAIL_GB}GB"
 # 模型約 7GB、套件約 3GB；已經下載過模型的話（重跑安裝），需要的空間少很多
@@ -128,35 +150,23 @@ elif [ "$AVAIL_GB" -lt 30 ]; then
   echo "⚠️ 剩餘空間約 ${AVAIL_GB}GB，低於建議的 30GB，之後可能會不夠用，仍繼續安裝。"
 fi
 
-if [ "$INTEL_MODE" = "1" ] && [ "$OS_KIND" != "Darwin" ]; then
-  echo "❌ --intel 只在 macOS（Apple Silicon 上模擬 Intel）有意義，這台是 $OS_KIND。請去掉這個參數重跑。"
-  exit 1
-fi
-
+# 共用的純函式明確指定平台／架構，避免 uv 選到另一種架構的 Python。
+PY_TARGET="$("$SYS_PYTHON" bookclub/system_info.py target "$OS_KIND" "$NATIVE_ARCH" "$INTEL_MODE")"
 if [ "$INTEL_MODE" = "1" ] && [ "$NATIVE_ARCH" = "arm64" ]; then
-  PY_TARGET="cpython-3.11-macos-x86_64-none"
   TARGET_ARCH="x86_64"
   VENV_DIR=".venv-x86"
-  echo "已加 --intel 參數：改用模擬的 Intel 環境（Rosetta 下的 x86_64 Python），只供開發測試用，虛擬環境放在 $VENV_DIR。"
+  echo "已加 --intel 參數：改用模擬的 Intel 環境（Rosetta 下的 x86_64 Python），只供開發測試用，虛擬環境放在 ${VENV_DIR}。"
 else
-  # 明確指定平台與晶片：只寫「3.11」的話，電腦上如果已經有另一種的 Python 3.11，uv 會直接拿來用
-  if [ "$OS_KIND" = "Darwin" ]; then
-    if [ "$NATIVE_ARCH" = "arm64" ]; then
-      PY_TARGET="cpython-3.11-macos-aarch64-none"
-    else
-      PY_TARGET="cpython-3.11-macos-x86_64-none"
-    fi
-  elif [ "$NATIVE_ARCH" = "aarch64" ] || [ "$NATIVE_ARCH" = "arm64" ]; then
-    PY_TARGET="cpython-3.11-linux-aarch64-gnu"
-  else
-    PY_TARGET="cpython-3.11-linux-x86_64-gnu"
-  fi
   TARGET_ARCH="$NATIVE_ARCH"
   VENV_DIR=".venv"
 fi
 
 # ── [2/11] Homebrew、ffmpeg、uv ──────────────────────────────
-step "安裝系統套件（ffmpeg、uv 等）"
+if [ "$OS_KIND" = "Darwin" ]; then
+  step "檢查 Homebrew，並安裝 ffmpeg／uv"
+else
+  step "安裝系統套件（ffmpeg、uv 等）"
+fi
 
 if [ "$OS_KIND" != "Darwin" ]; then
   # ── Linux（含 WSL2 Ubuntu）：系統套件走 apt-get，uv 走官方安裝指令 ──
@@ -168,13 +178,21 @@ if [ "$OS_KIND" != "Darwin" ]; then
   APT_PKGS="ffmpeg sox git build-essential curl unzip"
   MISSING=""
   for pkg in $APT_PKGS; do
-    dpkg -s "$pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
+    if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -qx 'install ok installed'; then
+      MISSING="$MISSING $pkg"
+    fi
   done
   if [ -n "$MISSING" ]; then
     echo "要安裝的系統套件：$MISSING"
     echo "⚠️ 接下來會用系統管理員權限安裝，畫面上可能跳出密碼提示，請輸入你的登入密碼。"
     ADMIN_CMD=""
-    if [ "$(id -u)" != "0" ]; then ADMIN_CMD="$(command -v sudo || true)"; fi
+    if [ "$(id -u)" != "0" ]; then
+      ADMIN_CMD="$(command -v sudo || true)"
+      if [ -z "$ADMIN_CMD" ]; then
+        echo "❌ 找不到 sudo，請由系統管理員安裝 $APT_PKGS 後重跑。"
+        exit 1
+      fi
+    fi
     $ADMIN_CMD apt-get update
     # shellcheck disable=SC2086
     $ADMIN_CMD apt-get install -y $MISSING
@@ -186,6 +204,7 @@ if [ "$OS_KIND" != "Darwin" ]; then
     echo "安裝 uv（Python 套件管理工具；apt 沒有，用官方安裝指令）..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    echo "uv 安裝完成；之後可能需要重開終端機或執行 source ~/.bashrc。"
     if ! command -v uv >/dev/null 2>&1; then
       echo "❌ 裝完還是找不到 uv。請開一個新的終端機（或先跑 source ~/.bashrc）再重跑這個腳本。"
       exit 1
