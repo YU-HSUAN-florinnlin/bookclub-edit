@@ -1,0 +1,263 @@
+:root {
+  --fg: #222;
+  --muted: #666;
+  --border: #ddd;
+  --bg: #fff;
+  --bg-soft: #f5f5f5;
+  --accent: #2a6f2a;
+  --accent-bg: #e9f5e9;
+  --warn: #a06a00;
+  --warn-bg: #fff6e0;
+  --danger: #b30000;
+  --danger-bg: #fdeaea;
+  --lowconf-border: #d98c00;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-soft);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Heiti TC", sans-serif;
+  line-height: 1.6;
+}
+
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ---------- 側邊欄 ---------- */
+
+.sidebar {
+  width: 240px;
+  flex: 0 0 240px;
+  background: #fff;
+  border-right: 1px solid var(--border);
+  padding: 16px 12px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.brand {
+  font-weight: bold;
+  font-size: 16px;
+  padding: 4px 8px 12px;
+}
+
+.videoinfo {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 0 8px 14px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.steps li a {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 8px;
+  border-radius: 6px;
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.steps li a:hover { background: var(--bg-soft); }
+.steps li a.active { background: var(--accent-bg); color: var(--accent); font-weight: bold; }
+
+.step-badge {
+  font-size: 11px;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-soft);
+  color: var(--muted);
+}
+
+.step-badge.done { background: var(--accent); color: #fff; }
+.step-badge.notyet { background: #eee; color: #aaa; }
+
+/* ---------- 內容區 ---------- */
+
+.content {
+  flex: 1;
+  padding: 24px 28px 80px;
+  max-width: 880px;
+}
+
+.content h1 { font-size: 20px; margin-top: 0; }
+.content h2 { font-size: 16px; margin-top: 28px; }
+
+.card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin: 14px 0;
+}
+
+.notyet-card {
+  background: #fafafa;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  border-radius: 10px;
+  padding: 24px;
+  text-align: center;
+}
+
+table.kv { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.kv td { padding: 4px 6px; border-bottom: 1px solid #eee; vertical-align: top; }
+table.kv td:first-child { color: var(--muted); width: 40%; white-space: nowrap; }
+
+.badge {
+  display: inline-block;
+  font-size: 12px;
+  padding: 2px 9px;
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--muted);
+}
+.badge.done { background: var(--accent-bg); color: var(--accent); }
+.badge.running { background: var(--warn-bg); color: var(--warn); }
+.badge.error { background: var(--danger-bg); color: var(--danger); }
+
+button {
+  font-size: 14px;
+  padding: 9px 16px;
+  border-radius: 6px;
+  border: 1px solid #999;
+  background: #333;
+  color: #fff;
+  cursor: pointer;
+}
+button:hover { background: #111; }
+button.secondary { background: #fff; color: #333; }
+button.secondary:hover { background: var(--bg-soft); }
+button:disabled { opacity: 0.5; cursor: default; }
+
+textarea, input[type="text"] {
+  width: 100%;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  resize: vertical;
+}
+
+audio { width: 100%; }
+
+.hint {
+  background: var(--warn-bg);
+  border: 1px solid #e8d9a8;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.log {
+  background: #111;
+  color: #d6ffd6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  border-radius: 8px;
+  padding: 10px 12px;
+  max-height: 260px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ---------- 第 4 步：名字覆核 ---------- */
+
+.namecard { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 14px 0; }
+.namecard.lowconf { border-color: var(--lowconf-border); background: #fffaf0; }
+.namecard .rowhead { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.namecard .idx { font-weight: bold; }
+.namecard .time { color: var(--muted); font-size: 13px; }
+.namecard .sentence { font-size: 16px; margin: 6px 0 10px; }
+.namecard .sentence mark { background: #ffe066; padding: 0 2px; border-radius: 3px; }
+.namecard .sentence .approx { background: #ffe6e6; padding: 0 2px; border-radius: 3px; }
+.namecard table.meta { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 10px; }
+.namecard table.meta td { padding: 3px 6px; border-bottom: 1px solid #eee; }
+.namecard table.meta td:nth-child(1), .namecard table.meta td:nth-child(3) {
+  color: var(--muted); width: 18%; white-space: nowrap;
+}
+.conf-低 { color: var(--danger); font-weight: bold; }
+.conf-中 { color: var(--warn); }
+.conf-高 { color: var(--accent); }
+.namecard .players { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.namecard .players > div { flex: 1 1 240px; min-width: 200px; }
+.namecard .playerlabel { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.namecard .missing { font-size: 12px; color: #999; }
+.namecard .checks { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; margin-bottom: 8px; }
+.namecard .notefield { margin-top: 6px; }
+.namecard .savedmark { font-size: 12px; color: var(--accent); margin-left: 6px; }
+
+.excluded-box {
+  background: var(--warn-bg);
+  border: 1px solid #e8d9a8;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-top: 12px;
+  font-size: 14px;
+}
+.excluded-box table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13px; }
+.excluded-box td, .excluded-box th { border-bottom: 1px solid #e8d9a8; padding: 4px 6px; text-align: left; }
+
+/* ---------- 手機寬度 ---------- */
+
+@media (max-width: 760px) {
+  .app { flex-direction: column; }
+  .sidebar {
+    width: 100%;
+    flex: none;
+    height: auto;
+    position: static;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .steps { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 4px; }
+  .steps li { flex: 0 0 auto; }
+  .videoinfo { display: none; }
+  .content { padding: 16px 16px 60px; max-width: none; }
+  .namecard .players { flex-direction: column; }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #eee;
+    --muted: #aaa;
+    --border: #3a3a3a;
+    --bg: #1c1c1c;
+    --bg-soft: #262626;
+    --accent: #6fcf6f;
+    --accent-bg: #16321a;
+    --warn: #e0b34d;
+    --warn-bg: #332a10;
+    --danger: #ff8080;
+    --danger-bg: #3a1616;
+  }
+  .sidebar, .card, .namecard { background: #232323; }
+  button { background: #6fcf6f; color: #111; border-color: #6fcf6f; }
+  button:hover { background: #57b357; }
+  button.secondary { background: #232323; color: #eee; border-color: var(--border); }
+}

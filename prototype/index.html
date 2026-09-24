@@ -1,0 +1,937 @@
+<title>讀書會剪輯工作台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=LXGW+WenKai+TC:wght@400;700&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>
+:root{
+  --bg:#EEF1F4; --surface:#FFFFFF; --surface-2:#F6F8FA; --sunken:#E3E8ED;
+  --ink:#17212B; --ink-2:#4B5664; --ink-3:#7A8592; --line:#D3DAE1;
+  --accent:#136B60; --accent-ink:#FFFFFF; --accent-soft:#D9EDE8;
+  --ai:#3F4FB8; --ai-soft:#E2E5F7;
+  --teacher:#8F5600; --teacher-soft:#F5E7D2;
+  --warn:#B42318; --warn-soft:#FBE3DF; --ok:#25733A; --ok-soft:#DDF0E1;
+  --font-body:"Noto Sans TC","PingFang TC","Heiti TC","Microsoft JhengHei",system-ui,sans-serif;
+  --font-display:"LXGW WenKai TC","Kaiti TC","BiauKai","DFKai-SB","Noto Serif TC",serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --r:10px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1318; --surface:#151C23; --surface-2:#1A222B; --sunken:#0B0F13;
+    --ink:#E3E8ED; --ink-2:#A3AEBA; --ink-3:#75818E; --line:#28323D;
+    --accent:#4CB5A3; --accent-ink:#062520; --accent-soft:#15332E;
+    --ai:#95A1F5; --ai-soft:#1F2550; --teacher:#E3AA56; --teacher-soft:#33260F;
+    --warn:#F08A7D; --warn-soft:#3B1C19; --ok:#6CC484; --ok-soft:#173222;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1318; --surface:#151C23; --surface-2:#1A222B; --sunken:#0B0F13;
+  --ink:#E3E8ED; --ink-2:#A3AEBA; --ink-3:#75818E; --line:#28323D;
+  --accent:#4CB5A3; --accent-ink:#062520; --accent-soft:#15332E;
+  --ai:#95A1F5; --ai-soft:#1F2550; --teacher:#E3AA56; --teacher-soft:#33260F;
+  --warn:#F08A7D; --warn-soft:#3B1C19; --ok:#6CC484; --ok-soft:#173222;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:15px;line-height:1.6;margin:0}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+h1,h2,h3{text-wrap:balance;margin:0}
+.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+
+.top{max-width:1440px;margin:0 auto;padding-inline:20px;padding-block:18px 6px;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between}
+.brand{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.brand h1{font-family:var(--font-display);font-size:28px;font-weight:700;letter-spacing:.02em}
+.sample{font-size:12px;letter-spacing:.06em;padding:2px 10px;border-radius:999px;background:var(--teacher-soft);color:var(--teacher);font-weight:700}
+.topright{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink-2)}
+.legend{display:flex;gap:10px;flex-wrap:wrap}
+.who-pill{display:inline-flex;align-items:center;font-size:12px;font-weight:700;padding:1px 9px;border-radius:999px;white-space:nowrap}
+.who-ai{background:var(--ai-soft);color:var(--ai)}
+.who-partner{background:var(--accent-soft);color:var(--accent)}
+.who-teacher{background:var(--teacher-soft);color:var(--teacher)}
+select.who-select{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:3px 8px}
+
+.app{max-width:1440px;margin:0 auto;padding-inline:20px;padding-block:14px 60px;display:grid;grid-template-columns:236px minmax(0,1fr) 300px;gap:20px;align-items:start}
+.rail{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex;flex-direction:column;gap:2px}
+.rail-item{display:grid;grid-template-columns:26px 1fr;gap:2px 8px;align-items:center;text-align:left;background:none;border:0;border-radius:8px;padding:8px 10px}
+.rail-item:hover{background:var(--surface-2)}
+.rail-item.is-on{background:var(--surface);box-shadow:0 0 0 1px var(--line)}
+.rail-num{font-family:var(--font-mono);font-size:13px;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;border:1.5px solid var(--line);color:var(--ink-2);grid-row:span 2}
+.rail-item.is-done .rail-num{background:var(--ok);border-color:var(--ok);color:var(--surface)}
+.rail-name{font-weight:500;font-size:14px;line-height:1.3}
+.rail-who{display:flex;gap:4px;flex-wrap:wrap}
+.rail-who .who-pill{font-size:11px;padding:0 7px}
+.rail-sep{height:1px;background:var(--line);margin:8px 10px}
+.rail-foot{display:flex;flex-direction:column;gap:6px;padding:4px 10px;font-size:13px}
+.linkish{background:none;border:0;padding:0;color:var(--ink-2);text-decoration:underline;text-underline-offset:3px;text-align:left}
+
+.main{min-width:0;display:flex;flex-direction:column;gap:18px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:20px}
+.page-head{display:flex;flex-direction:column;gap:6px}
+.page-head .eyebrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--ink-2)}
+.page-head h2{font-family:var(--font-display);font-size:26px;font-weight:700}
+.page-head p{margin:0;color:var(--ink-2);max-width:68ch}
+.note{font-size:13px;color:var(--ink-2);background:var(--surface-2);border-radius:8px;padding:10px 12px}
+.note b{color:var(--ink)}
+.warn-note{background:var(--warn-soft);color:var(--warn)}
+
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:6px 12px;font-size:14px;line-height:1.4}
+.btn:hover{border-color:var(--ink-3)}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:500}
+.btn-primary:hover{filter:brightness(1.06)}
+.btn-ai{background:var(--ai);border-color:var(--ai);color:var(--surface);font-weight:500}
+.btn:disabled{opacity:.5;cursor:default}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.next-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:14px;margin-top:4px}
+
+.play{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface-2);border-radius:999px;padding:2px 11px 2px 9px;font-size:13px;white-space:nowrap}
+.play::before{content:"";width:0;height:0;border-left:8px solid currentColor;border-top:5px solid transparent;border-bottom:5px solid transparent}
+.play.is-playing{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.play.is-playing::before{width:8px;height:10px;border:0;border-left:3px solid currentColor;border-right:3px solid currentColor}
+.play.after{border-color:var(--accent)}
+
+.flow{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.flow li{display:grid;grid-template-columns:40px minmax(0,1fr) auto;gap:4px 14px;padding:14px 4px;border-top:1px solid var(--line);align-items:start}
+.flow li:first-child{border-top:0}
+.flow .n{font-family:var(--font-display);font-size:26px;line-height:1;color:var(--ink-3);text-align:center;padding-top:2px}
+.flow h3{font-size:17px;font-weight:700;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.flow p{margin:2px 0 0;color:var(--ink-2);font-size:14px}
+.flow .time{font-size:13px;color:var(--ink-2);text-align:right;white-space:nowrap}
+.flow .time b{display:block;color:var(--ink);font-weight:500}
+.flow button.open{margin-top:6px}
+
+.split{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.split > div{border-radius:8px;padding:12px 14px;background:var(--surface-2)}
+.split h4{margin:0 0 4px;font-size:14px}
+.split p{margin:0;font-size:13px;color:var(--ink-2)}
+.split .big{font-size:20px;font-weight:700;color:var(--ink);font-family:var(--font-display)}
+
+.alts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.alt{border:1px solid var(--line);border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:6px;background:var(--surface)}
+.alt.is-picked{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.alt h4{margin:0;font-size:15px;display:flex;gap:8px;align-items:baseline}
+.alt h4 .tag{font-family:var(--font-display);font-size:20px;color:var(--ink-3)}
+.alt .seq{font-size:12.5px;color:var(--ink-2);background:var(--surface-2);border-radius:6px;padding:6px 8px}
+.alt ul{margin:0;padding-left:18px;font-size:13px;color:var(--ink-2)}
+.alt label{font-size:13px;display:flex;gap:6px;align-items:center;margin-top:auto}
+
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.tab{border:0;background:none;padding:8px 12px;border-bottom:2px solid transparent;color:var(--ink-2);font-size:14px}
+.tab.is-on{border-bottom-color:var(--accent);color:var(--ink);font-weight:500}
+.tab .count{font-family:var(--font-mono);font-size:12px;margin-left:4px;color:var(--ink-3)}
+
+.tbl-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:12px;font-weight:500;color:var(--ink-2);letter-spacing:.04em}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.card{border:1px solid var(--line);border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:8px;background:var(--surface)}
+.card h4{margin:0;font-size:16px;display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.card .sub{font-size:13px;color:var(--ink-2)}
+.card.is-set{border-color:var(--ok)}
+.conf{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-2)}
+.conf-bar{flex:1;height:6px;background:var(--sunken);border-radius:3px;overflow:hidden}
+.conf-bar i{display:block;height:100%;background:var(--ai)}
+.conf-bar.low i{background:var(--teacher)}
+.guess{font-size:13px;background:var(--ai-soft);border-radius:6px;padding:8px 10px;color:var(--ink)}
+.guess b{color:var(--ai)}
+select.assign{width:100%;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface)}
+
+.rate{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;font-size:13px}
+.dots{display:flex;gap:3px}
+.dot{width:26px;height:26px;border-radius:6px;border:1px solid var(--line);background:var(--surface-2);font-size:12px;font-family:var(--font-mono);padding:0}
+.dot.is-on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.reveal{font-size:13px;background:var(--teacher-soft);color:var(--teacher);border-radius:6px;padding:6px 10px}
+
+.steps-sim{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.steps-sim li{display:grid;grid-template-columns:22px 1fr auto;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px dashed var(--line);font-size:14px}
+.steps-sim .st{width:16px;height:16px;border-radius:50%;border:2px solid var(--line)}
+.steps-sim li.is-run .st{border-color:var(--ai);border-top-color:transparent;animation:spin .8s linear infinite}
+.steps-sim li.is-done .st{background:var(--ok);border-color:var(--ok)}
+.steps-sim .est{font-size:12px;color:var(--ink-3);white-space:nowrap}
+@keyframes spin{to{transform:rotate(360deg)}}
+.bar{height:8px;background:var(--sunken);border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--ai);transition:width .3s}
+.summary{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.summary div{background:var(--surface-2);border-radius:8px;padding:10px 12px;font-size:13px;color:var(--ink-2)}
+.summary b{display:block;font-size:22px;color:var(--ink);font-family:var(--font-display)}
+
+.keys{font-size:12px;color:var(--ink-2);display:flex;gap:12px;flex-wrap:wrap}
+kbd{font-family:var(--font-mono);font-size:11px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:var(--surface)}
+.progress{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink-2)}
+.progress .bar{flex:1;max-width:260px}
+.progress .bar i{background:var(--accent)}
+
+.items{display:flex;flex-direction:column;gap:10px}
+.item{border:1px solid var(--line);border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px;background:var(--surface)}
+.item.is-sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.item.is-done{background:var(--surface-2)}
+.item-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--ink-2)}
+.item-head .t{font-family:var(--font-mono);color:var(--ink);font-size:13px}
+.chip{font-size:12px;padding:1px 8px;border-radius:999px;background:var(--sunken);color:var(--ink-2);white-space:nowrap}
+.chip-ai{background:var(--ai-soft);color:var(--ai)}
+.chip-t{background:var(--teacher-soft);color:var(--teacher)}
+.chip-ok{background:var(--ok-soft);color:var(--ok)}
+.chip-warn{background:var(--warn-soft);color:var(--warn)}
+textarea.txt{width:100%;min-height:62px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface);line-height:1.7}
+.hint-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:13px}
+.hint-row .lbl{color:var(--ink-2)}
+.fix-btn{border:1px dashed var(--ai);background:var(--ai-soft);color:var(--ink);border-radius:6px;padding:2px 8px;font-size:13px}
+.fix-btn s{color:var(--ink-3)}
+.name-btn{border:1px dashed var(--teacher);background:var(--teacher-soft);color:var(--ink);border-radius:6px;padding:2px 8px;font-size:13px}
+.sent{font-size:15px;line-height:1.8}
+.sent mark{background:var(--teacher-soft);color:var(--teacher);border-radius:4px;padding:0 3px;font-weight:700}
+.opts{display:flex;flex-direction:column;gap:6px}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px;background:var(--surface)}
+.opt.is-on{border-color:var(--accent);background:var(--accent-soft)}
+.opt input{margin-top:5px;accent-color:var(--accent)}
+.opt small{display:block;color:var(--ink-2);font-size:12.5px}
+.opt .ai-tag{font-size:11px;color:var(--ai);font-weight:700;margin-left:6px}
+.sub-opts{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.pair label{font-size:13px;color:var(--ink-2);display:flex;flex-direction:column;gap:4px}
+.muted-item{opacity:.75}
+.del-row{display:grid;grid-template-columns:auto auto auto 1fr auto;gap:8px;align-items:center;font-size:14px;padding:8px 0;border-bottom:1px solid var(--line)}
+.del-row input{width:96px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font-family:var(--font-mono);font-size:13px}
+
+.ba{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.fit{font-size:13px;border-radius:6px;padding:6px 10px}
+.fit.ok{background:var(--ok-soft);color:var(--ok)}
+.fit.info{background:var(--ai-soft);color:var(--ai)}
+.fit.warn{background:var(--warn-soft);color:var(--warn)}
+.decide{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.decide input{flex:1;min-width:180px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font-size:13px}
+.btn.is-on-ok{background:var(--ok);border-color:var(--ok);color:var(--surface)}
+.btn.is-on-warn{background:var(--warn);border-color:var(--warn);color:var(--surface)}
+
+.player{display:flex;flex-direction:column;gap:12px}
+.pl-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.pl-time{font-family:var(--font-mono);font-size:14px}
+.speed{display:flex;gap:4px}
+.speed .btn{padding:4px 10px;font-size:13px}
+.speed .btn.is-on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.timeline{position:relative;height:54px;background:var(--sunken);border-radius:8px;cursor:pointer;overflow:hidden}
+.timeline .wave{position:absolute;inset:14px 0;display:flex;align-items:center;gap:2px;padding:0 6px;pointer-events:none}
+.timeline .wave i{flex:1;background:var(--line);border-radius:1px}
+.mk{position:absolute;top:0;bottom:0;width:3px;border:0;padding:0;margin-left:-1px}
+.mk::after{content:"";position:absolute;left:-5px;top:-1px;width:13px;height:13px;border-radius:50%;background:inherit}
+.mk-name{background:var(--teacher)}
+.mk-stu{background:var(--accent)}
+.mk-ovl{background:var(--ai)}
+.mk-del{background:var(--warn)}
+.mk-fix{background:var(--ink)}
+.playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--ink);pointer-events:none}
+.mk-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ink-2)}
+.mk-legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:-1px;background:var(--c)}
+.report{font-family:var(--font-mono);font-size:13px;background:var(--surface-2);border-radius:8px;padding:12px 14px;white-space:pre-wrap;line-height:1.7}
+
+.fb{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex;flex-direction:column;gap:12px}
+.fb h3{font-size:15px}
+.fb .desc{font-size:13px;color:var(--ink-2);margin:0}
+.fchips{display:flex;flex-wrap:wrap;gap:6px}
+.fchip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:3px 11px;font-size:13px}
+.fchip.is-on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.fb textarea{width:100%;min-height:96px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface);font-size:14px}
+.fb-list{display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto}
+.fb-rec{font-size:13px;background:var(--surface-2);border-radius:8px;padding:8px 10px}
+.fb-rec .meta{font-size:11.5px;color:var(--ink-3)}
+.store-note{font-size:12px;color:var(--ink-3)}
+textarea.export{width:100%;min-height:160px;font-family:var(--font-mono);font-size:12.5px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--surface-2)}
+
+.to-fb{display:none;position:fixed;right:16px;bottom:calc(env(safe-area-inset-bottom,0px) + 16px);z-index:9;border-radius:999px;padding:9px 16px;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+@media (max-width:1180px){ .to-fb{display:inline-flex} }
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 22px);transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 16px;border-radius:999px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:10}
+.toast.is-on{opacity:1}
+
+@media (max-width:1180px){
+  .app{grid-template-columns:210px minmax(0,1fr)}
+  .fb-col{grid-column:2}
+  .fb{position:static}
+}
+@media (max-width:760px){
+  .app{grid-template-columns:minmax(0,1fr);padding-inline:16px}
+  .top{padding-inline:16px}
+  .fb-col{grid-column:1}
+  .rail{position:static;flex-direction:row;overflow-x:auto;gap:4px;padding-bottom:4px}
+  .rail-item{grid-template-columns:24px auto;min-width:max-content}
+  .rail-who,.rail-sep,.rail-foot{display:none}
+  .split,.alts,.pair{grid-template-columns:minmax(0,1fr)}
+  .flow li{grid-template-columns:32px minmax(0,1fr)}
+  .flow .time{grid-column:2;text-align:left}
+  .del-row{grid-template-columns:1fr 1fr;}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
+}
+</style>
+
+<header class="top">
+  <div class="brand">
+    <h1>讀書會剪輯工作台</h1>
+    <span class="sample">樣品：資料和聲音都是假的</span>
+  </div>
+  <div class="topright">
+    <div class="legend">
+      <span class="who-pill who-ai">電腦</span>
+      <span class="who-pill who-partner">夥伴</span>
+      <span class="who-pill who-teacher">老師</span>
+    </div>
+    <label for="who">你是
+      <select id="who" class="who-select">
+        <option value="">（選一下）</option>
+        <option>宇軒</option>
+        <option>夥伴</option>
+        <option>老師</option>
+        <option>其他</option>
+      </select>
+    </label>
+  </div>
+</header>
+
+<div class="app">
+  <nav class="rail" id="rail" aria-label="步驟"></nav>
+  <main class="main" id="main"></main>
+  <aside class="fb-col"><div class="fb panel" id="fb"></div></aside>
+</div>
+<button type="button" class="btn btn-primary to-fb" data-act="toFb">留下這一步的感覺</button>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+"use strict";
+
+/* ── 樣品資料（全部虛構）──────────────────────────────── */
+const DUR = {"final":52.21,"gap":0.40,"p01n":5.51,"p01s":4.57,"p02":6.31,"p04":6.59,"p05a":3.56,"p05b":2.18,"p05c":1.58,"p06":2.61,"p07":5.62,"p09":6.18,"p10":6.75,"p12":2.34,"s01":5.56,"s02":6.25,"s03":2.73,"s04":6.58,"s05":2.05,"s06":2.68,"s07":5.23,"s09":6.24,"s10":6.69,"s11":4.29,"s12":2.18,"s13":1.83,"tA":5.38,"tB":4.10,"tC":4.95,"vFA":5.27,"vFB":5.28,"vFC":5.28,"vMA":5.27,"vMB":5.28};
+
+const STEPS = [
+  {id:"setup", n:"0", name:"一次性設定", who:["teacher","partner"], time:"約 1.5 小時", timeNote:"只做一次",
+   what:"名冊、匿名聲線、老師的聲音。建一次，之後每支影片都沿用。"},
+  {id:"s1", n:"1", name:"轉文字與分析", who:["ai"], time:"約 40–70 分鐘", timeNote:"估計，待實測",
+   what:"抽出聲音、轉成文字、分辨誰在說話、找出聲音重疊、抓出每個字的時間點。"},
+  {id:"s2", n:"2", name:"聲音分群", who:["partner"], time:"約 5–10 分鐘", timeNote:"估計",
+   what:"電腦把聲音分成 1 號、2 號⋯⋯，由你指定誰是老師、誰是名冊上的哪一位。"},
+  {id:"s3", n:"3", name:"學員逐字稿校對", who:["partner"], time:"約 2–4 小時", timeNote:"最花時間，估計",
+   what:"學員說的每句話都會改用匿名聲線重念，所以文字要逐句聽過、改對。名字在這裡換成英文代號。"},
+  {id:"s4", n:"4", name:"標記覆核", who:["partner"], time:"約 30–60 分鐘", timeNote:"估計",
+   what:"老師提到名字的地方、聲音重疊的地方、要刪除的段落，一筆一筆選做法。"},
+  {id:"s5", n:"5", name:"AI 執行", who:["ai"], time:"數小時", timeNote:"速度待實測，可以放著過夜",
+   what:"生成老師的句子和學員的匿名聲音，放回原本的時間；最後一次剪掉要刪的段落。"},
+  {id:"s6", n:"6", name:"成品逐筆覆核", who:["partner"], time:"約 30–60 分鐘", timeNote:"估計",
+   what:"每一筆聽「處理前／處理後」，不滿意就退回重做。"},
+  {id:"s7", n:"7", name:"整片檢查與輸出", who:["partner"], time:"約 1.5 小時", timeNote:"1.25–1.5 倍速看完",
+   what:"從頭看一次成品，有問題按一下就建修補項目；確認後輸出。"}
+];
+const WHO = {ai:"電腦", partner:"夥伴", teacher:"老師"};
+
+const ROSTER = [
+  {zh:"美華", alt:["美華","梅華","美樺"], code:"Bella", voice:"女聲 A", clip:"vFA", sex:"女"},
+  {zh:"小明", alt:["小明","曉明"], code:"Alex", voice:"男聲 A", clip:"vMA", sex:"男"},
+  {zh:"佩君", alt:["佩君","培君","珮君"], code:"Daisy", voice:"女聲 B", clip:"vFB", sex:"女"},
+  {zh:"志豪", alt:["志豪","智豪"], code:"Chris", voice:"男聲 B", clip:"vMB", sex:"男"},
+  {zh:"雅婷", alt:["雅婷","雅庭"], code:"Emma", voice:"女聲 C", clip:"vFC", sex:"女"}
+];
+const VOICES = [
+  {id:"女聲 A", clip:"vFA"}, {id:"女聲 B", clip:"vFB"}, {id:"女聲 C", clip:"vFC"},
+  {id:"男聲 A", clip:"vMA"}, {id:"男聲 B", clip:"vMB"}
+];
+const TEACHER_TEST = {
+  text:"我們練習的不是不生氣，而是在生氣的時候，還記得回到呼吸。",
+  order:["tC","tA","tB"],
+  refs:{tA:"參考音 10 秒・平常講課", tB:"參考音 30 秒・溫和引導", tC:"參考音 20 秒・情緒比較多"},
+  criteria:["像不像老師本人","語氣自然嗎","發音正確嗎","聽不出是 AI"]
+};
+const SPK = [
+  {n:1, total:"51 分 20 秒", clips:[["s01","00:41:02"],["s03","00:41:22"],["s09","00:42:07"]], guess:"老師", conf:97, why:"跟老師的聲音樣本比對，非常接近。"},
+  {n:2, total:"9 分 05 秒", clips:[["s02","00:41:09"],["s04","00:41:27"]], guess:"美華", conf:81, why:"00:41:02 老師說「美華，妳要不要先分享？」，接下來就是這個聲音。"},
+  {n:3, total:"6 分 40 秒", clips:[["s07","00:41:51"]], guess:"小明", conf:74, why:"00:41:46 老師說「小明你也有？那你接著說。」"},
+  {n:4, total:"4 分 15 秒", clips:[["s10","00:42:17"]], guess:"佩君", conf:62, why:"00:42:07 老師叫了「培君」，可能是佩君的同音字。"},
+  {n:5, total:"0 分 02 秒", clips:[["s13","00:52:10"]], guess:"", conf:18, why:"只有 2 秒、聲音很小，可能是有人沒關麥克風。"}
+];
+const SEGS = [
+  {id:"s02", t:"00:41:09", spk:2, draft:"好。這週我試著在生氣的時候先停一下，大概挺三次呼吸，再決定要不要說話。", sugg:[["挺三次","停三次"]]},
+  {id:"s04", t:"00:41:27", spk:2, draft:"可是有一次在公司開會，我還是直接回嘴了。後來才發現，我根本沒有聽完同時的話。", sugg:[["同時的話","同事的話"]]},
+  {id:"s07", t:"00:41:51", spk:3, draft:"對，我覺得最難的是，當下根本不知道自己在生氣，都是事後才發現。", sugg:[]},
+  {id:"s10", t:"00:42:17", spk:4, draft:"對，梅華剛剛講的，讓我想到我媽媽。她常說我講話太快，我以前都覺得是她想太多。", sugg:[]}
+];
+const NAMES = [
+  {id:"n1", t:"00:41:02", clip:"s01", pre:"好，那我們來聽聽看大家這週的練習。", name:"美華", post:"，妳要不要先分享？", code:"Bella", ai:"name",
+   why:"名字在句子後段，前後都有停頓，只換名字比較好接。", out:{name:"p01n", sentence:"p01s"}},
+  {id:"n2", t:"00:41:46", clip:"s06", pre:"", name:"小明", post:"你也有？那你接著說。", code:"Alex", ai:"sentence",
+   why:"名字在句首、後面緊接著說話，只換名字的接縫容易聽出來。", out:{name:"p06", sentence:"p06"}},
+  {id:"n3", t:"00:42:07", clip:"s09", pre:"這就是書裡說的，我們常常以為自己是對的。", name:"培君", post:"，妳剛剛好像也想說什麼？", code:"Daisy", ai:"name",
+   flag:"轉文字寫成「培君」，名冊上最接近的是佩君，請確認。", why:"名字前後都有停頓。", out:{name:"p09", sentence:"p09"}},
+  {id:"n4", t:"00:47:12", clip:"s12", pre:"上週", name:"志豪", post:"也提到類似的事。", code:"Chris", ai:"name",
+   why:"志豪這週沒有發言，只是被老師提到。", out:{name:"p12", sentence:"p12"}}
+];
+const OVL = {id:"o1", t:"00:41:41", t2:"00:41:45", clip:"s05", spk:3, teacher:"所以後來你怎麼做？", student:"我也有這種經驗",
+  ai:"seq", why:"兩邊都有內容，前後排開最清楚。", out:{seq:"p05a", overlay:"p05b", student:"p05c", drop:null}};
+const OVL_OPTS = [
+  {v:"seq", label:"老師的話也重念：前後排開", desc:"老師用老師的 AI 聲音、學員用匿名聲線，一句講完再接下一句。影片會變長一點，用畫面停格補。"},
+  {v:"overlay", label:"老師的話也重念：照原位置疊著", desc:"兩邊都重念，但照原本的時間疊在一起，影片長度不變。"},
+  {v:"student", label:"只留學員", desc:"學員的句子用匿名聲線重念，老師的話拿掉。"},
+  {v:"drop", label:"兩邊都不留", desc:"聲音和畫面一起剪掉，畫面會跳一下。"}
+];
+const FINAL_SEQ = [
+  ["p01n","name","名字：美華 → Bella"],["s03",null,""],["p02","stu","學員重念：2 號"],["p04","stu","學員重念：2 號"],
+  ["p05a","ovl","重疊：前後排開"],["p06","name","名字：小明 → Alex"],["p07","stu","學員重念：3 號"],
+  ["p09","name","名字：培君 → Daisy"],["p10","stu","學員重念：4 號"],["p12","name","名字：志豪 → Chris"]
+];
+const FEEL = ["很順","順序怪","太花時間","不需要這一步","應該換人做","看不懂"];
+const ORDER_ALTS = [
+  {v:"A", name:"目前的排法", seq:"1 分析 → 2 分群 → 3 校對 → 4 名字、重疊、刪除 → 5 生成 → 6 逐筆聽 → 7 整片看",
+   pros:["每一步只做一種事，比較好專心"], cons:["要做到第 6 步才聽得到結果","會被刪掉的段落，第 3 步也要先校對"]},
+  {v:"B", name:"先定刪除段落", seq:"1 分析 → 2 分群 → 刪除段落 → 3 校對（跳過要刪的） → 4 名字、重疊 → 5 → 6 → 7",
+   pros:["不用校對、生成會被刪掉的內容","老師的例外清單甚至可以在分析前先套用，電腦也少跑"], cons:["刪除要先決定，之後想救回來要回頭補"]},
+  {v:"C", name:"邊校對邊生成", seq:"校對完一段，電腦就在背景生成那一段，馬上可以聽",
+   pros:["早點聽到結果、早點發現問題","校對完不久就能開始逐筆聽"], cons:["生成時電腦會變慢，操作可能卡","每一段要等它生成"]},
+  {v:"D", name:"照時間順序一次處理", seq:"不分三輪：從影片開頭往後，遇到學員發言就校對，遇到名字或重疊就選做法",
+   pros:["像看影片一樣順，不用來回跳"], cons:["同一類的決定分散，前後比較難一致（例如名字的換法）"]}
+];
+
+/* ── 狀態（存在這台電腦的瀏覽器，方便重新整理後接著點）──────────── */
+const KEY = "bookclub-proto-v1";
+function initState(){
+  const s = {view:"home", setupTab:"roster", s4Tab:"names", sel:{s3:0,s4:0,s6:0},
+    done:{}, s1:{state:"idle", i:-1}, s5:{state:"idle", i:-1},
+    spk:{}, segs:{}, names:{}, ovl:{method:OVL.ai, teacher:OVL.teacher, student:OVL.student},
+    dels:[{id:"d1", from:"00:43:05", to:"00:43:40", src:"老師例外清單", note:"網路斷線、重新連線", clip:"s11"},
+          {id:"d2", from:"01:38:18", to:"影片結尾", src:"老師例外清單", note:"下課後閒聊，之後全部刪除"}],
+    review:{}, fixes:[], exported:false,
+    tt:{ratings:{}, revealed:false, chosen:""}, fbDraft:{}, order:[], who:""};
+  SPK.forEach(p => s.spk[p.n] = {v: p.guess, ok:false});
+  SEGS.forEach(g => s.segs[g.id] = {text:g.draft, done:false, ask:false});
+  NAMES.forEach(n => s.names[n.id] = {method:n.ai});
+  return s;
+}
+function load(){ try{ const raw = localStorage.getItem(KEY); return raw ? JSON.parse(raw) : null; }catch(e){ return null; } }
+let S = load() || initState();
+let saveT = null;
+function save(){ clearTimeout(saveT); saveT = setTimeout(() => { try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }, 150); }
+
+/* ── 小工具 ─────────────────────────────────────── */
+const $ = (sel, root=document) => root.querySelector(sel);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const whoPills = arr => arr.map(w => `<span class="who-pill who-${w}">${WHO[w]}</span>`).join("");
+const stepOf = id => STEPS.find(s => s.id === id);
+const rosterOf = zh => ROSTER.find(r => r.zh === zh);
+function spkLabel(n){ const v = S.spk[n] && S.spk[n].v; return v ? `${n} 號・${v}` : `${n} 號`; }
+function voiceOfSpk(n){ const r = rosterOf(S.spk[n] && S.spk[n].v); return r ? r.voice : "（還沒指定）"; }
+function fmt(sec){ sec = Math.max(0, sec); const m = Math.floor(sec/60), s = Math.floor(sec%60); return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`; }
+function toast(msg){ const t = $("#toast"); t.textContent = msg; t.classList.add("is-on"); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("is-on"), 2200); }
+const playBtn = (id, label="播放", extra="") => `<button type="button" class="play ${extra}" data-play="${id}" aria-label="播放：${esc(label)}">${esc(label)}</button>`;
+
+/* ── 聲音 ───────────────────────────────────────── */
+const player = new Audio();
+let playingId = null;
+function play(id){
+  if (!id) return;
+  const fin = $("#finalAudio"); if (fin && !fin.paused) fin.pause();
+  if (playingId === id && !player.paused){ player.pause(); playingId = null; paintPlaying(); return; }
+  player.src = `audio/${id}.mp3`;
+  player.play().catch(() => toast("這個瀏覽器擋住了自動播放，請再按一次"));
+  playingId = id; paintPlaying();
+}
+player.addEventListener("ended", () => { playingId = null; paintPlaying(); });
+player.addEventListener("pause", paintPlaying);
+function paintPlaying(){ document.querySelectorAll("[data-play]").forEach(b => b.classList.toggle("is-playing", b.dataset.play === playingId && !player.paused)); }
+
+/* ── 左側步驟列 ─────────────────────────────────── */
+function renderRail(){
+  const items = [`<button class="rail-item ${S.view==="home"?"is-on":""}" data-go="home"><span class="rail-num" aria-hidden="true">≡</span><span class="rail-name">流程總覽</span></button>`, `<div class="rail-sep"></div>`];
+  STEPS.forEach(st => {
+    items.push(`<button class="rail-item ${S.view===st.id?"is-on":""} ${S.done[st.id]?"is-done":""}" data-go="${st.id}">
+      <span class="rail-num">${S.done[st.id] ? "✓" : st.n}</span>
+      <span class="rail-name">${st.name}</span>
+      <span class="rail-who">${whoPills(st.who)}</span></button>`);
+  });
+  items.push(`<div class="rail-sep"></div><div class="rail-foot">
+    <button class="linkish" data-go="home" data-anchor="allfb">看全部回饋</button>
+    <button class="linkish" data-act="reset">${resetArmed ? "再按一次，清掉樣品資料" : "重設樣品資料"}</button></div>`);
+  $("#rail").innerHTML = items.join("");
+}
+let resetArmed = false;
+
+/* ── 各頁 ───────────────────────────────────────── */
+function head(st, extra=""){
+  return `<div class="page-head"><div class="eyebrow"><span class="mono">第 ${st.n} 步</span>${whoPills(st.who)}<span>${st.time}（${st.timeNote}）</span></div>
+    <h2>${st.name}</h2><p>${st.what}</p>${extra}</div>`;
+}
+function nextRow(id, label){
+  const i = STEPS.findIndex(s => s.id === id);
+  const nx = STEPS[i+1];
+  return `<div class="next-row"><span class="store-note">這一頁的操作會記在這台電腦的瀏覽器，重新整理不會不見。</span>
+    ${nx ? `<button class="btn btn-primary" data-done="${id}" data-go="${nx.id}">${label || "這一步完成，下一步"}：${nx.name}</button>`
+         : `<button class="btn btn-primary" data-done="${id}" data-go="home">完成，回到流程總覽</button>`}</div>`;
+}
+
+const V = {};
+
+V.home = () => {
+  const flow = STEPS.map(st => `<li><div class="n">${st.n}</div>
+    <div><h3>${st.name}${whoPills(st.who)}</h3><p>${st.what}</p>
+      <button class="btn open" data-go="${st.id}">點進去試</button></div>
+    <div class="time"><b>${st.time}</b>${st.timeNote}</div></li>`).join("");
+  const alts = ORDER_ALTS.map(a => `<div class="alt ${S.order.includes(a.v)?"is-picked":""}">
+    <h4><span class="tag">${a.v}</span>${a.name}</h4><div class="seq">${a.seq}</div>
+    <ul>${a.pros.map(p => `<li>好處：${p}</li>`).join("")}${a.cons.map(c => `<li>代價：${c}</li>`).join("")}</ul>
+    <label><input type="checkbox" data-order="${a.v}" ${S.order.includes(a.v)?"checked":""}> 我想試試這種</label></div>`).join("");
+  return `<section class="panel"><div class="page-head">
+      <div class="eyebrow"><span>每支影片約 2 小時・時間都是估計，試做後換成實測</span></div>
+      <h2>一支影片要走過的路</h2>
+      <p>這是可以點的樣品：名字、對話、聲音都是假的，AI 的部分用模擬。請照順序點一遍，每一步右邊可以留下感覺；送出的回饋我讀得到。</p></div>
+    <ol class="flow" style="margin-top:10px">${flow}</ol></section>
+
+  <section class="panel"><div class="page-head"><h2>誰做哪些事</h2>
+    <p>最想請你看的是這一塊：夥伴每支影片要花多少時間、哪些地方要等老師回答。</p></div>
+    <div class="split" style="margin-top:12px">
+      <div><h4><span class="who-pill who-ai">電腦</span></h4><div class="big">第 1、5 步</div><p>可以放著跑；第 5 步的生成速度要在夥伴電腦上實測，可能要過夜。</p></div>
+      <div><h4><span class="who-pill who-partner">夥伴</span></h4><div class="big">每支 5–8 小時</div><p>第 2、3、4、6、7 步。其中第 3 步校對最重，約佔一半（估計）。</p></div>
+      <div><h4><span class="who-pill who-teacher">老師</span></h4><div class="big">一次性＋例外清單</div><p>名冊、聲線、聽老師聲音的樣本；每支影片給例外清單。聽不出是誰、聽不清楚時，夥伴要問老師。</p></div>
+    </div></section>
+
+  <section class="panel"><div class="page-head"><h2>順序的其他排法</h2>
+    <p>如果目前的順序感覺怪，看看這幾種有沒有比較順的。可以勾不只一種（例如 B＋C）。勾完到右邊寫下原因再送出。</p></div>
+    <div class="alts" style="margin-top:12px">${alts}</div></section>
+
+  <section class="panel" id="allfb"><div class="page-head"><h2>全部回饋</h2>
+    <p>每一步送出的回饋都在這裡。${fbDb ? "回饋存在這個頁面的資料庫，我這邊讀得到。" : "目前回饋只存在這台電腦的瀏覽器；要傳給我，按下面的「全選」後複製，貼到對話裡。"}</p></div>
+    <div id="allfbList" class="fb-list" style="max-height:none;margin-top:10px"></div>
+    <div class="btn-row" style="margin-top:10px"><button class="btn" data-act="selectExport">全選文字</button></div>
+    <textarea class="export" id="exportText" readonly aria-label="全部回饋文字"></textarea></section>`;
+};
+
+V.setup = () => {
+  const st = stepOf("setup");
+  const tabs = [["roster","名冊"],["voices","匿名聲線"],["teacher","老師的聲音"]].map(([k,l]) =>
+    `<button class="tab ${S.setupTab===k?"is-on":""}" data-setup-tab="${k}">${l}</button>`).join("");
+  let body = "";
+  if (S.setupTab === "roster"){
+    body = `<div class="note"><b>誰做：</b>老師提供名單，夥伴輸入。一位學員只能有一個英文代號、一個聲線。「其他寫法」是轉文字可能聽錯的同音字，填越多，電腦越抓得到。</div>
+    <div class="tbl-wrap"><table><thead><tr><th>中文名</th><th>其他寫法</th><th>英文代號</th><th>固定聲線</th><th>性別</th><th></th></tr></thead><tbody>
+    ${ROSTER.map(r => `<tr><td>${r.zh}</td><td>${r.alt.join("、")}</td><td class="mono">${r.code}</td><td>${r.voice}</td><td>${r.sex}</td><td>${playBtn(r.clip, "聽聲線")}</td></tr>`).join("")}
+    </tbody></table></div>`;
+  } else if (S.setupTab === "voices"){
+    const users = v => ROSTER.filter(r => r.voice === v).map(r => r.zh).join("、") || "（還沒分配）";
+    body = `<div class="note"><b>誰做：</b>夥伴先挑，老師聽過再定案。同一位學員每一週都用同一個聲線。<br>樣品用的是電腦內建語音；正式版要找<b>可以商用、而且不像任何一位真實學員</b>的聲音來源。</div>
+    <div class="cards">${VOICES.map(v => `<div class="card"><h4>${v.id}</h4><div class="sub">給：${users(v.id)}</div>${playBtn(v.clip, "試聽")}</div>`).join("")}</div>`;
+  } else {
+    const t = S.tt;
+    const card = (id, i) => {
+      const letter = "ABC"[i]; const r = t.ratings[id] || {};
+      const rows = TEACHER_TEST.criteria.map((c, ci) => `<span>${c}</span><span class="dots">${[1,2,3,4,5].map(v =>
+        `<button class="dot ${r[ci]===v?"is-on":""}" data-rate="${id}" data-ci="${ci}" data-v="${v}" aria-label="${c} ${v} 分">${v}</button>`).join("")}</span>`).join("");
+      return `<div class="card ${t.chosen===id?"is-set":""}"><h4>版本 ${letter}${t.chosen===id?`<span class="chip chip-ok">預設</span>`:""}</h4>
+        ${playBtn(id, "播放版本 " + letter)}<div class="rate">${rows}</div>
+        ${t.revealed ? `<div class="reveal">${TEACHER_TEST.refs[id]}</div>` : ""}
+        <button class="btn ${t.chosen===id?"btn-primary":""}" data-choose="${id}">${t.chosen===id?"已選為預設":"選這個當預設"}</button></div>`;
+    };
+    body = `<div class="note"><b>誰做：</b>夥伴準備，老師一起聽。從舊影片挑幾段老師單獨說話的片段當「參考音」（每段最長 30 秒，要附一字不差的逐字稿），用同一句新的話生成，打亂順序盲聽、打分數，再揭曉是哪一段參考音。</div>
+      <p class="sent" style="margin:0">試聽句：「${TEACHER_TEST.text}」</p>
+      <div class="cards">${TEACHER_TEST.order.map(card).join("")}</div>
+      <div class="btn-row"><button class="btn" data-act="reveal">${t.revealed ? "蓋回去" : "揭曉參考音"}</button>
+      <span class="store-note">樣品的三個版本只是用同一個電腦語音調快慢和音高，聽不出真正的差別。</span></div>`;
+  }
+  return `<section class="panel" style="display:flex;flex-direction:column;gap:14px">${head(st)}<div class="tabs" role="tablist">${tabs}</div>${body}${nextRow("setup")}</section>`;
+};
+
+const S1_STEPS = [["抽出聲音","約 3 分鐘"],["雲端轉文字（Groq）","約 10–15 分鐘"],["分辨誰在說話、找聲音重疊","約 20–40 分鐘"],["抓出每個字的時間點","待實測"],["找可能是名字的地方（Claude）","約 5 分鐘"]];
+const S5_STEPS = [["生成老師的句子（名字 4 處）","待實測"],["生成學員的匿名聲音（4 段＋重疊 1 處）","待實測"],["放回原本的時間（補靜音／微調語速／停格）","幾分鐘"],["剪掉刪除段落","幾分鐘"],["組裝成影片","約 1 小時以上"]];
+function simList(list, sim){
+  return `<ol class="steps-sim">${list.map(([n,e], i) => `<li class="${i < sim.i || sim.state==="done" ? "is-done" : i===sim.i ? "is-run" : ""}"><span class="st"></span><span>${n}</span><span class="est">${e}</span></li>`).join("")}</ol>`;
+}
+V.s1 = () => {
+  const st = stepOf("s1"), sim = S.s1;
+  const pct = sim.state==="done" ? 100 : Math.max(0, sim.i) / S1_STEPS.length * 100;
+  return `<section class="panel" style="display:flex;flex-direction:column;gap:14px">${head(st)}
+    <div class="note"><b>要放進來的：</b>原始影片「第 4 週（樣品）.mp4」2:03:18、老師的例外清單（2 筆）。這一步不用人顧，可以做別的事。</div>
+    ${simList(S1_STEPS, sim)}
+    <div class="bar" aria-hidden="true"><i style="width:${pct}%"></i></div>
+    <div class="btn-row"><button class="btn btn-ai" data-act="runS1" ${sim.state==="running"?"disabled":""}>${sim.state==="done"?"再跑一次（模擬）":sim.state==="running"?"分析中⋯":"開始分析（模擬）"}</button>
+      <span class="store-note">模擬幾秒鐘跑完；右邊的時間是 2 小時影片的估計。</span></div>
+    ${sim.state==="done" ? `<div class="summary">
+      <div><b>5</b>個聲音群</div><div><b>4</b>段學員發言<br>（2 小時約 60–120 段）</div>
+      <div><b>2</b>處聲音重疊<br>（1 處是短附和，自動略過）</div><div><b>4</b>處可能提到名字</div><div><b>2</b>段老師指定刪除</div></div>` : ""}
+    ${nextRow("s1")}</section>`;
+};
+
+V.s2 = () => {
+  const st = stepOf("s2");
+  const opts = sel => [["","（選一個）"],["老師","老師"],...ROSTER.map(r => [r.zh, r.zh]),["雜音","不是人聲／雜音"],["問老師","聽不出來，問老師"]]
+    .map(([v,l]) => `<option value="${v}" ${sel===v?"selected":""}>${l}</option>`).join("");
+  const cards = SPK.map(p => {
+    const a = S.spk[p.n];
+    return `<div class="card ${a.ok?"is-set":""}"><h4>${p.n} 號<span class="sub">共 ${p.total}</span></h4>
+      <div class="btn-row">${p.clips.map(([c,t]) => playBtn(c, t)).join("")}</div>
+      <div class="guess">電腦猜：<b>${p.guess || "不確定"}</b><br>${p.why}</div>
+      <div class="conf"><span>把握</span><span class="conf-bar ${p.conf<70?"low":""}"><i style="width:${p.conf}%"></i></span><span class="mono">${p.conf}%</span></div>
+      <label class="sub" for="spk-${p.n}">這是誰</label>
+      <select class="assign" id="spk-${p.n}" data-spk="${p.n}">${opts(a.v)}</select>
+      <button class="btn ${a.ok?"btn-primary":""}" data-spk-ok="${p.n}">${a.ok?"已確認":"確認"}</button></div>`;
+  }).join("");
+  const okN = SPK.filter(p => S.spk[p.n].ok).length;
+  return `<section class="panel" style="display:flex;flex-direction:column;gap:14px">${head(st)}
+    <div class="note"><b>為什麼要做：</b>每位學員有固定的匿名聲線，所以要知道「2 號」是誰。夥伴不一定認得學員的聲音，電腦會用「老師前一句叫了誰」來猜；真的聽不出來就選「問老師」。</div>
+    <div class="progress">已確認 ${okN} / ${SPK.length} 群</div>
+    <div class="cards">${cards}</div>
+    <div class="note">另外有 <b>2 個片段</b>電腦不確定屬於哪一群（重疊處的短句、只出現一次的聲音），正式版會在這裡列出來單獨聽。</div>
+    ${nextRow("s2")}</section>`;
+};
+
+function nameHits(text){
+  const hits = [];
+  ROSTER.forEach(r => r.alt.forEach(a => { if (text.includes(a)) hits.push({alt:a, r}); }));
+  return hits;
+}
+V.s3 = () => {
+  const st = stepOf("s3");
+  const doneN = SEGS.filter(g => S.segs[g.id].done).length;
+  const rows = SEGS.map((g, i) => {
+    const s = S.segs[g.id];
+    const sugg = g.sugg.filter(([a]) => s.text.includes(a)).map(([a,b]) =>
+      `<button class="fix-btn" data-sugg="${g.id}" data-a="${esc(a)}" data-b="${esc(b)}">AI 建議：<s>${esc(a)}</s> → ${esc(b)}</button>`).join("");
+    const hits = nameHits(s.text).map(h =>
+      `<button class="name-btn" data-name-swap="${g.id}" data-a="${esc(h.alt)}" data-b="${h.r.code}">可能是名字：${esc(h.alt)}${h.alt!==h.r.zh?`（${h.r.zh}）`:""} → 換成 ${h.r.code}</button>`).join("");
+    return `<div class="item ${S.sel.s3===i?"is-sel":""} ${s.done?"is-done":""}" data-sel="s3" data-i="${i}">
+      <div class="item-head"><span class="t">${g.t}</span><span class="chip">${spkLabel(g.spk)}</span><span class="chip">重念用：${voiceOfSpk(g.spk)}</span>${playBtn(g.id, "聽原音")}
+        ${s.done?`<span class="chip chip-ok">已校對</span>`:""}${s.ask?`<span class="chip chip-t">要問老師</span>`:""}</div>
+      <textarea class="txt" data-seg="${g.id}" aria-label="${g.t} 的逐字稿">${esc(s.text)}</textarea>
+      ${sugg || hits ? `<div class="hint-row">${sugg}${hits}</div>` : ""}
+      <div class="btn-row"><label class="hint-row"><input type="checkbox" data-seg-done="${g.id}" ${s.done?"checked":""}> 已校對</label>
+        <label class="hint-row"><input type="checkbox" data-seg-ask="${g.id}" ${s.ask?"checked":""}> 聽不清楚，問老師</label></div></div>`;
+  }).join("");
+  return `<section class="panel" style="display:flex;flex-direction:column;gap:14px">${head(st)}
+    <div class="note"><b>為什麼每句都要改對：</b>學員的原聲不會留在成品裡，成品裡的學員聲音是照這份文字重念的。文字錯一個字，成品就念錯一個字。<br>重疊處的學員句子，在第 4 步一起處理。</div>
+    <div class="progress"><span>已校對 ${doneN} / ${SEGS.length} 段（樣品）</span><span class="bar"><i style="width:${doneN/SEGS.length*100}%"></i></span></div>
+    <div class="keys"><span><kbd>j</kbd>／<kbd>k</kbd> 下一段／上一段</span><span><kbd>p</kbd> 聽原音</span><span><kbd>Enter</kbd> 標記已校對</span></div>
+    <div class="items">${rows}</div>${nextRow("s3")}</section>`;
+};
+
+function s4Items(){ return S.s4Tab==="names" ? NAMES : S.s4Tab==="ovl" ? [OVL] : S.dels; }
+V.s4 = () => {
+  const st = stepOf("s4");
+  const tabs = [["names","老師提到名字",NAMES.length],["ovl","聲音重疊",2],["dels","刪除段落",S.dels.length]].map(([k,l,c]) =>
+    `<button class="tab ${S.s4Tab===k?"is-on":""}" data-s4-tab="${k}">${l}<span class="count">${c}</span></button>`).join("");
+  let body = "";
+  if (S.s4Tab === "names"){
+    body = NAMES.map((n, i) => {
+      const m = S.names[n.id].method;
+      const opt = (v, label, desc) => `<label class="opt ${m===v?"is-on":""}"><input type="radio" name="nm-${n.id}" data-name-m="${n.id}" value="${v}" ${m===v?"checked":""}>
+        <span>${label}${n.ai===v?`<span class="ai-tag">AI 建議</span>`:""}<small>${desc}</small></span></label>`;
+      return `<div class="item ${S.sel.s4===i?"is-sel":""}" data-sel="s4" data-i="${i}">
+        <div class="item-head"><span class="t">${n.t}</span><span class="chip chip-t">老師</span>${playBtn(n.clip, "聽原句")}<span>換成 <b class="mono">${n.code}</b></span></div>
+        <p class="sent" style="margin:0">${esc(n.pre)}<mark>${esc(n.name)}</mark>${esc(n.post)}</p>
+        ${n.flag ? `<div class="note warn-note">${n.flag}</div>` : ""}
+        <div class="opts">${opt("name","只換名字","原句保留，只把名字換成老師 AI 聲音念的英文名。")}${opt("sentence","整句換掉","整句改由老師的 AI 聲音重念。")}</div>
+        <div class="store-note">AI 的理由：${n.why}</div></div>`;
+    }).join("") + `<div class="note">預設用哪一種，會先做 3 組樣本給老師聽，由老師決定。這裡每一筆都還能改。</div>`;
+  } else if (S.s4Tab === "ovl"){
+    const o = S.ovl;
+    body = `<div class="item ${S.sel.s4===0?"is-sel":""}" data-sel="s4" data-i="0">
+      <div class="item-head"><span class="t">${OVL.t}–${OVL.t2}</span><span class="chip chip-t">老師</span><span class="chip">${spkLabel(OVL.spk)}</span>${playBtn(OVL.clip, "聽重疊處")}</div>
+      <div class="note">兩個人的聲音疊在一起時，電腦的文字最容易錯，<b>一定要人聽過再確認</b>。</div>
+      <div class="pair"><label for="ovl-t">老師說（電腦初稿）<textarea class="txt" id="ovl-t" data-ovl="teacher">${esc(o.teacher)}</textarea></label>
+        <label for="ovl-s">學員說（電腦初稿）<textarea class="txt" id="ovl-s" data-ovl="student">${esc(o.student)}</textarea></label></div>
+      <div class="opts">${OVL_OPTS.map(x => `<label class="opt ${o.method===x.v?"is-on":""}"><input type="radio" name="ovl-m" data-ovl-m="${x.v}" ${o.method===x.v?"checked":""}>
+        <span>${x.label}${OVL.ai===x.v?`<span class="ai-tag">AI 建議</span>`:""}<small>${x.desc}</small>
+        ${OVL.out[x.v] ? `<span class="sub-opts">${playBtn(OVL.out[x.v], "聽這樣做的結果", "after")}</span>` : ""}</span></label>`).join("")}</div>
+      <div class="store-note">沒有「不處理」：原樣保留等於學員的原聲留在成品裡。</div></div>
+      <div class="item muted-item"><div class="item-head"><span class="t">00:42:06</span><span class="chip">4 號・佩君</span><span class="chip chip-ok">自動略過</span></div>
+      <div>「嗯。」0.3 秒：短於半秒的附和，不列入處理，也不用你選。</div></div>`;
+  } else {
+    body = `<div class="note">剪點會自動對齊到附近的靜音處。來源：老師的例外清單、你手動新增。</div>
+      <div>${S.dels.map((d, i) => `<div class="del-row ${S.sel.s4===i?"is-sel":""}" data-sel="s4" data-i="${i}">
+        <input aria-label="開始時間" data-del="${d.id}" data-f="from" value="${esc(d.from)}"><span>到</span>
+        <input aria-label="結束時間" data-del="${d.id}" data-f="to" value="${esc(d.to)}">
+        <span><span class="chip ${d.src==="老師例外清單"?"chip-t":""}">${esc(d.src)}</span> ${esc(d.note)}</span>
+        <span>${d.clip ? playBtn(d.clip, "聽") : ""}${d.src==="手動新增"?` <button class="btn" data-del-rm="${d.id}">移除</button>`:""}</span></div>`).join("")}</div>
+      <div class="btn-row"><button class="btn" data-act="addDel">＋ 新增刪除段落</button><button class="btn" data-act="importDel">匯入老師的例外清單</button></div>`;
+  }
+  return `<section class="panel" style="display:flex;flex-direction:column;gap:14px">${head(st)}
+    <div class="tabs" role="tablist">${tabs}</div>
+    <div class="keys"><span><kbd>j</kbd>／<kbd>k</kbd> 下一筆／上一筆</span><span><kbd>p</kbd> 聽原句</span><span><kbd>空白鍵</kbd> 換做法</span></div>
+    <div class="items">${body}</div>${nextRow("s4")}</section>`;
+};
+
+V.s5 = () => {
+  const st = stepOf("s5"), sim = S.s5;
+  const total = 9, cur = sim.state==="done" ? total : Math.max(0, Math.min(total, Math.round((sim.i+1) / S5_STEPS.length * total)));
+  const pct = sim.state==="done" ? 100 : Math.max(0, sim.i) / S5_STEPS.length * 100;
+  return `<section class="panel" style="display:flex;flex-direction:column;gap:14px">${head(st)}
+    <div class="note"><b>先換聲、後剪接：</b>所有聲音先在原本的時間上換好，最後才一次剪掉要刪的段落、補上停格。影片只重新輸出一次。</div>
+    ${simList(S5_STEPS, sim)}
+    <div class="bar" aria-hidden="true"><i style="width:${pct}%"></i></div>
+    <div class="progress">目前生成到第 ${cur} / ${total} 句・預估剩餘：待實測</div>
+    <div class="btn-row"><button class="btn btn-ai" data-act="runS5" ${sim.state==="running"?"disabled":""}>${sim.state==="done"?"再跑一次（模擬）":sim.state==="running"?"執行中⋯":"開始執行（模擬）"}</button>
+      ${sim.state==="running" ? `<button class="btn" data-act="pauseS5">中斷</button>` : ""}
+      <span class="store-note">真的在跑時可以中斷，下次從中斷的地方接著做。</span></div>
+    ${nextRow("s5")}</section>`;
+};
+
+function reviewItems(){
+  const out = [];
+  S.fixes.forEach(f => out.push({id:f.id, kind:"修補", t:f.t, note:f.note, fix:true, sort:f.sec}));
+  NAMES.forEach(n => { const m = S.names[n.id].method; out.push({id:"r_"+n.id, kind:"名字", t:n.t, before:n.clip, after:n.out[m], teacher:true, label:(m==="name"?"只換名字":"整句換掉")+`：${n.name} → ${n.code}`}); });
+  const om = S.ovl.method;
+  out.push({id:"r_o1", kind:"重疊", t:OVL.t, before:OVL.clip, after:OVL.out[om], method:om, label:OVL_OPTS.find(x => x.v===om).label});
+  SEGS.forEach(g => out.push({id:"r_"+g.id, kind:"學員重念", t:g.t, before:g.id, after:"p"+g.id.slice(1), label:`${spkLabel(g.spk)} → ${voiceOfSpk(g.spk)}`}));
+  const toSec = t => { const p = String(t).split(":").map(Number); return p.length===3 ? p[0]*3600+p[1]*60+p[2] : 0; };
+  return out.sort((a,b) => (a.fix?-1:0) - (b.fix?-1:0) || toSec(a.t) - toSec(b.t));
+}
+function fitInfo(it){
+  if (it.kind === "重疊"){
+    if (it.method === "drop") return {c:"info", t:"聲音和畫面一起剪掉 2 秒，畫面會跳一下"};
+    if (it.method === "seq") return {c:"warn", t:`影片變長 ${(DUR[it.after]-DUR[it.before]).toFixed(1)} 秒，用畫面停格補（停格時老師的嘴不會動）`};
+    return {c:"ok", t:"長度跟原本差不多"};
+  }
+  if (!it.before || !it.after) return null;
+  const d = (DUR[it.after] - DUR[it.before]) / DUR[it.before], pct = Math.round(Math.abs(d)*100);
+  if (it.teacher){
+    return Math.abs(d) > .15 ? {c:"warn", t:`老師的句子${d<0?"短":"長"}了 ${pct}%，畫面上的嘴型可能對不上`} : {c:"ok", t:"長度差不多，嘴型對得上"};
+  }
+  if (d < -.03) return {c:"ok", t:`短了 ${pct}%，後面補靜音`};
+  if (d <= .03) return {c:"ok", t:"長度幾乎一樣"};
+  if (d <= .15) return {c:"info", t:`長了 ${pct}%，稍微調快語速`};
+  return {c:"warn", t:`長了 ${pct}%，用畫面停格補`};
+}
+V.s6 = () => {
+  const st = stepOf("s6");
+  const items = reviewItems();
+  const decided = items.filter(it => (S.review[it.id]||{}).status).length;
+  const rows = items.map((it, i) => {
+    const r = S.review[it.id] || {status:"", note:""}, fit = fitInfo(it);
+    return `<div class="item ${S.sel.s6===i?"is-sel":""}" data-sel="s6" data-i="${i}">
+      <div class="item-head"><span class="t">${it.t}</span><span class="chip ${it.fix?"chip-warn":it.kind==="名字"?"chip-t":it.kind==="重疊"?"chip-ai":""}">${it.kind}</span><span>${esc(it.label || it.note || "")}</span></div>
+      ${it.fix ? `<div class="note">整片檢查時回報：${esc(it.note || "（沒寫說明）")}。正式版會在這裡放那個時間點前後的片段。</div>` :
+        `<div class="ba">${playBtn(it.before, "處理前")}${it.after ? playBtn(it.after, "處理後", "after") : `<span class="chip">處理後：沒有聲音（整段剪掉）</span>`}</div>`}
+      ${fit ? `<div class="fit ${fit.c}">${fit.t}</div>` : ""}
+      <div class="decide"><button class="btn ${r.status==="ok"?"is-on-ok":""}" data-rv="${it.id}" data-s="ok">接受</button>
+        <button class="btn ${r.status==="redo"?"is-on-warn":""}" data-rv="${it.id}" data-s="redo">退回重做</button>
+        ${r.status==="redo" ? `<input data-rv-note="${it.id}" value="${esc(r.note)}" placeholder="說一句怎麼改，例如：念慢一點、Bella 的發音不對" aria-label="退回原因">` : ""}</div></div>`;
+  }).join("");
+  return `<section class="panel" style="display:flex;flex-direction:column;gap:14px">${head(st)}
+    <div class="note">紅色的是電腦自己判斷可能有問題的地方，請優先聽。退回的項目只重做那一筆，其他不動。</div>
+    <div class="progress"><span>已決定 ${decided} / ${items.length} 筆</span><span class="bar"><i style="width:${decided/items.length*100}%"></i></span></div>
+    <div class="keys"><span><kbd>j</kbd>／<kbd>k</kbd> 下一筆／上一筆</span><span><kbd>p</kbd> 處理後</span><span><kbd>o</kbd> 處理前</span><span><kbd>a</kbd> 接受</span><span><kbd>r</kbd> 退回</span></div>
+    <div class="items">${rows}</div>${nextRow("s6")}</section>`;
+};
+
+function finalMarks(){
+  let t = 0; const m = [];
+  FINAL_SEQ.forEach(([id, kind, label]) => {
+    if (kind) m.push({t, kind, label});
+    if (id === "p12") m.push({t: t, kind:"del", label:"刪除點：00:43:05–00:43:40（35 秒）"});
+    t += DUR[id] + DUR.gap;
+  });
+  return m;
+}
+V.s7 = () => {
+  const st = stepOf("s7");
+  const marks = finalMarks(), tot = DUR.final;
+  const bars = Array.from({length:90}, (_, i) => `<i style="height:${20 + Math.round(Math.abs(Math.sin(i*1.7) * Math.cos(i*.37)) * 80)}%"></i>`).join("");
+  const mk = marks.map(x => `<button class="mk mk-${x.kind==="name"?"name":x.kind==="stu"?"stu":x.kind==="ovl"?"ovl":"del"}" style="left:${x.t/tot*100}%;${x.kind==="del"?"transform:translateX(6px)":""}" data-seek="${x.t}" title="${esc(x.label)}" aria-label="${esc(x.label)}"></button>`).join("")
+    + S.fixes.map(f => `<button class="mk mk-fix" style="left:${f.sec/tot*100}%" data-seek="${f.sec}" aria-label="修補項目"></button>`).join("");
+  const counts = `學員重念 ${SEGS.length} 段・名字 ${NAMES.length} 處・重疊 1 處・刪除 ${S.dels.length} 段・修補 ${S.fixes.length} 筆`;
+  return `<section class="panel" style="display:flex;flex-direction:column;gap:14px">${head(st)}
+    <div class="note">這裡放的是 52 秒的樣品片段（原片 00:41:02 起，已經剪掉中間 35 秒）。實際要看完整支成品，用 1.25–1.5 倍速約 1.5 小時。</div>
+    <div class="player">
+      <audio id="finalAudio" src="audio/final.mp3" preload="metadata"></audio>
+      <div class="pl-row"><button class="btn btn-primary" data-act="toggleFinal" id="plBtn">播放</button>
+        <span class="pl-time" id="plTime">00:00 / ${fmt(tot)}</span>
+        <span class="speed">${[1,1.25,1.5].map(r => `<button class="btn ${S.rate===r||(!S.rate&&r===1)?"is-on":""}" data-rate-final="${r}">${r}×</button>`).join("")}</span>
+        <button class="btn" data-act="flag">這裡有問題</button></div>
+      <div class="timeline" id="tl" role="slider" aria-label="成品時間軸" aria-valuemin="0" aria-valuemax="${tot}" tabindex="0"><div class="wave">${bars}</div>${mk}<div class="playhead" id="ph" style="left:0"></div></div>
+      <div class="mk-legend"><span style="--c:var(--teacher)">名字</span><span style="--c:var(--accent)">學員重念</span><span style="--c:var(--ai)">重疊</span><span style="--c:var(--warn)">刪除點</span><span style="--c:var(--ink)">你回報的問題</span></div>
+      ${flagOpen ? `<div class="decide"><input id="flagNote" placeholder="什麼問題？例如：這裡老師的聲音突然變了" aria-label="問題說明"><button class="btn btn-primary" data-act="flagSave">建立修補項目</button><button class="btn" data-act="flagCancel">取消</button></div>` : ""}
+      ${S.fixes.length ? `<div class="note">已建立 ${S.fixes.length} 筆修補項目，會出現在第 6 步最上面。<button class="linkish" data-go="s6">去第 6 步處理</button></div>` : ""}
+    </div>
+    <div class="btn-row"><button class="btn btn-primary" data-act="export">確認輸出</button></div>
+    ${S.exported ? `<div class="report">輸出完成（樣品）
+成品：第4週_隱私處理版.mp4
+處理紀錄：report.md
+${counts}
+每一筆的「處理前／處理後」與耗時，都記在 report.md。</div>` : ""}
+    ${nextRow("s7")}</section>`;
+};
+let flagOpen = false;
+
+/* ── 右側回饋 ───────────────────────────────────── */
+let fbDb = null, fbAll = [], fbSource = "local";
+function localFb(){ try{ return JSON.parse(localStorage.getItem(KEY+"-fb") || "[]"); }catch(e){ return []; } }
+function saveLocalFb(rec){ const a = localFb(); a.unshift(rec); try{ localStorage.setItem(KEY+"-fb", JSON.stringify(a)); }catch(e){} fbAll = a; }
+function viewName(v){ return v==="home" ? "流程總覽／順序" : v==="order" ? "順序的其他排法" : (stepOf(v) ? `第 ${stepOf(v).n} 步・${stepOf(v).name}` : v); }
+function fbText(rec){ const d = new Date(rec.at); return `【${viewName(rec.view)}】${rec.chips && rec.chips.length ? "感覺：" + rec.chips.join("、") + "。" : ""}${rec.order && rec.order.length ? "想試的排法：" + rec.order.join("、") + "。" : ""}${rec.note ? "說明：" + rec.note : ""}（${rec.who || "未填"}，${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}）`; }
+function renderFb(){
+  const v = S.view, d = S.fbDraft[v] || {chips:[], note:""};
+  const mine = fbAll.filter(r => r.view === v);
+  const isHome = v === "home";
+  $("#fb").innerHTML = `<h3>${isHome ? "對整體流程或排法的感覺" : "這一步的感覺"}</h3>
+    <p class="desc">${isHome ? "勾了「其他排法」的話，會一起送出。" : "點選一個或多個，再寫一句原因。"}</p>
+    <div class="fchips">${FEEL.map(f => `<button class="fchip ${d.chips.includes(f)?"is-on":""}" data-feel="${f}" aria-pressed="${d.chips.includes(f)}">${f}</button>`).join("")}</div>
+    <label for="fbNote" class="desc">哪裡怪？想怎麼改？</label>
+    <textarea id="fbNote" placeholder="例如：刪除段落應該在校對之前決定">${esc(d.note)}</textarea>
+    <button class="btn btn-primary" data-act="sendFb">送出</button>
+    <span class="store-note">${fbDb ? "送出後我（Claude）讀得到。" : "目前存在這台電腦的瀏覽器；到流程總覽最下面可以複製全部回饋。"}</span>
+    ${mine.length ? `<div class="fb-list">${mine.map(r => `<div class="fb-rec">${esc(fbText(r))}</div>`).join("")}</div>` : ""}`;
+  const list = $("#allfbList");
+  if (list){
+    list.innerHTML = fbAll.length ? fbAll.map(r => `<div class="fb-rec">${esc(fbText(r))}</div>`).join("") : `<div class="store-note">還沒有回饋。</div>`;
+    const ex = $("#exportText"); if (ex) ex.value = fbAll.slice().reverse().map(fbText).join("\n");
+  }
+}
+async function sendFb(){
+  const v = S.view, d = S.fbDraft[v] || {chips:[], note:""};
+  const order = v === "home" ? S.order.slice() : [];
+  if (!d.chips.length && !d.note.trim() && !order.length){ toast("先點一個感覺，或寫幾個字"); return; }
+  const rec = {view:v, chips:d.chips, note:d.note.trim(), order, who:S.who || "", at:Date.now()};
+  let ok = false;
+  if (fbDb){ try{ await fbDb.collection("feedback").add(rec); ok = true; }catch(e){ ok = false; } }
+  if (!ok) saveLocalFb(rec);
+  S.fbDraft[v] = {chips:[], note:""}; save(); renderFb(); toast("已送出");
+}
+(async function connectDb(){
+  fbAll = localFb();
+  try{
+    const db = window.claude && window.claude.use ? await window.claude.use("db") : null;
+    if (!db) return;
+    fbDb = db;
+    db.collection("feedback").orderBy("at", "desc").limit(500).onSnapshot(snap => {
+      const remote = snap.docs.map(x => x.data());
+      fbAll = remote.concat(localFb()).sort((a,b) => b.at - a.at);
+      renderFb(); if (S.view === "home") render();
+    }, () => { fbDb = null; renderFb(); });
+    renderFb();
+  }catch(e){ fbDb = null; }
+})();
+
+/* ── 繪製 ───────────────────────────────────────── */
+function render(){
+  renderRail();
+  $("#main").innerHTML = (V[S.view] || V.home)();
+  $("#who").value = S.who || "";
+  renderFb(); paintPlaying(); bindFinal();
+}
+function go(v, anchor){
+  S.view = v; save(); render();
+  if (anchor){ const el = document.getElementById(anchor); if (el) el.scrollIntoView({behavior:"smooth", block:"start"}); }
+  else window.scrollTo({top:0});
+}
+
+/* ── 模擬執行 ─────────────────────────────────────── */
+let simTimer = null;
+function runSim(key, list){
+  clearInterval(simTimer);
+  S[key] = {state:"running", i:0}; render();
+  simTimer = setInterval(() => {
+    const s = S[key];
+    if (s.state !== "running"){ clearInterval(simTimer); return; }
+    s.i++;
+    if (s.i >= list.length){ s.state = "done"; S.done[key] = true; clearInterval(simTimer); toast(key==="s1" ? "分析完成（模擬）" : "執行完成（模擬）"); }
+    save(); if (S.view === key) render(); else renderRail();
+  }, 1100);
+}
+
+/* ── 第 7 步播放器 ────────────────────────────────── */
+function bindFinal(){
+  const a = $("#finalAudio"); if (!a) return;
+  a.playbackRate = S.rate || 1;
+  const upd = () => { const ph = $("#ph"), tt = $("#plTime"), b = $("#plBtn"); if (!ph) return;
+    ph.style.left = (a.currentTime / DUR.final * 100) + "%"; tt.textContent = `${fmt(a.currentTime)} / ${fmt(DUR.final)}`; b.textContent = a.paused ? "播放" : "暫停"; };
+  a.addEventListener("timeupdate", upd); a.addEventListener("play", upd); a.addEventListener("pause", upd); a.addEventListener("ended", upd);
+  const tl = $("#tl");
+  tl.addEventListener("click", e => { if (e.target.closest(".mk")) return; const r = tl.getBoundingClientRect(); a.currentTime = (e.clientX - r.left) / r.width * DUR.final; upd(); });
+  tl.addEventListener("keydown", e => { if (e.key==="ArrowRight"){ a.currentTime = Math.min(DUR.final, a.currentTime+2); upd(); } if (e.key==="ArrowLeft"){ a.currentTime = Math.max(0, a.currentTime-2); upd(); } });
+}
+
+/* ── 事件 ───────────────────────────────────────── */
+document.addEventListener("click", e => {
+  const b = e.target.closest("button, [data-sel]");
+  if (!b) return;
+  const d = b.dataset;
+  if (d.play){ play(d.play); return; }
+  if (d.done){ S.done[d.done] = true; }
+  if (d.go){ if (d.act !== "reset") { resetArmed = false; go(d.go, d.anchor); } return; }
+  if (d.setupTab){ S.setupTab = d.setupTab; save(); render(); return; }
+  if (d.s4Tab){ S.s4Tab = d.s4Tab; S.sel.s4 = 0; save(); render(); return; }
+  if (d.rate){ const r = S.tt.ratings[d.rate] || (S.tt.ratings[d.rate] = {}); r[d.ci] = +d.v; save(); render(); return; }
+  if (d.choose){ S.tt.chosen = d.choose; S.done.setup = true; save(); render(); toast("已設為老師聲音的預設參考音（樣品）"); return; }
+  if (d.spkOk){ S.spk[d.spkOk].ok = !S.spk[d.spkOk].ok; save(); render(); return; }
+  if (d.sugg){ const s = S.segs[d.sugg]; s.text = s.text.split(d.a).join(d.b); save(); render(); return; }
+  if (d.nameSwap){ const s = S.segs[d.nameSwap]; s.text = s.text.split(d.a).join(d.b); save(); render(); toast(`已換成 ${d.b}`); return; }
+  if (d.rv){ const r = S.review[d.rv] || (S.review[d.rv] = {status:"", note:""}); r.status = r.status === d.s ? "" : d.s; save(); render(); return; }
+  if (d.rateFinal){ S.rate = +d.rateFinal; save(); render(); return; }
+  if (d.seek){ const a = $("#finalAudio"); if (a){ a.currentTime = +d.seek; a.play().catch(()=>{}); } return; }
+  if (d.feel){ const dr = S.fbDraft[S.view] || (S.fbDraft[S.view] = {chips:[], note:""}); dr.chips = dr.chips.includes(d.feel) ? dr.chips.filter(x => x!==d.feel) : dr.chips.concat(d.feel); save(); renderFb(); return; }
+  if (d.delRm){ S.dels = S.dels.filter(x => x.id !== d.delRm); save(); render(); return; }
+  if (d.sel && !e.target.closest("button, input, textarea, select, label")){ S.sel[d.sel] = +d.i; save(); render(); return; }
+  switch (d.act){
+    case "reset":
+      if (!resetArmed){ resetArmed = true; renderRail(); setTimeout(() => { resetArmed = false; renderRail(); }, 4000); return; }
+      resetArmed = false; const who = S.who; S = initState(); S.who = who; save(); render(); toast("樣品資料已重設（回饋不受影響）"); return;
+    case "reveal": S.tt.revealed = !S.tt.revealed; save(); render(); return;
+    case "runS1": runSim("s1", S1_STEPS); return;
+    case "runS5": runSim("s5", S5_STEPS); return;
+    case "pauseS5": S.s5.state = "idle"; clearInterval(simTimer); save(); render(); toast("已中斷，下次從這裡接著做（模擬）"); return;
+    case "addDel": S.dels.push({id:"m"+Date.now(), from:"00:00:00", to:"00:00:00", src:"手動新增", note:"（填時間）"}); save(); render(); return;
+    case "importDel": toast("老師的例外清單已匯入（樣品裡已經有這 2 筆）"); return;
+    case "toggleFinal": { const a = $("#finalAudio"); if (!a) return; player.pause(); if (a.paused) a.play().catch(()=>{}); else a.pause(); return; }
+    case "flag": flagOpen = true; { const a = $("#finalAudio"); if (a) a.pause(); } render(); setTimeout(() => { const n = $("#flagNote"); if (n) n.focus(); }, 0); return;
+    case "flagCancel": flagOpen = false; render(); return;
+    case "flagSave": { const a = $("#finalAudio"), sec = a ? a.currentTime : 0, note = ($("#flagNote")||{}).value || "";
+      S.fixes.push({id:"f"+Date.now(), sec, t:"樣品片段 " + fmt(sec), note}); flagOpen = false; save(); render(); toast("已建立修補項目，會出現在第 6 步"); return; }
+    case "export": S.exported = true; S.done.s7 = true; save(); render(); return;
+    case "sendFb": sendFb(); return;
+    case "toFb": { const f = $("#fb"); if (f){ f.scrollIntoView({behavior:"smooth", block:"start"}); setTimeout(() => { const n = $("#fbNote"); if (n) n.focus({preventScroll:true}); }, 400); } return; }
+    case "selectExport": { const ex = $("#exportText"); if (ex){ ex.focus(); ex.select(); try{ navigator.clipboard && navigator.clipboard.writeText(ex.value).then(() => toast("已複製"), () => toast("已全選，按 ⌘C 複製")); }catch(err){ toast("已全選，按 ⌘C 複製"); } } return; }
+  }
+});
+document.addEventListener("change", e => {
+  const t = e.target, d = t.dataset;
+  if (t.id === "who"){ S.who = t.value; save(); return; }
+  if (d.spk){ S.spk[d.spk].v = t.value; S.spk[d.spk].ok = false; save(); render(); return; }
+  if (d.segDone){ S.segs[d.segDone].done = t.checked; save(); render(); return; }
+  if (d.segAsk){ S.segs[d.segAsk].ask = t.checked; save(); render(); return; }
+  if (d.nameM){ S.names[d.nameM].method = t.value; save(); render(); return; }
+  if (d.ovlM){ S.ovl.method = d.ovlM; save(); render(); return; }
+  if (d.order){ S.order = t.checked ? S.order.concat(d.order) : S.order.filter(x => x!==d.order); save(); render(); return; }
+});
+document.addEventListener("input", e => {
+  const t = e.target, d = t.dataset;
+  if (d.seg){ S.segs[d.seg].text = t.value; save(); return; }
+  if (d.ovl){ S.ovl[d.ovl] = t.value; save(); return; }
+  if (d.del){ const x = S.dels.find(y => y.id === d.del); if (x) x[d.f] = t.value; save(); return; }
+  if (d.rvNote){ (S.review[d.rvNote] || (S.review[d.rvNote] = {status:"redo", note:""})).note = t.value; save(); return; }
+  if (t.id === "fbNote"){ (S.fbDraft[S.view] || (S.fbDraft[S.view] = {chips:[], note:""})).note = t.value; save(); return; }
+});
+document.addEventListener("keydown", e => {
+  const tag = (e.target.tagName || "").toLowerCase();
+  if (tag === "textarea" || tag === "input" || tag === "select"){ if (e.key === "Escape") e.target.blur(); return; }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const v = S.view;
+  const lists = {s3:SEGS, s4:s4Items(), s6:reviewItems()};
+  if (!lists[v]) return;
+  const n = lists[v].length, i = S.sel[v] || 0;
+  const k = e.key;
+  if (k === "j" || k === "k"){ S.sel[v] = Math.max(0, Math.min(n-1, i + (k==="j"?1:-1))); save(); render();
+    const el = document.querySelector(`[data-sel="${v}"][data-i="${S.sel[v]}"]`); if (el) el.scrollIntoView({block:"nearest"}); e.preventDefault(); return; }
+  if (v === "s3"){ const g = SEGS[i];
+    if (k === "p"){ play(g.id); e.preventDefault(); }
+    if (k === "Enter"){ S.segs[g.id].done = !S.segs[g.id].done; save(); render(); e.preventDefault(); } }
+  if (v === "s4"){
+    if (k === "p"){ const it = lists.s4[i]; play(it && it.clip); e.preventDefault(); }
+    if (k === " "){ e.preventDefault();
+      if (S.s4Tab === "names"){ const nm = NAMES[i]; S.names[nm.id].method = S.names[nm.id].method === "name" ? "sentence" : "name"; }
+      else if (S.s4Tab === "ovl"){ const ord = OVL_OPTS.map(x => x.v); S.ovl.method = ord[(ord.indexOf(S.ovl.method)+1) % ord.length]; }
+      save(); render(); } }
+  if (v === "s6"){ const it = lists.s6[i]; if (!it) return;
+    if (k === "p"){ play(it.after); e.preventDefault(); }
+    if (k === "o"){ play(it.before); e.preventDefault(); }
+    if (k === "a" || k === "r"){ const r = S.review[it.id] || (S.review[it.id] = {status:"", note:""}); r.status = k==="a" ? "ok" : "redo"; save(); render(); e.preventDefault(); } }
+});
+
+render();
+})();
+</script>

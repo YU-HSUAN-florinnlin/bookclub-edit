@@ -1,0 +1,15 @@
+# 版本上限：這些套件的新版不再提供 Intel Mac（x86_64）安裝檔，只能停在下面這些版本。
+#
+# 兩種晶片（Intel／Apple Silicon）一律套用同一組上限，不為 Apple Silicon 另外放寬。
+# 這是刻意的：如果 Apple Silicon 裝了更新版本，會出現「宇軒的 M1 測試都正常，夥伴的
+# Intel Mac 卻裝不起來或跑不出結果」的落差，事後很難查。安裝時用
+#   uv pip install -r requirements.txt -c constraints.txt
+# 把這份也帶入，requirements.txt 裡沒特別寫版本的套件，版本不會超過這裡的上限。
+torch==2.2.2
+torchaudio==2.2.2
+numpy<2
+llvmlite<=0.45.1
+numba<=0.62.1
+onnxruntime<=1.23.2
+scipy<=1.17.1
+cryptography<=48.0.1

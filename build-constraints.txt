@@ -1,0 +1,6 @@
+# 建置期版本上限（用 --build-constraint 帶入，跟 constraints.txt 是分開機制）。
+#
+# openai-whisper 這個套件沒有預先編好的安裝檔，安裝時會現場用原始碼建置；
+# 它建置腳本用的是新版 setuptools 已經拿掉的舊寫法，建置當下要鎖住版本才不會失敗。
+# 執行期（跑程式的時候）也需要舊版 setuptools，那個限制寫在 requirements.txt。
+setuptools<81

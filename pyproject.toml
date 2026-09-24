@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bookclub-edit"
+version = "0.1.0"
+description = "讀書會影片隱私處理工具：學員聲音換成匿名聲線、名字換成代號。"
+requires-python = ">=3.11,<3.12"
+# 相依套件不寫在這裡，改由 requirements.txt／constraints.txt 管理（Intel 與 Apple
+# Silicon 要套用同一組版本上限，用 requirements 才方便一起檢查）。這裡只是為了讓
+# `pip install -e . --no-deps` 能產生 `bookclub` 這個指令。
+dependencies = []
+
+[project.scripts]
+bookclub = "bookclub.cli:main"
+
+[tool.setuptools]
+packages = ["bookclub"]

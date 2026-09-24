@@ -1,0 +1,30 @@
+# 讀書會剪輯工具設定檔（範本）
+#
+# install.sh 會把這份複製到 ~/讀書會剪輯資料/settings.toml（已經有這個檔案
+# 就不覆蓋）。之後要調整門檻或模型，直接改 ~/讀書會剪輯資料/settings.toml，
+# 不要改這份範本——範本是給「還沒有設定檔的人」用的起點。
+
+[server]
+port = 8766  # 網頁伺服器的埠號，啟動後網址是 http://localhost:8766
+
+[claude_models]
+# 呼叫 claude -p 時用哪個模型，名稱寫在這裡、程式不寫死，之後要換模型改這裡就好。
+punctuation = "sonnet"  # 標點還原：規則清楚、次數多，用快速的模型
+naming = "opus"         # 名字候選判斷：需要判斷語意，用能力較強的模型
+
+[thresholds]
+# 生成的聲音比原本的時間格長多少（比例）以內，用微調語速處理；超過才標紅讓人決定
+length_tolerance = 0.15
+# 兩人重疊的時間在這秒數以內、而且是「嗯、對、好」這類附和詞，自動當附和過濾掉
+echo_overlap_max_s = 0.5
+# 名字比對要不要放寬（同音字也算候選）。true 比較不會漏掉，但候選會變多，覆核量增加
+name_match_relaxed = true
+
+[paths]
+cosyvoice_model_dir = "~/.cache/bookclub/Fun-CosyVoice3-0.5B"  # 聲音生成模型放的位置
+aligner_model_id = "Qwen/Qwen3-ForcedAligner-0.6B"             # 逐字對位模型（Hugging Face 上的名稱）
+
+[overlap]
+# 找重疊、分辨說話者只在「學員／不確定的句子」前後各留幾秒的範圍跑 pyannote，
+# 純老師講話的長區塊不跑（省時間）。對應 02 規格的 overlap_scan_pad_s
+scan_pad_s = 3.0

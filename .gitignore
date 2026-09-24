@@ -1,0 +1,12 @@
+.venv*/
+third_party/
+spikes/
+tests/smoke/out/
+__pycache__/
+*.egg-info/
+*.wav
+*.aiff
+.DS_Store
+
+# 樣品網頁的聲音是 macOS 系統語音做的（授權只限個人使用），不放進公開倉庫；用 prototype/make_audio.sh 重新產生
+prototype/audio/
