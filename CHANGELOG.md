@@ -2,6 +2,15 @@
 
 版本號用 `主.次.修`，主版本 0 代表還在開發、介面與檔案格式可能改變。
 
+## 0.1.2（2026-09-24）
+
+- **安裝腳本改成跨平台**：同一份 `install.sh` 在 macOS 與 Linux（含 Windows 的 WSL2 Ubuntu）都能跑。自動判斷作業系統，WSL2 會標示出來；macOS 走 Homebrew、Linux 走 apt-get（ffmpeg、sox、git、build-essential、curl、unzip），`uv` 在 Linux 用官方安裝指令
+- Python 版本目標依平台與晶片組出（macOS arm64／x86_64、Linux x86_64／aarch64）
+- `--intel` 只在 macOS 有效，在 Linux 上會明確報錯
+- `bookclub doctor` 的「作業系統／晶片／記憶體」三項改成跨平台，Linux 讀 `/etc/os-release` 與 `/proc/meminfo`，WSL2 另外標示
+- 新增 `tests/test_platform.py`（17 個測試，用假的系統檔內容驗 Linux 分支），全倉庫 138 個
+- **尚未在真的 WSL2 上實跑驗證**
+
 ## 0.1.1（2026-09-24）
 
 - **安裝前先檢查電腦裡已經有什麼**：新增 `bookclub/detect.py`，偵測系統工具、CosyVoice 原始碼與模型權重、pyannote 模型、Silero VAD、現成的 Python 環境。`install.sh` 與 `bookclub doctor` 共用同一份邏輯

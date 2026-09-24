@@ -58,24 +58,67 @@ class Check:
 # ── 系統資訊（純顯示，不影響總結）────────────────────────────
 
 
-def check_macos_version() -> Check:
-    version = platform.mac_ver()[0] or "未知"
-    return Check("macOS 版本", True, version, required=False)
+def is_wsl() -> bool:
+    """在 Windows 的 WSL2 裡跑嗎（夥伴的環境）。取不到就當作不是。"""
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return False
+
+
+def linux_distro_name() -> str:
+    """從 /etc/os-release 讀發行版名稱（Ubuntu 22.04 之類），讀不到回傳 Linux。"""
+    try:
+        for line in Path("/etc/os-release").read_text(encoding="utf-8").splitlines():
+            if line.startswith("PRETTY_NAME="):
+                return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return "Linux"
+
+
+def linux_mem_gb() -> float:
+    """從 /proc/meminfo 讀總記憶體（GB），讀不到回傳 0。"""
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1]) / (1024**2)  # kB → GB
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0.0
+
+
+def check_os_version() -> Check:
+    """作業系統：macOS 顯示版本；Linux 顯示發行版，WSL2 另外標示。"""
+    if platform.system() == "Darwin":
+        return Check("作業系統", True, f"macOS {platform.mac_ver()[0] or '未知'}", required=False)
+    detail = linux_distro_name()
+    if is_wsl():
+        detail += "（WSL2，Windows 裡的 Linux）"
+    return Check("作業系統", True, detail, required=False)
 
 
 def check_chip() -> Check:
     machine = platform.machine()
-    label = {
-        "arm64": "arm64（Apple Silicon）",
-        "x86_64": "x86_64（Intel，或在 Apple Silicon 上以 Rosetta 模擬 Intel）",
-    }.get(machine, machine)
+    if platform.system() == "Darwin":
+        label = {
+            "arm64": "arm64（Apple Silicon）",
+            "x86_64": "x86_64（Intel，或在 Apple Silicon 上以 Rosetta 模擬 Intel）",
+        }.get(machine, machine)
+    else:
+        label = {"aarch64": "aarch64（ARM）", "x86_64": "x86_64"}.get(machine, machine)
     return Check("晶片", True, label, required=False)
 
 
 def check_memory() -> Check:
     try:
-        out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
-        mem_gb = int(out.stdout.strip()) / (1024**3)
+        if platform.system() == "Darwin":
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
+            mem_gb = int(out.stdout.strip()) / (1024**3)
+        else:
+            mem_gb = linux_mem_gb()
+        if mem_gb <= 0:
+            return Check("記憶體", True, "無法偵測", required=False)
         detail = f"約 {mem_gb:.0f}GB"
         if mem_gb < 8:
             detail += "（低於建議的 8GB，聲音生成等步驟可能較吃緊）"
@@ -314,7 +357,7 @@ def check_roster_file() -> Check:
 
 def run_checks(include_claude_call: bool) -> list[Check]:
     checks = [
-        check_macos_version(),
+        check_os_version(),
         check_chip(),
         check_memory(),
         check_disk_space(),

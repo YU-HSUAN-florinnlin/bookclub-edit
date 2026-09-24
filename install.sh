@@ -3,6 +3,7 @@
 #
 # 用法：
 #   bash install.sh              一般安裝（Intel Mac／Apple Silicon 都用這個）
+#   （macOS 與 Linux／WSL2 Ubuntu 共用同一份腳本，會自動判斷）
 #   bash install.sh --intel      在 Apple Silicon 上模擬 Intel 環境（開發測試用，
 #                                 真的 Intel Mac 不需要加這個參數）
 #   bash install.sh --no-skill   不建立 Claude Code 的 skill 捷徑
@@ -36,6 +37,13 @@ done
 # ── [0] 先檢查電腦裡已經有什麼 ───────────────────────────────
 # 別人可能已經照其他說明裝過 CosyVoice（原始碼＋模型約 7GB）。先偵測一次，
 # 已經有的就沿用、不重抓；偵測邏輯在 bookclub/detect.py，doctor 也用同一份。
+# ── 作業系統偵測（macOS 與 Linux／WSL2 共用同一份腳本）──────────
+OS_KIND="$(uname -s)"          # Darwin ／ Linux
+IS_WSL=0
+if [ "$OS_KIND" = "Linux" ] && grep -qi microsoft /proc/version 2>/dev/null; then
+  IS_WSL=1
+fi
+
 SYS_PYTHON="$(command -v python3 || true)"
 if [ -z "$SYS_PYTHON" ]; then
   echo "❌ 找不到 python3，請先安裝 Python 3 再跑這支腳本。"
@@ -68,18 +76,37 @@ step() {
 }
 
 # ── [1/11] 系統檢查 ──────────────────────────────────────────
-step "檢查系統（macOS 版本、晶片、記憶體、剩餘空間）"
+step "檢查系統（作業系統、晶片、記憶體、剩餘空間）"
 
 NATIVE_ARCH="$(uname -m)"
-echo "macOS 版本：$(sw_vers -productVersion)"
-if [ "$NATIVE_ARCH" = "arm64" ]; then
-  echo "晶片：arm64（Apple Silicon）"
+if [ "$OS_KIND" = "Darwin" ]; then
+  echo "作業系統：macOS $(sw_vers -productVersion 2>/dev/null || echo '（版本無法偵測）')"
+  MEM_BYTES="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
+  MEM_GB=$(( MEM_BYTES / 1024 / 1024 / 1024 ))
 else
-  echo "晶片：x86_64（Intel）"
+  # Linux：發行版看 /etc/os-release、記憶體看 /proc/meminfo；取不到就說無法偵測，不中斷
+  DISTRO="$( . /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-Linux}" || echo "Linux" )"
+  if [ "$IS_WSL" = "1" ]; then
+    echo "作業系統：$DISTRO（偵測到 WSL2，Windows 裡的 Linux）"
+  else
+    echo "作業系統：$DISTRO"
+  fi
+  MEM_KB="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  MEM_GB=$(( MEM_KB / 1024 / 1024 ))
 fi
 
-MEM_GB=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))
-echo "記憶體：約 ${MEM_GB}GB"
+if [ "$NATIVE_ARCH" = "arm64" ] || [ "$NATIVE_ARCH" = "aarch64" ]; then
+  echo "晶片：$NATIVE_ARCH（ARM）"
+else
+  echo "晶片：$NATIVE_ARCH"
+fi
+
+if [ "$MEM_GB" -le 0 ]; then
+  echo "記憶體：無法偵測，略過這項檢查"
+  MEM_GB=8   # 偵測不到時不要因此中斷安裝，當成剛好達標
+else
+  echo "記憶體：約 ${MEM_GB}GB"
+fi
 if [ "$MEM_GB" -lt 8 ]; then
   echo "⚠️ 記憶體低於建議的 8GB，聲音生成等步驟可能會比較吃緊，仍繼續安裝。"
 fi
@@ -101,43 +128,89 @@ elif [ "$AVAIL_GB" -lt 30 ]; then
   echo "⚠️ 剩餘空間約 ${AVAIL_GB}GB，低於建議的 30GB，之後可能會不夠用，仍繼續安裝。"
 fi
 
+if [ "$INTEL_MODE" = "1" ] && [ "$OS_KIND" != "Darwin" ]; then
+  echo "❌ --intel 只在 macOS（Apple Silicon 上模擬 Intel）有意義，這台是 $OS_KIND。請去掉這個參數重跑。"
+  exit 1
+fi
+
 if [ "$INTEL_MODE" = "1" ] && [ "$NATIVE_ARCH" = "arm64" ]; then
   PY_TARGET="cpython-3.11-macos-x86_64-none"
   TARGET_ARCH="x86_64"
   VENV_DIR=".venv-x86"
   echo "已加 --intel 參數：改用模擬的 Intel 環境（Rosetta 下的 x86_64 Python），只供開發測試用，虛擬環境放在 $VENV_DIR。"
 else
-  # 明確指定晶片：只寫「3.11」的話，電腦上如果已經有另一種晶片的 Python 3.11，uv 會直接拿來用
-  if [ "$NATIVE_ARCH" = "arm64" ]; then
-    PY_TARGET="cpython-3.11-macos-aarch64-none"
+  # 明確指定平台與晶片：只寫「3.11」的話，電腦上如果已經有另一種的 Python 3.11，uv 會直接拿來用
+  if [ "$OS_KIND" = "Darwin" ]; then
+    if [ "$NATIVE_ARCH" = "arm64" ]; then
+      PY_TARGET="cpython-3.11-macos-aarch64-none"
+    else
+      PY_TARGET="cpython-3.11-macos-x86_64-none"
+    fi
+  elif [ "$NATIVE_ARCH" = "aarch64" ] || [ "$NATIVE_ARCH" = "arm64" ]; then
+    PY_TARGET="cpython-3.11-linux-aarch64-gnu"
   else
-    PY_TARGET="cpython-3.11-macos-x86_64-none"
+    PY_TARGET="cpython-3.11-linux-x86_64-gnu"
   fi
   TARGET_ARCH="$NATIVE_ARCH"
   VENV_DIR=".venv"
 fi
 
 # ── [2/11] Homebrew、ffmpeg、uv ──────────────────────────────
-step "檢查 Homebrew，並安裝 ffmpeg／uv"
+step "安裝系統套件（ffmpeg、uv 等）"
 
-if ! command -v brew >/dev/null 2>&1; then
+if [ "$OS_KIND" != "Darwin" ]; then
+  # ── Linux（含 WSL2 Ubuntu）：系統套件走 apt-get，uv 走官方安裝指令 ──
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "❌ 這台 Linux 沒有 apt-get，本腳本只自動處理 Debian／Ubuntu 系統。"
+    echo "   請自行安裝下列套件後重跑：ffmpeg sox git build-essential curl unzip"
+    exit 1
+  fi
+  APT_PKGS="ffmpeg sox git build-essential curl unzip"
+  MISSING=""
+  for pkg in $APT_PKGS; do
+    dpkg -s "$pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
+  done
+  if [ -n "$MISSING" ]; then
+    echo "要安裝的系統套件：$MISSING"
+    echo "⚠️ 接下來會用系統管理員權限安裝，畫面上可能跳出密碼提示，請輸入你的登入密碼。"
+    ADMIN_CMD=""
+    if [ "$(id -u)" != "0" ]; then ADMIN_CMD="$(command -v sudo || true)"; fi
+    $ADMIN_CMD apt-get update
+    # shellcheck disable=SC2086
+    $ADMIN_CMD apt-get install -y $MISSING
+  else
+    echo "系統套件都已安裝，跳過"
+  fi
+
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "安裝 uv（Python 套件管理工具；apt 沒有，用官方安裝指令）..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    if ! command -v uv >/dev/null 2>&1; then
+      echo "❌ 裝完還是找不到 uv。請開一個新的終端機（或先跑 source ~/.bashrc）再重跑這個腳本。"
+      exit 1
+    fi
+  else
+    echo "uv 已安裝，跳過"
+  fi
+elif ! command -v brew >/dev/null 2>&1; then
   echo "❌ 沒有找到 Homebrew（macOS 的套件安裝工具）。"
   echo "   這一步需要輸入你的登入密碼，本腳本不會自動安裝，請自己動手："
   echo "   1. 打開 https://brew.sh，照畫面指示安裝"
   echo "   2. 安裝完成後，開一個新的終端機視窗"
   echo "   3. 重新執行「bash install.sh」"
   exit 1
+else
+  echo "Homebrew 已安裝"
+  for pkg in ffmpeg uv; do
+    if brew list --versions "$pkg" >/dev/null 2>&1; then
+      echo "  $pkg 已安裝，跳過"
+    else
+      echo "  安裝 $pkg..."
+      brew install "$pkg"
+    fi
+  done
 fi
-echo "Homebrew 已安裝"
-
-for pkg in ffmpeg uv; do
-  if brew list --versions "$pkg" >/dev/null 2>&1; then
-    echo "  $pkg 已安裝，跳過"
-  else
-    echo "  安裝 $pkg..."
-    brew install "$pkg"
-  fi
-done
 
 # ── [3/11] Python 虛擬環境 ────────────────────────────────────
 step "準備 Python 虛擬環境（$VENV_DIR）"

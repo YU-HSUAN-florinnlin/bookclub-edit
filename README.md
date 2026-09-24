@@ -1,6 +1,6 @@
 # bookclub-edit
 
-**版本 0.1.1（測試版）**：流程八步裡，第 1 步的分析全部完成，第 2、4 步有部分介面，還不能產出處理過的影片。版本號 0.x 代表介面與檔案格式還可能改變。
+**版本 0.1.2（測試版）**：流程八步裡，第 1 步的分析全部完成，第 2、4 步有部分介面，還不能產出處理過的影片。版本號 0.x 代表介面與檔案格式還可能改變。
 
 讀書會 Zoom 錄影的隱私處理工具：把學員的聲音跟姓名去識別化，老師原音保留。**在自己電腦上跑，影片跟個資都留在本機**，不上傳、不進這個公開倉庫。
 
@@ -84,9 +84,11 @@ cd ~/Downloads/bookclub-edit    # 或你 clone 下來的位置
 bash install.sh
 ```
 
+同一份腳本在 **macOS** 與 **Linux（含 Windows 的 WSL2 Ubuntu）** 都能跑，會自己判斷平台：macOS 用 Homebrew，Linux 用 apt-get 安裝 ffmpeg、sox、git、build-essential、curl、unzip，`uv` 用官方安裝指令。Linux 安裝系統套件那一步需要系統管理員權限，畫面上會跳出密碼提示。不是 Debian／Ubuntu 系統的話，腳本會列出需要的套件請你自行安裝。
+
 `install.sh` 會依序做：檢查系統與空間 → 裝 Homebrew 套件（ffmpeg、uv）→ 建立 Python 3.11 虛擬環境（`.venv/`）→ 裝 Python 套件與 `bookclub` 指令 → 抓聲音生成引擎 CosyVoice 原始碼 → 下載三個 AI 模型 → 建立 `~/讀書會剪輯資料/` 資料夾（並複製 `profile.example/` 的範例檔進去）→ 建 Claude Code 的 skill 捷徑 → 跑一次環境健檢。**可以重複執行**：已經做過的步驟會自動跳過，不會重複下載，也不會刪掉已經調整過的設定。第一次安裝依網路速度可能要半小時以上，大部分時間花在下載模型。
 
-**WSL2 注意事項**：這支安裝腳本目前只在 macOS（Apple Silicon）測過，**WSL2 尚未驗證**。腳本裡用了 `brew`、`sw_vers`、`sysctl` 這幾個 macOS 專屬指令，在 WSL2 的 Ubuntu 上大概率會卡住或報錯。遇到問題請把完整的錯誤訊息交給 Claude Code 排錯，Claude Code 應該能幫忙改成 Linux 對應的做法（例如系統套件改用 `apt`），**跑完之後麻煩把結果（順利或卡在哪、怎麼解的）回報**，方便之後把 WSL2 支援直接補進安裝腳本。
+**WSL2 注意事項**：0.1.2 已經把腳本改成跨平台（Linux 走 apt-get），但**還沒有人在真的 WSL2 上跑過**，只在 macOS 上驗證過平台判斷的邏輯。第一次安裝遇到問題，請把完整的錯誤訊息交給 Claude Code 排錯，並**把結果（順利或卡在哪、怎麼解的）回報**，方便補進安裝腳本。目前已知風險：`uv` 裝完可能不在 PATH 上（要開新終端機或 `source ~/.bashrc`）、Python 3.11 下載較慢、模型下載約 7GB 要看網路速度。
 
 安裝最後會自動跑一次環境健檢（`bookclub doctor`），告訴你有沒有裝好、還缺什麼。另外「分辨誰在說話」用的 pyannote 模型是受限模型，要先到 Hugging Face 個別同意條款才能下載，`bookclub doctor` 沒過的話畫面上會有清楚的修法說明。
 
