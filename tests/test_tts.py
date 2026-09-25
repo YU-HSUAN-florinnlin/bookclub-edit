@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import numpy as np
 import soundfile as sf
 
-from bookclub import fit, tts
+from bookclub import fit, pauses, tts
 
 SR = 24000
 TOL = 0.15
@@ -176,7 +176,7 @@ def test_generate_teacher_end_to_end_with_resume():
                                    check_similarity=False)
         a, b = log["句子"]
         assert [x["種子"] for x in a["嘗試"]] == [42, 1] and a["選定"] == 2 and not a["要人聽"]
-        assert len(b["嘗試"]) == 1 and b["放回時間格"]["做法"] == fit.PAD
+        assert len(b["嘗試"]) == 1 and b["放回時間格"]["放回做法"] == fit.PAD and b["建議做法"] == "補靜音"
         assert (work / "生成" / "老師" / "A.wav").is_file()
         if shutil.which("ffmpeg"):
             assert abs(_dur(work / b["放回時間格"]["檔案"]) - slot_b) < 0.02
@@ -187,6 +187,123 @@ def test_generate_teacher_end_to_end_with_resume():
         tts.generate_teacher(work, sp, synth=synth2, hear=_fake_hear_factory(synth2, sentences),
                              check_similarity=False)
         assert synth2.calls == []
+
+
+# ---------- 插入停頓（pauses） ----------
+
+def _tone_s(sec):
+    t = np.arange(int(sec * SR)) / SR
+    return (0.3 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
+
+
+def _sil(sec):
+    return np.zeros(int(sec * SR), dtype=np.float32)
+
+
+def test_detect_silences_finds_long_gap_only():
+    x = np.concatenate([_tone_s(1.0), _sil(0.1), _tone_s(1.0), _sil(0.8), _tone_s(1.0)])
+    sil = pauses.detect_silences(x, SR)
+    assert len(sil) == 1 and abs(sil[0][0] - 2.1) < 0.05 and abs(sil[0][1] - 2.9) < 0.05
+
+
+def _chars(spec):
+    return [pauses.Char(t, s, e) for t, s, e in spec]
+
+
+def test_pauses_after_chars_maps_gap_between_words():
+    chars = _chars([("好", 0.0, 0.3), ("那", 0.3, 0.6), ("我", 1.6, 1.9), ("們", 1.9, 2.2)])
+    assert pauses.pauses_after_chars(chars, [(0.62, 1.58)]) == {1: 1.0}
+    assert pauses.pauses_after_chars(chars, [(3.0, 4.0)]) == {}  # 結尾的空白不算
+
+
+def test_plan_inserts_dropped_repeat_takes_max_not_sum():
+    # 原片「素，催產素，催產素就」：兩個「素」後面各停 2.0、2.4 秒；生成少念一次「催產素」
+    orig = _chars([(c, i, i + 0.5) for i, c in enumerate("加催產素催產素催產素就會")])
+    orig_p = {3: 2.0, 6: 2.4}
+    gen = _chars([(c, i * 0.3, i * 0.3 + 0.3) for i, c in enumerate("加催產素催產素就會")])
+    x = np.concatenate([_tone_s(len(gen) * 0.3)])
+    ins = pauses.plan_inserts(orig, orig_p, gen, x, SR)
+    assert len(ins) <= 2 and all(add <= 2.4 for _, add in ins)
+    assert sum(add for _, add in ins) <= 4.4
+
+
+def test_apply_inserts_length_and_lead():
+    x = _tone_s(3.0)
+    y = pauses.apply_inserts(x, SR, [(1.0, 0.5), (2.0, 0.7)], lead=0.4)
+    assert abs(len(y) / SR - (3.0 + 0.5 + 0.7 + 0.4)) < 0.01
+    # 插入的地方真的是安靜的
+    at = int((0.4 + 1.0 + 0.25) * SR)
+    assert np.abs(y[at - 100:at + 100]).max() == 0
+    y2 = pauses.apply_inserts(x, SR, [], lead=-0.5)
+    assert abs(len(y2) / SR - 2.5) < 0.01
+
+
+def test_generate_teacher_pause_variant_recommended():
+    """原片：老師講 2 秒、停 2 秒、講 2 秒（時間格 6 秒）；生成一口氣念完 4 秒 → 插入停頓後剛好 6 秒。"""
+    if not shutil.which("ffmpeg"):
+        print("  （沒有 ffmpeg，略過）")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        work = Path(d)
+        ref = work / "參考音"
+        ref.mkdir()
+        sf.write(str(ref / "ref.wav"), np.zeros(SR, dtype=np.float32), SR)
+        (ref / "ref.txt").write_text("參考", encoding="utf-8")
+        orig = np.concatenate([_sil(10.0), _tone_s(2.0), _sil(2.0), _tone_s(2.0), _sil(5.0)])
+        sf.write(str(work / "audio.wav"), orig, SR)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(work / "audio.wav"), str(work / "audio.flac")], check=True)
+        (work / "transcript").mkdir()
+        (work / "transcript" / "merged.json").write_text(json.dumps({"sentences": [
+            {"start": 10.0, "end": 12.0, "text": "甲乙丙丁，"}, {"start": 14.0, "end": 16.0, "text": "戊己庚辛。"}]},
+            ensure_ascii=False), encoding="utf-8")
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "P", "slot": [10.0, 16.0]}]), encoding="utf-8")
+
+        def synth(text, seed, speed):
+            return _tone_s(4.0), SR
+
+        def align(path, text):
+            chars = [c for c in text if c.isalnum()]
+            if "原聲" in Path(path).name:  # 原片：前 4 字 0–2 秒，後 4 字 4–6 秒
+                return [pauses.Char(c, (i if i < 4 else i + 4) * 0.5, (i if i < 4 else i + 4) * 0.5 + 0.5)
+                        for i, c in enumerate(chars)]
+            return [pauses.Char(c, i * 0.5, i * 0.5 + 0.5) for i, c in enumerate(chars)]
+
+        log = tts.generate_teacher(work, sp, synth=synth, hear=lambda p: "甲乙丙丁戊己庚辛",
+                                   check_similarity=False, align=align)
+        r = log["句子"][0]
+        assert r["text"] == "甲乙丙丁，戊己庚辛。"  # 沒給文字 → 用原片逐字稿
+        assert r["原片停頓"] == [{"在這個字後面": "丁", "秒": 2.0}]
+        assert r["建議做法"] == "插入停頓" and not r["要人聽"]
+        names = [v["版本"] for v in r["候選做法"]]
+        assert names[:2] == ["插入停頓", "補靜音"] and "拉長" in names
+        assert abs(_dur(work / r["放回時間格"]["檔案"]) - 6.0) < 0.02
+        assert len(r["嘗試"]) == 1  # 插入停頓就過關，不必改語速重生成
+
+
+def test_generate_teacher_speed_retry_only_after_pauses_fail():
+    """沒有原片可以插入停頓、長度又差太多 → 第三階段才改語速重生成，並出現「改語速重生成」「拉長」候選。"""
+    if not shutil.which("ffmpeg"):
+        return
+    with tempfile.TemporaryDirectory() as d:
+        work = Path(d)
+        ref = work / "參考音"
+        ref.mkdir()
+        sf.write(str(ref / "ref.wav"), np.zeros(SR, dtype=np.float32), SR)
+        (ref / "ref.txt").write_text("參考", encoding="utf-8")
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "L", "text": "甲乙丙丁", "slot_s": 6.0}]), encoding="utf-8")
+        calls = []
+
+        def synth(text, seed, speed):
+            calls.append(speed)
+            return _tone_s(4.0 / speed), SR
+
+        log = tts.generate_teacher(work, sp, synth=synth, hear=lambda p: "甲乙丙丁", check_similarity=False)
+        r = log["句子"][0]
+        assert calls == [1.0, 0.85]
+        names = [v["版本"] for v in r["候選做法"]]
+        assert names == ["補靜音", "改語速重生成", "拉長"] and r["要人聽"]
 
 
 def _run_all() -> int:

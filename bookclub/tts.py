@@ -18,7 +18,9 @@
 
 - `<句子編號>_第<N>次.wav`：每一次嘗試的原始生成檔（24kHz）
 - `<句子編號>.wav`：選定的那一次
-- `<句子編號>_放回時間格.wav`：有時間格時，照 `bookclub/fit.py` 補靜音或微調語速後、剛好等長的版本
+- `<句子編號>_<做法>_放回時間格.wav`：有時間格時，每種做法放回時間格的等長版本（插入停頓／補靜音／
+  改語速重生成／拉長，見 `_finalize`），`<句子編號>_放回時間格.wav` 是建議的那個
+- `<句子編號>_原聲.wav`：原片時間格那一段（插入停頓要對照）
 - `生成/老師紀錄.json`：每句每次嘗試的種子、語速、長度、耗時、檢查結果
 
 可以中斷續跑：紀錄裡已經有結果的句子直接跳過。
@@ -28,6 +30,8 @@ from __future__ import annotations
 
 import difflib
 import re
+import shutil
+import subprocess
 import time
 import unicodedata
 from dataclasses import dataclass
@@ -112,7 +116,8 @@ def load_sentences(path: str | Path) -> list[dict]:
     """讀句子清單。兩種格式：
 
     - `.json`：`[{"id": "T1", "text": "...", "slot": [開始秒, 結束秒]}, ...]`，
-      `slot`（原片時間格）可以省略；也可以改給 `slot_s`（只給長度）
+      `slot`（原片時間格）可以省略；也可以改給 `slot_s`（只給長度）。有給 `slot` 時
+      `text` 可以省略，預設用原片那段的逐字稿（照原話念，含重複的字）
     - 其他（純文字）：一行一句，空行略過，編號自動給 `01`、`02`…，沒有時間格
     """
     import json
@@ -134,13 +139,14 @@ def load_sentences(path: str | Path) -> list[dict]:
         seen.add(sid)
         if not re.fullmatch(r"[\w\-]+", sid):
             raise ValueError(f"句子編號只能用字母、數字、底線、減號（會拿來當檔名）：{sid!r}")
-        text = str(it.get("text", "")).strip()
-        if not text:
-            raise ValueError(f"第 {sid} 句沒有文字")
+        text = str(it.get("text") or "").strip()
         slot_s = it.get("slot_s")
         slot = it.get("slot")
         if slot is not None:
-            slot_s = float(slot[1]) - float(slot[0])
+            slot = [float(slot[0]), float(slot[1])]
+            slot_s = slot[1] - slot[0]
+        if not text and slot is None:
+            raise ValueError(f"第 {sid} 句沒有文字（有給原片時間格 slot 才能省略，會改用原片那段的逐字稿）")
         out.append({"id": sid, "text": text, "slot": slot, "slot_s": float(slot_s) if slot_s else None})
     return out
 
@@ -156,17 +162,26 @@ class Attempt:
     heard: str | None       # 轉回來的文字；沒檢查就是 None
     content: float | None   # content_score；沒檢查就是 None
     similarity: float | None = None
+    paused_s: float | None = None   # 照原片停頓插入空白後的長度；沒做就是 None
 
     def content_ok(self) -> bool:
         return self.content is None or self.content >= CONTENT_MIN
 
+    def lengths(self) -> list[float]:
+        return [self.audio_s] + ([self.paused_s] if self.paused_s else [])
+
+    def length_gap(self, slot_s: float | None) -> float:
+        """原始或插入停頓後，跟時間格差距比較小的那個（比例）。"""
+        return min(abs(x / slot_s - 1) for x in self.lengths()) if slot_s else 0.0
+
     def length_ok(self, slot_s: float | None, tolerance: float) -> bool:
-        return slot_s is None or abs(self.audio_s / slot_s - 1) <= tolerance
+        return slot_s is None or self.length_gap(slot_s) <= tolerance
 
     def to_dict(self, n: int, slot_s: float | None, tolerance: float) -> dict:
         return {
             "第幾次": n, "種子": self.seed, "語速": self.speed,
-            "長度秒": round(self.audio_s, 2), "耗時秒": round(self.elapsed_s, 1),
+            "長度秒": round(self.audio_s, 2), "插入停頓後長度秒": round(self.paused_s, 2) if self.paused_s else None,
+            "耗時秒": round(self.elapsed_s, 1),
             "倍數": round(self.elapsed_s / self.audio_s, 1) if self.audio_s else None,
             "轉回文字": self.heard, "內容相似度": self.content,
             "內容通過": self.content_ok(),
@@ -208,8 +223,7 @@ def choose_best(history: list[Attempt], slot_s: float | None, tolerance: float) 
     """挑最好的一次（回傳 index）：內容通過優先，其次長度通過，再來內容分數、長度差距。"""
     def key(i: int):
         a = history[i]
-        length_gap = abs(a.audio_s / slot_s - 1) if slot_s else 0.0
-        return (a.content_ok(), a.length_ok(slot_s, tolerance), a.content or 0.0, -length_gap)
+        return (a.content_ok(), a.length_ok(slot_s, tolerance), a.content or 0.0, -a.length_gap(slot_s))
 
     return max(range(len(history)), key=key)
 
@@ -219,6 +233,7 @@ def choose_best(history: list[Attempt], slot_s: float | None, tolerance: float) 
 Synth = Callable[[str, int, float], tuple[np.ndarray, int]]
 Hear = Callable[[Path], str]
 Similar = Callable[[Path], float]
+Align = Callable[[Path, str], list]  # (聲音檔, 文字) → [pauses.Char, ...]
 
 
 def make_cosyvoice_synth(ref_wav: Path, ref_text: str) -> Synth:
@@ -288,74 +303,195 @@ def _save_wav(path: Path, wav: np.ndarray, sr: int) -> None:
     sf.write(str(path), wav, sr)
 
 
-def generate_one(
-    item: dict, out_dir: Path, synth: Synth, hear: Hear | None, similar: Similar | None,
-    tolerance: float, log: Callable[[str], None] = print,
+VARIANT_ORDER = ["插入停頓", "補靜音", "改語速重生成", "拉長"]  # 都能放進時間格時，建議的先後順序
+STRETCH_MIN = 0.85  # 「拉長」最多放慢到 0.85 倍，再慢聲音會糊
+
+
+def slot_text(merged: dict | None, start: float, end: float) -> str:
+    """原片時間格裡的逐字稿：句子中點落在時間格內的都算，照順序接起來。"""
+    if not merged:
+        return ""
+    parts = [s["text"] for s in merged.get("sentences", []) if start <= (s["start"] + s["end"]) / 2 <= end]
+    return "".join(parts).strip()
+
+
+def prepare_original(workdir: Path, item: dict, out_dir: Path, align: Align) -> dict | None:
+    """切出原片那一段、對位、找出老師在哪幾個字後面停頓。沒有 audio.flac 或逐字稿就回傳 None。"""
+    import soundfile as sf
+
+    from bookclub import pauses
+
+    audio = wd.audio_path(workdir)
+    if not audio.is_file() or not item.get("原文") or not item.get("slot"):
+        return None
+    start, end = item["slot"]
+    clip = out_dir / f"{item['id']}_原聲.wav"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(audio), str(clip)],
+        check=True,
+    )
+    chars = align(clip, item["原文"])
+    x, sr = sf.read(str(clip))
+    found = pauses.pauses_after_chars(chars, pauses.detect_silences(x, sr))
+    return {"chars": chars, "pauses": found, "clip": clip}
+
+
+def _paused_version(src: Path, text: str, ctx: dict, align: Align, dst: Path) -> tuple[float, list, float]:
+    """照原片停頓在生成的聲音裡插入空白，回傳（新長度、插入點、開頭位移）。"""
+    import soundfile as sf
+
+    from bookclub import pauses
+
+    x, sr = sf.read(str(src))
+    gen_chars = align(src, text)
+    inserts = pauses.plan_inserts(ctx["chars"], ctx["pauses"], gen_chars, x, sr)
+    lead = pauses.lead_offset(ctx["chars"], gen_chars)
+    y = pauses.apply_inserts(x, sr, inserts, lead)
+    _save_wav(dst, y, sr)
+    return len(y) / sr, inserts, lead
+
+
+def _run_attempt(
+    item: dict, n: int, seed: int, speed: float, out_dir: Path,
+    synth: Synth, hear: Hear | None, similar: Similar | None, log: Callable[[str], None],
+) -> Attempt:
+    """生成一次並做內容、聲紋檢查。"""
+    sid, text, slot_s = item["id"], item["text"], item.get("slot_s")
+    t = time.time()
+    wav, sr = synth(text, seed, speed)
+    elapsed = time.time() - t
+    audio_s = len(wav) / sr
+    path = out_dir / f"{sid}_第{n}次.wav"
+    _save_wav(path, wav, sr)
+    heard = hear(path) if hear else None
+    att = Attempt(seed, speed, audio_s, elapsed, heard, content_score(text, heard) if heard is not None else None)
+    if similar:
+        try:
+            att.similarity = similar(path)
+        except Exception as exc:  # 聲紋只是參考，算不出來不擋生成
+            log(f"  ⚠️ 聲紋相似度算不出來：{exc}")
+    parts = [f"  第 {n} 次：種子 {seed}、語速 {speed}，聲音 {audio_s:.1f} 秒，花 {elapsed:.0f} 秒（{elapsed / audio_s:.1f} 倍）"]
+    if att.content is not None:
+        parts.append(f"內容 {att.content:.2f}{'' if att.content_ok() else '（不過）'}")
+    if slot_s:
+        parts.append(f"長度差 {audio_s / slot_s - 1:+.0%}")
+    if att.similarity is not None:
+        parts.append(f"聲紋 {att.similarity:.2f}")
+    log("，".join(parts))
+    return att
+
+
+def _base_index(history: list[Attempt]) -> int:
+    """候選做法的底：語速 1.0 的生成裡，內容通過、分數最高的一次。"""
+    normal = [i for i, a in enumerate(history) if a.speed == 1.0] or list(range(len(history)))
+    return max(normal, key=lambda i: (history[i].content_ok(), history[i].content or 0.0))
+
+
+def _finalize(
+    item: dict, out_dir: Path, history: list[Attempt], paused: dict | None, ctx: dict | None,
+    tolerance: float, log: Callable[[str], None],
 ) -> dict:
-    """生成一句：照 next_attempt 的策略最多試 MAX_ATTEMPTS 次，回傳這句的紀錄。"""
+    """挑選定的一次、把每種做法放回時間格、建議一種，回傳這句的紀錄。"""
     from bookclub import fit
 
     sid, text, slot_s = item["id"], item["text"], item.get("slot_s")
-    history: list[Attempt] = []
-    while (nxt := next_attempt(history, slot_s, tolerance)) is not None:
-        seed, speed = nxt
-        n = len(history) + 1
-        t = time.time()
-        wav, sr = synth(text, seed, speed)
-        elapsed = time.time() - t
-        audio_s = len(wav) / sr
-        path = out_dir / f"{sid}_第{n}次.wav"
-        _save_wav(path, wav, sr)
-        heard = hear(path) if hear else None
-        att = Attempt(seed, speed, audio_s, elapsed, heard,
-                      content_score(text, heard) if heard is not None else None)
-        if similar:
-            try:
-                att.similarity = similar(path)
-            except Exception as exc:  # 聲紋只是參考，算不出來不擋生成
-                log(f"  ⚠️ 聲紋相似度算不出來：{exc}")
-        history.append(att)
-        parts = [f"  第 {n} 次：種子 {seed}、語速 {speed}，聲音 {audio_s:.1f} 秒，花 {elapsed:.0f} 秒（{elapsed / audio_s:.1f} 倍）"]
-        if att.content is not None:
-            parts.append(f"內容 {att.content:.2f}{'' if att.content_ok() else '（不過）'}")
-        if slot_s:
-            parts.append(f"長度差 {audio_s / slot_s - 1:+.0%}{'' if att.length_ok(slot_s, tolerance) else '（不過）'}")
-        if att.similarity is not None:
-            parts.append(f"聲紋 {att.similarity:.2f}")
-        log("，".join(parts))
-
+    workdir = out_dir.parent.parent
     best = choose_best(history, slot_s, tolerance)
     chosen = history[best]
     chosen_path = out_dir / f"{sid}.wav"
-    chosen_path.write_bytes((out_dir / f"{sid}_第{best + 1}次.wav").read_bytes())
-
+    shutil.copyfile(out_dir / f"{sid}_第{best + 1}次.wav", chosen_path)
     record = {
         "id": sid, "text": text, "slot": item.get("slot"), "slot_s": slot_s,
         "嘗試": [a.to_dict(i + 1, slot_s, tolerance) for i, a in enumerate(history)],
         "選定": best + 1,
-        "檔案": str(chosen_path.relative_to(out_dir.parent.parent)),
-        "要人聽": not (chosen.content_ok() and chosen.length_ok(slot_s, tolerance)),
+        "檔案": str(chosen_path.relative_to(workdir)),
+        "要人聽": not chosen.content_ok(),
         "內容已檢查": chosen.content is not None,
     }
-    if slot_s:
-        plan = fit.plan_fit(chosen.audio_s, slot_s, "老師", tolerance)
-        fitted = out_dir / f"{sid}_放回時間格.wav"
-        fit.apply_fit(chosen_path, fitted, slot_s, plan)
-        record["放回時間格"] = {**plan, "檔案": str(fitted.relative_to(out_dir.parent.parent))}
-        if plan["做法"] == fit.FLAG:
-            record["要人聽"] = True
+    if not slot_s:
+        return record
+
+    if ctx:
+        record["原片停頓"] = [
+            {"在這個字後面": ctx["chars"][i].text, "秒": d} for i, d in sorted(ctx["pauses"].items())
+        ]
+        record["原聲檔案"] = str(ctx["clip"].relative_to(workdir))
+
+    base_i = _base_index(history)
+    base = history[base_i]
+    base_path = out_dir / f"{sid}_第{base_i + 1}次.wav"
+    variants = []
+
+    def add(name: str, src: Path, n: int, length: float) -> dict:
+        plan = fit.plan_fit(length, slot_s, "老師", tolerance)
+        dst = out_dir / f"{sid}_{name}_放回時間格.wav"
+        fit.apply_fit(src, dst, slot_s, plan)
+        v = {
+            "版本": name, "來源第幾次": n, "長度秒": round(length, 2), "放回做法": plan["做法"],
+            "差異比例": plan["差異比例"], "atempo": plan["atempo"], "原因": plan["原因"],
+            "檔案": str(dst.relative_to(workdir)),
+        }
+        variants.append(v)
+        return v
+
+    if paused and base.paused_s:
+        v = add("插入停頓", paused["檔案"], base_i + 1, base.paused_s)
+        v["插入點"] = [{"秒": at, "補幾秒": add_s} for at, add_s in paused["插入"]]
+        v["開頭位移秒"] = paused["開頭位移秒"]
+    add("補靜音", base_path, base_i + 1, base.audio_s)
+    respeed = [i for i, a in enumerate(history) if a.speed != 1.0 and a.content_ok()]
+    if respeed:
+        i = respeed[-1]
+        add("改語速重生成", out_dir / f"{sid}_第{i + 1}次.wav", i + 1, history[i].audio_s)
+    if base.audio_s < slot_s * (1 - tolerance):
+        factor = max(STRETCH_MIN, base.audio_s / slot_s)
+        stretched = out_dir / f"{sid}_拉長.wav"
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(base_path), "-af", f"atempo={factor:.4f}", str(stretched)],
+            check=True,
+        )
+        add("拉長", stretched, base_i + 1, base.audio_s / factor)
+
+    ok = [v for v in variants if v["放回做法"] != fit.FLAG]
+    if ok:
+        rec = min(ok, key=lambda v: VARIANT_ORDER.index(v["版本"]))
+    else:
+        rec = min(variants, key=lambda v: abs(v["差異比例"]))
+        record["要人聽"] = True
+    shutil.copyfile(workdir / rec["檔案"], out_dir / f"{sid}_放回時間格.wav")
+    record["候選做法"] = variants
+    record["建議做法"] = rec["版本"]
+    record["放回時間格"] = {**rec, "檔案": str((out_dir / f"{sid}_放回時間格.wav").relative_to(workdir))}
+    summary = "、".join("{} {:+.0%}".format(v["版本"], v["差異比例"]) for v in variants)
+    log(f"[老師聲音] 第 {sid} 句放回時間格：{summary} → 建議「{rec['版本']}」"
+        + ("（都超過容許範圍，要人聽）" if not ok else ""))
     return record
+
+
+def _free_memory() -> None:
+    """呼叫前先把模型變數設成 None，這裡回收記憶體。8GB 的 Mac 放不下生成模型和對位模型同時在記憶體裡。"""
+    import gc
+
+    gc.collect()
 
 
 def generate_teacher(
     workdir: str | Path, sentences_path: str | Path, *,
     ref_wav: str | Path | None = None, ref_text_path: str | Path | None = None,
-    check_content: bool = True, check_similarity: bool = True, redo: bool = False,
+    check_content: bool = True, check_similarity: bool = True, use_pauses: bool = True, redo: bool = False,
     synth: Synth | None = None, hear: Hear | None = None, similar: Similar | None = None,
+    align: Align | None = None, log: Callable[[str], None] = print,
 ) -> dict:
     """流程第 5 步（一）的入口：`bookclub gen teacher`。回傳並存下 `生成/老師紀錄.json`。
 
-    synth／hear／similar 可以從外面傳進來（測試用假的），不傳就載入真的模型。
+    分三個階段跑，同一時間只載入一個大模型（8GB 的 Mac 兩個一起放會一直搬
+    swap，慢好幾倍）：
+
+    1. 生成模型：每句生成到內容檢查通過（念錯才換種子）
+    2. 對位模型：有時間格的句子，照原片停頓插入空白
+    3. 生成模型：原始跟插入停頓後長度都不過的句子，才改語速重生成
+
+    synth／hear／similar／align 可以從外面傳進來（測試用假的），不傳就載入真的模型。
     """
     from bookclub.config import load_settings
 
@@ -371,44 +507,123 @@ def generate_teacher(
     items = load_sentences(sentences_path)
     tolerance = load_settings().thresholds.length_tolerance
 
+    merged = wd.read_json(wd.merged_transcript_path(workdir))
+    for it in items:
+        if it["slot"]:
+            it["原文"] = slot_text(merged, *it["slot"])
+        if not it["text"]:
+            if not it.get("原文"):
+                raise ValueError(f"第 {it['id']} 句沒有文字，工作區裡也找不到原片那段的逐字稿（transcript/merged.json）")
+            it["text"] = it["原文"]
+
     log_path = teacher_log_path(workdir)
     record = wd.read_json(log_path, default=None) or {}
     done = {} if redo else {r["id"]: r for r in record.get("句子", [])}
     same_ref = record.get("參考音") == str(ref_wav) and record.get("參考音逐字稿") == ref_text
     if done and not same_ref:
-        print("參考音跟上次不同，全部重新生成。")
+        log("參考音跟上次不同，全部重新生成。")
         done = {}
 
     todo = [it for it in items if it["id"] not in done or done[it["id"]]["text"] != it["text"]]
-    print(f"[老師聲音] 共 {len(items)} 句，要生成 {len(todo)} 句（其他 {len(items) - len(todo)} 句沿用上次結果）")
+    log(f"[老師聲音] 共 {len(items)} 句，要生成 {len(todo)} 句（其他 {len(items) - len(todo)} 句沿用上次結果）")
+    out_dir = teacher_out_dir(workdir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    load_s = 0.0
 
-    t0 = time.time()
     if todo:
-        if synth is None:
-            print("[老師聲音] 載入 CosyVoice3，並記住參考音的聲音特徵（約半分鐘到一分鐘）...")
-            synth = make_cosyvoice_synth(ref_wav, ref_text)
+        own_synth = synth is None
+        own_align = align is None
+
+        def load_synth() -> Synth:
+            nonlocal load_s
+            t = time.time()
+            log("[老師聲音] 載入 CosyVoice3，並記住參考音的聲音特徵（約半分鐘到一分鐘）...")
+            s = make_cosyvoice_synth(ref_wav, ref_text)
+            load_s += time.time() - t
+            return s
+
         if hear is None and check_content:
             hear = make_groq_hear()
             if hear is None:
-                print("⚠️ 沒有設定 GROQ_API_KEY，這次不檢查念得對不對，每句都要人聽。")
+                log("⚠️ 沒有設定 GROQ_API_KEY，這次不檢查念得對不對，每句都要人聽。")
         if similar is None and check_similarity:
             similar = make_similarity(workdir)
-    load_s = time.time() - t0
 
-    out_dir = teacher_out_dir(workdir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    results = []
-    for it in items:
-        if it in todo:
-            print(f"[老師聲音] 第 {it['id']} 句（{len(it['text'])} 字）")
-            done[it["id"]] = generate_one(it, out_dir, synth, hear, similar, tolerance)
+        histories: dict[str, list[Attempt]] = {it["id"]: [] for it in todo}
+        paused: dict[str, dict] = {}
+        ctxs: dict[str, dict] = {}
+
+        # 階段一：生成到內容通過（長度先不管，下一階段插入停頓可能就過了）
+        if synth is None:
+            synth = load_synth()
+        for it in todo:
+            log(f"[老師聲音] 第 {it['id']} 句（{len(it['text'])} 字）")
+            h = histories[it["id"]]
+            while (nxt := next_attempt(h, None, tolerance)) is not None:
+                h.append(_run_attempt(it, len(h) + 1, *nxt, out_dir, synth, hear, similar, log))
+
+        # 階段二：插入停頓
+        slotted = [it for it in todo if it["slot"] and it.get("原文")]
+        if use_pauses and slotted and (align is not None or wd.audio_path(workdir).is_file()):
+            if own_synth:
+                synth = None
+                _free_memory()
+            if align is None:
+                t = time.time()
+                log("[老師聲音] 載入逐字對位模型，照原片停頓插入空白...")
+                from bookclub.pauses import Aligner
+
+                align = Aligner().align
+                load_s += time.time() - t
+            for it in slotted:
+                sid = it["id"]
+                try:
+                    ctx = prepare_original(workdir, it, out_dir, align)
+                except Exception as exc:
+                    log(f"  ⚠️ 第 {sid} 句原片停頓分析失敗，不做插入停頓：{exc}")
+                    continue
+                if not ctx:
+                    continue
+                ctxs[sid] = ctx
+                h = histories[sid]
+                bi = _base_index(h)
+                if not h[bi].content_ok():
+                    continue
+                try:
+                    dst = out_dir / f"{sid}_第{bi + 1}次_插入停頓.wav"
+                    h[bi].paused_s, inserts, lead = _paused_version(
+                        out_dir / f"{sid}_第{bi + 1}次.wav", it["text"], ctx, align, dst)
+                    paused[sid] = {"檔案": dst, "插入": inserts, "開頭位移秒": lead}
+                    log(f"  第 {sid} 句：原片 {len(ctx['pauses'])} 個停頓，插入 {len(inserts)} 段空白，"
+                        f"長度 {h[bi].audio_s:.1f} → {h[bi].paused_s:.1f} 秒（時間格 {it['slot_s']:.1f} 秒）")
+                except Exception as exc:
+                    log(f"  ⚠️ 第 {sid} 句插入停頓失敗：{exc}")
+            if own_align:
+                align = None
+                _free_memory()
+
+        # 階段三：長度還是不過的才改語速重生成
+        retry = [it for it in todo if it["slot_s"]
+                 and next_attempt(histories[it["id"]], it["slot_s"], tolerance) is not None]
+        if retry:
+            if synth is None:
+                synth = load_synth()
+            for it in retry:
+                log(f"[老師聲音] 第 {it['id']} 句長度差太多，改語速重生成")
+                h = histories[it["id"]]
+                while (nxt := next_attempt(h, it["slot_s"], tolerance)) is not None:
+                    h.append(_run_attempt(it, len(h) + 1, *nxt, out_dir, synth, hear, similar, log))
+
+        for it in todo:
+            done[it["id"]] = _finalize(it, out_dir, histories[it["id"]], paused.get(it["id"]),
+                                       ctxs.get(it["id"]), tolerance, log)
             _write_log(log_path, ref_wav, ref_text, items, done, load_s)
-        results.append(done[it["id"]])
 
+    results = [done[it["id"]] for it in items]
     summary = _write_log(log_path, ref_wav, ref_text, items, done, load_s)
     flagged = [r["id"] for r in results if r["要人聽"]]
-    print(f"[老師聲音] 完成：{len(results)} 句，{len(flagged)} 句要人聽"
-          + (f"（{'、'.join(flagged)}）" if flagged else "") + f"。紀錄：{log_path}")
+    log(f"[老師聲音] 完成：{len(results)} 句，{len(flagged)} 句要人聽"
+        + (f"（{'、'.join(flagged)}）" if flagged else "") + f"。紀錄：{log_path}")
     return summary
 
 

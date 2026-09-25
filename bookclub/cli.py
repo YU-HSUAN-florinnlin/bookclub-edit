@@ -96,6 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
     gen_teacher_parser.add_argument("--ref-text", help="改用別的參考音逐字稿檔案")
     gen_teacher_parser.add_argument("--no-check", action="store_true", help="不用 Groq 轉回文字檢查（省時間、沒網路時用）")
     gen_teacher_parser.add_argument("--no-similarity", action="store_true", help="不算聲紋相似度")
+    gen_teacher_parser.add_argument("--no-pauses", action="store_true", help="不照原片停頓插入空白（不載入逐字對位模型）")
     gen_teacher_parser.add_argument("--redo", action="store_true", help="忽略上次結果，全部重新生成")
 
     return parser
@@ -174,7 +175,8 @@ def main(argv: list[str] | None = None) -> int:
 
             generate_teacher(
                 args.workdir, args.sentences, ref_wav=args.ref_wav, ref_text_path=args.ref_text,
-                check_content=not args.no_check, check_similarity=not args.no_similarity, redo=args.redo,
+                check_content=not args.no_check, check_similarity=not args.no_similarity,
+                use_pauses=not args.no_pauses, redo=args.redo,
             )
             return 0
         print("用法：bookclub gen teacher <工作區> <句子清單> [--ref-wav 檔案] [--ref-text 檔案] [--no-check] [--redo]")
