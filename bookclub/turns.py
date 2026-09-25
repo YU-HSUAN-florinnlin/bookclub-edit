@@ -146,7 +146,8 @@ def cluster_turns(embs: np.ndarray, durs: list[float]) -> list[int]:
 
 # ---------- 串起來 ----------
 
-def build_turns(workdir: str | Path, *, model: str | None = None, log=print) -> dict:
+def build_turns(workdir: str | Path, *, model: str | None = None, roster_path: str | Path | None = None,
+                log=print) -> dict:
     """`bookclub run turns`：文字切段落＋聲音認人＋名字線索，寫出 `校對/段落.json`。"""
     from bookclub import names
     from bookclub.config import data_dir, load_settings
@@ -163,7 +164,7 @@ def build_turns(workdir: str | Path, *, model: str | None = None, log=print) -> 
     raw_turns = text_turns(sents, model, log)
     text_s = time.time() - t0
 
-    roster = names.load_roster(data_dir() / "名冊.csv")
+    roster = names.load_roster(Path(roster_path).expanduser() if roster_path else data_dir() / "名冊.csv")
     turns = []
     for i, t in enumerate(raw_turns):
         ss = sents[t["起"]:t["迄"] + 1]

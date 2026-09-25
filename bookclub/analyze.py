@@ -1,7 +1,8 @@
 """串流程：`bookclub run analyze <影片> <工作區>`。
 
 依序呼叫流程第 1 步的四個零件＋refpick：轉文字 → 認老師 → 找重疊 → 挑老師
-參考音（呼叫 `bookclub/refpick.py`）→ 找名字。每個零件自己的快取檔案存在就
+參考音（呼叫 `bookclub/refpick.py`）→ 找名字 → 段落分析（`bookclub/turns.py`，
+09-25 宇軒：放在第 3 步之前自動跑完，第 3 步只要人確認）。每個零件自己的快取檔案存在就
 跳過，這支只是照順序呼叫、彙總結果；中途中斷重跑，已經做完的步驟不會重做。
 
 最後寫 `workdir/分析結果.json`（彙整索引＋各步驟耗時）與 `workdir/報告.md`
@@ -42,6 +43,7 @@ def run_analyze(
     exclusion_path: str | Path | None = None,
     skip_overlap: bool = False,
     ref_n: int = 5,
+    skip_turns: bool = False,
 ) -> dict:
     workdir = ensure(workdir)
     video = Path(video).expanduser()
@@ -117,6 +119,24 @@ def run_analyze(
         print("[分析一條龍] 5/5 沒給 --roster，跳過找名字")
         names_result = {"candidates": [], "統計": {"總筆數": 0}, "elapsed": 0.0, "跳過": True}
 
+    # ---------- 6. 段落分析（第 3 步用） ----------
+    turns_stats = None
+    from bookclub import turns as turns_mod
+
+    if skip_turns:
+        print("[分析一條龍] 6/6 跳過段落分析（--skip-turns）")
+    elif turns_mod.turns_path(workdir).exists():
+        print("[分析一條龍] 6/6 段落分析已經有結果，沿用（不覆蓋已經確認過的段落）")
+    else:
+        t0 = time.time()
+        try:
+            turns_stats = turns_mod.build_turns(workdir, roster_path=roster_path)["統計"]
+            elapsed["6_段落分析"] = round(time.time() - t0, 1)
+            print(f"[分析一條龍] 6/6 段落分析完成：{turns_stats['段落數']} 段、學員 {turns_stats['學員人數']} 位")
+        except Exception as exc:  # Claude 叫不到、額度用完：其他分析結果照常可用
+            print(f"⚠️ [分析一條龍] 6/6 段落分析失敗：{exc}")
+            print("   → 修好之後單獨重跑：bookclub run turns <工作區>（先用 bookclub doctor --claude 確認叫得到 Claude）")
+
     total_elapsed = time.time() - t_grand0
     elapsed["總耗時"] = round(total_elapsed, 1)
 
@@ -135,6 +155,7 @@ def run_analyze(
         "參考音候選數": ref_record.get("候選數", 0),
         "名字候選數": names_result["統計"].get("總筆數", 0),
         "名字候選統計": names_result["統計"],
+        "段落統計": turns_stats,
         "elapsed": elapsed,
     }
     write_json(analysis_result_path(workdir), result)

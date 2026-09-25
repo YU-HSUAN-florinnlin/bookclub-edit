@@ -158,7 +158,7 @@ async function renderOverview() {
   contentEl.innerHTML = "<p>載入中…</p>";
   const state = await apiGet("/api/state");
   const sub = state.substeps || {};
-  const order = ["轉文字", "認老師", "找重疊", "挑參考音", "找名字"];
+  const order = ["轉文字", "認老師", "找重疊", "挑參考音", "找名字", "段落分析"];
 
   const rows = order.map((k) => {
     const s = sub[k] || {};
@@ -208,7 +208,7 @@ async function renderStep1Body() {
   ]);
   const sub = state.substeps || {};
   const order = [
-    ["轉文字", "1"], ["認老師", "2"], ["找重疊", "3"], ["挑參考音", "4"], ["找名字", "5"],
+    ["轉文字", "1"], ["認老師", "2"], ["找重疊", "3"], ["挑參考音", "4"], ["找名字", "5"], ["段落分析", "6"],
   ];
   const rows = order.map(([k]) => {
     const s = sub[k] || {};
@@ -471,7 +471,7 @@ async function renderStep3() {
   if (pr.data["尚未準備"]) {
     contentEl.innerHTML = `<h1>3　學員逐字稿校對</h1>
       <div class="notyet-card">還沒做段落分析。在終端機執行：<br>
-      <code>.venv/bin/bookclub run turns &lt;工作區&gt;</code><br>會用 Claude 讀逐字稿切段落、用聲紋認人，約 10 分鐘。</div>`;
+      <code>.venv/bin/bookclub run turns &lt;工作區&gt;</code><br>第 1 步「開始分析」最後會自動跑；沒跑成功（例如叫不到 Claude）才需要單獨執行。</div>`;
     return;
   }
   renderStep3Body();

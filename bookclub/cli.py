@@ -56,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze_parser.add_argument("--skip-overlap", action="store_true", help="跳過找重疊（排錯、省時間用）")
     analyze_parser.add_argument("--ref-n", type=int, default=5, help="挑幾個老師參考音候選（預設 5）")
+    analyze_parser.add_argument("--skip-turns", action="store_true", help="跳過段落分析（不呼叫 Claude）")
 
     turns_parser = run_sub.add_parser("turns", help="段落分析：看文字切段落、看聲音認人（第 3 步校對用）")
     turns_parser.add_argument("workdir", help="工作區路徑（要先跑過 run analyze）")
@@ -163,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
             run_analyze(
                 args.video, args.workdir, roster_path=args.roster, sensitive_path=args.sensitive,
                 exclusion_path=args.exclusions,
-                skip_overlap=args.skip_overlap, ref_n=args.ref_n,
+                skip_overlap=args.skip_overlap, ref_n=args.ref_n, skip_turns=args.skip_turns,
             )
             return 0
         if args.run_command == "turns":

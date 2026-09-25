@@ -184,13 +184,18 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
             "elapsed_s": elapsed.get("5_找名字"),
             "統計": (names_result or {}).get("統計", analysis.get("名字候選統計", {})),
         },
+        "段落分析": {
+            "done": (workdir / "校對" / "段落.json").exists(),
+            "elapsed_s": elapsed.get("6_段落分析"),
+            "統計": analysis.get("段落統計") or {},
+        },
     }
 
-    pr_data = read_json(workdir / "校對" / "校對稿.json", default=None)
-    pr_items = (pr_data or {}).get("句子", [])
+    turns_data = read_json(workdir / "校對" / "段落.json", default=None)
+    stu_turns = [t for t in (turns_data or {}).get("段落", []) if t.get("說話者") != "老師"]
     proofread_state = {
-        "done": bool(pr_items) and all(it.get("已校對") for it in pr_items),
-        "已校對": sum(1 for it in pr_items if it.get("已校對")), "總句數": len(pr_items),
+        "done": bool(stu_turns) and all(t.get("已確認") for t in stu_turns),
+        "已確認": sum(1 for t in stu_turns if t.get("已確認")), "學員段落數": len(stu_turns),
     }
 
     return {
