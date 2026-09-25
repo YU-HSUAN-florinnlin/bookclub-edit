@@ -1,6 +1,6 @@
 """指令列入口：`bookclub`。
 
-`doctor`、`models download`、`run analyze`、`serve`、`ref`、`gen teacher`、`gen names`、`render audio` 是真的會動的指令；
+`doctor`、`models download`、`run analyze`、`serve`、`ref`、`gen teacher`、`gen names`、`render audio`、`proofread prepare` 是真的會動的指令；
 `bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
 功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列
 也只有第 1、2、4 步是真的（對應 `run analyze` 的轉文字／挑參考音／找名字），
@@ -108,6 +108,13 @@ def build_parser() -> argparse.ArgumentParser:
     gen_names_parser.add_argument("--plan-only", action="store_true", help="只排計畫、不生成")
     gen_names_parser.add_argument("--redo", action="store_true", help="忽略上次生成結果，全部重新生成")
 
+    pr_parser = sub.add_parser("proofread", help="第 3 步：學員逐字稿校對")
+    pr_sub = pr_parser.add_subparsers(dest="pr_command")
+    pr_prep = pr_sub.add_parser("prepare", help="整理一段時間內學員說的句子，給校對頁用")
+    pr_prep.add_argument("workdir", help="工作區路徑")
+    pr_prep.add_argument("--start", default="0:00", help="從幾分幾秒開始（例如 43:15 或 1:05:00）")
+    pr_prep.add_argument("--minutes", type=float, help="處理幾分鐘（不給就到影片結尾）")
+
     render_parser = sub.add_parser("render", help="組裝：把生成的聲音、消音放回原本的時間")
     render_sub = render_parser.add_subparsers(dest="render_command")
     render_audio_parser = render_sub.add_parser("audio", help="組出跟原片等長的新聲音軌＋處理前後試聽")
@@ -210,6 +217,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print("用法：bookclub gen teacher <工作區> <句子清單> [--ref-wav 檔案] [--ref-text 檔案] [--no-check] [--redo]")
         print("     bookclub gen names <工作區> [--only 1,5,9] [--plan-only]")
+        return 2
+
+    if args.command == "proofread":
+        if args.pr_command == "prepare":
+            from bookclub.proofread import build_sample
+
+            parts = [float(x) for x in args.start.split(":")]
+            start = sum(v * 60 ** k for k, v in enumerate(reversed(parts)))
+            end = start + args.minutes * 60 if args.minutes else 1e9
+            build_sample(args.workdir, start, end)
+            print("下一步：bookclub serve <工作區>，打開第 3 步")
+            return 0
+        print("用法：bookclub proofread prepare <工作區> [--start 43:15] [--minutes 5]")
         return 2
 
     if args.command == "render":

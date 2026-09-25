@@ -261,3 +261,25 @@ audio { width: 100%; }
   button:hover { background: #57b357; }
   button.secondary { background: #232323; color: #eee; border-color: var(--border); }
 }
+
+/* 第 3 步：學員逐字稿校對 */
+.pr-progress { background:#f6f8fa; border:1px solid #d0d7de; border-radius:8px; padding:10px 14px; margin:12px 0; }
+.pr-progress .bar { height:8px; background:#e5e7eb; border-radius:4px; overflow:hidden; margin-bottom:6px; }
+.pr-progress .bar div { height:100%; background:#2da44e; }
+.pr-progress .nums { font-size:14px; line-height:1.8; }
+.pr-tools { display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin:8px 0 12px; font-size:14px; }
+.pr-voices { margin:10px 0 16px; }
+.pr-voices table { border-collapse:collapse; margin-top:8px; font-size:14px; }
+.pr-voices td, .pr-voices th { padding:4px 10px; border-bottom:1px solid #eee; text-align:left; }
+.pr-row { border:1px solid #d0d7de; border-radius:8px; padding:8px 12px; margin:8px 0; background:#fff; }
+.pr-row.done { background:#f0faf2; border-color:#b7e1c1; }
+.pr-row:focus-within { border-color:#0969da; box-shadow:0 0 0 2px rgba(9,105,218,.15); }
+.pr-head { display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:14px; margin-bottom:6px; }
+.pr-head .idx { color:#57606a; min-width:2em; }
+.pr-head .time { color:#57606a; font-variant-numeric:tabular-nums; }
+.pr-head .pr-done { margin-left:auto; }
+.pr-text { width:100%; box-sizing:border-box; font-size:17px; line-height:1.6; padding:6px 8px; border:1px solid #d0d7de; border-radius:6px; resize:vertical; font-family:inherit; }
+.pr-orig { font-size:13px; color:#57606a; margin-top:4px; }
+.pr-orig.hidden { display:none; }
+.badge.warn { background:#fff8c5; color:#7d4e00; }
+kbd { border:1px solid #ccc; border-bottom-width:2px; border-radius:4px; padding:0 4px; font-size:12px; background:#fafafa; }

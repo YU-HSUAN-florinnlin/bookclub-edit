@@ -186,7 +186,15 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
         },
     }
 
+    pr_data = read_json(workdir / "校對" / "校對稿.json", default=None)
+    pr_items = (pr_data or {}).get("句子", [])
+    proofread_state = {
+        "done": bool(pr_items) and all(it.get("已校對") for it in pr_items),
+        "已校對": sum(1 for it in pr_items if it.get("已校對")), "總句數": len(pr_items),
+    }
+
     return {
+        "proofread": proofread_state,
         "workdir": str(workdir),
         "video": {
             "path": str(video_path) if video_path else None,
@@ -610,6 +618,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, build_refs(server.workdir))
         elif path == "/api/names":
             self._send_json(200, build_names(server.workdir))
+        elif path == "/api/proofread":
+            from bookclub.proofread import page_data
+
+            self._send_json(200, page_data(server.workdir))
         elif path == "/api/audio":
             self._handle_audio(query)
         elif path == "/api/run/status":
@@ -661,6 +673,14 @@ class Handler(BaseHTTPRequestHandler):
             tags = body.get("tags", [])
             note = str(body.get("note", ""))
             self._send_json(200, names_mark(server.workdir, cid, tags, note))
+        elif path == "/api/proofread/save":
+            from bookclub.proofread import save_item
+
+            self._send_json(200, save_item(server.workdir, str(body["id"]), body))
+        elif path == "/api/proofread/voice":
+            from bookclub.proofread import set_voice
+
+            self._send_json(200, set_voice(server.workdir, str(body["聲音"]), body.get("學員")))
         elif path == "/api/run/analyze":
             result = server.start_analyze(body)
             self._send_json(202 if result.get("started") else 409, result)

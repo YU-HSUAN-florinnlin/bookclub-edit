@@ -161,3 +161,86 @@ def build_sample(
           f"自動換代號 {st['自動替換句數']} 句、要看一下的名字提示 {st['有名字提示句數']} 句；"
           f"太短、聲音用猜的 {st['聲音是猜的句數']} 句（{st['抽聲紋分群秒']:.0f} 秒）→ {proofread_path(workdir)}")
     return data
+
+
+# ---------- 網頁用：讀取與存檔 ----------
+
+import threading
+
+_lock = threading.Lock()
+PLAY_PAD_S = 0.15          # 播放時句子前後多放一點，避免切掉第一個字
+MAX_COUNT_S = 180.0        # 單次累加的校對時間上限：停在同一句超過 3 分鐘多半是離開座位
+
+
+def _student_seconds_total(workdir: Path) -> float:
+    speakers = wd.read_json(wd.speakers_path(workdir)) or {}
+    return sum(s["end"] - s["start"] for s in speakers.get("sentences", []) if s["label"] in STUDENT_LABELS)
+
+
+def page_data(workdir: str | Path) -> dict:
+    """`GET /api/proofread`：校對稿＋播放網址＋進度與推算。"""
+    from urllib.parse import urlencode
+
+    from bookclub import names
+    from bookclub.config import data_dir
+
+    workdir = Path(workdir)
+    data = wd.read_json(proofread_path(workdir))
+    if not data:
+        return {"句子": [], "尚未準備": True}
+    for it in data["句子"]:
+        q = urlencode({"start": f"{max(0, it['start'] - PLAY_PAD_S):.2f}", "end": f"{it['end'] + PLAY_PAD_S:.2f}"})
+        it["音檔網址"] = f"/api/audio?{q}"
+    roster = names.load_roster(data_dir() / "名冊.csv")
+    data["代號選項"] = sorted({r["代號"] for r in roster if r["代號"]})
+    data["進度"] = progress(data, _student_seconds_total(workdir))
+    return data
+
+
+def progress(data: dict, student_total_s: float) -> dict:
+    """已校對幾句、花多久、每 1 分鐘學員聲音要校對多久、推算整支影片要多久（純函式）。"""
+    items = data["句子"]
+    done = [it for it in items if it["已校對"]]
+    spent = sum(it["校對秒數"] or 0.0 for it in done)   # 每次累加時已經限制單次最多 MAX_COUNT_S
+    audio = sum(it["end"] - it["start"] for it in done)
+    ratio = spent / audio if audio else None   # 每 1 秒聲音花幾秒校對
+    return {
+        "已校對": len(done), "總句數": len(items),
+        "已花秒數": round(spent), "已校對聲音秒數": round(audio, 1),
+        "每分鐘聲音要花分鐘": round(ratio, 1) if ratio else None,
+        "整支學員聲音分鐘": round(student_total_s / 60, 1),
+        "推算整支要花小時": round(student_total_s * ratio / 3600, 1) if ratio else None,
+        "改過字的句數": sum(1 for it in done if it["校對稿"] != it.get("自動校對稿", it["校對稿"])),
+    }
+
+
+def save_item(workdir: str | Path, sid: str, fields: dict) -> dict:
+    """`POST /api/proofread/save`：存一句（校對稿、聲音、已校對），校對秒數用累加的。"""
+    workdir = Path(workdir)
+    with _lock:
+        data = wd.read_json(proofread_path(workdir))
+        it = next((x for x in data["句子"] if x["id"] == sid), None)
+        if it is None:
+            raise KeyError(f"找不到這一句：{sid}")
+        it.setdefault("自動校對稿", it["校對稿"])
+        if "校對稿" in fields:
+            it["校對稿"] = str(fields["校對稿"]).strip()
+        if "聲音" in fields:
+            it["聲音"] = str(fields["聲音"])
+            it["聲音是猜的"] = False
+        if "已校對" in fields:
+            it["已校對"] = bool(fields["已校對"])
+        if fields.get("加秒數"):
+            it["校對秒數"] = round((it["校對秒數"] or 0.0) + min(float(fields["加秒數"]), MAX_COUNT_S), 1)
+        wd.write_json(proofread_path(workdir), data)
+        return {"ok": True, "句子": it, "進度": progress(data, _student_seconds_total(workdir))}
+
+
+def set_voice(workdir: str | Path, voice: str, student: str | None) -> dict:
+    """`POST /api/proofread/voice`：第 2 步聲音編號指認——這個聲音是名冊上哪位（填代號）。"""
+    workdir = Path(workdir)
+    with _lock:
+        data = wd.read_json(proofread_path(workdir))
+        data["聲音"].setdefault(voice, {"秒數": 0.0, "學員": None})["學員"] = student or None
+        wd.write_json(proofread_path(workdir), data)
+        return {"ok": True, "聲音": data["聲音"]}

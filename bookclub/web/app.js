@@ -9,7 +9,7 @@ const STEP_DEFS = [
   { id: "step0", num: 0, title: "一次性設定", real: false },
   { id: "step1", num: 1, title: "轉文字與分析", real: true },
   { id: "step2", num: 2, title: "聲音分群與參考音", real: true },
-  { id: "step3", num: 3, title: "學員逐字稿校對", real: false },
+  { id: "step3", num: 3, title: "學員逐字稿校對", real: true },
   { id: "step4", num: 4, title: "標記覆核", real: true },
   { id: "step5", num: 5, title: "AI 執行", real: false },
   { id: "step6", num: 6, title: "成品逐筆覆核", real: false },
@@ -103,6 +103,7 @@ function stepDoneFromState(num, state) {
   if (num === 1) return !!(sub["轉文字"] && sub["轉文字"].done);
   if (num === 2) return !!(sub["挑參考音"] && sub["挑參考音"].done);
   if (num === 4) return !!(sub["找名字"] && sub["找名字"].done);
+  if (num === 3) return !!(state.proofread && state.proofread.done);
   return false;
 }
 
@@ -119,6 +120,7 @@ async function render() {
     if (id === "overview") return await renderOverview();
     if (id === "step1") return await renderStep1();
     if (id === "step2") return await renderStep2();
+    if (id === "step3") return await renderStep3();
     if (id === "step4") return await renderStep4();
     const def = STEP_DEFS.find((s) => s.id === id);
     return renderNotYet(def);
@@ -448,4 +450,212 @@ async function submitMark(id) {
   } catch (e) {
     if (savedEl) savedEl.textContent = `存檔失敗：${e.message}`;
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// 第 3 步：學員逐字稿校對
+// ---------------------------------------------------------------------------
+// 每句：播放、改文字、改聲音、按「完成」。鍵盤：在文字框裡 ⌘／Ctrl＋Enter＝完成並跳下一句
+// （自動播放），Esc＝重播這句。校對時間：點進一句開始計，按完成或離開這句時送出累加。
+
+const pr = {
+  data: null,
+  player: new Audio(),
+  rate: 1,
+  autoplay: true,
+  onlyTodo: false,
+  voiceFilter: "",
+  activeId: null,
+  activeSince: null,
+};
+
+async function renderStep3() {
+  contentEl.innerHTML = "<p>載入中…</p>";
+  pr.data = await apiGet("/api/proofread");
+  if (pr.data["尚未準備"]) {
+    contentEl.innerHTML = `<h1>3　學員逐字稿校對</h1>
+      <div class="notyet-card">這支影片還沒準備校對稿。在終端機執行：<br>
+      <code>.venv/bin/bookclub proofread prepare &lt;工作區&gt; --start 43:15 --minutes 5</code></div>`;
+    return;
+  }
+  renderStep3Body();
+}
+
+function prFmt(sec) {
+  if (sec == null) return "—";
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function prProgressHtml(p) {
+  const pct = p["總句數"] ? Math.round((p["已校對"] / p["總句數"]) * 100) : 0;
+  const perMin = p["每分鐘聲音要花分鐘"] != null ? `${p["每分鐘聲音要花分鐘"]} 分鐘` : "—（先完成幾句）";
+  const total = p["推算整支要花小時"] != null ? `約 ${p["推算整支要花小時"]} 小時` : "—";
+  return `<div class="pr-progress">
+    <div class="bar"><div style="width:${pct}%"></div></div>
+    <div class="nums">已校對 <b>${p["已校對"]}</b>／${p["總句數"]} 句　花了 <b>${prFmt(p["已花秒數"])}</b>
+    　每 1 分鐘學員聲音要花 <b>${perMin}</b>
+    　整支影片學員講 ${p["整支學員聲音分鐘"]} 分鐘，推算要 <b>${total}</b></div></div>`;
+}
+
+function renderStep3Body() {
+  const d = pr.data;
+  const voices = Object.entries(d["聲音"] || {});
+  const voiceNames = voices.map(([v]) => v);
+  const codes = d["代號選項"] || [];
+  const firstOf = (v) => d["句子"].find((it) => it["聲音"] === v);
+
+  const voiceRows = voices.map(([v, info]) => {
+    const f = firstOf(v);
+    const opts = ['<option value="">（還沒指認）</option>']
+      .concat(codes.map((c) => `<option ${info["學員"] === c ? "selected" : ""}>${esc(c)}</option>`)).join("");
+    return `<tr><td><b>${esc(v)}</b></td><td>${info["秒數"]} 秒</td>
+      <td>${f ? `<button class="pr-play" data-url="${esc(f["音檔網址"])}">▶ 聽一句</button>` : ""}</td>
+      <td><select class="pr-voice-student" data-voice="${esc(v)}">${opts}</select></td>
+      <td><button class="pr-filter" data-voice="${esc(v)}">只看這個聲音</button></td></tr>`;
+  }).join("");
+
+  const rows = d["句子"].map((it, i) => {
+    const vopts = voiceNames.map((v) => `<option ${it["聲音"] === v ? "selected" : ""}>${esc(v)}</option>`).join("");
+    const hints = (it["名字提示"] || []).map((h) => `<span class="badge warn">「${esc(h["字"])}」可能是 ${esc(h["可能是"])}</span>`).join("");
+    const repl = (it["已替換"] || []).length ? `<span class="badge">已換成代號 ${it["已替換"].length} 處</span>` : "";
+    const guess = it["聲音是猜的"] ? '<span class="badge warn">聲音是猜的</span>' : "";
+    const changed = it["原文"] !== it["校對稿"];
+    return `<div class="pr-row ${it["已校對"] ? "done" : ""}" id="pr-${esc(it.id)}" data-i="${i}">
+      <div class="pr-head"><span class="idx">${i + 1}</span><span class="time">${esc(fmtHms(it.start))}</span>
+        <button class="pr-play" data-url="${esc(it["音檔網址"])}" data-id="${esc(it.id)}">▶</button>
+        <select class="pr-voice" data-id="${esc(it.id)}">${vopts}</select>
+        ${guess}${repl}${hints}
+        <button class="pr-done" data-id="${esc(it.id)}">${it["已校對"] ? "✓ 已完成" : "完成"}</button></div>
+      <textarea class="pr-text" rows="2" data-id="${esc(it.id)}">${esc(it["校對稿"])}</textarea>
+      <div class="pr-orig ${changed ? "" : "hidden"}">原本轉出來的：${esc(it["原文"])}</div>
+    </div>`;
+  }).join("");
+
+  contentEl.innerHTML = `
+    <h1>3　學員逐字稿校對</h1>
+    <p class="hint">範圍 ${esc(fmtHms(d["範圍"][0]))}–${esc(fmtHms(d["範圍"][1]))}。成品裡學員的聲音照這份文字重念，錯一個字就念錯一個字。
+    點進文字框就開始計時；<kbd>⌘</kbd>／<kbd>Ctrl</kbd>＋<kbd>Enter</kbd> 完成並跳下一句，<kbd>Esc</kbd> 重播這句。</p>
+    <div id="pr-progress">${prProgressHtml(d["進度"])}</div>
+    <div class="pr-tools">
+      播放速度 <select id="pr-rate"><option value="1">1 倍</option><option value="1.25">1.25 倍</option><option value="1.5">1.5 倍</option></select>
+      <label><input type="checkbox" id="pr-autoplay" ${pr.autoplay ? "checked" : ""}> 跳下一句時自動播放</label>
+      <label><input type="checkbox" id="pr-onlytodo" ${pr.onlyTodo ? "checked" : ""}> 只顯示還沒校對的</label>
+      <span id="pr-filter-label"></span>
+    </div>
+    <details class="pr-voices" ${voices.length ? "open" : ""}><summary>聲音指認（${voices.length} 個聲音）：這個聲音是哪位學員</summary>
+      <table><tr><th>聲音</th><th>總長</th><th></th><th>學員代號</th><th></th></tr>${voiceRows}</table>
+      <p class="hint">很短的句子聲紋抽不準，可能被拆成很多個聲音；在每一句的聲音選單改回正確的聲音即可。</p></details>
+    <div id="pr-list">${rows}</div>`;
+
+  document.getElementById("pr-rate").value = String(pr.rate);
+  document.getElementById("pr-rate").addEventListener("change", (e) => { pr.rate = Number(e.target.value); pr.player.playbackRate = pr.rate; });
+  document.getElementById("pr-autoplay").addEventListener("change", (e) => { pr.autoplay = e.target.checked; });
+  document.getElementById("pr-onlytodo").addEventListener("change", (e) => { pr.onlyTodo = e.target.checked; prApplyFilter(); });
+  contentEl.querySelectorAll(".pr-play").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.id) prActivate(b.dataset.id);
+    prPlay(b.dataset.url);
+  }));
+  contentEl.querySelectorAll(".pr-filter").forEach((b) => b.addEventListener("click", () => {
+    pr.voiceFilter = pr.voiceFilter === b.dataset.voice ? "" : b.dataset.voice; prApplyFilter();
+  }));
+  contentEl.querySelectorAll(".pr-voice-student").forEach((el) => el.addEventListener("change", async () => {
+    await apiPost("/api/proofread/voice", { "聲音": el.dataset.voice, "學員": el.value || null });
+  }));
+  contentEl.querySelectorAll(".pr-voice").forEach((el) => el.addEventListener("change", () => prSave(el.dataset.id, { "聲音": el.value })));
+  contentEl.querySelectorAll(".pr-text").forEach((el) => {
+    el.addEventListener("focus", () => prActivate(el.dataset.id));
+    el.addEventListener("blur", () => prSave(el.dataset.id, { "校對稿": el.value }));
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); prComplete(el.dataset.id, true); }
+      else if (e.key === "Escape") { e.preventDefault(); prPlayId(el.dataset.id); }
+    });
+  });
+  contentEl.querySelectorAll(".pr-done").forEach((b) => b.addEventListener("click", () => {
+    const it = prItem(b.dataset.id);
+    if (it["已校對"]) prSave(b.dataset.id, { "已校對": false });
+    else prComplete(b.dataset.id, false);
+  }));
+  prApplyFilter();
+}
+
+function fmtHms(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+  return `${h ? h + ":" : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function prItem(id) { return pr.data["句子"].find((x) => x.id === id); }
+
+function prPlay(url) {
+  pr.player.src = url;
+  pr.player.playbackRate = pr.rate;
+  pr.player.play().catch(() => {});
+}
+
+function prPlayId(id) { const it = prItem(id); if (it) prPlay(it["音檔網址"]); }
+
+function prActivate(id) {
+  if (pr.activeId === id) return;
+  prFlushTime();
+  pr.activeId = id;
+  pr.activeSince = Date.now();
+}
+
+function prFlushTime() {
+  // 離開一句時，把這段時間記到那一句（還沒按完成也算，按完成時一起送）
+  if (!pr.activeId || !pr.activeSince) return 0;
+  const sec = (Date.now() - pr.activeSince) / 1000;
+  const it = prItem(pr.activeId);
+  if (it) it._pending = (it._pending || 0) + sec;
+  pr.activeSince = Date.now();
+  return sec;
+}
+
+async function prSave(id, fields) {
+  const it = prItem(id);
+  if (!it) return;
+  if (pr.activeId === id) prFlushTime();
+  const body = { id, ...fields };
+  if (it._pending) { body["加秒數"] = it._pending; it._pending = 0; }
+  const onlyText = Object.keys(fields).length === 1 && "校對稿" in fields;
+  if (onlyText && fields["校對稿"].trim() === it["校對稿"] && !body["加秒數"]) return;
+  const res = await apiPost("/api/proofread/save", body);
+  Object.assign(it, res["句子"]);
+  const row = document.getElementById(`pr-${id}`);
+  if (row) {
+    row.classList.toggle("done", !!it["已校對"]);
+    row.querySelector(".pr-done").textContent = it["已校對"] ? "✓ 已完成" : "完成";
+    const orig = row.querySelector(".pr-orig");
+    orig.classList.toggle("hidden", it["原文"] === it["校對稿"]);
+  }
+  document.getElementById("pr-progress").innerHTML = prProgressHtml(res["進度"]);
+}
+
+async function prComplete(id, goNext) {
+  const row = document.getElementById(`pr-${id}`);
+  const text = row.querySelector(".pr-text").value;
+  await prSave(id, { "校對稿": text, "已校對": true });
+  if (!goNext) return;
+  const rows = [...contentEl.querySelectorAll(".pr-row")].filter((r) => r.style.display !== "none");
+  const idx = rows.indexOf(row);
+  const next = rows.slice(idx + 1).find((r) => !r.classList.contains("done")) || rows[idx + 1];
+  if (next) {
+    const ta = next.querySelector(".pr-text");
+    ta.focus();
+    next.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (pr.autoplay) prPlayId(ta.dataset.id);
+  }
+  prApplyFilter();
+}
+
+function prApplyFilter() {
+  contentEl.querySelectorAll(".pr-row").forEach((r) => {
+    const it = pr.data["句子"][Number(r.dataset.i)];
+    const hide = (pr.onlyTodo && it["已校對"] && !r.contains(document.activeElement))
+      || (pr.voiceFilter && it["聲音"] !== pr.voiceFilter);
+    r.style.display = hide ? "none" : "";
+  });
+  const lab = document.getElementById("pr-filter-label");
+  if (lab) lab.textContent = pr.voiceFilter ? `（只看聲音 ${pr.voiceFilter}，再按一次取消）` : "";
 }

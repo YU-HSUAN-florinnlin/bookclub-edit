@@ -35,6 +35,29 @@ def test_cluster_voices_orders_by_seconds():
     assert proofread.cluster_voices(embs, [1.0, 9.0, 1.0, 1.0]) == ["B", "A", "B", "B"]
 
 
+def test_save_item_accumulates_time_and_progress():
+    import json, tempfile
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        (w / "校對").mkdir()
+        items = [{"id": f"s{i}", "start": i * 10.0, "end": i * 10.0 + 6.0, "校對稿": "原句", "原文": "原句",
+                  "聲音": "A", "聲音是猜的": True, "已校對": False, "校對秒數": None} for i in range(2)]
+        (w / "校對" / "校對稿.json").write_text(json.dumps({"句子": items, "聲音": {"A": {"秒數": 12, "學員": None}}},
+                                                        ensure_ascii=False), encoding="utf-8")
+        (w / "說話者判斷.json").write_text(json.dumps({"sentences": [
+            {"start": 0, "end": 600, "label": "不是老師"}, {"start": 600, "end": 900, "label": "老師"}]}), encoding="utf-8")
+        proofread.save_item(w, "s0", {"加秒數": 10})
+        r = proofread.save_item(w, "s0", {"校對稿": "改過的句子", "已校對": True, "加秒數": 500, "聲音": "B"})
+        it = r["句子"]
+        assert it["校對秒數"] == 10 + proofread.MAX_COUNT_S and it["聲音"] == "B" and not it["聲音是猜的"]
+        p = r["進度"]
+        assert p["已校對"] == 1 and p["改過字的句數"] == 1 and p["整支學員聲音分鐘"] == 10.0
+        # 6 秒聲音花 190 秒 → 每分鐘聲音約 31.7 分鐘；整支 600 秒學員聲音 → 約 5.3 小時
+        assert abs(p["推算整支要花小時"] - 5.3) < 0.1
+        proofread.set_voice(w, "A", "Laura")
+        assert json.loads((w / "校對" / "校對稿.json").read_text(encoding="utf-8"))["聲音"]["A"]["學員"] == "Laura"
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0
