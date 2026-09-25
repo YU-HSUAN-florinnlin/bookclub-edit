@@ -520,12 +520,14 @@ function renderStep3Body() {
   // ① 段落時間表
   const tlRows = turns.map((t, i) => {
     const teacher = t["說話者"] === "老師";
-    const mismatch = (t["文字判斷"] === "老師") !== (t["聲音判斷"] === "老師") && t["聲音判斷"] !== "不確定";
+    const calm = ["冥想引導", "導讀"].includes(t["內容類型"]);   // 聲紋在這兩種段落不可靠，不標警告
+    const mismatch = !calm && (t["文字判斷"] === "老師") !== (t["聲音判斷"] === "老師") && t["聲音判斷"] !== "不確定";
     return `<tr class="${teacher ? "t-teacher" : "t-student"} ${!pr.showTeacher && teacher ? "t-hide" : ""}">
       <td>${i + 1}</td><td class="tm">${esc(fmtHms(t.start))}–${esc(fmtHms(t.end))}</td>
       <td>${prFmt(t.end - t.start)}</td>
       <td><select class="tl-who" data-id="${esc(t.id)}">${whoOpts(t["說話者"])}</select></td>
       <td><button class="pr-play" data-url="${esc(t["音檔網址"])}">▶</button></td>
+      <td>${t["內容類型"] ? `<span class="badge">${esc(t["內容類型"])}</span>` : ""}</td>
       <td class="why">${esc(t["換人依據"] || "")}${mismatch ? ' <span class="badge warn">聲紋判斷不同</span>' : ""}${t["學員是猜的"] ? ' <span class="badge warn">太短，學員是猜的</span>' : ""}</td>
       <td>${i ? `<button class="tl-merge" data-id="${esc(t.id)}" title="併進上一段">↑ 併入上一段</button>` : ""}</td></tr>`;
   }).join("");
@@ -567,7 +569,7 @@ function renderStep3Body() {
       <label><input type="checkbox" id="pr-autoplay" ${pr.autoplay ? "checked" : ""}> 確認後自動播放下一段</label></div>
 
     <details class="pr-sec" open><summary><h2>① 段落：誰從幾分幾秒講到幾分幾秒</h2></summary>
-      <p class="hint">共 ${turns.length} 段。只看文字判斷老師／學員，跟聲紋一致 ${Math.round((c["一致比例"] || 0) * 100)}%；標「聲紋判斷不同」的段落請優先聽。
+      <p class="hint">共 ${turns.length} 段。老師／學員以文字判斷為主，跟聲紋一致 ${Math.round((c["一致比例"] || 0) * 100)}%（冥想引導、導讀的段落聲紋不可靠，不列入比對）；標「聲紋判斷不同」的段落請優先聽。
       <label><input type="checkbox" id="tl-teacher" ${pr.showTeacher ? "checked" : ""}> 也顯示老師的段落</label></p>
       <table class="tl">${tlRows}</table></details>
 

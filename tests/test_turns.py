@@ -39,6 +39,9 @@ def test_compare_with_voice_by_seconds():
           _t("d", 100, 105, "學員", "不確定")]
     c = turns.compare_with_voice(ts)
     assert c["一致比例"] == 0.9 and c["文字老師聲紋學員"] == 10 and c["聲紋不確定"] == 5
+    calm = [{**_t("m", 0, 600, "老師", "學員"), "內容類型": "冥想引導"}, _t("b", 600, 700, "老師", "老師")]
+    c2 = turns.compare_with_voice(calm)
+    assert c2["一致比例"] == 1.0 and c2["冥想導讀不比對"] == 600
 
 
 def test_same_person_agreement_within_chunk():
