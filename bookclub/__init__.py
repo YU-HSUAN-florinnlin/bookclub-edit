@@ -4,4 +4,4 @@
 指令用法見 `bookclub --help`，或跑 `bookclub doctor` 檢查環境。
 """
 
-__version__ = "0.0.1"
+__version__ = "0.1.4"

@@ -160,6 +160,12 @@ def apply_simple_filters(result: dict) -> dict:
     return result
 
 
+def _region_files(region_dir: Path, start: float, end: float) -> tuple[str, Path, Path]:
+    """區域的快取檔用起訖時間命名（09-26 改；以前用流水號，掃描範圍一改就會拿到別的區域的快取）。"""
+    uri = f"區域_{start:.2f}_{end:.2f}"
+    return uri, region_dir / f"{uri}.flac", region_dir / f"{uri}.rttm"
+
+
 def find_overlaps(
     audio_path: Path,
     workdir: Path,
@@ -171,7 +177,7 @@ def find_overlaps(
         已自動跳過數, 重疊數（含跳過的）, 掃描區域數, 掃描總秒數, elapsed
 
     `workdir/重疊.json` 已存在就直接讀出來回傳；每個掃描區域另外快取
-    RTTM（`workdir/重疊/區域NNNN.rttm`），中途中斷只補沒做完的區域。
+    RTTM（`workdir/重疊/區域_起_訖.rttm`，用時間命名），中途中斷只補沒做完的區域。
     """
     workdir = Path(workdir)
     cache_path = overlap_path(workdir)
@@ -211,12 +217,12 @@ def find_overlaps(
 
     all_overlaps: list[dict] = []
     n_regions = len(merged_regions)
+    n_cached = 0
 
     for i, (r_start, r_end) in enumerate(merged_regions):
-        uri = f"區域{i:04d}"
-        region_audio = region_dir / f"{uri}.flac"
-        rttm_path = region_dir / f"{uri}.rttm"
-
+        uri, region_audio, rttm_path = _region_files(region_dir, r_start, r_end)
+        if rttm_path.exists():
+            n_cached += 1
         if not region_audio.exists():
             _extract_region_audio(audio_path, r_start, r_end, region_audio)
 
@@ -254,6 +260,7 @@ def find_overlaps(
 
     result = {
         "overlaps": all_overlaps,
+        "用到快取的區域數": n_cached,
         "重疊數": len(all_overlaps),
         "已自動跳過數": n_skipped,
         "掃描區域數": n_regions,

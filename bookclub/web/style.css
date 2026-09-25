@@ -306,7 +306,8 @@ tr.t-hide { display:none; }
 .rv-goto { width: 230px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
 .rv-goto.bad { border-color: var(--danger); background: var(--danger-bg); }
 .rv-io { font-size: 13px; color: var(--muted); }
-.rv-io b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.rv-iobox { width: 92px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; font-variant-numeric: tabular-nums; font-size: 13px; }
+.rv-iobox.bad { border-color: var(--danger); background: var(--danger-bg); }
 .rv-keys { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 .rv-ctrl button { padding: 4px 10px; font-size: 13px; }
 .rv-tl, .rv-zoom { position: relative; height: 26px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; margin-top: 6px; cursor: pointer; overflow: hidden; touch-action: none; user-select: none; }

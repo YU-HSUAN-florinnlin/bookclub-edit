@@ -143,6 +143,11 @@ def test_skip_overlap_reuses_existing_cache():
         assert r["重疊數"] == 1 and r["要人決定數"] == 1 and not r.get("跳過")
 
 
+def test_region_cache_named_by_time():
+    uri, a, r = ov._region_files(Path("/x"), 12.345, 20.0)
+    assert uri == "區域_12.35_20.00" and r.name == "區域_12.35_20.00.rttm"
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

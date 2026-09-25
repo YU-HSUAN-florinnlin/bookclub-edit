@@ -155,6 +155,19 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     return items
 
 
+def roster_words() -> list[str]:
+    """名冊上的本名與其他寫法（找「還沒換成代號的本名」用）。"""
+    from bookclub import names
+    from bookclub.config import data_dir
+
+    return sorted({r["寫法"] for r in names.load_roster(data_dir() / "名冊.csv") if len(r["寫法"]) >= 2},
+                  key=len, reverse=True)
+
+
+def has_real_name(text: str, words: list[str]) -> bool:
+    return any(w in (text or "") for w in words)
+
+
 def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     """`GET /api/review`：覆核工作台一次要的全部資料。"""
     from bookclub import overlap as overlap_mod
@@ -182,6 +195,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         bands = [{"start": s["start"], "end": s["end"], "說話者": "老師" if s.get("label") == "老師" else "學員?",
                   "冥想導讀": False, "id": s["id"]} for s in sents]
 
+    words = roster_words()
     items: list[dict] = []
     for k, t in enumerate(turns):
         if t["說話者"] == "老師":
@@ -190,7 +204,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                       "說話者": t["說話者"], "校對稿": t["校對稿"], "原文": t["原文"], "已確認": t["已確認"],
                       "問老師": bool(t.get("問老師")), "問老師備註": t.get("問老師備註", ""),
                       "內容類型": t.get("內容類型"), "換人依據": t.get("換人依據"),
-                      "學員是猜的": bool(t.get("學員是猜的"))})
+                      "學員是猜的": bool(t.get("學員是猜的")), "含本名": has_real_name(t["校對稿"], words)})
     items += _names_items(workdir, sents)
 
     ov = wd.read_json(wd.overlap_path(workdir), default=None)

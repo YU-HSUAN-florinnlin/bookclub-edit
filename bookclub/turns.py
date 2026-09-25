@@ -29,7 +29,7 @@ from bookclub import workdir as wd
 
 CHUNK_LINES = 220        # 每次交給 Claude 的句數（約 8–10 分鐘）
 OVERLAP_LINES = 20       # 前後塊重疊的句數，接縫處用前一塊的判斷
-PARALLEL_CALLS = 4       # 同時送給 Claude 的塊數（每塊各自獨立判斷）
+PARALLEL_CALLS = 8       # 同時送給 Claude 的塊數（每塊各自獨立判斷；09-26 從 4 改 8：第一堂 8 塊一次送完，不用等第二輪）
 MAX_EMB_S = 30.0         # 每段最多取 30 秒抽聲紋
 MIN_EMB_S = 1.5          # 短於這個秒數的段落不抽聲紋（歸到最像的學員，標「猜的」）
 VOICE_DISTANCE_T = 0.5   # 段落層級聲紋分群門檻（比逐句的 0.6 嚴一點：整段的聲紋比較穩）
@@ -148,13 +148,14 @@ def text_turns(sentences: list[dict], model: str, log=print, workers: int = PARA
     def one(k: int) -> list[dict]:
         start, end = ranges[k]
         t0 = time.time()
-        for attempt in (1, 2):   # Claude 偶爾回傳格式壞掉的 JSON，重送一次
+        for attempt in (1, 2):   # Claude 偶爾回傳格式壞掉的 JSON、或同時送太多被拒，重送一次
             try:
                 raw = parse_json(call(PROMPT + "\n逐字稿：\n" + format_lines(sentences[start:end], start), model))
                 break
-            except ValueError:
+            except (ValueError, RuntimeError, subprocess.TimeoutExpired):
                 if attempt == 2:
                     raise
+                time.sleep(5)
         chunk = normalize_turns(raw.get("段落", []), start, end - 1)
         for t in chunk:
             if t.get("學員編號"):

@@ -112,6 +112,7 @@ def run_analyze(
     t_sp = time.time()
     speaker_result = speakers_mod.classify_speakers(_audio_path(workdir), workdir, sentences)
     elapsed["2b_認老師"] = round(time.time() - t_sp, 1)
+
     text_data = None
     if text_future is not None:
         try:

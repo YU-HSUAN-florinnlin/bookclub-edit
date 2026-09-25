@@ -67,7 +67,7 @@ async function renderReview() {
           <span class="rv-clock" id="rv-clock">0:00</span>／${esc(rvFmt(v["長度"]))}
           <input id="rv-goto" class="rv-goto" placeholder="跳到：43:15 或 1:05:00，按 Enter">
           <select id="rv-rate" title="播放速度"><option value="1">1 倍</option><option value="1.25">1.25 倍</option><option value="1.5">1.5 倍</option><option value="2">2 倍</option></select>
-          <span class="rv-io">起 <b id="rv-in">—</b>　訖 <b id="rv-out">—</b></span>
+          <span class="rv-io">起 <input id="rv-in" class="rv-iobox" placeholder="按 I 或輸入">　訖 <input id="rv-out" class="rv-iobox" placeholder="按 O 或輸入"></span>
           <button id="rv-add-cut" class="secondary" title="用 I／O 標的起訖新增一段刪除段落">＋刪除段落</button>
           <button id="rv-add-mute" class="secondary" title="用 I／O 標的起訖新增一段局部消音">＋局部消音</button>
           <button id="rv-size" class="secondary" title="影片縮小，清單多一點空間">影片縮小</button>
@@ -100,6 +100,7 @@ async function renderReview() {
     rvSeek(t);
   });
   document.getElementById("rv-rate").addEventListener("change", (e) => { if (rv.video) rv.video.playbackRate = Number(e.target.value); });
+  rvBindIOBoxes();
   document.getElementById("rv-add-cut").addEventListener("click", () => rvAddRange("cut"));
   document.getElementById("rv-add-mute").addEventListener("click", () => rvAddRange("mute"));
   document.getElementById("rv-hl").addEventListener("change", (e) => { rv.highlight = e.target.checked; rvHighlightNow(true); });
@@ -417,6 +418,7 @@ function rvCardHtml(it) {
       <label class="rv-ask"><input type="checkbox" class="rv-askbox" ${it["問老師"] ? "checked" : ""}> 聽不清楚，問老師</label>
       <button class="rv-confirm">${it["已確認"] ? "取消確認" : "確認"}</button>`)}
       ${it["學員是猜的"] ? '<div class="hint">這段太短，學員是猜的，請聽一下是誰。</div>' : ""}
+      ${it["含本名"] ? '<div class="rv-warn">文字裡有名冊上的本名，記得換成英文代號（成品會照這份文字重念）。</div>' : ""}
       <textarea class="rv-text" rows="${rows}">${esc(it["校對稿"])}</textarea>
       <input class="rv-asknote" placeholder="要問老師什麼（例如：這裡聽不清楚是「覺察」還是「覺得」）" value="${esc(it["問老師備註"] || "")}" style="${it["問老師"] ? "" : "display:none"}">
       ${it["原文"] !== it["校對稿"] ? `<details class="pr-orig"><summary>看原本轉出來的</summary>${esc(it["原文"])}</details>` : ""}</div>`;
@@ -667,7 +669,7 @@ function rvGoNext(key) {
 
 async function rvAddRange(kind) {
   if (rv.inMark == null || rv.outMark == null || rv.outMark <= rv.inMark) {
-    alert("先在影片上按 I 標起點、按 O 標終點（終點要在起點之後）");
+    alert("先在影片上按 I 標起點、按 O 標終點，或直接在「起」「訖」欄輸入時間（終點要在起點之後）");
     return;
   }
   const api = kind === "cut" ? "/api/review/cut" : "/api/review/mute";
@@ -678,9 +680,23 @@ async function rvAddRange(kind) {
 }
 
 function rvShowIO() {
-  document.getElementById("rv-in").textContent = rv.inMark != null ? rvFmt(rv.inMark, 2) : "—";
-  document.getElementById("rv-out").textContent = rv.outMark != null ? rvFmt(rv.outMark, 2) : "—";
+  document.getElementById("rv-in").value = rv.inMark != null ? rvFmt(rv.inMark, 2) : "";
+  document.getElementById("rv-out").value = rv.outMark != null ? rvFmt(rv.outMark, 2) : "";
   rvRenderZoom();
+}
+
+function rvBindIOBoxes() {   // 起訖也可以手動輸入（例如 43:15.5），按 Enter 或離開欄位就記下
+  for (const [id, k] of [["rv-in", "inMark"], ["rv-out", "outMark"]]) {
+    const el = document.getElementById(id);
+    const take = () => {
+      if (!el.value.trim()) { rv[k] = null; el.classList.remove("bad"); return; }
+      const t = rvParseTime(el.value);
+      el.classList.toggle("bad", t == null);
+      if (t != null) { rv[k] = t; rvRenderZoom(); }
+    };
+    el.addEventListener("change", take);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); take(); } });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -705,7 +721,9 @@ async function rvExport() {
   msg.textContent = "匯出中…";
   try {
     const r = await apiPost("/api/review/export", {});
-    const warn = r["未確認數"] ? `<span class="badge warn">還有 ${r["未確認數"]} 筆沒確認</span> ` : "";
+    const warn = (r["未確認數"] ? `<span class="badge warn">還有 ${r["未確認數"]} 筆沒確認</span> ` : "")
+      + ((r["還有本名的地方"] || []).length ? `<span class="badge warn">${r["還有本名的地方"].length} 處還有本名：${esc(r["還有本名的地方"].slice(0, 5).join("、"))}</span> ` : "")
+      + ((r["缺參考音"] || []).length ? `<span class="badge warn">還沒選定老師參考音（第 2 步）</span> ` : "");
     msg.innerHTML = `${warn}已匯出：<code>${esc(r["檔案"])}</code>（<a href="/api/review/export.zip">下載</a>）`;
   } catch (err) { msg.innerHTML = `<span class="badge error">失敗</span> ${esc(err.message)}`; }
 }

@@ -7,6 +7,7 @@
 - `ref.wav`、`ref.txt`（老師參考音）、`發音對照表.csv`（有才放）
 - `給夥伴的說明.txt`
 不放 Groq 的原始逐字稿（`原文`）、名字候選的本名與整句原文；盡量只放代號後的文字。
+學員段落的校對稿、重疊的文字裡如果還有名冊上的本名（還沒校對完），匯出時列出是哪幾筆提醒。
 
 `bookclub review import <zip> <新工作區> --video <影片>`：建工作區、比對影片長度、從影片抽 `audio.flac`、
 放好檔案，讓 `bookclub gen names`、`bookclub render audio` 直接能跑。
@@ -99,6 +100,10 @@ def build_result(workdir: str | Path, video: str | Path | None = None) -> dict:
                                         "學員說話者", "備註", "已確認")}
                 | {"代號": code_of.get(it.get("學員說話者"))}
                 for it in page["項目"] if it["類型"] == "重疊"]
+    words = review.roster_words()
+    real_names = [f"學員段落 {x['id']}" for x in segments if review.has_real_name(x["校對稿"], words)] + \
+        [f"重疊 {x['id']}" for x in overlaps
+         if review.has_real_name(x.get("老師文字"), words) or review.has_real_name(x.get("學員文字"), words)]
     pending = [it for it in page["項目"] if not it.get("已確認")]
     by_type: dict[str, int] = {}
     for it in pending:
@@ -119,6 +124,7 @@ def build_result(workdir: str | Path, video: str | Path | None = None) -> dict:
         "局部消音": [m for m in dec["局部消音"]],
         "老師聲紋中心": ((wd.read_json(wd.speakers_path(workdir), default={}) or {})
                        .get("cluster_info", {}).get("老師聲紋中心")),
+        "還有本名的地方": real_names,
         "未確認數": len(pending),
         "未確認各類": by_type,
         "統計": page["進度"],
@@ -178,8 +184,12 @@ def export_review(workdir: str | Path, out: str | Path | None = None, video: str
         print(f"⚠️ [匯出] 還沒選定老師參考音（缺 {'、'.join(missing_ref)}）：先在第 2 步選好，不然夥伴沒辦法生成老師的聲音")
     if result["未確認數"]:
         print(f"⚠️ [匯出] 還有 {result['未確認數']} 筆沒確認：{result['未確認各類']}")
+    if result["還有本名的地方"]:
+        print(f"⚠️ [匯出] 還有 {len(result['還有本名的地方'])} 處文字裡有名冊上的本名，還沒換成代號："
+              f"{'、'.join(result['還有本名的地方'][:10])}")
     print(f"[匯出] {out}")
     return {"檔案": str(out), "未確認數": result["未確認數"], "未確認各類": result["未確認各類"],
+            "還有本名的地方": result["還有本名的地方"],
             "內含": [RESULT_NAME, README_NAME, *files], "缺參考音": missing_ref}
 
 

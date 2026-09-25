@@ -155,6 +155,21 @@ def test_export_import_roundtrip_same_name_plan():
         pass
 
 
+def test_export_lists_places_with_real_names():
+    from bookclub import exchange
+
+    w = _fresh()
+    orig = review.roster_words
+    review.roster_words = lambda: ["學員1分享"]          # 假的「本名」：假資料學員 1 的句子都有這幾個字
+    try:
+        d = review.page_data(w)
+        assert [x["含本名"] for x in d["項目"] if x["類型"] == "學員段落"] == [True, False, True]
+        r = exchange.export_review(w, out=w.parent / "匯出.zip")
+        assert r["還有本名的地方"][:2] == ["學員段落 T003", "學員段落 T007"]
+    finally:
+        review.roster_words = orig
+
+
 def test_import_rejects_wrong_video_length():
     import subprocess
 
