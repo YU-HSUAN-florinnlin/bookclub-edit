@@ -70,3 +70,24 @@ def classify_speakers(
         "scan_pad_s": pad_s,
         "elapsed": round(elapsed, 1),
     }
+
+
+def scan_regions_for(sentences: list[dict], pad_s: float, *, voice_only: bool = False) -> list[list[float]]:
+    """學員／不確定的句子前後各 pad_s 秒、合併後的掃描範圍。voice_only=True 時用原本的聲紋判斷
+    （`聲紋判斷` 欄位），算「只看聲紋的話要掃多少」給報告比較用。"""
+    if voice_only:
+        sentences = [{**s, "label": s.get("聲紋判斷", s.get("label"))} for s in sentences]
+    return [list(iv) for iv in _exclude_regions_from_sentences(sentences, pad_s=pad_s)]
+
+
+def save_corrected(workdir: Path, sentences: list[dict], scan_regions: list[list[float]], pad_s: float,
+                   correction: dict) -> None:
+    """把文字修正過的判斷寫回 `說話者判斷.json`（同一個快取檔；refpick 挑參考音時直接讀到修正後的結果）。
+    原本的聲紋判斷留在每句的 `聲紋判斷`，重複執行不會越改越多。"""
+    path = speakers_path(workdir)
+    data = read_json(path, default={}) or {}
+    data["sentences"] = sentences
+    data["scan_regions"] = scan_regions
+    data["scan_pad_s"] = pad_s
+    data["文字修正"] = correction
+    write_json(path, data)

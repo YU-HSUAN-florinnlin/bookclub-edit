@@ -39,6 +39,11 @@ def turns_path(workdir: Path) -> Path:
     return workdir / "校對" / "段落.json"
 
 
+def text_turns_path(workdir: Path) -> Path:
+    """段落分析的文字那一半（Claude 的判斷）快取：存在就不再呼叫 Claude。"""
+    return workdir / "校對" / "段落_文字.json"
+
+
 # ---------- 文字判斷（Claude） ----------
 
 PROMPT = """你在協助剪輯一支讀書會的錄影。老師帶領，學員輪流分享或提問；通常是老師講一段、學員講一段，可能來回幾次，老師再點下一位學員，或下一位學員自己接話。
@@ -162,6 +167,71 @@ def text_turns(sentences: list[dict], model: str, log=print, workers: int = PARA
     return stitch_chunks(chunks)
 
 
+def get_text_turns(workdir: str | Path, sentences: list[dict], *, model: str | None = None, log=print,
+                   call=None) -> dict:
+    """段落分析的文字那一半：`校對/段落_文字.json` 存在（而且句數對得上）就直接用，不然呼叫 Claude 再存檔。
+
+    回傳 {"段落": [{起, 迄, 說話者, 學員編號, 內容類型, …, 句子: [句子 id]}], "句數", "模型", "文字判斷秒"}。
+    sentences 只用到 id／start／text，轉文字的句子或認老師之後的句子都可以（兩者順序、id 一樣）。"""
+    workdir = Path(workdir).expanduser()
+    path = text_turns_path(workdir)
+    cached = wd.read_json(path)
+    if cached and cached.get("句數") == len(sentences):
+        log(f"[段落] 已有 {path.name}（{len(cached['段落'])} 段），不再呼叫 Claude")
+        return cached
+    if model is None:
+        from bookclub.config import load_settings
+
+        model = load_settings().claude_models.turns
+    log(f"[段落] {len(sentences)} 句，交給 Claude（{model}）只看文字切段落...")
+    t0 = time.time()
+    raw = text_turns(sentences, model, log, call=call)
+    for t in raw:
+        t["句子"] = [s["id"] for s in sentences[t["起"]:t["迄"] + 1]]
+    data = {"段落": raw, "句數": len(sentences), "模型": model, "文字判斷秒": round(time.time() - t0)}
+    wd.write_json(path, data)
+    return data
+
+
+# ---------- 文字修正聲紋判斷（09-25 宇軒：冥想引導、導讀整段算老師） ----------
+
+def calm_turns(text: dict) -> list[dict]:
+    """冥想引導、導讀的段落（聲紋在這兩種段落不可靠）。"""
+    return [t for t in text.get("段落", []) if t.get("內容類型") in VOICE_UNRELIABLE]
+
+
+def correct_labels(sentences: list[dict], text: dict) -> dict:
+    """落在冥想引導、導讀段落裡、聲紋判成非老師的句子改成老師（就地修改，純函式）。
+
+    原本的聲紋判斷存在 `聲紋判斷`，第一次修正時記下、之後不動，所以重複執行結果一樣；
+    文字結果改了（例如重跑段落分析），沒被新結果涵蓋的句子會還原成聲紋判斷。
+    每句加 `判斷依據`：「聲紋」或「文字：冥想引導／導讀」。回傳統計與冥想導讀的時間區域。"""
+    kind_of: dict[str, str] = {}
+    for t in calm_turns(text):
+        for sid in t.get("句子", []):
+            kind_of[sid] = t["內容類型"]
+    n = secs = 0.0
+    for s in sentences:
+        voice = s.setdefault("聲紋判斷", s.get("label"))
+        kind = kind_of.get(s.get("id"))
+        if kind and voice != "老師":
+            s["label"] = "老師"
+            s["判斷依據"] = f"文字：{kind}"
+            n += 1
+            secs += s["end"] - s["start"]
+        else:
+            s["label"] = voice
+            s["判斷依據"] = "聲紋"
+    by_id = {s["id"]: s for s in sentences}
+    regions = []
+    for t in calm_turns(text):
+        ss = [by_id[i] for i in t.get("句子", []) if i in by_id]
+        if ss:
+            regions.append([round(ss[0]["start"], 3), round(ss[-1]["end"], 3)])
+    return {"改成老師句數": int(n), "改成老師秒數": round(secs, 1), "冥想導讀段數": len(regions),
+            "冥想導讀秒數": round(sum(e - s for s, e in regions), 1), "冥想導讀區域": regions}
+
+
 # ---------- 聲音認人 ----------
 
 def cluster_turns(embs: np.ndarray, durs: list[float]) -> list[int]:
@@ -181,10 +251,12 @@ def cluster_turns(embs: np.ndarray, durs: list[float]) -> list[int]:
 # ---------- 串起來 ----------
 
 def build_turns(workdir: str | Path, *, model: str | None = None, roster_path: str | Path | None = None,
-                log=print) -> dict:
-    """`bookclub run turns`：文字切段落＋聲音認人＋名字線索，寫出 `校對/段落.json`。"""
+                log=print, text: dict | None = None) -> dict:
+    """`bookclub run turns`：文字切段落（有 `段落_文字.json` 就沿用）＋聲音認人＋名字線索，寫出 `校對/段落.json`。
+
+    `bookclub run analyze` 會先把文字那一半跑完（跟認老師同時跑），這裡只補聲音認人（約 13 秒）。"""
     from bookclub import names
-    from bookclub.config import data_dir, load_settings
+    from bookclub.config import data_dir
     from bookclub.refpick import _l2norm, _load_embed_model, cosine
 
     workdir = Path(workdir).expanduser()
@@ -192,11 +264,10 @@ def build_turns(workdir: str | Path, *, model: str | None = None, roster_path: s
     if not speakers:
         raise FileNotFoundError(f"找不到 {wd.speakers_path(workdir)}，先跑 `bookclub run analyze`。")
     sents = speakers["sentences"]
-    model = model or load_settings().claude_models.turns
-    log(f"[段落] {len(sents)} 句，交給 Claude（{model}）只看文字切段落...")
-    t0 = time.time()
-    raw_turns = text_turns(sents, model, log)
-    text_s = time.time() - t0
+    text = text or get_text_turns(workdir, sents, model=model, log=log)
+    raw_turns = text["段落"]
+    model = text.get("模型") or model
+    text_s = text.get("文字判斷秒") or 0
 
     roster = names.load_roster(Path(roster_path).expanduser() if roster_path else data_dir() / "名冊.csv")
     turns = []
@@ -282,10 +353,11 @@ def build_turns(workdir: str | Path, *, model: str | None = None, roster_path: s
 
 
 def _voice_role(ss: list[dict]) -> str:
-    """這段的聲紋判斷：依秒數多數決（老師／學員／不確定）。"""
+    """這段的聲紋判斷：依秒數多數決（老師／學員／不確定）。用原本的聲紋判斷，不用文字修正過的。"""
     secs = {"老師": 0.0, "學員": 0.0, "不確定": 0.0}
     for s in ss:
-        k = "老師" if s["label"] == "老師" else "學員" if s["label"] == "不是老師" else "不確定"
+        lab = s.get("聲紋判斷", s["label"])
+        k = "老師" if lab == "老師" else "學員" if lab == "不是老師" else "不確定"
         secs[k] += s["end"] - s["start"]
     return max(secs, key=secs.get)
 
@@ -416,6 +488,10 @@ def save_turn(workdir: str | Path, tid: str, fields: dict) -> dict:
             t["校對稿"] = str(fields["校對稿"]).strip()
         if "已確認" in fields:
             t["已確認"] = bool(fields["已確認"])
+        if "問老師" in fields:          # 聽不清楚，問老師（覆核工作台）
+            t["問老師"] = bool(fields["問老師"])
+        if "問老師備註" in fields:
+            t["問老師備註"] = str(fields["問老師備註"])
         if fields.get("加秒數"):
             t["校對秒數"] = round((t["校對秒數"] or 0.0) + min(float(fields["加秒數"]), MAX_COUNT_S), 1)
         wd.write_json(turns_path(workdir), data)

@@ -116,6 +116,33 @@ def test_teacher_turn_contains_true_and_false():
     assert ov._teacher_turn_contains(ann, "老師", 4.98, 20.02) is True
 
 
+def test_zero_length_overlap_auto_skipped_and_idempotent():
+    res = {"overlaps": [{"start": 1.0, "end": 1.0, "length": 0.0, "已自動跳過": False, "原因": None},
+                        {"start": 5.0, "end": 5.4, "length": 0.4, "已自動跳過": False, "原因": None},
+                        {"start": 9.0, "end": 9.2, "length": 0.2, "已自動跳過": True, "原因": "兩位學員之間的重疊"}]}
+    ov.apply_simple_filters(res)
+    assert res["overlaps"][0]["已自動跳過"] and res["overlaps"][0]["原因"] == ov.ZERO_REASON
+    assert res["overlaps"][2]["原因"] == "兩位學員之間的重疊"          # 已經跳過的不改原因
+    assert (res["重疊數"], res["已自動跳過數"], res["要人決定數"]) == (3, 2, 1)
+    ov.apply_simple_filters(res)
+    assert res["已自動跳過數"] == 2
+
+
+def test_skip_overlap_reuses_existing_cache():
+    import json
+    import tempfile
+
+    from bookclub import analyze
+
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        assert analyze.skipped_overlap_result(w, [[0, 10]])["重疊數"] == 0      # 沒有快取：0 筆、標跳過
+        (w / "重疊.json").write_text(json.dumps({"overlaps": [
+            {"start": 1.0, "end": 1.5, "length": 0.5, "已自動跳過": False, "原因": None}]}), encoding="utf-8")
+        r = analyze.skipped_overlap_result(w, [[0, 10]])
+        assert r["重疊數"] == 1 and r["要人決定數"] == 1 and not r.get("跳過")
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

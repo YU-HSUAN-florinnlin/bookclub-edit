@@ -6,10 +6,11 @@
 `spikes/diarize/diarize_test.py` 驗證過的搬過來：diarization → `get_overlap()`
 找重疊 → 聲紋比對老師（沿用「認老師」那一步算出來的老師聲紋中心，不重算）。
 
-自動過濾（02 規格 2026-09-20 定案）：
+自動過濾（02 規格 2026-09-20 定案；第 3 條 09-26 加）：
     1. 兩位學員之間的重疊 → 跳過（兩邊都會重念，不需要人決定老師那邊怎麼處理）
     2. 老師講話時學員的短附和（< `echo_overlap_max_s` 秒，且落在老師連續講話
        的區間內部）→ 跳過
+    3. 重疊不到 0.05 秒（分辨說話者的邊界誤差，`apply_simple_filters`，讀快取時也會套用）→ 跳過
 被跳過的仍然列在輸出清單裡（`已自動跳過` 標成 true、附上原因），不是刪掉——
 覆核網頁之後可以一鍵救回。
 
@@ -141,6 +142,24 @@ def _decide_skip(ann, roles: dict, labels: list[str], ov_start: float, ov_end: f
     return False, None
 
 
+MIN_OVERLAP_S = 0.05   # 短於這個長度的重疊是分辨說話者的邊界誤差（09-26 第一堂有 6 筆 0.0 秒），自動跳過
+ZERO_REASON = "重疊不到 0.05 秒（邊界誤差）"
+
+
+def apply_simple_filters(result: dict) -> dict:
+    """不需要重跑 pyannote 的過濾規則，套在新算的或讀快取的結果上都行（重複套用結果一樣）。
+    目前一條：長度不到 MIN_OVERLAP_S 的重疊自動跳過。套完重算統計數字。"""
+    for o in result.get("overlaps", []):
+        if not o.get("已自動跳過") and o.get("length", 0) < MIN_OVERLAP_S:
+            o["已自動跳過"] = True
+            o["原因"] = ZERO_REASON
+    ovs = result.get("overlaps", [])
+    result["重疊數"] = len(ovs)
+    result["已自動跳過數"] = sum(1 for o in ovs if o.get("已自動跳過"))
+    result["要人決定數"] = result["重疊數"] - result["已自動跳過數"]
+    return result
+
+
 def find_overlaps(
     audio_path: Path,
     workdir: Path,
@@ -159,6 +178,10 @@ def find_overlaps(
     cached = read_json(cache_path, default=None)
     if cached is not None:
         print("[3/找重疊] 已有 重疊.json，略過")
+        before = cached.get("已自動跳過數")
+        apply_simple_filters(cached)
+        if cached["已自動跳過數"] != before:
+            write_json(cache_path, cached)
         return cached
 
     audio_path = Path(audio_path)
@@ -237,6 +260,8 @@ def find_overlaps(
         "掃描總秒數": round(scan_total, 1),
         "elapsed": round(elapsed, 1),
     }
+    apply_simple_filters(result)
+    n_skipped = result["已自動跳過數"]
     write_json(cache_path, result)
     print(f"[3/找重疊] 完成：共 {len(all_overlaps)} 處重疊，自動跳過 {n_skipped} 處，"
           f"耗時 {elapsed:.1f} 秒")

@@ -111,6 +111,48 @@ def test_chunk_ranges_and_parallel_stitch_match_sequential():
     assert out[1]["學員編號"] == "C0-S1"
 
 
+def _sent(i, label, dur=2.0):
+    return {"id": f"s{i}", "start": i * 3.0, "end": i * 3.0 + dur, "text": f"第{i}句", "label": label}
+
+
+def test_correct_labels_idempotent_and_reverts():
+    sents = [_sent(0, "老師"), _sent(1, "不是老師"), _sent(2, "不確定"), _sent(3, "太短", 0.3), _sent(4, "不是老師")]
+    text = {"段落": [{"起": 0, "迄": 3, "說話者": "老師", "內容類型": "冥想引導", "句子": ["s0", "s1", "s2", "s3"]},
+                     {"起": 4, "迄": 4, "說話者": "學員", "內容類型": "學員分享", "句子": ["s4"]}]}
+    c = turns.correct_labels(sents, text)
+    assert c["改成老師句數"] == 3 and c["改成老師秒數"] == 4.3
+    assert [s["label"] for s in sents] == ["老師", "老師", "老師", "老師", "不是老師"]
+    assert sents[1]["聲紋判斷"] == "不是老師" and sents[1]["判斷依據"] == "文字：冥想引導"
+    assert sents[4]["判斷依據"] == "聲紋" and c["冥想導讀區域"] == [[0.0, 9.3]]
+    again = turns.correct_labels(sents, text)                       # 重複執行：結果一樣
+    assert again["改成老師句數"] == 3 and [s["label"] for s in sents][1] == "老師"
+    turns.correct_labels(sents, {"段落": []})                        # 文字結果換了：還原成聲紋判斷
+    assert [s["label"] for s in sents] == ["老師", "不是老師", "不確定", "太短", "不是老師"]
+
+
+def test_get_text_turns_caches_and_skips_claude():
+    sents = [_sent(i, "老師") for i in range(5)]
+    calls = [0]
+
+    def fake_call(prompt, model):
+        calls[0] += 1
+        return json.dumps({"段落": [{"起": 0, "迄": 4, "說話者": "老師", "內容類型": "導讀"}]})
+
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        a = turns.get_text_turns(w, sents, model="x", log=lambda *_: None, call=fake_call)
+        assert a["段落"][0]["句子"] == [f"s{i}" for i in range(5)] and turns.text_turns_path(w).exists()
+        b = turns.get_text_turns(w, sents, model="x", log=lambda *_: None, call=fake_call)
+        assert calls[0] == 1 and b == a                                # 第二次讀快取，不再呼叫
+        turns.get_text_turns(w, sents + [_sent(5, "老師")], model="x", log=lambda *_: None, call=fake_call)
+        assert calls[0] == 2                                           # 句數對不上：重新判斷
+
+
+def test_voice_role_uses_original_voice_label():
+    ss = [{**_sent(0, "老師"), "聲紋判斷": "不是老師"}, _sent(1, "不是老師")]
+    assert turns._voice_role(ss) == "學員"
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0
