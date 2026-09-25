@@ -555,12 +555,17 @@ def generate_teacher(
 
     merged = wd.read_json(wd.merged_transcript_path(workdir))
     for it in items:
-        if it["slot"]:
+        if it["slot"] and merged:
             it["原文"] = slot_text(merged, *it["slot"])
+        elif it["slot"] and it["text"]:
+            # 匯入的工作區沒有逐字稿（不帶學員本名出去）：插入停頓的對位改用代號版的句子，名字那幾個字對不準，其他字照常
+            it["原文"] = it["text"]
         if not it["text"]:
             if not it.get("原文"):
                 raise ValueError(f"第 {it['id']} 句沒有文字，工作區裡也找不到原片那段的逐字稿（transcript/merged.json）")
             it["text"] = it["原文"]
+    if pron_table is None and (workdir / PRON_TABLE_NAME).is_file():
+        pron_table = workdir / PRON_TABLE_NAME     # 匯入的工作區：用匯出時一起帶過來的那份
     table = load_pron_table(pron_table)
     for it in items:
         it["生成用文字"], it["發音對照"] = apply_pron(it["text"], table)

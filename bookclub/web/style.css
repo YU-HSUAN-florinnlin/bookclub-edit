@@ -99,7 +99,7 @@ html, body {
 .content {
   flex: 1;
   padding: 24px 28px 80px;
-  max-width: 880px;
+  max-width: 1100px;
 }
 
 .content h1 { font-size: 20px; margin-top: 0; }
@@ -295,3 +295,74 @@ tr.t-teacher { background:#f6f8fa; color:#57606a; }
 tr.t-student td { background:#fff; }
 tr.t-hide { display:none; }
 .pr-orig { font-size:13px; color:#57606a; margin-top:4px; }
+
+/* ---------- 第 3 步：覆核工作台 ---------- */
+.rv-top { position: sticky; top: 0; z-index: 5; background: var(--bg-soft); padding: 6px 0 8px; border-bottom: 1px solid var(--border); }
+.rv-player video { width: 100%; max-height: 34vh; background: #000; border-radius: 6px; display: block; }
+.rv-top.small .rv-player video { max-height: 18vh; }
+.rv-top.small .rv-keys { display: none; }
+.rv-ctrl { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 2px; font-size: 14px; }
+.rv-clock { font-variant-numeric: tabular-nums; font-weight: bold; min-width: 70px; display: inline-block; }
+.rv-goto { width: 230px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+.rv-goto.bad { border-color: var(--danger); background: var(--danger-bg); }
+.rv-io { font-size: 13px; color: var(--muted); }
+.rv-io b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.rv-keys { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.rv-ctrl button { padding: 4px 10px; font-size: 13px; }
+.rv-tl, .rv-zoom { position: relative; height: 26px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; margin-top: 6px; cursor: pointer; overflow: hidden; touch-action: none; user-select: none; }
+.rv-zoom { height: 40px; }
+.rv-band { position: absolute; top: 0; bottom: 0; opacity: .85; }
+.rv-mark { position: absolute; min-width: 3px; }
+.rv-tl .rv-mark, .rv-zoom .rv-mark { top: 0; height: 9px; }
+.rv-mark.m-name { background: #d62728; }
+.rv-mark.m-ov { background: #ff8c00; top: 9px; }
+.rv-mark.m-cut { background: #111; top: auto; bottom: 0; height: 9px; }
+.rv-mark.m-mute { background: repeating-linear-gradient(45deg, #7b3fa0 0 3px, #d9c2ea 3px 6px); top: auto; bottom: 0; height: 9px; }
+.rv-head { position: absolute; top: 0; bottom: 0; width: 2px; background: #c00; box-shadow: 0 0 0 1px #fff; pointer-events: none; }
+.rv-iomark { position: absolute; top: 0; bottom: 0; width: 2px; background: #1f6feb; pointer-events: none; }
+.rv-tick { position: absolute; bottom: 0; height: 8px; border-left: 1px solid #555; pointer-events: none; }
+.rv-tick span { position: absolute; bottom: 8px; left: 2px; font-size: 10px; color: #333; background: rgba(255,255,255,.7); padding: 0 2px; }
+.rv-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.rv-legend i { display: inline-block; width: 12px; height: 10px; margin-right: 3px; vertical-align: middle; border-radius: 2px; }
+.rv-legend i.m-name { background: #d62728; } .rv-legend i.m-ov { background: #ff8c00; }
+.rv-legend i.m-cut { background: #111; } .rv-legend i.m-mute { background: repeating-linear-gradient(45deg, #7b3fa0 0 3px, #d9c2ea 3px 6px); }
+.rv-sec { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; margin: 12px 0; }
+.rv-sec summary h2 { display: inline; font-size: 15px; }
+.rv-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+table.rv-people td { padding: 4px 8px; vertical-align: middle; }
+.rv-voicecell label { margin-right: 8px; white-space: nowrap; }
+.rv-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.rv-filter { background: var(--bg); color: #333; border: 1px solid var(--border); padding: 4px 10px; font-size: 13px; }
+.rv-filter.on { background: #222; color: #fff; }
+.rv-opts { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; margin-bottom: 8px; }
+.rv-card { scroll-margin-top: calc(var(--rv-top-h, 0px) + 12px); background: var(--bg); border: 1px solid var(--border); border-left: 5px solid #ccc; border-radius: 8px; padding: 10px 14px; margin: 10px 0; outline: none; }
+.rv-card.c-學員段落 { border-left-color: #3d9970; } .rv-card.c-名字 { border-left-color: #d62728; }
+.rv-card.c-重疊 { border-left-color: #ff8c00; } .rv-card.c-刪除段落 { border-left-color: #111; } .rv-card.c-局部消音 { border-left-color: #7b3fa0; }
+.rv-card.done { background: var(--accent-bg); }
+.rv-card.active { box-shadow: 0 0 0 2px #1f6feb inset; }
+.rv-card.now { box-shadow: 0 0 0 3px #ffd33d; }
+.rv-card.active.now { box-shadow: 0 0 0 2px #1f6feb inset, 0 0 0 3px #ffd33d; }
+.rv-chead { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 14px; }
+.rv-chead .time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.rv-chead button, .rv-chead select { padding: 3px 9px; font-size: 13px; }
+.rv-type { font-weight: bold; }
+.rv-state { color: var(--accent); font-size: 13px; margin-left: auto; }
+.rv-card textarea { width: 100%; font-size: 15px; line-height: 1.7; }
+.rv-card .sentence { font-size: 16px; margin: 4px 0; }
+.rv-card .sentence mark { background: #ffe066; padding: 0 2px; border-radius: 3px; }
+.rv-whole { font-size: 14px; background: var(--bg-soft); border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
+.rv-choices { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; margin: 6px 0; font-size: 14px; }
+.rv-radio { white-space: nowrap; }
+.rv-card .checks { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; margin: 4px 0; }
+.rv-card input.rv-note, .rv-card input.rv-asknote { width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; margin-top: 4px; }
+.rv-warn { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 6px 10px; font-size: 13px; margin: 4px 0; }
+.rv-arrange { font-size: 14px; margin: 4px 0; }
+.rv-ctx { font-size: 14px; background: var(--bg-soft); border-radius: 6px; padding: 6px 10px; margin: 4px 0; }
+.rv-2col { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; }
+.rv-2col label { flex: 1 1 260px; }
+.rv-range { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
+.rv-range input { width: 110px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; font-variant-numeric: tabular-nums; }
+.rv-range button { padding: 3px 9px; font-size: 13px; }
+.rv-ask { font-size: 13px; white-space: nowrap; }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+.rv-export { margin-top: 20px; }

@@ -156,7 +156,7 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
         },
         "認老師": {
             "done": speakers is not None,
-            "elapsed_s": elapsed.get("2_認老師"),
+            "elapsed_s": elapsed.get("2b_認老師", elapsed.get("2_認老師")),
             "統計": {
                 "老師群佔可比對總秒數比例": (speakers or {}).get("cluster_info", {}).get(
                     "老師群佔可比對總秒數比例", analysis.get("老師群佔可比對總秒數比例")
@@ -165,7 +165,7 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
         },
         "找重疊": {
             "done": overlap is not None and not overlap.get("跳過"),
-            "elapsed_s": elapsed.get("3_找重疊"),
+            "elapsed_s": elapsed.get("4_找重疊", elapsed.get("3_找重疊")),
             "統計": {
                 "重疊數": (overlap or {}).get("重疊數", analysis.get("重疊數")),
                 "已自動跳過數": (overlap or {}).get("已自動跳過數", analysis.get("重疊已自動跳過數")),
@@ -173,7 +173,7 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
         },
         "挑參考音": {
             "done": ref_record is not None,
-            "elapsed_s": elapsed.get("4_挑參考音"),
+            "elapsed_s": elapsed.get("5_挑參考音", elapsed.get("4_挑參考音")),
             "統計": {
                 "候選數": (ref_record or {}).get("候選數", analysis.get("參考音候選數")),
                 "已選定名次": (ref_record or {}).get("選定名次"),
@@ -181,12 +181,13 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
         },
         "找名字": {
             "done": names_result is not None,
-            "elapsed_s": elapsed.get("5_找名字"),
+            "elapsed_s": elapsed.get("6_找名字", elapsed.get("5_找名字")),
             "統計": (names_result or {}).get("統計", analysis.get("名字候選統計", {})),
         },
         "段落分析": {
             "done": (workdir / "校對" / "段落.json").exists(),
-            "elapsed_s": elapsed.get("6_段落分析"),
+            "elapsed_s": elapsed.get("2a_段落文字_Claude", 0) + elapsed.get("7_段落聲紋", 0)
+            if ("2a_段落文字_Claude" in elapsed or "7_段落聲紋" in elapsed) else elapsed.get("6_段落分析"),
             "統計": analysis.get("段落統計") or {},
         },
     }
@@ -602,6 +603,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._route_get_api(path, query)
             else:
                 self._serve_static(path)
+        except (BrokenPipeError, ConnectionResetError):
+            return   # 瀏覽器拖曳影片時會中斷前一個請求，正常現象
         except SecurityError as e:
             self._send_json(403, {"error": str(e)})
         except FileNotFoundError as e:
@@ -633,6 +636,22 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub.turns import page_data as turns_page
 
             self._send_json(200, turns_page(server.workdir))
+        elif path == "/api/review":
+            from bookclub.review import page_data as review_page
+
+            self._send_json(200, review_page(server.workdir, video=server.video))
+        elif path == "/api/video":
+            from bookclub.review import video_path
+
+            vp = video_path(server.workdir, server.video)
+            if vp is None:
+                raise FileNotFoundError("找不到原片：啟動伺服器時帶 --video，或確認分析結果記錄的影片路徑還在")
+            self._serve_file(vp)
+        elif path == "/api/review/export.zip":
+            from bookclub.exchange import export_review
+
+            out = export_review(server.workdir, video=server.video)
+            self._serve_file(Path(out["檔案"]), content_type="application/zip")
         elif path == "/api/audio":
             self._handle_audio(query)
         elif path == "/api/run/status":
@@ -703,6 +722,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, _turns.split_turn(server.workdir, str(body["id"]), int(body["at"])))
             else:
                 self._send_json(200, _turns.set_person_code(server.workdir, str(body["學員"]), body.get("代號")))
+        elif path.startswith("/api/review/"):
+            from bookclub import review as rv
+
+            if path == "/api/review/name":
+                self._send_json(200, rv.save_name(server.workdir, str(body["id"]), body))
+            elif path == "/api/review/overlap":
+                self._send_json(200, rv.save_overlap(server.workdir, str(body["id"]), body))
+            elif path == "/api/review/cut":
+                self._send_json(200, rv.save_cut(server.workdir, body))
+            elif path == "/api/review/mute":
+                self._send_json(200, rv.save_mute(server.workdir, body))
+            elif path == "/api/review/voice":
+                self._send_json(200, rv.set_voice(server.workdir, body.get("學員"), str(body["聲音"])))
+            elif path == "/api/review/time":
+                self._send_json(200, rv.add_time(server.workdir, float(body.get("秒數", 0))))
+            elif path == "/api/review/export":
+                from bookclub.exchange import export_review
+
+                self._send_json(200, export_review(server.workdir, video=server.video))
+            else:
+                self._send_json(404, {"error": f"沒有這個 API：{path}"})
         elif path == "/api/run/analyze":
             result = server.start_analyze(body)
             self._send_json(202 if result.get("started") else 409, result)

@@ -45,7 +45,8 @@ def test_plan_three_ways_and_skip():
         _cand(30.0, 30.4, "只換名字", sid="s9", matched="小華", code="Lily"),
         _cand(40.0, 40.4, "整句換掉", sid="s1"),                    # 標成不是名字 → 略過
     ]
-    plan = nameplan.build_plan(cands, {"5": {"tags": ["不是名字"]}}, SENTS)
+    plan = nameplan.build_plan(cands, {"3": {"做法": "直接消音"}, "4": {"做法": "只換名字"},
+                                       "5": {"tags": ["不是名字"]}}, SENTS)
     whole = [g for g in plan["生成"] if g["id"].startswith("S")]
     assert len(whole) == 1 and whole[0]["text"] == "Amy，妳剛剛說的Tom也有提到。" and whole[0]["候選"] == [1, 2]
     assert whole[0]["slot"] == [10.0, 14.0]
@@ -61,6 +62,22 @@ def test_plan_decision_overrides_and_manual():
     assert plan["要人處理"][0]["候選"] == 1 and not plan["生成"]
     plan = nameplan.build_plan([_cand(10.0, 10.5, "整句換掉")], {"1": {"tags": [], "做法": "直接消音"}}, SENTS)
     assert plan["消音"] and not plan["生成"]
+
+
+def test_plan_defaults_to_whole_sentence_and_expands_half_sentences():
+    sents = {
+        "a": {"id": "a", "start": 0.0, "end": 2.0, "text": "上次我們講到，", "label": "老師"},
+        "b": {"id": "b", "start": 2.1, "end": 4.0, "text": "小美說她很緊張，", "label": "老師"},
+        "c": {"id": "c", "start": 4.0, "end": 6.0, "text": "後來就好了﹖", "label": "老師"},
+        "d": {"id": "d", "start": 6.2, "end": 8.0, "text": "我們繼續，", "label": "老師"},
+        "e": {"id": "e", "start": 8.0, "end": 9.0, "text": "謝謝，", "label": "不是老師"},
+    }
+    plan = nameplan.build_plan([_cand(2.2, 2.6, "直接消音", sid="b")], {}, sents)   # 建議做法只是參考
+    g = plan["生成"][0]
+    assert g["text"] == "上次我們講到，Amy說她很緊張，後來就好了﹖" and g["slot"] == [0.0, 6.0]
+    assert g["句子"] == ["a", "b", "c"]
+    group = nameplan.expand_sentence(sorted(sents.values(), key=lambda x: x["start"]), 3)
+    assert [x["id"] for x in group] == ["d"]                     # 下一段是學員：不接
 
 
 def test_plan_only_writes_no_real_names_to_sentence_list():

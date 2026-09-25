@@ -213,7 +213,7 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
 
     if video is None:
         merged = wd.read_json(wd.merged_transcript_path(workdir)) or {}
-        video = merged.get("source")
+        video = merged.get("source") or (wd.read_json(wd.analysis_result_path(workdir)) or {}).get("video")
     if not video or not Path(video).is_file():
         raise FileNotFoundError(f"找不到原片影片：{video}\n→ 用 --video 指定影片路徑。")
 
