@@ -110,6 +110,46 @@ def content_score(expected: str, heard: str) -> float:
     return round(difflib.SequenceMatcher(None, a, b, autojunk=False).ratio(), 4)
 
 
+# ---------- 發音對照表 ----------
+
+PRON_TABLE_NAME = "發音對照表.csv"
+
+
+def pron_table_path() -> Path:
+    from bookclub.config import data_dir
+
+    return data_dir() / PRON_TABLE_NAME
+
+
+def load_pron_table(path: str | Path | None = None) -> list[tuple[str, str]]:
+    """讀發音對照表（欄位：原字,生成用,原因,建立日期）。
+
+    CosyVoice 的口音不完全是台灣口音，有些詞念起來會偏掉（「愉快」會念成
+    「玉快」）。生成前把這些詞換成念起來比較接近台灣口音的寫法（「魚快」）。
+    只影響送進模型念的文字；內容檢查、對位、標點判斷都還是用原本的文字。
+    檔案不存在就是沒有對照表。長的詞先換，避免短詞先換掉長詞的一部分。
+    """
+    import csv
+
+    path = Path(path).expanduser() if path else pron_table_path()
+    if not path.is_file():
+        return []
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        rows = [(r.get("原字", "").strip(), r.get("生成用", "").strip()) for r in csv.DictReader(f)]
+    rows = [(a, b) for a, b in rows if a and b and a != b]
+    return sorted(rows, key=lambda r: -len(r[0]))
+
+
+def apply_pron(text: str, table: list[tuple[str, str]]) -> tuple[str, list[str]]:
+    """回傳（送進模型念的文字、用到的對照，例如 ["愉快→魚快"]）。"""
+    used = []
+    for a, b in table:
+        if a in text:
+            text = text.replace(a, b)
+            used.append(f"{a}→{b}")
+    return text, used
+
+
 # ---------- 句子清單 ----------
 
 def load_sentences(path: str | Path) -> list[dict]:
@@ -359,7 +399,7 @@ def _run_attempt(
     """生成一次並做內容、聲紋檢查。"""
     sid, text, slot_s = item["id"], item["text"], item.get("slot_s")
     t = time.time()
-    wav, sr = synth(text, seed, speed)
+    wav, sr = synth(item.get("生成用文字") or text, seed, speed)
     elapsed = time.time() - t
     audio_s = len(wav) / sr
     path = out_dir / f"{sid}_第{n}次.wav"
@@ -402,7 +442,8 @@ def _finalize(
     chosen_path = out_dir / f"{sid}.wav"
     shutil.copyfile(out_dir / f"{sid}_第{best + 1}次.wav", chosen_path)
     record = {
-        "id": sid, "text": text, "slot": item.get("slot"), "slot_s": slot_s,
+        "id": sid, "text": text, "生成用文字": item.get("生成用文字") or text,
+        "發音對照": item.get("發音對照", []), "slot": item.get("slot"), "slot_s": slot_s,
         "嘗試": [a.to_dict(i + 1, slot_s, tolerance) for i, a in enumerate(history)],
         "選定": best + 1,
         "檔案": str(chosen_path.relative_to(workdir)),
@@ -480,6 +521,7 @@ def generate_teacher(
     workdir: str | Path, sentences_path: str | Path, *,
     ref_wav: str | Path | None = None, ref_text_path: str | Path | None = None,
     check_content: bool = True, check_similarity: bool = True, use_pauses: bool = True, redo: bool = False,
+    pron_table: str | Path | None = None,
     synth: Synth | None = None, hear: Hear | None = None, similar: Similar | None = None,
     align: Align | None = None, log: Callable[[str], None] = print,
 ) -> dict:
@@ -516,6 +558,9 @@ def generate_teacher(
             if not it.get("原文"):
                 raise ValueError(f"第 {it['id']} 句沒有文字，工作區裡也找不到原片那段的逐字稿（transcript/merged.json）")
             it["text"] = it["原文"]
+    table = load_pron_table(pron_table)
+    for it in items:
+        it["生成用文字"], it["發音對照"] = apply_pron(it["text"], table)
 
     log_path = teacher_log_path(workdir)
     record = wd.read_json(log_path, default=None) or {}
@@ -525,7 +570,8 @@ def generate_teacher(
         log("參考音跟上次不同，全部重新生成。")
         done = {}
 
-    todo = [it for it in items if it["id"] not in done or done[it["id"]]["text"] != it["text"]]
+    todo = [it for it in items if it["id"] not in done or done[it["id"]]["text"] != it["text"]
+            or done[it["id"]].get("生成用文字", it["text"]) != it["生成用文字"]]
     log(f"[老師聲音] 共 {len(items)} 句，要生成 {len(todo)} 句（其他 {len(items) - len(todo)} 句沿用上次結果）")
     out_dir = teacher_out_dir(workdir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -558,7 +604,8 @@ def generate_teacher(
         if synth is None:
             synth = load_synth()
         for it in todo:
-            log(f"[老師聲音] 第 {it['id']} 句（{len(it['text'])} 字）")
+            log(f"[老師聲音] 第 {it['id']} 句（{len(it['text'])} 字）"
+                + (f"，發音對照：{'、'.join(it['發音對照'])}" if it["發音對照"] else ""))
             h = histories[it["id"]]
             while (nxt := next_attempt(h, None, tolerance)) is not None:
                 h.append(_run_attempt(it, len(h) + 1, *nxt, out_dir, synth, hear, similar, log))

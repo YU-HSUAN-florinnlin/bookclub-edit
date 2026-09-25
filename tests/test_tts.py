@@ -318,6 +318,41 @@ def test_punct_boundaries_and_snap():
     assert pauses.punct_boundaries(gen2, "Bella，妳好。") == {0, 2}
 
 
+def test_pron_table_applies_only_to_synth_text():
+    with tempfile.TemporaryDirectory() as d:
+        work = Path(d)
+        table = work / "發音對照表.csv"
+        table.write_text("原字,生成用,原因,建立日期\n愉快,魚快,念成玉快,2026-09-25\n", encoding="utf-8")
+        assert tts.apply_pron("覺得愉快、很愉快", tts.load_pron_table(table)) == ("覺得魚快、很魚快", ["愉快→魚快"])
+        assert tts.load_pron_table(work / "沒有這個檔.csv") == []
+        ref = work / "參考音"
+        ref.mkdir()
+        sf.write(str(ref / "ref.wav"), np.zeros(SR, dtype=np.float32), SR)
+        (ref / "ref.txt").write_text("參考", encoding="utf-8")
+        sp = work / "句子.txt"
+        sp.write_text("讓人覺得愉快。\n", encoding="utf-8")
+        said = []
+
+        def synth(text, seed, speed):
+            said.append(text)
+            return _tone_s(1.0), SR
+
+        heard = []
+
+        def hear(p):
+            heard.append(p)
+            return "讓人覺得愉快"
+
+        log = tts.generate_teacher(work, sp, synth=synth, hear=hear, check_similarity=False, pron_table=table)
+        r = log["句子"][0]
+        assert said == ["讓人覺得魚快。"] and r["text"] == "讓人覺得愉快。" and r["嘗試"][0]["內容通過"]
+        assert r["生成用文字"] == "讓人覺得魚快。" and r["發音對照"] == ["愉快→魚快"]
+        # 對照表改了（拿掉）→ 這句要重新生成
+        table.write_text("原字,生成用,原因,建立日期\n", encoding="utf-8")
+        tts.generate_teacher(work, sp, synth=synth, hear=hear, check_similarity=False, pron_table=table)
+        assert said[-1] == "讓人覺得愉快。"
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0

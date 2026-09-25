@@ -98,6 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
     gen_teacher_parser.add_argument("--no-similarity", action="store_true", help="不算聲紋相似度")
     gen_teacher_parser.add_argument("--no-pauses", action="store_true", help="不照原片停頓插入空白（不載入逐字對位模型）")
     gen_teacher_parser.add_argument("--redo", action="store_true", help="忽略上次結果，全部重新生成")
+    gen_teacher_parser.add_argument(
+        "--pron-table", help="發音對照表 CSV（預設 ~/讀書會剪輯資料/發音對照表.csv，不存在就不換）"
+    )
 
     return parser
 
@@ -176,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
             generate_teacher(
                 args.workdir, args.sentences, ref_wav=args.ref_wav, ref_text_path=args.ref_text,
                 check_content=not args.no_check, check_similarity=not args.no_similarity,
-                use_pauses=not args.no_pauses, redo=args.redo,
+                use_pauses=not args.no_pauses, redo=args.redo, pron_table=args.pron_table,
             )
             return 0
         print("用法：bookclub gen teacher <工作區> <句子清單> [--ref-wav 檔案] [--ref-text 檔案] [--no-check] [--redo]")
