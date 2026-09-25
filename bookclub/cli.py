@@ -57,6 +57,10 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("--skip-overlap", action="store_true", help="跳過找重疊（排錯、省時間用）")
     analyze_parser.add_argument("--ref-n", type=int, default=5, help="挑幾個老師參考音候選（預設 5）")
 
+    turns_parser = run_sub.add_parser("turns", help="段落分析：看文字切段落、看聲音認人（第 3 步校對用）")
+    turns_parser.add_argument("workdir", help="工作區路徑（要先跑過 run analyze）")
+    turns_parser.add_argument("--model", help="claude -p 用的模型（預設讀 settings.toml 的 claude_models.turns）")
+
     sub.add_parser("export", help="匯出成品（Phase 5 才會做）")
 
     ref_parser = sub.add_parser("ref", help="老師參考音相關指令")
@@ -161,6 +165,11 @@ def main(argv: list[str] | None = None) -> int:
                 exclusion_path=args.exclusions,
                 skip_overlap=args.skip_overlap, ref_n=args.ref_n,
             )
+            return 0
+        if args.run_command == "turns":
+            from bookclub.turns import build_turns
+
+            build_turns(args.workdir, model=args.model)
             return 0
         print("用法：bookclub run analyze <影片> <工作區> [--roster 名冊.csv] [--sensitive 敏感詞.csv] "
               "[--exclusions 名字排除清單.csv] [--skip-overlap]")

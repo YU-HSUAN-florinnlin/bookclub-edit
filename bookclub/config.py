@@ -45,6 +45,7 @@ class ClaudeModels:
 
     punctuation: str = "sonnet"  # 標點還原：規則清楚、量大，用快速便宜的模型
     naming: str = "opus"  # 名字候選判斷：需要判斷語意，用能力較強的模型
+    turns: str = "sonnet"  # 段落分析：讀整支逐字稿判斷誰在說話、什麼時候換人
 
 
 @dataclass
@@ -112,6 +113,7 @@ def load_settings() -> Settings:
         claude_models=ClaudeModels(
             punctuation=claude_raw.get("punctuation", "sonnet"),
             naming=claude_raw.get("naming", "opus"),
+            turns=claude_raw.get("turns", "sonnet"),
         ),
         thresholds=Thresholds(
             length_tolerance=float(thresholds_raw.get("length_tolerance", 0.15)),

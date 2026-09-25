@@ -1,0 +1,100 @@
+"""bookclub/turns.py 的單元測試（純函式與存檔，不呼叫 Claude、不載入聲紋模型）。
+
+獨立可跑：.venv/bin/python tests/test_turns.py
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+import numpy as np
+
+from bookclub import turns
+
+
+def test_normalize_turns_fills_gaps_and_overlaps():
+    raw = [{"起": 0, "迄": 3, "說話者": "老師"}, {"起": 3, "迄": 5, "說話者": "學員"},
+           {"起": 8, "迄": 9, "說話者": "老師"}, {"起": "x", "迄": 2}]
+    out = turns.normalize_turns(raw, 0, 10)
+    assert [(t["起"], t["迄"]) for t in out] == [(0, 3), (4, 7), (8, 10)]
+
+
+def test_parse_json_from_chatty_output():
+    assert turns.parse_json('好的，結果如下：\n```json\n{"段落": []}\n```')["段落"] == []
+
+
+def _t(tid, start, end, text_role, voice_role, text_id=None, person=None):
+    return {"id": tid, "start": start, "end": end, "文字判斷": text_role, "聲音判斷": voice_role,
+            "文字學員編號": text_id, "學員": person}
+
+
+def test_compare_with_voice_by_seconds():
+    ts = [_t("a", 0, 60, "老師", "老師"), _t("b", 60, 90, "學員", "學員"), _t("c", 90, 100, "老師", "學員"),
+          _t("d", 100, 105, "學員", "不確定")]
+    c = turns.compare_with_voice(ts)
+    assert c["一致比例"] == 0.9 and c["文字老師聲紋學員"] == 10 and c["聲紋不確定"] == 5
+
+
+def test_same_person_agreement_within_chunk():
+    ts = [_t("a", 0, 1, "學員", "學員", "C0-S1", "學員1"), _t("b", 1, 2, "學員", "學員", "C0-S1", "學員1"),
+          _t("c", 2, 3, "學員", "學員", "C0-S2", "學員1"), _t("d", 3, 4, "學員", "學員", "C1-S1", "學員2")]
+    r = turns.same_person_agreement(ts)
+    assert r["同一人比對組數"] == 3 and abs(r["同一人判斷一致比例"] - 1 / 3) < 1e-3
+
+
+def test_cluster_turns_orders_by_seconds():
+    a, b = np.array([1.0, 0.0]), np.array([0.0, 1.0])
+    assert turns.cluster_turns(np.stack([a, b, b]), [50.0, 10.0, 10.0]) == [0, 1, 1]
+
+
+def test_save_merge_split_and_person():
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        (w / "校對").mkdir()
+        sents = [{"id": f"s{i}", "start": i * 5.0, "end": i * 5.0 + 4, "text": t, "label": "不是老師"}
+                 for i, t in enumerate(["我先說。", "然後呢。", "換我了。"])]
+        (w / "說話者判斷.json").write_text(json.dumps({"sentences": sents}, ensure_ascii=False), encoding="utf-8")
+        data = {"段落": [
+            {"id": "T001", "start": 0, "end": 9, "句子": ["s0", "s1"], "說話者": "學員1", "原文": "我先說。然後呢。",
+             "校對稿": "我先說。然後呢。", "已確認": False, "校對秒數": None},
+            {"id": "T002", "start": 10, "end": 14, "句子": ["s2"], "說話者": "學員1", "原文": "換我了。",
+             "校對稿": "換我了。", "已確認": False, "校對秒數": None}],
+            "學員": {"學員1": {"秒數": 13, "段數": 2, "點名線索": {}, "代號": None}}}
+        (w / "校對" / "段落.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+        r = turns.save_turn(w, "T002", {"說話者": "新學員", "已確認": True, "加秒數": 999})
+        assert r["段落"]["說話者"] == "學員2" and r["段落"]["校對秒數"] == turns.MAX_COUNT_S
+        turns.split_turn(w, "T001", 4)
+        d1 = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
+        assert [t["id"] for t in d1["段落"]] == ["T001", "T001b", "T002"]
+        assert d1["段落"][0]["校對稿"] == "我先說。" and d1["段落"][1]["start"] == 5.0
+        turns.merge_turn(w, "T001b")
+        turns.set_person_code(w, "學員2", "Laura")
+        d2 = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
+        assert len(d2["段落"]) == 2 and d2["段落"][0]["end"] == 9 and d2["學員"]["學員2"]["代號"] == "Laura"
+        p = turns.turns_progress(d2)
+        assert p["學員段落數"] == 2 and p["已確認"] == 1
+
+
+def _run_all() -> int:
+    tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
+    failed = 0
+    for name, func in tests:
+        try:
+            func()
+            print(f"✓ {name}")
+        except Exception as exc:
+            failed += 1
+            print(f"✗ {name}：{exc!r}")
+    print(f"{len(tests) - failed}/{len(tests)} 通過")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(_run_all())

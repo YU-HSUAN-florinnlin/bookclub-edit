@@ -283,3 +283,15 @@ audio { width: 100%; }
 .pr-orig.hidden { display:none; }
 .badge.warn { background:#fff8c5; color:#7d4e00; }
 kbd { border:1px solid #ccc; border-bottom-width:2px; border-radius:4px; padding:0 4px; font-size:12px; background:#fafafa; }
+
+.pr-sec { margin:14px 0; }
+.pr-sec > summary { cursor:pointer; list-style:revert; }
+.pr-sec > summary h2 { display:inline; font-size:18px; }
+table.tl { border-collapse:collapse; width:100%; font-size:14px; margin-top:6px; }
+table.tl td { padding:4px 8px; border-bottom:1px solid #eee; vertical-align:middle; }
+table.tl td.tm { font-variant-numeric:tabular-nums; white-space:nowrap; }
+table.tl td.why { color:#57606a; font-size:13px; }
+tr.t-teacher { background:#f6f8fa; color:#57606a; }
+tr.t-student td { background:#fff; }
+tr.t-hide { display:none; }
+.pr-orig { font-size:13px; color:#57606a; margin-top:4px; }

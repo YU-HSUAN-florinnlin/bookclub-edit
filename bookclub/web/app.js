@@ -454,116 +454,156 @@ async function submitMark(id) {
 
 
 // ---------------------------------------------------------------------------
-// 第 3 步：學員逐字稿校對
+// 第 3 步：學員逐字稿校對（段落版，09-25 宇軒改版）
 // ---------------------------------------------------------------------------
-// 每句：播放、改文字、改聲音、按「完成」。鍵盤：在文字框裡 ⌘／Ctrl＋Enter＝完成並跳下一句
-// （自動播放），Esc＝重播這句。校對時間：點進一句開始計，按完成或離開這句時送出累加。
+// 三塊：①段落時間表：誰從幾分幾秒講到幾分幾秒（可改說話者、併進上一段）
+//       ②學員換成哪個英文名　③學員段落逐段確認逐字稿（一大段一起改）
+// 鍵盤：在文字框裡 ⌘／Ctrl＋Enter＝確認並跳下一段（自動播放），Esc＝從頭播這段。
 
 const pr = {
-  data: null,
-  player: new Audio(),
-  rate: 1,
-  autoplay: true,
-  onlyTodo: false,
-  voiceFilter: "",
-  activeId: null,
-  activeSince: null,
+  data: null, player: new Audio(), rate: 1, autoplay: true, onlyTodo: false, showTeacher: false,
+  activeId: null, activeSince: null,
 };
 
 async function renderStep3() {
   contentEl.innerHTML = "<p>載入中…</p>";
-  pr.data = await apiGet("/api/proofread");
+  pr.data = await apiGet("/api/turns");
   if (pr.data["尚未準備"]) {
     contentEl.innerHTML = `<h1>3　學員逐字稿校對</h1>
-      <div class="notyet-card">這支影片還沒準備校對稿。在終端機執行：<br>
-      <code>.venv/bin/bookclub proofread prepare &lt;工作區&gt; --start 43:15 --minutes 5</code></div>`;
+      <div class="notyet-card">還沒做段落分析。在終端機執行：<br>
+      <code>.venv/bin/bookclub run turns &lt;工作區&gt;</code><br>會用 Claude 讀逐字稿切段落、用聲紋認人，約 10 分鐘。</div>`;
     return;
   }
   renderStep3Body();
 }
 
+async function prReload() {
+  const y = window.scrollY;
+  pr.data = await apiGet("/api/turns");
+  renderStep3Body();
+  window.scrollTo(0, y);
+}
+
+function fmtHms(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+  return `${h ? h + ":" : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 function prFmt(sec) {
   if (sec == null) return "—";
-  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
-  return `${m}:${String(s).padStart(2, "0")}`;
+  return `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}`;
 }
 
 function prProgressHtml(p) {
-  const pct = p["總句數"] ? Math.round((p["已校對"] / p["總句數"]) * 100) : 0;
-  const perMin = p["每分鐘聲音要花分鐘"] != null ? `${p["每分鐘聲音要花分鐘"]} 分鐘` : "—（先完成幾句）";
-  const total = p["推算整支要花小時"] != null ? `約 ${p["推算整支要花小時"]} 小時` : "—";
-  return `<div class="pr-progress">
-    <div class="bar"><div style="width:${pct}%"></div></div>
-    <div class="nums">已校對 <b>${p["已校對"]}</b>／${p["總句數"]} 句　花了 <b>${prFmt(p["已花秒數"])}</b>
-    　每 1 分鐘學員聲音要花 <b>${perMin}</b>
-    　整支影片學員講 ${p["整支學員聲音分鐘"]} 分鐘，推算要 <b>${total}</b></div></div>`;
+  const pct = p["學員段落數"] ? Math.round((p["已確認"] / p["學員段落數"]) * 100) : 0;
+  const perMin = p["每分鐘聲音要花分鐘"] != null ? `${p["每分鐘聲音要花分鐘"]} 分鐘` : "—（先確認幾段）";
+  const total = p["推算全部要花小時"] != null ? `約 ${p["推算全部要花小時"]} 小時` : "—";
+  return `<div class="pr-progress"><div class="bar"><div style="width:${pct}%"></div></div>
+    <div class="nums">學員段落已確認 <b>${p["已確認"]}</b>／${p["學員段落數"]} 段　花了 <b>${prFmt(p["已花秒數"])}</b>
+    　每 1 分鐘學員聲音要花 <b>${perMin}</b>　學員共講 ${p["學員聲音分鐘"]} 分鐘，推算全部要 <b>${total}</b></div></div>`;
+}
+
+function prWho(name) {
+  if (name === "老師") return "老師";
+  const code = (pr.data["學員"][name] || {})["代號"];
+  return code ? `${name} → ${code}` : name;
 }
 
 function renderStep3Body() {
   const d = pr.data;
-  const voices = Object.entries(d["聲音"] || {});
-  const voiceNames = voices.map(([v]) => v);
+  const turns = d["段落"];
+  const people = Object.entries(d["學員"]);
   const codes = d["代號選項"] || [];
-  const firstOf = (v) => d["句子"].find((it) => it["聲音"] === v);
+  const whoOpts = (cur) => ["老師", ...people.map(([n]) => n), "新學員"]
+    .map((n) => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n === "新學員" ? "＋新的學員" : prWho(n))}</option>`).join("");
 
-  const voiceRows = voices.map(([v, info]) => {
-    const f = firstOf(v);
-    const opts = ['<option value="">（還沒指認）</option>']
-      .concat(codes.map((c) => `<option ${info["學員"] === c ? "selected" : ""}>${esc(c)}</option>`)).join("");
-    return `<tr><td><b>${esc(v)}</b></td><td>${info["秒數"]} 秒</td>
-      <td>${f ? `<button class="pr-play" data-url="${esc(f["音檔網址"])}">▶ 聽一句</button>` : ""}</td>
-      <td><select class="pr-voice-student" data-voice="${esc(v)}">${opts}</select></td>
-      <td><button class="pr-filter" data-voice="${esc(v)}">只看這個聲音</button></td></tr>`;
+  // ① 段落時間表
+  const tlRows = turns.map((t, i) => {
+    const teacher = t["說話者"] === "老師";
+    const mismatch = (t["文字判斷"] === "老師") !== (t["聲音判斷"] === "老師") && t["聲音判斷"] !== "不確定";
+    return `<tr class="${teacher ? "t-teacher" : "t-student"} ${!pr.showTeacher && teacher ? "t-hide" : ""}">
+      <td>${i + 1}</td><td class="tm">${esc(fmtHms(t.start))}–${esc(fmtHms(t.end))}</td>
+      <td>${prFmt(t.end - t.start)}</td>
+      <td><select class="tl-who" data-id="${esc(t.id)}">${whoOpts(t["說話者"])}</select></td>
+      <td><button class="pr-play" data-url="${esc(t["音檔網址"])}">▶</button></td>
+      <td class="why">${esc(t["換人依據"] || "")}${mismatch ? ' <span class="badge warn">聲紋判斷不同</span>' : ""}${t["學員是猜的"] ? ' <span class="badge warn">太短，學員是猜的</span>' : ""}</td>
+      <td>${i ? `<button class="tl-merge" data-id="${esc(t.id)}" title="併進上一段">↑ 併入上一段</button>` : ""}</td></tr>`;
   }).join("");
 
-  const rows = d["句子"].map((it, i) => {
-    const vopts = voiceNames.map((v) => `<option ${it["聲音"] === v ? "selected" : ""}>${esc(v)}</option>`).join("");
-    const hints = (it["名字提示"] || []).map((h) => `<span class="badge warn">「${esc(h["字"])}」可能是 ${esc(h["可能是"])}</span>`).join("");
-    const repl = (it["已替換"] || []).length ? `<span class="badge">已換成代號 ${it["已替換"].length} 處</span>` : "";
-    const guess = it["聲音是猜的"] ? '<span class="badge warn">聲音是猜的</span>' : "";
-    const changed = it["原文"] !== it["校對稿"];
-    return `<div class="pr-row ${it["已校對"] ? "done" : ""}" id="pr-${esc(it.id)}" data-i="${i}">
-      <div class="pr-head"><span class="idx">${i + 1}</span><span class="time">${esc(fmtHms(it.start))}</span>
-        <button class="pr-play" data-url="${esc(it["音檔網址"])}" data-id="${esc(it.id)}">▶</button>
-        <select class="pr-voice" data-id="${esc(it.id)}">${vopts}</select>
-        ${guess}${repl}${hints}
-        <button class="pr-done" data-id="${esc(it.id)}">${it["已校對"] ? "✓ 已完成" : "完成"}</button></div>
-      <textarea class="pr-text" rows="2" data-id="${esc(it.id)}">${esc(it["校對稿"])}</textarea>
-      <div class="pr-orig ${changed ? "" : "hidden"}">原本轉出來的：${esc(it["原文"])}</div>
+  // ② 學員換成哪個英文名
+  const pRows = people.map(([n, p]) => {
+    const sug = p["建議代號"];
+    const opts = ['<option value="">（還沒指定）</option>']
+      .concat(codes.map((c) => `<option ${p["代號"] === c ? "selected" : ""}>${esc(c)}</option>`)).join("");
+    const clue = Object.entries(p["點名線索"] || {}).map(([k, v]) => `${esc(k)}×${v}`).join("、");
+    return `<tr><td><b>${esc(n)}</b></td><td>${prFmt(p["秒數"])}</td><td>${p["段數"]} 段</td>
+      <td>${p["試聽網址"] ? `<button class="pr-play" data-url="${esc(p["試聽網址"])}">▶ 聽一段</button>` : ""}</td>
+      <td><select class="p-code" data-person="${esc(n)}">${opts}</select>
+      ${sug && !p["代號"] ? `<button class="p-sug" data-person="${esc(n)}" data-code="${esc(sug)}">用建議：${esc(sug)}</button>` : ""}</td>
+      <td class="why">${clue ? `老師點名：${clue}` : ""}</td></tr>`;
+  }).join("");
+
+  // ③ 逐段確認逐字稿
+  const cards = turns.map((t, i) => {
+    if (t["說話者"] === "老師") return "";
+    const rows = Math.min(14, Math.max(3, Math.ceil(t["校對稿"].length / 38)));
+    return `<div class="pr-row ${t["已確認"] ? "done" : ""}" id="pr-${esc(t.id)}" data-id="${esc(t.id)}">
+      <div class="pr-head"><span class="idx">第 ${i + 1} 段</span>
+        <b>${esc(prWho(t["說話者"]))}</b><span class="time">${esc(fmtHms(t.start))}–${esc(fmtHms(t.end))}（${prFmt(t.end - t.start)}）</span>
+        <button class="pr-play" data-url="${esc(t["音檔網址"])}" data-id="${esc(t.id)}">▶ 播放整段</button>
+        <button class="pr-split" data-id="${esc(t.id)}" title="在游標位置切成兩段">✂ 從游標處切開</button>
+        <button class="pr-done" data-id="${esc(t.id)}">${t["已確認"] ? "✓ 已確認" : "確認"}</button></div>
+      <textarea class="pr-text" rows="${rows}" data-id="${esc(t.id)}">${esc(t["校對稿"])}</textarea>
+      ${t["原文"] !== t["校對稿"] ? `<details class="pr-orig"><summary>看原本轉出來的</summary>${esc(t["原文"])}</details>` : ""}
     </div>`;
   }).join("");
 
+  const c = d["比對"] || {};
   contentEl.innerHTML = `
     <h1>3　學員逐字稿校對</h1>
-    <p class="hint">範圍 ${esc(fmtHms(d["範圍"][0]))}–${esc(fmtHms(d["範圍"][1]))}。成品裡學員的聲音照這份文字重念，錯一個字就念錯一個字。
-    點進文字框就開始計時；<kbd>⌘</kbd>／<kbd>Ctrl</kbd>＋<kbd>Enter</kbd> 完成並跳下一句，<kbd>Esc</kbd> 重播這句。</p>
+    <p class="hint">電腦已經讀過逐字稿、切好段落，並用聲紋認出哪幾段是同一位學員。請依序確認三件事：①段落有沒有切對、是不是這個人 ②每位學員換成哪個英文名 ③逐段確認逐字稿（成品裡學員的聲音照這份文字重念，錯一個字就念錯一個字）。</p>
     <div id="pr-progress">${prProgressHtml(d["進度"])}</div>
-    <div class="pr-tools">
-      播放速度 <select id="pr-rate"><option value="1">1 倍</option><option value="1.25">1.25 倍</option><option value="1.5">1.5 倍</option></select>
-      <label><input type="checkbox" id="pr-autoplay" ${pr.autoplay ? "checked" : ""}> 跳下一句時自動播放</label>
-      <label><input type="checkbox" id="pr-onlytodo" ${pr.onlyTodo ? "checked" : ""}> 只顯示還沒校對的</label>
-      <span id="pr-filter-label"></span>
-    </div>
-    <details class="pr-voices" ${voices.length ? "open" : ""}><summary>聲音指認（${voices.length} 個聲音）：這個聲音是哪位學員</summary>
-      <table><tr><th>聲音</th><th>總長</th><th></th><th>學員代號</th><th></th></tr>${voiceRows}</table>
-      <p class="hint">很短的句子聲紋抽不準，可能被拆成很多個聲音；在每一句的聲音選單改回正確的聲音即可。</p></details>
-    <div id="pr-list">${rows}</div>`;
+    <div class="pr-tools">播放速度 <select id="pr-rate"><option value="1">1 倍</option><option value="1.25">1.25 倍</option><option value="1.5">1.5 倍</option></select>
+      <label><input type="checkbox" id="pr-autoplay" ${pr.autoplay ? "checked" : ""}> 確認後自動播放下一段</label></div>
+
+    <details class="pr-sec" open><summary><h2>① 段落：誰從幾分幾秒講到幾分幾秒</h2></summary>
+      <p class="hint">共 ${turns.length} 段。只看文字判斷老師／學員，跟聲紋一致 ${Math.round((c["一致比例"] || 0) * 100)}%；標「聲紋判斷不同」的段落請優先聽。
+      <label><input type="checkbox" id="tl-teacher" ${pr.showTeacher ? "checked" : ""}> 也顯示老師的段落</label></p>
+      <table class="tl">${tlRows}</table></details>
+
+    <details class="pr-sec" open><summary><h2>② 學員換成哪個英文名（${people.length} 位）</h2></summary>
+      <table class="tl">${pRows}</table>
+      <p class="hint">「學員 1、2⋯⋯」是聲紋分出來的；同一個人被分成兩位時，在 ① 把段落改成同一位即可。</p></details>
+
+    <details class="pr-sec" open><summary><h2>③ 逐段確認逐字稿</h2></summary>
+      <p class="hint">點進文字框開始計時；<kbd>⌘</kbd>／<kbd>Ctrl</kbd>＋<kbd>Enter</kbd> 確認並跳下一段，<kbd>Esc</kbd> 從頭播這段。發現其實是兩個人，把游標放在換人的地方按「✂ 從游標處切開」。
+      <label><input type="checkbox" id="pr-onlytodo" ${pr.onlyTodo ? "checked" : ""}> 只顯示還沒確認的</label></p>
+      <div id="pr-list">${cards}</div></details>`;
 
   document.getElementById("pr-rate").value = String(pr.rate);
   document.getElementById("pr-rate").addEventListener("change", (e) => { pr.rate = Number(e.target.value); pr.player.playbackRate = pr.rate; });
   document.getElementById("pr-autoplay").addEventListener("change", (e) => { pr.autoplay = e.target.checked; });
   document.getElementById("pr-onlytodo").addEventListener("change", (e) => { pr.onlyTodo = e.target.checked; prApplyFilter(); });
+  document.getElementById("tl-teacher").addEventListener("change", (e) => {
+    pr.showTeacher = e.target.checked;
+    contentEl.querySelectorAll("tr.t-teacher").forEach((r) => r.classList.toggle("t-hide", !pr.showTeacher));
+  });
   contentEl.querySelectorAll(".pr-play").forEach((b) => b.addEventListener("click", () => {
     if (b.dataset.id) prActivate(b.dataset.id);
     prPlay(b.dataset.url);
   }));
-  contentEl.querySelectorAll(".pr-filter").forEach((b) => b.addEventListener("click", () => {
-    pr.voiceFilter = pr.voiceFilter === b.dataset.voice ? "" : b.dataset.voice; prApplyFilter();
+  contentEl.querySelectorAll(".tl-who").forEach((el) => el.addEventListener("change", async () => {
+    await apiPost("/api/turns/save", { id: el.dataset.id, "說話者": el.value }); await prReload();
   }));
-  contentEl.querySelectorAll(".pr-voice-student").forEach((el) => el.addEventListener("change", async () => {
-    await apiPost("/api/proofread/voice", { "聲音": el.dataset.voice, "學員": el.value || null });
+  contentEl.querySelectorAll(".tl-merge").forEach((b) => b.addEventListener("click", async () => {
+    await apiPost("/api/turns/merge", { id: b.dataset.id }); await prReload();
   }));
-  contentEl.querySelectorAll(".pr-voice").forEach((el) => el.addEventListener("change", () => prSave(el.dataset.id, { "聲音": el.value })));
+  contentEl.querySelectorAll(".p-code").forEach((el) => el.addEventListener("change", async () => {
+    await apiPost("/api/turns/person", { "學員": el.dataset.person, "代號": el.value || null }); await prReload();
+  }));
+  contentEl.querySelectorAll(".p-sug").forEach((b) => b.addEventListener("click", async () => {
+    await apiPost("/api/turns/person", { "學員": b.dataset.person, "代號": b.dataset.code }); await prReload();
+  }));
   contentEl.querySelectorAll(".pr-text").forEach((el) => {
     el.addEventListener("focus", () => prActivate(el.dataset.id));
     el.addEventListener("blur", () => prSave(el.dataset.id, { "校對稿": el.value }));
@@ -572,28 +612,27 @@ function renderStep3Body() {
       else if (e.key === "Escape") { e.preventDefault(); prPlayId(el.dataset.id); }
     });
   });
+  contentEl.querySelectorAll(".pr-split").forEach((b) => b.addEventListener("mousedown", (e) => e.preventDefault()));
+  contentEl.querySelectorAll(".pr-split").forEach((b) => b.addEventListener("click", async () => {
+    const ta = document.querySelector(`.pr-text[data-id="${b.dataset.id}"]`);
+    const at = ta.selectionStart;
+    if (!at || at >= ta.value.length) { alert("先把游標放在要切開的地方（換人的第一個字前面）"); return; }
+    await prSave(b.dataset.id, { "校對稿": ta.value });
+    try { await apiPost("/api/turns/split", { id: b.dataset.id, at }); } catch (err) { alert(err.message); return; }
+    await prReload();
+  }));
   contentEl.querySelectorAll(".pr-done").forEach((b) => b.addEventListener("click", () => {
-    const it = prItem(b.dataset.id);
-    if (it["已校對"]) prSave(b.dataset.id, { "已校對": false });
-    else prComplete(b.dataset.id, false);
+    const t = prItem(b.dataset.id);
+    if (t["已確認"]) prSave(b.dataset.id, { "已確認": false }); else prComplete(b.dataset.id, false);
   }));
   prApplyFilter();
 }
 
-function fmtHms(sec) {
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
-  return `${h ? h + ":" : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
+function prItem(id) { return pr.data["段落"].find((x) => x.id === id); }
 
-function prItem(id) { return pr.data["句子"].find((x) => x.id === id); }
+function prPlay(url) { pr.player.src = url; pr.player.playbackRate = pr.rate; pr.player.play().catch(() => {}); }
 
-function prPlay(url) {
-  pr.player.src = url;
-  pr.player.playbackRate = pr.rate;
-  pr.player.play().catch(() => {});
-}
-
-function prPlayId(id) { const it = prItem(id); if (it) prPlay(it["音檔網址"]); }
+function prPlayId(id) { const t = prItem(id); if (t) prPlay(t["音檔網址"]); }
 
 function prActivate(id) {
   if (pr.activeId === id) return;
@@ -603,40 +642,34 @@ function prActivate(id) {
 }
 
 function prFlushTime() {
-  // 離開一句時，把這段時間記到那一句（還沒按完成也算，按完成時一起送）
-  if (!pr.activeId || !pr.activeSince) return 0;
-  const sec = (Date.now() - pr.activeSince) / 1000;
-  const it = prItem(pr.activeId);
-  if (it) it._pending = (it._pending || 0) + sec;
+  if (!pr.activeId || !pr.activeSince) return;
+  const t = prItem(pr.activeId);
+  if (t) t._pending = (t._pending || 0) + (Date.now() - pr.activeSince) / 1000;
   pr.activeSince = Date.now();
-  return sec;
 }
 
 async function prSave(id, fields) {
-  const it = prItem(id);
-  if (!it) return;
+  const t = prItem(id);
+  if (!t) return;
   if (pr.activeId === id) prFlushTime();
   const body = { id, ...fields };
-  if (it._pending) { body["加秒數"] = it._pending; it._pending = 0; }
+  if (t._pending) { body["加秒數"] = t._pending; t._pending = 0; }
   const onlyText = Object.keys(fields).length === 1 && "校對稿" in fields;
-  if (onlyText && fields["校對稿"].trim() === it["校對稿"] && !body["加秒數"]) return;
-  const res = await apiPost("/api/proofread/save", body);
-  Object.assign(it, res["句子"]);
+  if (onlyText && fields["校對稿"].trim() === t["校對稿"] && !body["加秒數"]) return;
+  const res = await apiPost("/api/turns/save", body);
+  Object.assign(t, res["段落"]);
   const row = document.getElementById(`pr-${id}`);
   if (row) {
-    row.classList.toggle("done", !!it["已校對"]);
-    row.querySelector(".pr-done").textContent = it["已校對"] ? "✓ 已完成" : "完成";
-    const orig = row.querySelector(".pr-orig");
-    orig.classList.toggle("hidden", it["原文"] === it["校對稿"]);
+    row.classList.toggle("done", !!t["已確認"]);
+    row.querySelector(".pr-done").textContent = t["已確認"] ? "✓ 已確認" : "確認";
   }
   document.getElementById("pr-progress").innerHTML = prProgressHtml(res["進度"]);
 }
 
 async function prComplete(id, goNext) {
   const row = document.getElementById(`pr-${id}`);
-  const text = row.querySelector(".pr-text").value;
-  await prSave(id, { "校對稿": text, "已校對": true });
-  if (!goNext) return;
+  await prSave(id, { "校對稿": row.querySelector(".pr-text").value, "已確認": true });
+  if (!goNext) return prApplyFilter();
   const rows = [...contentEl.querySelectorAll(".pr-row")].filter((r) => r.style.display !== "none");
   const idx = rows.indexOf(row);
   const next = rows.slice(idx + 1).find((r) => !r.classList.contains("done")) || rows[idx + 1];
@@ -651,11 +684,7 @@ async function prComplete(id, goNext) {
 
 function prApplyFilter() {
   contentEl.querySelectorAll(".pr-row").forEach((r) => {
-    const it = pr.data["句子"][Number(r.dataset.i)];
-    const hide = (pr.onlyTodo && it["已校對"] && !r.contains(document.activeElement))
-      || (pr.voiceFilter && it["聲音"] !== pr.voiceFilter);
-    r.style.display = hide ? "none" : "";
+    const t = prItem(r.dataset.id);
+    r.style.display = pr.onlyTodo && t["已確認"] && !r.contains(document.activeElement) ? "none" : "";
   });
-  const lab = document.getElementById("pr-filter-label");
-  if (lab) lab.textContent = pr.voiceFilter ? `（只看聲音 ${pr.voiceFilter}，再按一次取消）` : "";
 }

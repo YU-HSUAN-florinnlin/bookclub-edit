@@ -567,6 +567,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
+        if content_type.split(";")[0] in ("text/html", "text/javascript", "application/javascript", "text/css"):
+            self.send_header("Cache-Control", "no-cache")  # 更新工具後重新整理就拿到新版網頁，不會卡在舊快取
         if is_partial:
             self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
         self.end_headers()
@@ -622,6 +624,10 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub.proofread import page_data
 
             self._send_json(200, page_data(server.workdir))
+        elif path == "/api/turns":
+            from bookclub.turns import page_data as turns_page
+
+            self._send_json(200, turns_page(server.workdir))
         elif path == "/api/audio":
             self._handle_audio(query)
         elif path == "/api/run/status":
@@ -681,6 +687,17 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub.proofread import set_voice
 
             self._send_json(200, set_voice(server.workdir, str(body["聲音"]), body.get("學員")))
+        elif path in ("/api/turns/save", "/api/turns/merge", "/api/turns/split", "/api/turns/person"):
+            from bookclub import turns as _turns
+
+            if path == "/api/turns/save":
+                self._send_json(200, _turns.save_turn(server.workdir, str(body["id"]), body))
+            elif path == "/api/turns/merge":
+                self._send_json(200, _turns.merge_turn(server.workdir, str(body["id"])))
+            elif path == "/api/turns/split":
+                self._send_json(200, _turns.split_turn(server.workdir, str(body["id"]), int(body["at"])))
+            else:
+                self._send_json(200, _turns.set_person_code(server.workdir, str(body["學員"]), body.get("代號")))
         elif path == "/api/run/analyze":
             result = server.start_analyze(body)
             self._send_json(202 if result.get("started") else 409, result)
