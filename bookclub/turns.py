@@ -29,6 +29,7 @@ from bookclub import workdir as wd
 
 CHUNK_LINES = 220        # 每次交給 Claude 的句數（約 8–10 分鐘）
 OVERLAP_LINES = 20       # 前後塊重疊的句數，接縫處用前一塊的判斷
+PARALLEL_CALLS = 4       # 同時送給 Claude 的塊數（每塊各自獨立判斷）
 MAX_EMB_S = 30.0         # 每段最多取 30 秒抽聲紋
 MIN_EMB_S = 1.5          # 短於這個秒數的段落不抽聲紋（歸到最像的學員，標「猜的」）
 VOICE_DISTANCE_T = 0.5   # 段落層級聲紋分群門檻（比逐句的 0.6 嚴一點：整段的聲紋比較穩）
@@ -99,33 +100,63 @@ def normalize_turns(raw: list[dict], lo: int, hi: int) -> list[dict]:
     return out
 
 
-def text_turns(sentences: list[dict], model: str, log=print) -> list[dict]:
-    """整支逐字稿分塊交給 Claude，接起來。學員編號加上塊的前綴（C0-S1），跨塊的同一人交給聲紋判斷。"""
-    n = len(sentences)
-    all_turns: list[dict] = []
-    start = 0
-    k = 0
+def chunk_ranges(n: int, size: int = CHUNK_LINES, overlap: int = OVERLAP_LINES) -> list[tuple[int, int]]:
+    """把 n 行切成 [(start, end), ...]（end 不含），相鄰兩塊重疊 overlap 行（純函式）。"""
+    out, start = [], 0
     while start < n:
-        end = min(n, start + CHUNK_LINES)
+        end = min(n, start + size)
+        out.append((start, end))
+        if end >= n:
+            break
+        start = end - overlap
+    return out
+
+
+def stitch_chunks(chunks: list[list[dict]]) -> list[dict]:
+    """依順序把每一塊的段落接起來：重疊區用前一塊的判斷，這一塊從接縫之後開始（純函式）。"""
+    all_turns: list[dict] = []
+    for chunk in chunks:
+        if all_turns:
+            seam = all_turns[-1]["迄"]
+            chunk = [dict(t) for t in chunk if t["迄"] > seam]
+            if chunk:
+                chunk[0]["起"] = max(chunk[0]["起"], seam + 1)
+        all_turns.extend(chunk)
+    return all_turns
+
+
+def text_turns(sentences: list[dict], model: str, log=print, workers: int = PARALLEL_CALLS,
+               call=None) -> list[dict]:
+    """整支逐字稿分塊交給 Claude，**同時送出**（預設 4 塊一起），全部回來再依順序接起來。
+
+    每一塊各自獨立判斷，所以可以平行；訂閱方案限制同時呼叫數時會自動排隊，最慢就是一塊一塊跑。
+    學員編號加上塊的前綴（C0-S1），跨塊的同一人交給聲紋判斷。call 可以換成假的（測試用）。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    call = call or call_claude
+    ranges = chunk_ranges(len(sentences))
+
+    def one(k: int) -> list[dict]:
+        start, end = ranges[k]
         t0 = time.time()
-        raw = parse_json(call_claude(PROMPT + "\n逐字稿：\n" + format_lines(sentences[start:end], start), model))
+        for attempt in (1, 2):   # Claude 偶爾回傳格式壞掉的 JSON，重送一次
+            try:
+                raw = parse_json(call(PROMPT + "\n逐字稿：\n" + format_lines(sentences[start:end], start), model))
+                break
+            except ValueError:
+                if attempt == 2:
+                    raise
         chunk = normalize_turns(raw.get("段落", []), start, end - 1)
         for t in chunk:
             if t.get("學員編號"):
                 t["學員編號"] = f"C{k}-{t['學員編號']}"
-        # 重疊區：前一塊已經判斷過的行，用前一塊的；這一塊從接縫之後開始
-        if all_turns:
-            seam = all_turns[-1]["迄"]
-            chunk = [t for t in chunk if t["迄"] > seam]
-            if chunk:
-                chunk[0]["起"] = max(chunk[0]["起"], seam + 1)
-        all_turns.extend(chunk)
-        log(f"[段落] 第 {k + 1} 塊（{start}–{end - 1} 行）：{len(chunk)} 段，{time.time() - t0:.0f} 秒")
-        if end >= n:
-            break
-        start = end - OVERLAP_LINES
-        k += 1
-    return all_turns
+        log(f"[段落] 第 {k + 1}／{len(ranges)} 塊（{start}–{end - 1} 行）：{len(chunk)} 段，{time.time() - t0:.0f} 秒")
+        return chunk
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        chunks = list(pool.map(one, range(len(ranges))))
+    return stitch_chunks(chunks)
 
 
 # ---------- 聲音認人 ----------

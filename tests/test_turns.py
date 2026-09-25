@@ -82,6 +82,32 @@ def test_save_merge_split_and_person():
         assert p["學員段落數"] == 2 and p["已確認"] == 1
 
 
+def test_chunk_ranges_and_parallel_stitch_match_sequential():
+    assert turns.chunk_ranges(500, 220, 20) == [(0, 220), (200, 420), (400, 500)]
+    sents = [{"start": i * 2.0, "end": i * 2.0 + 1, "text": f"第{i}句"} for i in range(500)]
+    import threading, time as _t
+    active, peak = [0], [0]
+    lock = threading.Lock()
+
+    def fake_call(prompt, model):
+        with lock:
+            active[0] += 1; peak[0] = max(peak[0], active[0])
+        _t.sleep(0.2)
+        ids = [int(line.split("|")[0]) for line in prompt.split("逐字稿：\n")[1].splitlines()]
+        a, b = ids[0], ids[-1]
+        mid = (a + b) // 2
+        with lock:
+            active[0] -= 1
+        return json.dumps({"段落": [{"起": a, "迄": mid, "說話者": "老師"},
+                                   {"起": mid + 1, "迄": b, "說話者": "學員", "學員編號": "S1"}]})
+
+    out = turns.text_turns(sents, "sonnet", log=lambda *_: None, call=fake_call)
+    assert peak[0] >= 2                                     # 真的同時送
+    assert out[0]["起"] == 0 and out[-1]["迄"] == 499        # 頭尾完整
+    assert all(out[i]["迄"] + 1 == out[i + 1]["起"] for i in range(len(out) - 1))   # 不重疊、不遺漏
+    assert out[1]["學員編號"] == "C0-S1"
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0
