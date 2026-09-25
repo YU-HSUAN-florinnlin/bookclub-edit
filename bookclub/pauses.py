@@ -82,6 +82,32 @@ def pauses_after_chars(chars: list[Char], silences: list[tuple[float, float]]) -
     return out
 
 
+def trim_silence(x: np.ndarray, sr: int, db: float = SILENCE_DB, min_active_s: float = 0.1,
+                 keep_s: float = 0.05) -> np.ndarray:
+    """裁掉頭尾的空白，前後各留 keep_s 秒。
+
+    CosyVoice 生成的聲音開頭常有 0.5 秒以上的空白（09-25 第一堂名字句實測：
+    2 秒的句子前面空了 0.68 秒），不裁掉長度判斷會失準。只有連續 min_active_s
+    秒以上夠大聲才算開始講話，開頭零點幾秒的小雜音不算。
+    """
+    if x.ndim > 1:
+        x = x.mean(axis=1)
+    fr = max(1, int(sr * FRAME_S))
+    n = len(x) // fr
+    if n == 0:
+        return x
+    rms = np.sqrt(np.mean(x[: n * fr].reshape(n, fr).astype(np.float64) ** 2, axis=1)) + 1e-9
+    active = 20 * np.log10(rms / rms.max()) >= db
+    run = max(1, int(round(min_active_s / FRAME_S)))
+    starts = [i for i in range(n - run + 1) if active[i:i + run].all()]
+    if not starts:
+        return x
+    first = starts[0]
+    last = starts[-1] + run  # 最後一段連續講話的結尾（音框）
+    keep = int(keep_s * sr)
+    return x[max(0, first * fr - keep): min(len(x), last * fr + keep)]
+
+
 # ---------- 對應到生成的聲音 ----------
 
 def map_chars(orig: list[Char], gen: list[Char]) -> dict[int, int]:

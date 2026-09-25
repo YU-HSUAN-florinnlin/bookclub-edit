@@ -1,6 +1,6 @@
 """指令列入口：`bookclub`。
 
-`doctor`、`models download`、`run analyze`、`serve`、`ref`、`gen teacher` 是真的會動的指令；
+`doctor`、`models download`、`run analyze`、`serve`、`ref`、`gen teacher`、`gen names`、`render audio` 是真的會動的指令；
 `bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
 功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列
 也只有第 1、2、4 步是真的（對應 `run analyze` 的轉文字／挑參考音／找名字），
@@ -102,6 +102,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--pron-table", help="發音對照表 CSV（預設 ~/讀書會剪輯資料/發音對照表.csv，不存在就不換）"
     )
 
+    gen_names_parser = gen_sub.add_parser("names", help="老師提到學員名字的地方：排出處理計畫、用老師 AI 聲音生成")
+    gen_names_parser.add_argument("workdir", help="工作區路徑（要先跑過 run analyze、選定參考音）")
+    gen_names_parser.add_argument("--only", help="只處理這幾筆候選（逗號分隔的編號，測試用），例如 1,5,9")
+    gen_names_parser.add_argument("--plan-only", action="store_true", help="只排計畫、不生成")
+    gen_names_parser.add_argument("--redo", action="store_true", help="忽略上次生成結果，全部重新生成")
+
+    render_parser = sub.add_parser("render", help="組裝：把生成的聲音、消音放回原本的時間")
+    render_sub = render_parser.add_subparsers(dest="render_command")
+    render_audio_parser = render_sub.add_parser("audio", help="組出跟原片等長的新聲音軌＋處理前後試聽")
+    render_audio_parser.add_argument("workdir", help="工作區路徑")
+    render_audio_parser.add_argument("--video", help="原片影片路徑（預設讀逐字稿記錄的來源）")
+
     return parser
 
 
@@ -182,7 +194,31 @@ def main(argv: list[str] | None = None) -> int:
                 use_pauses=not args.no_pauses, redo=args.redo, pron_table=args.pron_table,
             )
             return 0
+        if args.gen_command == "names":
+            from bookclub.nameplan import make_plan, sentences_path
+            from bookclub.tts import generate_teacher
+
+            only = [int(x) for x in args.only.split(",") if x.strip()] if args.only else None
+            plan = make_plan(args.workdir, only=only)
+            if plan["要人處理"]:
+                print("要人處理的候選：" + "、".join(f"{m['候選']}（{m['原因']}）" for m in plan["要人處理"]))
+            if plan["生成"] and not args.plan_only:
+                from pathlib import Path as _Path
+
+                generate_teacher(args.workdir, sentences_path(_Path(args.workdir).expanduser()), redo=args.redo)
+            print("下一步：bookclub render audio <工作區>")
+            return 0
         print("用法：bookclub gen teacher <工作區> <句子清單> [--ref-wav 檔案] [--ref-text 檔案] [--no-check] [--redo]")
+        print("     bookclub gen names <工作區> [--only 1,5,9] [--plan-only]")
+        return 2
+
+    if args.command == "render":
+        if args.render_command == "audio":
+            from bookclub.assemble import render_audio
+
+            render_audio(args.workdir, video=args.video)
+            return 0
+        print("用法：bookclub render audio <工作區> [--video 影片]")
         return 2
 
     parser.print_help()

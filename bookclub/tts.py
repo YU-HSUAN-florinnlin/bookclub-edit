@@ -401,6 +401,9 @@ def _run_attempt(
     t = time.time()
     wav, sr = synth(item.get("生成用文字") or text, seed, speed)
     elapsed = time.time() - t
+    from bookclub.pauses import trim_silence
+
+    wav = trim_silence(wav, sr)  # 生成的聲音開頭常空 0.5 秒以上，先裁掉再比長度
     audio_s = len(wav) / sr
     path = out_dir / f"{sid}_第{n}次.wav"
     _save_wav(path, wav, sr)

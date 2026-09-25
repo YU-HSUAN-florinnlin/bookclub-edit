@@ -353,6 +353,12 @@ def test_pron_table_applies_only_to_synth_text():
         assert said[-1] == "讓人覺得愉快。"
 
 
+def test_trim_silence_skips_blip_and_keeps_margin():
+    x = np.concatenate([_sil(0.12), _tone_s(0.06), _sil(0.5), _tone_s(2.0), _sil(0.3)])
+    y = pauses.trim_silence(x, SR)
+    assert abs(len(y) / SR - 2.1) < 0.05, len(y) / SR
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0
