@@ -344,7 +344,8 @@ def _paused_version(src: Path, text: str, ctx: dict, align: Align, dst: Path) ->
 
     x, sr = sf.read(str(src))
     gen_chars = align(src, text)
-    inserts = pauses.plan_inserts(ctx["chars"], ctx["pauses"], gen_chars, x, sr)
+    # 只在標點的位置補空白（宇軒 09-25：照原片位置補會停在句子中間，不自然）
+    inserts = pauses.plan_inserts(ctx["chars"], ctx["pauses"], gen_chars, x, sr, snap_text=text)
     lead = pauses.lead_offset(ctx["chars"], gen_chars)
     y = pauses.apply_inserts(x, sr, inserts, lead)
     _save_wav(dst, y, sr)

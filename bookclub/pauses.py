@@ -8,7 +8,9 @@ AI 聲音會一口氣念完，比原片短很多，放回時間格嘴型也對�
    停頓落在哪兩個字之間。Groq 的逐字時間會把停頓算進字的長度裡（「如果」
    佔 1.6 秒），不能直接用
 3. 生成的聲音也對位一次，把「原片第 i 個字後面的停頓」對應到生成聲音裡
-   同一個字後面，插入空白（生成本來就有的空白會扣掉，不重複加）
+   同一個字後面；**只在標點的位置插入**，落在句子中間的停頓移到最近的
+   標點（宇軒 09-25 試聽：老師常在句子中間停下來想，照原位置補會「斷在
+   半空中」）。生成本來就有的空白會扣掉，不重複加
 4. 開頭也照原片對齊：原片老師在時間格第幾秒才開口，生成的聲音就從第幾秒開始
 
 只增加空白、不動字本身，所以不需要重新生成。對位模型約 1 分鐘內，比生成一次
@@ -106,13 +108,50 @@ def _quietest_point(x: np.ndarray, sr: int, lo: float, hi: float) -> float:
     return (a + k * fr + fr / 2) / sr
 
 
+PUNCT = set("，,。.、；;：:！!？?…—")
+
+
+def punct_boundaries(gen: list[Char], text: str) -> set[int]:
+    """生成文字裡「第 j 個字後面緊接著標點」的 j。對位模型給的字不含標點，
+    這裡照順序在原文字裡找到每個字，再看它後面是不是標點。"""
+    out: set[int] = set()
+    pos = 0
+    for j, c in enumerate(gen):
+        k = text.find(c.text, pos)
+        if k < 0:
+            continue
+        pos = k + len(c.text)
+        rest = text[pos:].lstrip()
+        if rest and rest[0] in PUNCT:
+            out.add(j)
+    return out
+
+
+def snap_to_boundaries(wanted: dict[int, float], boundaries: set[int], last: int) -> dict[int, float]:
+    """不在標點上的停頓移到最近的標點（距離一樣時往前）；同一個位置取最長的。
+    最後一個字的標點不算（結尾空白交給補靜音）。"""
+    spots = sorted(b for b in boundaries if b < last)
+    if not spots:
+        return dict(wanted)
+    out: dict[int, float] = {}
+    for j, dur in wanted.items():
+        k = j if j in boundaries else min(spots, key=lambda b: (abs(b - j), b > j))
+        out[k] = max(out.get(k, 0.0), dur)
+    return out
+
+
 def plan_inserts(
     orig: list[Char], orig_pauses: dict[int, float], gen: list[Char], gen_x: np.ndarray, sr: int,
+    snap_text: str | None = None,
 ) -> list[tuple[float, float]]:
     """回傳 [(生成聲音裡的插入秒數, 要補幾秒空白), ...]，依時間排序。
 
     原片停頓的那個字如果在生成的文字裡找不到（例如原話重複的字被刪掉），
     往前找最近一個對得上的字；對到同一個位置的多個停頓取最長的，不相加。
+
+    snap_text 給了（要念的文字）就只在標點的位置插入，`bookclub/tts.py` 一律
+    這樣用：老師常在句子中間停（想下一個字），照原位置補空白會「斷在半空中」
+    （宇軒 09-25 試聽）。不給 snap_text 是照原位置補，只留給測試對照。
     """
     mapping = map_chars(orig, gen)
     wanted: dict[int, float] = {}
@@ -126,6 +165,9 @@ def plan_inserts(
         if j >= len(gen) - 1:
             continue  # 最後一個字後面的空白交給補靜音
         wanted[j] = max(wanted.get(j, 0.0), dur)
+
+    if snap_text is not None:
+        wanted = snap_to_boundaries(wanted, punct_boundaries(gen, snap_text), len(gen) - 1)
 
     inserts = []
     for j, dur in sorted(wanted.items()):

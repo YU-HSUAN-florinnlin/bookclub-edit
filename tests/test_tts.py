@@ -306,6 +306,18 @@ def test_generate_teacher_speed_retry_only_after_pauses_fail():
         assert names == ["補靜音", "改語速重生成", "拉長"] and r["要人聽"]
 
 
+def test_punct_boundaries_and_snap():
+    text = "它會增加催產素，催產素就會讓人愉快。"
+    gen = _chars([(c, i * 0.3, i * 0.3 + 0.3) for i, c in enumerate("它會增加催產素催產素就會讓人愉快")])
+    b = pauses.punct_boundaries(gen, text)
+    assert b == {6, 15}
+    # 「會」後面（1）與第二個「素」後面（9）的停頓都移到「素，」（6），取最長的；結尾的句號不算
+    assert pauses.snap_to_boundaries({1: 0.5, 9: 2.4}, b, len(gen) - 1) == {6: 2.4}
+    # 英文名字也對得上
+    gen2 = _chars([("Bella", 0, 0.5), ("妳", 0.5, 0.7), ("好", 0.7, 0.9)])
+    assert pauses.punct_boundaries(gen2, "Bella，妳好。") == {0, 2}
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0
