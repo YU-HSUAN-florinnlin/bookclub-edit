@@ -99,16 +99,25 @@ def run_analyze(
 
     t0 = time.time()
     text_future = None
+    cut_future = None
     pool = None
     if not skip_turns:
-        pool = ThreadPoolExecutor(max_workers=1)
+        pool = ThreadPoolExecutor(max_workers=2)
 
         def _text_job():
             t = time.time()
             data = turns_mod.get_text_turns(workdir, sentences, model=turns_model)
             return data, time.time() - t
 
+        def _cut_job():   # 09-26：建議刪除段落，另一個 Claude 呼叫，跟段落分析同時跑
+            from bookclub import cutsuggest
+
+            t = time.time()
+            data = cutsuggest.suggest_cuts(workdir, sentences, duration=duration, video=video, model=turns_model)
+            return data, time.time() - t
+
         text_future = pool.submit(_text_job)
+        cut_future = pool.submit(_cut_job)
     t_sp = time.time()
     speaker_result = speakers_mod.classify_speakers(_audio_path(workdir), workdir, sentences)
     elapsed["2b_認老師"] = round(time.time() - t_sp, 1)
@@ -122,8 +131,6 @@ def run_analyze(
             print(f"⚠️ [分析一條龍] 段落分析（Claude）失敗：{exc}")
             print("   → 這次先用純聲紋判斷繼續跑；修好之後重跑 bookclub run analyze（已完成的步驟會沿用），"
                   "或單獨跑 bookclub run turns <工作區>（先用 bookclub doctor --claude 確認叫得到 Claude）")
-        finally:
-            pool.shutdown(wait=False)
     elapsed["2_段落文字與認老師"] = round(time.time() - t0, 1)
     labeled_sentences = speaker_result["sentences"]
     scan_regions = speaker_result["scan_regions"]
@@ -212,6 +219,18 @@ def run_analyze(
             print(f"⚠️ [分析一條龍] 7/7 段落分析（聲紋部分）失敗：{exc}")
             print("   → 修好之後單獨重跑：bookclub run turns <工作區>")
 
+    # 建議刪除段落在背景跑（Claude＋候選附近的畫面檢查），不擋前面的步驟，最後才收
+    cut_data = None
+    if cut_future is not None:
+        try:
+            cut_data, cut_s = cut_future.result()
+            elapsed["2c_刪除建議"] = round(cut_s, 1)
+            print(f"[分析一條龍] 建議刪除段落：{len(cut_data.get('建議', []))} 筆")
+        except Exception as exc:  # Claude 失敗就沒有建議，不擋其他步驟
+            print(f"⚠️ [分析一條龍] 建議刪除段落（Claude）失敗：{exc}；這次沒有建議，之後可以單獨跑 bookclub run cuts <工作區>")
+    if pool is not None:
+        pool.shutdown(wait=False)
+
     total_elapsed = time.time() - t_grand0
     elapsed["總耗時"] = round(total_elapsed, 1)
 
@@ -233,6 +252,7 @@ def run_analyze(
         "名字候選數": names_result["統計"].get("總筆數", 0),
         "名字候選統計": names_result["統計"],
         "段落統計": turns_stats,
+        "刪除建議數": len((cut_data or {}).get("建議", [])) if cut_data is not None else None,
         "elapsed": elapsed,
     }
     write_json(analysis_result_path(workdir), result)
