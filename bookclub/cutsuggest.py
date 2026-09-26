@@ -163,6 +163,9 @@ def suggest_cuts(workdir: str | Path, sentences: list[dict] | None = None, *, du
 
         video = video_path(workdir)
     model = model or load_settings().claude_models.turns
+    if not sentences:
+        log("[刪除建議] 沒有逐字稿，跳過")
+        return {"建議": [], "跳過": "沒有逐字稿"}
 
     t0 = time.time()
     reply = None

@@ -64,6 +64,8 @@ function currentRouteId() {
   return STEP_DEFS.some((s) => s.id === h) ? h : "overview";
 }
 
+let lastState = null;
+
 async function renderSidebar() {
   let state = null;
   try {
@@ -71,8 +73,11 @@ async function renderSidebar() {
   } catch (e) {
     videoInfoEl.textContent = `讀取工作區狀態失敗：${e.message}`;
   }
+  lastState = state;
 
-  if (state) {
+  if (state && state["沒有專案"]) {
+    videoInfoEl.textContent = "還沒選影片（到總覽選）";
+  } else if (state) {
     const v = state.video || {};
     const name = v.name || "（還不知道影片路徑）";
     const dur = v.duration_hms ? `　長度 ${v.duration_hms}` : "";
@@ -83,7 +88,7 @@ async function renderSidebar() {
   stepsEl.innerHTML = STEP_DEFS.map((s) => {
     let badgeClass = "notyet";
     let badgeText = "·";
-    if (s.real && state) {
+    if (s.real && state && !state["沒有專案"]) {
       const done = stepDoneFromState(s.num, state);
       badgeClass = done ? "done" : "";
       badgeText = done ? "✓" : "·";
@@ -118,6 +123,10 @@ async function render() {
 
   try {
     if (id === "overview") return await renderOverview();
+    if (id !== "step0" && lastState && lastState["沒有專案"]) {
+      contentEl.innerHTML = `<div class="notyet-card">還沒選影片。到 <a href="#overview">總覽</a> 選一支影片，或切換到已有的專案。</div>`;
+      return;
+    }
     if (id === "step1") return await renderStep1();
     if (id === "step2") return await renderStep2();
     if (id === "step3") return await renderReview();
@@ -160,40 +169,95 @@ function renderNotYet(def) {
 
 async function renderOverview() {
   contentEl.innerHTML = "<p>載入中…</p>";
-  const state = await apiGet("/api/state");
-  const sub = state.substeps || {};
-  const order = ["轉文字", "認老師", "找重疊", "挑參考音", "找名字", "段落分析"];
-
-  const rows = order.map((k) => {
-    const s = sub[k] || {};
-    const statClass = s.done ? "done" : "";
-    return `<tr>
-      <td>${esc(k)}</td>
-      <td><span class="badge ${statClass}">${s.done ? "已完成" : "未完成"}</span></td>
-      <td>${esc(fmtElapsed(s.elapsed_s))}</td>
-      <td>${esc(JSON.stringify(s["統計"] || {}))}</td>
-    </tr>`;
-  }).join("");
-
+  const [state, projects] = await Promise.all([apiGet("/api/state"), apiGet("/api/projects")]);
+  const hasProject = !state["沒有專案"];
+  let current = "";
+  if (hasProject) {
+    const sub = state.substeps || {};
+    const order = ["轉文字", "認老師", "找重疊", "挑參考音", "找名字", "段落分析"];
+    const done = order.filter((k) => (sub[k] || {}).done).length;
+    current = `
+      <h2>目前的專案</h2>
+      <div class="card">
+        <table class="kv">
+          <tr><td>影片</td><td>${esc(state.video.name || "（不知道）")}</td></tr>
+          <tr><td>影片長度</td><td>${esc(state.video.duration_hms || "—")}</td></tr>
+          <tr><td>工作區</td><td>${esc(state.workdir)}</td></tr>
+          <tr><td>影片分析</td><td>${done}／${order.length} 個子步驟完成${state["總耗時_s"] ? `，花了 ${esc(fmtElapsed(state["總耗時_s"]))}` : ""}（<a href="#step1">看進度</a>）</td></tr>
+        </table>
+      </div>`;
+  }
+  const list = projects["專案"] || [];
+  const rows = list.map((p) => `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
+      <td><b>${esc(p["名稱"])}</b>${p["路徑"] === projects["目前"] ? "　（目前）" : ""}</td>
+      <td>${esc(p["長度"] || "—")}</td>
+      <td>${p["分析完成"] ? "分析完成" : "還沒分析完"}${p["有覆核"] ? "、覆核中" : ""}</td>
+      <td>${esc(p["修改時間"])}</td>
+      <td>${p["路徑"] === projects["目前"] ? "" : `<button class="secondary pj-switch" data-name="${esc(p["名稱"])}">切換</button>`}</td></tr>`).join("");
   contentEl.innerHTML = `
     <h1>總覽</h1>
-    <div class="card">
-      <table class="kv">
-        <tr><td>影片</td><td>${esc(state.video.name || "（不知道）")}</td></tr>
-        <tr><td>影片長度</td><td>${esc(state.video.duration_hms || "—")}</td></tr>
-        <tr><td>工作區</td><td>${esc(state.workdir)}</td></tr>
-        <tr><td>總耗時</td><td>${esc(fmtElapsed(state["總耗時_s"]))}</td></tr>
-      </table>
+    <div class="card pick">
+      <h2 style="margin-top:0">選影片</h2>
+      <p class="muted">選一支影片，按「開始分析」才會在 <code>${esc(projects["工作區根目錄"])}</code> 建這支影片的資料夾。同一支影片已經做到一半的，會接著做（做完的步驟自動跳過）。</p>
+      <div id="pickerSel"></div>
+      <div id="picker"></div>
     </div>
-    <h2>各步驟狀態</h2>
-    <div class="card">
-      <table class="kv">
-        <thead><tr><th style="text-align:left">子步驟</th><th style="text-align:left">狀態</th>
-          <th style="text-align:left">耗時</th><th style="text-align:left">統計</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-  `;
+    ${current}
+    <h2>已有的專案（${list.length}）</h2>
+    <div class="card">${list.length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">還沒有專案。</p>`}</div>`;
+  contentEl.querySelectorAll(".pj-switch").forEach((b) => b.addEventListener("click", async () => {
+    try { await apiPost("/api/projects/switch", { "名稱": b.dataset.name }); } catch (e) { alert(e.message); return; }
+    await render();
+  }));
+  let start = null;
+  try { start = localStorage.getItem("pick-dir"); } catch (e) { /* 沒有 localStorage 也沒關係 */ }
+  await renderPicker(start, list);
+}
+
+let pickedVideo = null;
+
+async function renderPicker(path, projectList) {
+  const box = document.getElementById("picker");
+  let d;
+  try {
+    d = await apiGet(`/api/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`);
+  } catch (e) {
+    if (path) return renderPicker(null, projectList);
+    box.innerHTML = `<p class="badge error">${esc(e.message)}</p>`;
+    return;
+  }
+  try { localStorage.setItem("pick-dir", d["路徑"]); } catch (e) { /* 同上 */ }
+  const rel = d["路徑"] === d["家目錄"] ? "家目錄" : d["路徑"].replace(d["家目錄"] + "/", "");
+  box.innerHTML = `
+    <div class="pk-path"><b>${esc(rel)}</b>${d["上一層"] ? ` <button class="secondary pk-up">回上一層</button>` : ""}</div>
+    <ul class="pk-list">
+      ${d["資料夾"].map((n) => `<li><button class="linkish pk-dir" data-name="${esc(n)}">📁 ${esc(n)}</button></li>`).join("")}
+      ${d["影片"].map((v) => `<li><button class="linkish pk-video" data-name="${esc(v["名稱"])}">🎬 ${esc(v["名稱"])}</button> <span class="muted">${v["大小MB"]} MB</span></li>`).join("")}
+      ${!d["資料夾"].length && !d["影片"].length ? `<li class="muted">這個資料夾沒有子資料夾或影片。</li>` : ""}
+    </ul>`;
+  const up = box.querySelector(".pk-up");
+  if (up) up.addEventListener("click", () => renderPicker(d["上一層"], projectList));
+  box.querySelectorAll(".pk-dir").forEach((b) => b.addEventListener("click", () => renderPicker(`${d["路徑"]}/${b.dataset.name}`, projectList)));
+  box.querySelectorAll(".pk-video").forEach((b) => b.addEventListener("click", () => {
+    pickedVideo = `${d["路徑"]}/${b.dataset.name}`;
+    const stem = b.dataset.name.replace(/\.[^.]+$/, "");
+    const existing = (projectList || []).find((p) => p["名稱"] === stem);
+    document.getElementById("pickerSel").innerHTML = `
+      <div class="pk-sel"><div>選了：<b>${esc(b.dataset.name)}</b></div>
+        <div class="muted">${existing ? `已經有這支影片的專案（${esc(existing["分析完成"] ? "分析完成" : "還沒分析完")}），按開始分析會接著做。` : `會建立資料夾：工作區/${esc(stem)}/`}</div>
+        <button id="pkStart">開始分析</button> <span id="pkMsg"></span></div>`;
+    document.getElementById("pkStart").addEventListener("click", startPicked);
+  }));
+}
+
+async function startPicked() {
+  const msg = document.getElementById("pkMsg");
+  msg.textContent = "開始中…";
+  try {
+    const r = await apiPost("/api/projects/start", { "影片": pickedVideo });
+    msg.textContent = r["接著做"] ? "接著做，已經完成的步驟會跳過" : "已建立專案";
+  } catch (e) { msg.innerHTML = `<span class="badge error">失敗</span> ${esc(e.message)}`; return; }
+  location.hash = "#step1";
 }
 
 // ---------------------------------------------------------------------------

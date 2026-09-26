@@ -358,6 +358,49 @@ def test_names_mark_place_tag_appends_to_exclusion_csv_once():
             shutil.rmtree(data_dir, ignore_errors=True)
 
 
+def test_home_path_and_browse_stay_in_home():
+    home = Path.home().resolve()
+    assert srv.home_path(None) == home and srv.home_path("~") == home
+    for bad in ("../..", "/etc", "~/../../etc", "Downloads/../../.."):
+        try:
+            srv.home_path(bad)
+            raise AssertionError(bad)
+        except srv.SecurityError:
+            pass
+    d = Path(tempfile.mkdtemp(dir=home))          # 家目錄底下的暫存資料夾，測完移走
+    try:
+        (d / "子資料夾").mkdir()
+        (d / ".隱藏").mkdir()
+        (d / "上課.MP4").write_bytes(b"x" * 10)
+        (d / "筆記.txt").write_text("x")
+        r = srv.browse(str(d))
+        assert r["資料夾"] == ["子資料夾"] and [v["名稱"] for v in r["影片"]] == ["上課.MP4"] and r["上一層"]
+    finally:
+        shutil.rmtree(d)
+
+
+def test_projects_list_and_dir_for_video():
+    data = Path(tempfile.mkdtemp())
+    old = os.environ.get("BOOKCLUB_DATA_DIR")
+    os.environ["BOOKCLUB_DATA_DIR"] = str(data)
+    try:
+        assert srv.project_dir_for(Path("/x/2025-04-09 第一堂.mp4")) == data / "工作區" / "2025-04-09 第一堂"
+        a = data / "工作區" / "第一堂"
+        a.mkdir(parents=True)
+        (a / "分析結果.json").write_text(json.dumps({"video": "/v/第一堂.mp4", "影片長度": 90.0,
+                                                     "elapsed": {"總耗時": 5}}), encoding="utf-8")
+        (data / "工作區" / "第二堂").mkdir()
+        r = srv.list_projects(a)
+        names = {p["名稱"]: p for p in r["專案"]}
+        assert set(names) == {"第一堂", "第二堂"} and r["目前"] == str(a)
+        assert names["第一堂"]["分析完成"] and names["第一堂"]["影片"] == "第一堂.mp4" and not names["第二堂"]["分析完成"]
+    finally:
+        if old is None:
+            os.environ.pop("BOOKCLUB_DATA_DIR")
+        else:
+            os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

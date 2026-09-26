@@ -87,6 +87,89 @@ def safe_join(base: Path, relative: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# 專案（09-26：一支影片一個工作區；總覽選影片、切換專案）
+# ---------------------------------------------------------------------------
+
+VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi")
+
+
+class NoProject(Exception):
+    """還沒選專案（`bookclub serve` 沒帶工作區、網頁上也還沒選影片）。"""
+
+
+def workroot() -> Path:
+    """所有專案的工作區放在這裡：`~/讀書會剪輯資料/工作區/`。"""
+    return data_dir() / "工作區"
+
+
+def home_path(text: str | None) -> Path:
+    """網頁資料夾瀏覽只允許家目錄底下：擋 `..`、擋跳出家目錄（含符號連結）。"""
+    home = Path.home().resolve()
+    if not text:
+        return home
+    raw = Path(str(text)).expanduser()
+    if any(part == ".." for part in raw.parts):
+        raise SecurityError(f"不允許的路徑：{text}")
+    p = (raw if raw.is_absolute() else home / raw).resolve()
+    try:
+        p.relative_to(home)
+    except ValueError:
+        raise SecurityError(f"只能選家目錄底下的檔案：{text}") from None
+    return p
+
+
+def browse(path_text: str | None) -> dict:
+    """`GET /api/browse?path=`：列出資料夾與影片檔（不列隱藏檔）。"""
+    p = home_path(path_text)
+    if not p.is_dir():
+        raise FileNotFoundError(f"不是資料夾：{p}")
+    home = Path.home().resolve()
+    dirs, videos = [], []
+    try:
+        entries = sorted(p.iterdir(), key=lambda x: x.name)
+    except PermissionError as e:
+        raise SecurityError(f"沒有權限讀這個資料夾：{p}") from e
+    for x in entries:
+        if x.name.startswith("."):
+            continue
+        try:
+            if x.is_dir():
+                dirs.append(x.name)
+            elif x.suffix.lower() in VIDEO_EXTS:
+                videos.append({"名稱": x.name, "大小MB": round(x.stat().st_size / 1e6, 1)})
+        except OSError:
+            continue
+    return {"路徑": str(p), "上一層": str(p.parent) if p != home else None, "家目錄": str(home),
+            "資料夾": dirs, "影片": videos}
+
+
+def project_dir_for(video: Path) -> Path:
+    """影片對應的專案資料夾：`工作區/<影片檔名（不含副檔名）>/`。"""
+    name = Path(video).stem.strip().replace("/", "_") or "未命名"
+    return workroot() / name
+
+
+def list_projects(current: Path | None = None) -> dict:
+    """`GET /api/projects`：工作區底下已有的專案（影片、長度、做到哪、最後修改時間）。"""
+    root = workroot()
+    out = []
+    if root.is_dir():
+        for d in sorted((x for x in root.iterdir() if x.is_dir() and not x.name.startswith(".")),
+                        key=lambda x: x.stat().st_mtime, reverse=True):
+            analysis = read_json(analysis_result_path(d), default={}) or {}
+            video = analysis.get("video")
+            out.append({
+                "名稱": d.name, "路徑": str(d),
+                "影片": Path(video).name if video else None,
+                "長度": fmt_time(analysis["影片長度"]) if analysis.get("影片長度") else None,
+                "分析完成": bool(analysis.get("elapsed", {}).get("總耗時")),
+                "有覆核": (d / "覆核" / "覆核決定.json").exists(),
+                "修改時間": datetime.fromtimestamp(d.stat().st_mtime).strftime("%m-%d %H:%M"),
+            })
+    return {"目前": str(current) if current else None, "工作區根目錄": str(root), "專案": out}
+
+
+# ---------------------------------------------------------------------------
 # Range 請求（給音檔播放器拖曳用）
 # ---------------------------------------------------------------------------
 
@@ -467,16 +550,39 @@ class BookclubServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, handler_cls, *, workdir: Path, video: Path | None):
+    def __init__(self, addr, handler_cls, *, workdir: Path | None, video: Path | None):
         super().__init__(addr, handler_cls)
-        self.workdir = Path(workdir)
+        self._workdir = Path(workdir) if workdir else None
         self.video = Path(video) if video else None
         self.run_lock = threading.Lock()
         self.run_state: dict = self._fresh_run_state()
 
+    @property
+    def workdir(self) -> Path:
+        if self._workdir is None:
+            raise NoProject("還沒選影片：到「總覽」選一支影片，或切換到已有的專案")
+        return self._workdir
+
+    @property
+    def has_workdir(self) -> bool:
+        return self._workdir is not None
+
+    def use_project(self, workdir: Path, video: Path | None = None) -> None:
+        """切換「目前的工作區」（所有 API 都讀這個）。分析跑到一半不能換。"""
+        with self.run_lock:
+            if self.run_state["running"]:
+                raise ValueError("分析還在跑，等它結束再切換專案")
+            self._workdir = Path(workdir)
+            self.video = Path(video) if video else None
+            self.run_state = self._fresh_run_state()
+
     @staticmethod
     def _fresh_run_state() -> dict:
         return {"running": False, "started_at": None, "finished_at": None, "error": None, "messages": []}
+
+    def run_status_running(self) -> bool:
+        with self.run_lock:
+            return bool(self.run_state["running"])
 
     def run_status(self) -> dict:
         with self.run_lock:
@@ -513,14 +619,17 @@ class BookclubServer(ThreadingHTTPServer):
         tee = _TeeWriter(sys.stdout, self.run_state["messages"], self.run_lock)
         try:
             with contextlib.redirect_stdout(tee):
+                d = data_dir()
+                default = lambda name: str(d / name) if (d / name).exists() else None  # noqa: E731
                 run_analyze(
                     video,
                     self.workdir,
-                    roster_path=opts.get("roster"),
-                    sensitive_path=opts.get("sensitive"),
+                    roster_path=opts.get("roster") or default("名冊.csv"),
+                    sensitive_path=opts.get("sensitive") or default("敏感詞.csv"),
                     exclusion_path=opts.get("exclusions"),
                     skip_overlap=bool(opts.get("skip_overlap", False)),
                     ref_n=int(opts.get("ref_n", 5)),
+                    skip_turns=bool(opts.get("skip_turns", False)),
                 )
         except Exception as e:  # noqa: BLE001 — 背景執行緒要把任何失敗記進 run_state，不能讓它默默死掉
             with self.run_lock:
@@ -607,6 +716,8 @@ class Handler(BaseHTTPRequestHandler):
             return   # 瀏覽器拖曳影片時會中斷前一個請求，正常現象
         except SecurityError as e:
             self._send_json(403, {"error": str(e)})
+        except NoProject as e:
+            self._send_json(409, {"error": str(e), "沒有專案": True})
         except FileNotFoundError as e:
             self._send_json(404, {"error": str(e)})
         except ValueError as e:
@@ -623,7 +734,14 @@ class Handler(BaseHTTPRequestHandler):
     def _route_get_api(self, path: str, query: dict) -> None:
         server = self.server
         if path == "/api/state":
+            if not server.has_workdir:
+                self._send_json(200, {"沒有專案": True, "workdir": None, "video": {}, "substeps": {}, "proofread": {}})
+                return
             self._send_json(200, build_state(server.workdir, video=server.video))
+        elif path == "/api/projects":
+            self._send_json(200, list_projects(server._workdir))
+        elif path == "/api/browse":
+            self._send_json(200, browse((query.get("path") or [None])[0]))
         elif path == "/api/refs":
             self._send_json(200, build_refs(server.workdir))
         elif path == "/api/names":
@@ -685,6 +803,8 @@ class Handler(BaseHTTPRequestHandler):
             self._route_post_api(path, body)
         except SecurityError as e:
             self._send_json(403, {"error": str(e)})
+        except NoProject as e:
+            self._send_json(409, {"error": str(e), "沒有專案": True})
         except FileNotFoundError as e:
             self._send_json(404, {"error": str(e)})
         except (ValueError, KeyError, json.JSONDecodeError) as e:
@@ -694,6 +814,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route_post_api(self, path: str, body: dict) -> None:
         server = self.server
+        if path == "/api/projects/switch":
+            d = safe_join(workroot(), str(body["名稱"]))
+            if not d.is_dir():
+                raise FileNotFoundError(f"沒有這個專案：{body['名稱']}")
+            analysis = read_json(analysis_result_path(d), default={}) or {}
+            server.use_project(d, analysis.get("video"))
+            self._send_json(200, {"ok": True, "目前": str(d)})
+            return
+        if path == "/api/projects/start":
+            video = home_path(str(body["影片"]))
+            if not video.is_file() or video.suffix.lower() not in VIDEO_EXTS:
+                raise FileNotFoundError(f"不是影片檔：{video}")
+            d = project_dir_for(video)
+            existed = d.exists()
+            if server.run_status_running():
+                raise ValueError("分析還在跑，等它結束再開始另一支")
+            d.mkdir(parents=True, exist_ok=True)          # 按下「開始分析」才建資料夾
+            server.use_project(d, video)
+            opts = {k: body[k] for k in ("skip_turns", "skip_overlap") if k in body}
+            result = server.start_analyze({"video": str(video), **opts})
+            self._send_json(202 if result.get("started") else 409,
+                            {**result, "專案": d.name, "路徑": str(d), "接著做": existed})
+            return
         if path == "/api/refs/use":
             rank = int(body["rank"])
             transcript = str(body.get("transcript", ""))
@@ -769,23 +912,25 @@ class Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 def serve(
-    workdir: str | Path,
+    workdir: str | Path | None = None,
     video: str | Path | None = None,
     port: int | None = None,
     open_browser: bool = True,
 ) -> None:
-    workdir = Path(workdir).expanduser()
-    workdir.mkdir(parents=True, exist_ok=True)
+    """不帶工作區：網頁總覽選影片或切換已有的專案（09-26）。帶工作區：舊用法，直接開那一個。"""
+    if workdir:
+        workdir = Path(workdir).expanduser()
+        workdir.mkdir(parents=True, exist_ok=True)
     if port is None:
         port = load_settings().server_port
 
     httpd = BookclubServer(
         ("127.0.0.1", port), Handler,
-        workdir=workdir, video=Path(video).expanduser() if video else None,
+        workdir=workdir or None, video=Path(video).expanduser() if video else None,
     )
     url = f"http://127.0.0.1:{port}/"
     print(f"[網頁伺服器] 網址：{url}")
-    print(f"[網頁伺服器] 工作區：{workdir}")
+    print(f"[網頁伺服器] 工作區：{workdir or '（還沒選，到網頁總覽選影片）'}")
     print("[網頁伺服器] Ctrl+C 結束")
 
     if open_browser:

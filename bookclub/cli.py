@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     models_sub.add_parser("download", help="下載／確認三個模型都在該在的位置（已存在的檔案不重抓）")
 
     serve_parser = sub.add_parser("serve", help="開網頁伺服器")
-    serve_parser.add_argument("workdir", help="工作區路徑")
+    serve_parser.add_argument("workdir", nargs="?", help="工作區路徑（不給就在網頁總覽選影片、切換專案）")
     serve_parser.add_argument("--video", help="直接帶入影片路徑（按「開始分析」時要用到）")
     serve_parser.add_argument("--port", type=int, help="伺服器埠號（預設讀 settings.toml）")
     serve_parser.add_argument("--no-open", action="store_true", help="啟動後不要自動開瀏覽器")
@@ -61,6 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
     turns_parser = run_sub.add_parser("turns", help="段落分析：看文字切段落、看聲音認人（第 3 步校對用）")
     turns_parser.add_argument("workdir", help="工作區路徑（要先跑過 run analyze）")
     turns_parser.add_argument("--model", help="claude -p 用的模型（預設讀 settings.toml 的 claude_models.turns）")
+
+    cuts_parser = run_sub.add_parser("cuts", help="建議刪除段落（開頭空白、結尾道別、念聊天區留言、小組討論前後、技術問題）")
+    cuts_parser.add_argument("workdir", help="工作區路徑（要先轉好文字）")
+    cuts_parser.add_argument("--video", help="原片路徑（檢查畫面靜止用；預設讀分析結果記錄的影片）")
+    cuts_parser.add_argument("--force", action="store_true", help="已經有結果也重跑")
 
     sub.add_parser("export", help="匯出成品（Phase 5 才會做）")
 
@@ -178,6 +183,11 @@ def main(argv: list[str] | None = None) -> int:
                 exclusion_path=args.exclusions,
                 skip_overlap=args.skip_overlap, ref_n=args.ref_n, skip_turns=args.skip_turns,
             )
+            return 0
+        if args.run_command == "cuts":
+            from bookclub.cutsuggest import suggest_cuts
+
+            suggest_cuts(args.workdir, video=args.video, force=args.force)
             return 0
         if args.run_command == "turns":
             from bookclub.turns import build_turns
