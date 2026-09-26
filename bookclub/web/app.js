@@ -7,9 +7,9 @@
 
 const STEP_DEFS = [
   { id: "overview", num: null, title: "總覽", real: true },
-  { id: "step0", num: 0, title: "名冊與聲線", real: false },
-  { id: "step1", num: 1, title: "轉文字與分析", real: true },
-  { id: "step2", num: 2, title: "聲音分群與參考音", real: true },
+  { id: "step0", num: 0, title: "初始化設定", real: false },
+  { id: "step1", num: 1, title: "影片分析", real: true },
+  { id: "step2", num: 2, title: "挑選老師參考聲音片段", real: true },
   { id: "step3", num: 3, title: "覆核工作台", real: true },
   { id: "step4", num: 4, title: "AI 執行", real: false },
   { id: "step5", num: 5, title: "成品逐筆覆核", real: false },
@@ -196,7 +196,7 @@ async function renderOverview() {
 }
 
 // ---------------------------------------------------------------------------
-// 第 1 步：轉文字與分析
+// 第 1 步：影片分析
 // ---------------------------------------------------------------------------
 
 async function renderStep1() {
@@ -227,7 +227,7 @@ async function renderStep1Body() {
   const messages = (status && status.messages) || [];
 
   contentEl.innerHTML = `
-    <h1>1　轉文字與分析</h1>
+    <h1>1　影片分析</h1>
     <div class="card">
       <table class="kv">
         <thead><tr><th style="text-align:left">子步驟</th><th style="text-align:left">狀態</th>
@@ -280,7 +280,7 @@ function startStatusPoll() {
 }
 
 // ---------------------------------------------------------------------------
-// 第 2 步：聲音分群與參考音（只顯示第一名，換一段往下走）
+// 第 2 步：挑選老師參考聲音片段（只顯示第一名，換一段往下走）
 // ---------------------------------------------------------------------------
 
 let refsCache = null;
@@ -297,7 +297,7 @@ function renderStep2Body() {
   const list = (refsCache && refsCache.candidates) || [];
   if (list.length === 0) {
     contentEl.innerHTML = `
-      <h1>2　聲音分群與參考音</h1>
+      <h1>2　挑選老師參考聲音片段</h1>
       <div class="notyet-card">還沒有參考音候選——先在第 1 步按「開始分析」跑完，或確認 bookclub run analyze 有正常結束。</div>
     `;
     return;
@@ -306,7 +306,7 @@ function renderStep2Body() {
   const c = list[refsPointer];
 
   contentEl.innerHTML = `
-    <h1>2　聲音分群與參考音</h1>
+    <h1>2　挑選老師參考聲音片段</h1>
     <div class="hint">參考音裡如果有雜音、笑聲、咳嗽，或別人的回應（例如「嗯」「對」），都不適合，請按「換一段」。</div>
     <div class="card">
       <p>第 ${refsPointer + 1} 段／共 ${list.length} 段　｜　原片時間：${esc(c["原片時間"])}　｜　長度：${esc(c["長度秒"])} 秒</p>

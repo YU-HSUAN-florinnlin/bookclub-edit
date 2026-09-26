@@ -143,7 +143,7 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
         video_path = Path(analysis["video"])
 
     # 子步驟鍵名沿用 bookclub/analyze.py 的中文命名（1_轉文字…5_找名字），前端
-    # 第 1 步頁直接照這個順序顯示；「聲音分群與參考音」（前端第 2 步）另外從
+    # 第 1 步頁直接照這個順序顯示；「挑選老師參考聲音片段」（前端第 2 步）另外從
     # /api/refs 抓細節，這裡的「認老師」只給總覽用的統計數字。
     substeps = {
         "轉文字": {
