@@ -483,6 +483,20 @@ def _append_exclusion(term: str, reason: str) -> bool:
     return True
 
 
+def _import_profile_bytes(raw: bytes) -> dict:
+    """`POST /api/profile/import`：網頁上傳的設定包（body 是 zip）先存成暫存檔再匯入。"""
+    import tempfile
+
+    from bookclub import profile
+
+    if not raw.startswith(b"PK"):
+        raise ValueError("上傳的不是 zip 檔")
+    with tempfile.TemporaryDirectory() as tmp:
+        z = Path(tmp) / "設定包.zip"
+        z.write_bytes(raw)
+        return profile.import_profile(z)
+
+
 # ---------------------------------------------------------------------------
 # /api/audio：直接給檔案，或用 ffmpeg 即時切片
 # ---------------------------------------------------------------------------
@@ -738,6 +752,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"沒有專案": True, "workdir": None, "video": {}, "substeps": {}, "proofread": {}})
                 return
             self._send_json(200, build_state(server.workdir, video=server.video))
+        elif path == "/api/profile":
+            from bookclub import profile
+
+            self._send_json(200, profile.summary())
+        elif path == "/api/profile/export.zip":
+            from bookclub import profile
+
+            out = profile.export_profile()
+            self._serve_file(Path(out["檔案"]), content_type="application/zip")
         elif path == "/api/projects":
             self._send_json(200, list_projects(server._workdir))
         elif path == "/api/browse":
@@ -799,6 +822,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
             raw = self.rfile.read(length) if length else b""
+            if path == "/api/profile/import":        # 設定包：body 是 zip 本身
+                self._send_json(200, _import_profile_bytes(raw))
+                return
             body = json.loads(raw.decode("utf-8")) if raw.strip() else {}
             self._route_post_api(path, body)
         except SecurityError as e:

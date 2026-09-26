@@ -7,7 +7,7 @@
 
 const STEP_DEFS = [
   { id: "overview", num: null, title: "總覽", real: true },
-  { id: "step0", num: 0, title: "初始化設定", real: false },
+  { id: "step0", num: 0, title: "初始化設定", real: true },
   { id: "step1", num: 1, title: "影片分析", real: true },
   { id: "step2", num: 2, title: "挑選老師參考聲音片段", real: true },
   { id: "step3", num: 3, title: "覆核工作台", real: true },
@@ -105,6 +105,7 @@ async function renderSidebar() {
 
 function stepDoneFromState(num, state) {
   const sub = state.substeps || {};
+  if (num === 0) return true;
   if (num === 1) return !!(sub["轉文字"] && sub["轉文字"].done);
   if (num === 2) return !!(sub["挑參考音"] && sub["挑參考音"].done);
   if (num === 3) return !!(state.proofread && state.proofread.done);
@@ -130,6 +131,7 @@ async function render() {
     if (id === "step1") return await renderStep1();
     if (id === "step2") return await renderStep2();
     if (id === "step3") return await renderReview();
+    if (id === "step0") return await renderProfile();
     const def = STEP_DEFS.find((s) => s.id === id);
     return renderNotYet(def);
   } catch (e) {
@@ -153,14 +155,67 @@ function stopStatusPoll() {
 
 function renderNotYet(def) {
   const notes = {
-    step0: "每一期建一次名冊（本名、其他寫法、英文代號、性別），匿名聲線素材（可商用的開放授權）建一次。"
-      + "目前直接編輯 ~/讀書會剪輯資料/名冊.csv；敏感詞、排除清單、發音對照表遇到再加，不算設定步驟。",
     step4: "覆核工作台確認完、匯出覆核結果之後，交給夥伴的電腦執行：bookclub review import → bookclub gen names → bookclub render audio。網頁版還沒做。",
   };
   contentEl.innerHTML = `
     <h1>${esc(def.num)}　${esc(def.title)}</h1>
     <div class="notyet-card">${esc(notes[def.id] || "這一步還沒做，之後的階段才會做。")}</div>
   `;
+}
+
+// ---------------------------------------------------------------------------
+// 第 0 步：初始化設定（跨專案共用；名冊只顯示代號與筆數，不顯示本名）
+// ---------------------------------------------------------------------------
+
+async function renderProfile() {
+  contentEl.innerHTML = "<p>載入中…</p>";
+  const d = await apiGet("/api/profile");
+  const desc = {
+    "名冊.csv": "學員本名、其他寫法、英文代號、性別。只要一份、不分期：同一支影片裡同一人同一代號就好",
+    "敏感詞.csv": "公司名、地名等要換掉的詞，與替代詞",
+    "名字排除清單.csv": "確認不是名字的詞（地名、疊字誤抓），之後自動不列入候選",
+    "發音對照表.csv": "老師 AI 聲音念偏的詞，換成接近台灣口音的寫法",
+  };
+  const rows = Object.entries(d["檔案"]).map(([name, f]) => `<tr>
+      <td><b>${esc(name.replace(".csv", ""))}</b><div class="muted">${esc(desc[name] || "")}</div>
+        ${name === "名冊.csv" && (f["代號"] || []).length ? `<div class="muted">代號：${esc(f["代號"].join("、"))}${f["沒有代號的筆數"] ? `（另有 ${f["沒有代號的筆數"]} 筆還沒有代號）` : ""}</div>` : ""}</td>
+      <td>${f["有檔案"] ? `${f["筆數"]} 筆` : "還沒有檔案"}</td>
+      <td>${esc(f["最後修改"] || "—")}</td></tr>`).join("");
+  const st = d["settings.toml"];
+  contentEl.innerHTML = `
+    <h1>0　初始化設定</h1>
+    <p class="muted">這些設定所有影片共用，放在 <code>${esc(d["資料夾"])}</code>。AI 之後發現新的念偏詞、排除詞會照舊寫進這裡；要給協作夥伴，用下面的設定包。</p>
+    <div class="card"><table class="kv prof">
+      <thead><tr><th style="text-align:left">項目</th><th style="text-align:left">筆數</th><th style="text-align:left">最後修改</th></tr></thead>
+      <tbody>${rows}
+        <tr><td><b>settings.toml</b><div class="muted">伺服器埠號、Claude 模型、門檻值</div></td><td>${st["有檔案"] ? "有" : "沒有（用內建預設值）"}</td><td>${esc(st["最後修改"] || "—")}</td></tr>
+        <tr><td><b>匿名聲線</b><div class="muted">學員重念用的 AI 聲音素材（可商用的開放授權）</div></td><td>${esc(d["匿名聲線"]["狀態"])}</td><td>—</td></tr>
+      </tbody></table></div>
+    <h2>設定包（給協作夥伴）</h2>
+    <div class="card">
+      <p>匯出：名冊、敏感詞、名字排除清單、發音對照表、settings.toml 打包成一個 zip。名冊含學員本名，只傳給協作夥伴。</p>
+      <p><a href="/api/profile/export.zip"><button>匯出設定包</button></a></p>
+      <p style="margin-top:18px">匯入：每個清單以第一欄當鑰匙，新的加進去、已經有的不動；同一鑰匙內容不同，保留這台電腦的並列出衝突。</p>
+      <p><input type="file" id="profFile" accept=".zip"> <button id="profImport" class="secondary">匯入設定包</button></p>
+      <div id="profMsg"></div>
+    </div>`;
+  document.getElementById("profImport").addEventListener("click", async () => {
+    const f = document.getElementById("profFile").files[0];
+    const msg = document.getElementById("profMsg");
+    if (!f) { msg.innerHTML = `<p class="muted">先選設定包 zip。</p>`; return; }
+    msg.textContent = "匯入中…";
+    try {
+      const res = await fetch("/api/profile/import", { method: "POST", headers: { "Content-Type": "application/zip" }, body: f });
+      const r = await res.json();
+      if (!res.ok) throw new Error(r.error || "匯入失敗");
+      const lines = Object.entries(r["檔案"]).map(([name, v]) => `<li>${esc(name)}：新增 ${v["新增"]} 筆${v["衝突"].length
+        ? `，衝突 ${v["衝突"].length} 筆（保留這台電腦的）：${esc(v["衝突"].map((c) => c["鑰匙"]).join("、"))}` : ""}</li>`).join("");
+      msg.innerHTML = `<p><span class="badge done">匯入完成</span> 新增 ${r["新增"]} 筆、衝突 ${r["衝突數"]} 筆</p><ul>${lines}</ul>`;
+      const keep = msg.innerHTML;
+      await renderProfile();
+      document.getElementById("profMsg").innerHTML = keep;
+    } catch (e) { msg.innerHTML = `<span class="badge error">失敗</span> ${esc(e.message)}`; }
+  });
 }
 
 // ---------------------------------------------------------------------------

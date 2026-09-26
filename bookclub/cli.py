@@ -137,6 +137,13 @@ def build_parser() -> argparse.ArgumentParser:
     rimp.add_argument("--video", required=True, help="原片路徑（要跟匯出時同一支，會比對長度）")
     rimp.add_argument("--force", action="store_true", help="影片長度對不上也照樣匯入")
 
+    prof_parser = sub.add_parser("profile", help="第 0 步初始化設定：設定包匯出／匯入（給協作夥伴）")
+    prof_sub = prof_parser.add_subparsers(dest="profile_command")
+    pexp = prof_sub.add_parser("export", help="把名冊、敏感詞、名字排除清單、發音對照表、settings.toml 打包成一個 zip")
+    pexp.add_argument("--out", help="zip 存到哪裡（預設 ~/讀書會剪輯資料/設定包/設定包_時間.zip）")
+    pimp = prof_sub.add_parser("import", help="匯入設定包：第一欄當鑰匙，新的加進去、已經有的不動，內容不同列出衝突")
+    pimp.add_argument("zip", help="設定包 zip")
+
     render_parser = sub.add_parser("render", help="組裝：把生成的聲音、消音放回原本的時間")
     render_sub = render_parser.add_subparsers(dest="render_command")
     render_audio_parser = render_sub.add_parser("audio", help="組出跟原片等長的新聲音軌＋處理前後試聽")
@@ -277,6 +284,22 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print("用法：bookclub review export <工作區> [--out 檔案.zip]")
         print("     bookclub review import <zip> <新工作區> --video <影片> [--force]")
+        return 2
+
+    if args.command == "profile":
+        from bookclub import profile
+
+        if args.profile_command == "export":
+            profile.export_profile(args.out)
+            return 0
+        if args.profile_command == "import":
+            r = profile.import_profile(args.zip)
+            for name, v in r["檔案"].items():
+                print(f"  {name}：新增 {v['新增']} 筆" + (f"、衝突 {len(v['衝突'])} 筆（保留本機的）：" +
+                      "、".join(str(c["鑰匙"]) for c in v["衝突"]) if v["衝突"] else ""))
+            return 0
+        print("用法：bookclub profile export [--out 檔案.zip]")
+        print("     bookclub profile import <設定包.zip>")
         return 2
 
     if args.command == "render":
