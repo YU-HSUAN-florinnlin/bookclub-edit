@@ -17,6 +17,13 @@ sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import fake_workdir  # noqa: E402
 
+# 名冊、敏感詞用暫存資料夾的假資料，不讀真的 ~/讀書會剪輯資料/
+import os  # noqa: E402
+
+_DATA = Path(tempfile.mkdtemp())
+(_DATA / "名冊.csv").write_text("中文名,其他寫法,英文代號,聲線,性別\n小美,,Amy,,女\n阿明,,Tom,,男\n", encoding="utf-8")
+os.environ["BOOKCLUB_DATA_DIR"] = str(_DATA)
+
 from bookclub import review  # noqa: E402
 
 _ROOT = None
@@ -131,8 +138,12 @@ def test_export_import_roundtrip_same_name_plan():
     review.save_name(w, "1", {"做法": "整句換掉", "已確認": True})
     review.save_name(w, "2", {"做法": "直接消音"})
     review.save_cut(w, {"start": 31.3, "end": 35.9})
+    stu2 = next(x for x in review.page_data(w)["項目"] if x["id"] == "T005")
+    assert "Amy" in stu2["建議稿"] and stu2["換過的字"][0]["原字"] == "小美"      # 學員說到的本名自動換成代號
+    from bookclub import turns
+    turns.save_turn(w, "T005", {"校對稿": stu2["建議稿"], "已確認": True})     # 覆核時按「通過」
     r = exchange.export_review(w, out=w.parent / "匯出.zip")
-    assert r["未確認數"] == 7 and "ref.wav" in r["內含"]      # 3 學員段落＋名字 1＋重疊 1＋建議刪除 2
+    assert r["未確認數"] == 6 and "ref.wav" in r["內含"]      # 2 學員段落＋名字 1＋重疊 1＋建議刪除 2
     with zipfile.ZipFile(r["檔案"]) as z:
         res = json.loads(z.read("覆核結果.json").decode("utf-8"))
         text = z.read("覆核結果.json").decode("utf-8")
@@ -195,7 +206,8 @@ def test_suggest_overlap_rules():
     assert r["做法"] == "兩邊都重生成" and r["排法"] == "前後排開" and "老師收尾" in r["原因"]      # 交接
     assert "學員收尾" in f({"start": 49.8, "end": 50.5}, turns, "學員2", {})["原因"]
     assert f({"start": 29.5, "end": 30.3}, turns, "學員2", {"學員2": "保留原聲"})["做法"] == "不用改"
-    assert f({"start": 40, "end": 40.5}, turns, "學員2", {})["做法"] == "兩邊都重生成"               # 判斷不出來
+    assert f({"start": 40, "end": 40.5}, turns, "學員2", {})["做法"] == "只留學員"                  # 學員說話中老師回應
+    assert f({"start": 95, "end": 95.5}, turns, None, {})["做法"] == "兩邊都重生成"                  # 判斷不出來
 
 
 def test_replace_real_names():

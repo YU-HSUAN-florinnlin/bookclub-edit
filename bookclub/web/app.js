@@ -114,6 +114,7 @@ async function render() {
   await renderSidebar();
   const id = currentRouteId();
   stopStatusPoll();
+  contentEl.classList.remove("wide");
 
   try {
     if (id === "overview") return await renderOverview();
