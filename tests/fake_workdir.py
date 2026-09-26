@@ -3,8 +3,10 @@
 全部是合成資料（電子音、假逐字稿、假名字），不含任何真實學員內容。
     .venv/bin/python tests/fake_workdir.py <資料夾>        # 建好後 bookclub serve <資料夾>/工作區
 
-內容（3 分鐘）：老師（冥想引導、導讀）、兩位學員輪流說話；老師提到兩次名字；三處重疊
+內容（3 分鐘）：老師（冥想引導、導讀）、三位學員說話；老師提到兩次名字；三處重疊
 （一處要人決定、一處兩位學員之間、一處 0 秒的邊界誤差）；參考音 ref.wav／ref.txt；發音對照表。
+09-26 加：一段學員發言藏在老師段落裡（164–168 秒，段落分析判成老師）、兩位學員被分成同一人
+（學員1 的第二段其實是另一個人的聲音）、建議刪除 2 段（`校對/刪除建議.json`）。
 """
 
 from __future__ import annotations
@@ -25,9 +27,17 @@ SENT_S, GAP_S = 3.6, 0.4
 TURNS = [
     (0, 20, "老師", "冥想引導"), (20, 40, "老師", "講解"), (40, 70, "學員1", "學員分享"),
     (70, 90, "老師", "提問與回應"), (90, 110, "學員2", "學員分享"), (110, 140, "老師", "導讀"),
-    (140, 160, "學員1", "學員分享"), (160, 180, "老師", "講解"),
+    (140, 160, "學員3", "學員分享"), (160, 180, "老師", "講解"),
 ]
-FREQ = {"老師": 220.0, "學員1": 330.0, "學員2": 440.0}
+FREQ = {"老師": 220.0, "學員1": 330.0, "學員2": 440.0, "學員3": 550.0}
+HIDDEN = (164, 168, "學員2")     # 藏在老師段落裡的學員發言（聲音是學員，段落分析判成老師）
+CLUSTERED_AS = {"學員3": "學員1"}  # 聲紋分群錯：學員3 被分成學員1
+
+
+def _voice(t: float) -> str:
+    if HIDDEN[0] <= t < HIDDEN[1]:
+        return HIDDEN[2]
+    return _who(t)[0]
 
 
 def _who(t: float) -> tuple[str, str]:
@@ -42,6 +52,10 @@ def _sentences() -> list[dict]:
     for k in range(int(DUR // (SENT_S + GAP_S))):
         start = k * (SENT_S + GAP_S)
         who, kind = _who(start)
+        if HIDDEN[0] <= start < HIDDEN[1]:
+            out.append({"id": f"00_{k:03d}", "start": round(start, 3), "end": round(start + SENT_S, 3),
+                        "text": "這是藏在老師段落裡的學員發言。", "avg_logprob": -0.2, "label": "不是老師", "sim": 0.1})
+            continue
         if who == "老師":
             text = f"老師說的第{k}句，" if k % 3 else f"老師說的第{k}句。"
         else:
@@ -61,7 +75,7 @@ def _sentences() -> list[dict]:
 def _audio(sents: list[dict]) -> np.ndarray:
     x = np.zeros(int(DUR * SR), dtype=np.float32)
     for s in sents:
-        who, _ = _who(s["start"])
+        who = _voice(s["start"])
         a, b = int(s["start"] * SR), int(s["end"] * SR)
         t = np.arange(b - a) / SR
         x[a:b] = 0.15 * np.sin(2 * np.pi * FREQ[who] * t)
@@ -97,6 +111,7 @@ def make(root: str | Path) -> Path:
     turns, people = [], {}
     for i, (a, b, who, kind) in enumerate(TURNS):
         ss = [s for s in sents if a <= s["start"] < b]
+        who = CLUSTERED_AS.get(who, who)
         text = "".join(s["text"] for s in ss)
         turns.append({"id": f"T{i + 1:03d}", "start": ss[0]["start"], "end": ss[-1]["end"], "句子": [s["id"] for s in ss],
                       "文字判斷": "老師" if who == "老師" else "學員", "文字學員編號": None, "換人依據": "假資料",
@@ -131,6 +146,13 @@ def make(root: str | Path) -> Path:
          "已自動跳過": True, "原因": "兩位學員之間的重疊", "區域": "區域0002"},
     ]
     _write(w / "重疊.json", {"overlaps": ov, "重疊數": 3, "已自動跳過數": 1, "掃描區域數": 3, "掃描總秒數": 60.0})
+
+    _write(w / "校對" / "刪除建議.json", {"建議": [
+        {"id": "S1", "類型": "開頭空白", "start": 0.0, "end": 3.6, "原因": "假資料：開頭到第一句話之前沒人說話",
+         "剪點對齊安靜處": [True, True]},
+        {"id": "S2", "類型": "結尾道別", "start": 172.0, "end": 180.0, "原因": "假資料：最後幾句是道別",
+         "剪點對齊安靜處": [True, True]},
+    ], "模型": "假資料", "耗時": {}})
 
     ref = w / "參考音"
     sf.write(str(ref / "ref.wav"), audio[int(20 * SR):int(40 * SR)], SR)

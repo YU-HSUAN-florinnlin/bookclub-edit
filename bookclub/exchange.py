@@ -104,7 +104,7 @@ def build_result(workdir: str | Path, video: str | Path | None = None) -> dict:
     real_names = [f"學員段落 {x['id']}" for x in segments if review.has_real_name(x["校對稿"], words)] + \
         [f"重疊 {x['id']}" for x in overlaps
          if review.has_real_name(x.get("老師文字"), words) or review.has_real_name(x.get("學員文字"), words)]
-    pending = [it for it in page["項目"] if not it.get("已確認")]
+    pending = [it for it in page["項目"] if not it.get("已確認") and not it.get("不用處理")]
     by_type: dict[str, int] = {}
     for it in pending:
         by_type[it["類型"]] = by_type.get(it["類型"], 0) + 1

@@ -113,7 +113,7 @@ def test_cut_snaps_to_quiet_and_mute():
     review.save_mute(w, {"id": m["id"], "方式": "霧化"})
     assert review.load_decisions(w)["局部消音"][0]["方式"] == "霧化"
     p = review.page_data(w)["進度"]
-    assert p["各類"]["刪除段落"] == {"已確認": 1, "總數": 1}
+    assert p["各類"]["刪除段落"] == {"已確認": 1, "總數": 3}          # 手動 1 筆＋建議 2 筆（還沒決定）
 
 
 def test_progress_estimate():
@@ -132,7 +132,7 @@ def test_export_import_roundtrip_same_name_plan():
     review.save_name(w, "2", {"做法": "直接消音"})
     review.save_cut(w, {"start": 31.3, "end": 35.9})
     r = exchange.export_review(w, out=w.parent / "匯出.zip")
-    assert r["未確認數"] == 5 and "ref.wav" in r["內含"]      # 3 學員段落＋名字 2＋重疊 1，名字 1 已確認
+    assert r["未確認數"] == 7 and "ref.wav" in r["內含"]      # 3 學員段落＋名字 1＋重疊 1＋建議刪除 2
     with zipfile.ZipFile(r["檔案"]) as z:
         res = json.loads(z.read("覆核結果.json").decode("utf-8"))
         text = z.read("覆核結果.json").decode("utf-8")
@@ -163,9 +163,9 @@ def test_export_lists_places_with_real_names():
     review.roster_words = lambda: ["學員1分享"]          # 假的「本名」：假資料學員 1 的句子都有這幾個字
     try:
         d = review.page_data(w)
-        assert [x["含本名"] for x in d["項目"] if x["類型"] == "學員段落"] == [True, False, True]
+        assert [x["含本名"] for x in d["項目"] if x["類型"] == "學員段落"] == [True, False, False]
         r = exchange.export_review(w, out=w.parent / "匯出.zip")
-        assert r["還有本名的地方"][:2] == ["學員段落 T003", "學員段落 T007"]
+        assert r["還有本名的地方"][:1] == ["學員段落 T003"]
     finally:
         review.roster_words = orig
 
@@ -184,6 +184,85 @@ def test_import_rejects_wrong_video_length():
         raise AssertionError
     except ValueError as e:
         assert "長度對不上" in str(e)
+
+
+def test_suggest_overlap_rules():
+    turns = [{"start": 0, "end": 30, "說話者": "老師"}, {"start": 30.2, "end": 50, "說話者": "學員2"},
+             {"start": 50.3, "end": 90, "說話者": "老師"}]
+    f = review.suggest_overlap
+    assert f({"start": 10, "end": 10.4}, turns, None, {})["做法"] == "只留老師原聲學員消音"        # 老師講話中間附和
+    r = f({"start": 29.5, "end": 30.3}, turns, "學員2", {})
+    assert r["做法"] == "兩邊都重生成" and r["排法"] == "前後排開" and "老師收尾" in r["原因"]      # 交接
+    assert "學員收尾" in f({"start": 49.8, "end": 50.5}, turns, "學員2", {})["原因"]
+    assert f({"start": 29.5, "end": 30.3}, turns, "學員2", {"學員2": "保留原聲"})["做法"] == "不用改"
+    assert f({"start": 40, "end": 40.5}, turns, "學員2", {})["做法"] == "兩邊都重生成"               # 判斷不出來
+
+
+def test_replace_real_names():
+    table = [{"寫法": "小美", "代號": "Amy"}, {"寫法": "美", "代號": "X"}, {"寫法": "王小美", "代號": "Amy"},
+             {"寫法": "公司名", "代號": "某公司"}]
+    text, ch = review.replace_real_names("我是王小美，在公司名上班，小美說", table)
+    assert text == "我是Amy，在某公司上班，Amy說"                  # 長的先換、單字不換
+    assert [c["原字"] for c in ch] == ["王小美", "公司名", "小美"] and text[ch[0]["位置"]:].startswith("Amy")
+
+
+def test_prep_and_cut_suggestions_mark_items_not_needed():
+    w = _fresh()
+    d = review.page_data(w)
+    assert d["開始前確認"] == {"學員": False, "保留原聲": False, "刪除": False}
+    assert [x["id"] for x in d["刪除建議"]] == ["S1", "S2"]
+    review.set_prep(w, "學員", True)
+    assert review.load_decisions(w)["開始前確認"]["學員"]
+    review.decide_cut_suggestion(w, "S2", "刪除")
+    review.decide_cut_suggestion(w, "S1", "不刪")
+    dec = review.load_decisions(w)
+    assert [c["建議id"] for c in dec["刪除段落"]] == ["S2"] and dec["刪除建議"]["S1"]["決定"] == "不刪"
+    d = review.page_data(w)
+    cuts = [x for x in d["項目"] if x["類型"] == "刪除段落"]
+    assert len(cuts) == 2 and all(x["已確認"] for x in cuts)                   # 建議那一筆就代表刪除段落，不重複列
+    review.decide_cut_suggestion(w, "S2", "不刪")
+    assert review.load_decisions(w)["刪除段落"][0]["狀態"] == "還原"
+    # 刪除 40–72 秒：學員1 的段落、69.6 秒的重疊都落在裡面 → 不用處理
+    review.save_cut(w, {"start": 39.9, "end": 72.0})
+    review.set_voice(w, "學員2", "保留原聲")
+    d = review.page_data(w)
+    skip = {x["id"]: x["不用處理"] for x in d["項目"] if x.get("不用處理")}
+    assert skip.get("T003") == "落在確認刪除的段落裡" and "O69.60" in skip and "保留原聲" in skip.get("T005", "")
+    assert all(x.get("建議") and x["建議"].get("原因") for x in d["項目"])       # 每一筆一開始就有建議＋原因
+    stu = next(x for x in d["項目"] if x["類型"] == "學員段落")
+    assert stu["建議稿"] == stu["校對稿"]
+
+
+def test_merge_split_and_mark_student():
+    from bookclub import turns
+
+    w = _fresh()
+    turns.merge_person(w, "學員2", "學員1")
+    data = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
+    assert set(data["學員"]) == {"學員1"} and data["學員"]["學員1"]["段數"] == 3
+    r = turns.reassign_turns(w, ["T007"], "新學員")
+    assert r["說話者"] == "學員2"
+    data = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
+    assert {t["id"]: t["說話者"] for t in data["段落"]}["T007"] == "學員2" and data["學員"]["學員2"]["段數"] == 1
+    # 藏在老師段落（160–180）裡的學員發言：164–168 秒
+    r = turns.mark_student(w, 163.9, 167.7, "新學員")
+    data = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
+    ts = data["段落"]
+    new = next(t for t in ts if t["id"] in r["段落"])
+    assert new["說話者"] == "學員3" and new["start"] == 164.0 and new["end"] == 167.6 and new["原文"].startswith("這是藏在")
+    assert [t["start"] for t in ts] == sorted(t["start"] for t in ts) and len({t["id"] for t in ts}) == len(ts)
+    teacher = [t for t in ts if t["說話者"] == "老師" and t["start"] >= 160]
+    assert len(teacher) == 2 and teacher[1]["id"] != "T008"                     # 老師段落在前後切開
+    # 標的範圍裡一句都沒有（2 秒的漏抓）→ 手動標記段落
+    r = turns.mark_student(w, 103.0, 104.5, "學員2")
+    data = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
+    man = next(t for t in data["段落"] if t["id"] == r["段落"][0])
+    assert man["手動標記"] and man["句子"] == [] and man["start"] == 103.0
+    try:
+        turns.merge_person(w, "學員1", "學員1")
+        raise AssertionError
+    except ValueError:
+        pass
 
 
 def _run_all() -> int:

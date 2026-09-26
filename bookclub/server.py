@@ -711,17 +711,27 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub.proofread import set_voice
 
             self._send_json(200, set_voice(server.workdir, str(body["聲音"]), body.get("學員")))
-        elif path in ("/api/turns/save", "/api/turns/merge", "/api/turns/split", "/api/turns/person"):
+        elif path.startswith("/api/turns/"):
             from bookclub import turns as _turns
 
-            if path == "/api/turns/save":
+            if path == "/api/turns/merge_person":
+                self._send_json(200, _turns.merge_person(server.workdir, str(body["從"]), str(body["併進"])))
+            elif path == "/api/turns/reassign":
+                self._send_json(200, _turns.reassign_turns(server.workdir, [str(x) for x in body["ids"]],
+                                                           str(body["說話者"])))
+            elif path == "/api/turns/mark_student":
+                self._send_json(200, _turns.mark_student(server.workdir, float(body["start"]), float(body["end"]),
+                                                         str(body.get("說話者") or "新學員")))
+            elif path == "/api/turns/save":
                 self._send_json(200, _turns.save_turn(server.workdir, str(body["id"]), body))
             elif path == "/api/turns/merge":
                 self._send_json(200, _turns.merge_turn(server.workdir, str(body["id"])))
             elif path == "/api/turns/split":
                 self._send_json(200, _turns.split_turn(server.workdir, str(body["id"]), int(body["at"])))
-            else:
+            elif path == "/api/turns/person":
                 self._send_json(200, _turns.set_person_code(server.workdir, str(body["學員"]), body.get("代號")))
+            else:
+                self._send_json(404, {"error": f"沒有這個 API：{path}"})
         elif path.startswith("/api/review/"):
             from bookclub import review as rv
 
@@ -735,6 +745,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, rv.save_mute(server.workdir, body))
             elif path == "/api/review/voice":
                 self._send_json(200, rv.set_voice(server.workdir, body.get("學員"), str(body["聲音"])))
+            elif path == "/api/review/prep":
+                self._send_json(200, rv.set_prep(server.workdir, str(body["項目"]), bool(body.get("完成", True))))
+            elif path == "/api/review/cutsuggest":
+                self._send_json(200, rv.decide_cut_suggestion(server.workdir, str(body["id"]), str(body["決定"])))
             elif path == "/api/review/time":
                 self._send_json(200, rv.add_time(server.workdir, float(body.get("秒數", 0))))
             elif path == "/api/review/export":

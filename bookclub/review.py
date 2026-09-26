@@ -33,6 +33,9 @@ VOICE_CHOICES = ("重新生成", "保留原聲")
 CALM_KINDS = ("冥想引導", "導讀")
 MAX_TIME_STEP_S = 300.0      # 單次累加的覆核時間上限（離開座位不會灌水）
 SNAP_SEARCH_S = 0.5          # 剪點往前後各找多遠的安靜處
+PREP_KEYS = ("學員", "保留原聲", "刪除")   # 開始前 3 件事（09-26 宇軒選 A：先做完才進逐筆清單）
+HANDOVER_S = 1.5             # 重疊離「老師↔學員換人」的地方這麼近，算一來一往的交接
+CUT_SUGGEST_FILE = "刪除建議.json"
 
 _lock = threading.Lock()
 
@@ -52,8 +55,12 @@ def _now() -> str:
 def load_decisions(workdir: Path) -> dict:
     data = wd.read_json(review_path(workdir), default=None) or {}
     data.setdefault("版本", 1)
-    for k, v in (("重疊", {}), ("刪除段落", []), ("局部消音", []), ("學員聲音", {}), ("覆核秒數", 0.0)):
+    for k, v in (("重疊", {}), ("刪除段落", []), ("局部消音", []), ("學員聲音", {}), ("覆核秒數", 0.0),
+                 ("刪除建議", {})):
         data.setdefault(k, v)
+    data.setdefault("開始前確認", {})
+    for k in PREP_KEYS:
+        data["開始前確認"].setdefault(k, False)
     return data
 
 
@@ -92,6 +99,111 @@ def video_path(workdir: Path, override: str | Path | None = None) -> Path | None
         if c and Path(c).expanduser().is_file():
             return Path(c).expanduser()
     return None
+
+
+
+# ---------------------------------------------------------------------------
+# 每一筆的建議（09-26：使用者只要看、按通過）
+# ---------------------------------------------------------------------------
+
+def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict) -> dict:
+    """重疊的預設建議（純函式，規則照 02 規格第三節的定案，減少人的決策）：
+    1. 學員是「保留原聲」的人 → 不用改
+    2. 一來一往交接（老師收尾、學員開口，或反過來；重疊離換人的地方 1.5 秒內）→ 兩邊都重生成、前後排開
+    3. 學員在老師連續講話中間附和（整個重疊落在老師的段落裡）→ 只留老師原聲、學員消音
+    4. 判斷不出來 → 兩邊都重生成、前後排開（最保險）"""
+    if who and voices.get(who) == "保留原聲":
+        return {"做法": "不用改", "排法": None, "原因": f"{who} 保留原聲，重疊照原樣"}
+    ordered = sorted(turns, key=lambda t: t["start"])
+    for a, b in zip(ordered, ordered[1:]):
+        if (a["說話者"] == "老師") == (b["說話者"] == "老師"):
+            continue
+        edge = (a["end"] + b["start"]) / 2
+        if o["start"] - HANDOVER_S <= edge <= o["end"] + HANDOVER_S:
+            how = "老師收尾、學員開口" if a["說話者"] == "老師" else "學員收尾、老師開口"
+            return {"做法": "兩邊都重生成", "排法": "前後排開", "原因": f"一來一往交接的地方（{how}），兩邊都重念、前後排開"}
+    inside = any(t["說話者"] == "老師" and t["start"] <= o["start"] and o["end"] <= t["end"] for t in ordered)
+    if inside:
+        return {"做法": "只留老師原聲學員消音", "排法": None,
+                "原因": "學員在老師連續講話中間附和（學員那邊短），留老師原聲、學員消音"}
+    return {"做法": "兩邊都重生成", "排法": "前後排開", "原因": "判斷不出是附和還是交接，先用最保險的做法"}
+
+
+def replace_real_names(text: str, table: list[dict]) -> tuple[str, list[dict]]:
+    """名冊上的本名、敏感詞換成代號／替代詞（純函式）。table：[{寫法, 代號}]，長的先換。
+    回傳 (新文字, [{原字, 換成, 位置}])，位置是新文字裡的字元索引，給畫面標出換過的字。"""
+    rows = sorted((r for r in table if r.get("代號") and len(r["寫法"]) >= 2), key=lambda r: -len(r["寫法"]))
+    out, changes, i = [], [], 0
+    text = text or ""
+    pos = 0
+    while i < len(text):
+        hit = next((r for r in rows if text.startswith(r["寫法"], i)), None)
+        if hit:
+            out.append(hit["代號"])
+            changes.append({"原字": hit["寫法"], "換成": hit["代號"], "位置": pos})
+            pos += len(hit["代號"])
+            i += len(hit["寫法"])
+        else:
+            out.append(text[i])
+            pos += 1
+            i += 1
+    return "".join(out), changes
+
+
+def replace_table() -> list[dict]:
+    from bookclub import names
+    from bookclub.config import data_dir
+
+    return names.load_roster(data_dir() / "名冊.csv") + names.load_sensitive_words(data_dir() / "敏感詞.csv")
+
+
+def cut_suggest_path(workdir: Path) -> Path:
+    return Path(workdir) / "校對" / CUT_SUGGEST_FILE
+
+
+def load_cut_suggestions(workdir: Path) -> list[dict]:
+    """影片分析產生的建議刪除段落（`bookclub/cutsuggest.py`）；還沒跑就是空的。"""
+    data = wd.read_json(cut_suggest_path(workdir), default=None) or {}
+    return data.get("建議", [])
+
+
+def _in_ranges(a: float, b: float, ranges: list[tuple[float, float]], pad: float = 0.3) -> bool:
+    return any(x - pad <= a and b <= y + pad for x, y in ranges)
+
+
+def set_prep(workdir: str | Path, key: str, done: bool) -> dict:
+    """`POST /api/review/prep`：開始前 3 件事（學員／保留原聲／刪除）哪一件做完了。"""
+    if key not in PREP_KEYS:
+        raise ValueError(f"只能是：{'、'.join(PREP_KEYS)}")
+    workdir = Path(workdir)
+    with _lock:
+        dec = load_decisions(workdir)
+        dec["開始前確認"][key] = bool(done)
+        _save_decisions(workdir, dec)
+        return {"ok": True, "開始前確認": dec["開始前確認"]}
+
+
+def decide_cut_suggestion(workdir: str | Path, sid: str, choice: str) -> dict:
+    """`POST /api/review/cutsuggest`：建議刪除的段落，確認刪除或不刪。
+    刪除＝在 `刪除段落[]` 建（或改回）一筆帶 `建議id` 的段落；不刪＝那一筆改成還原。"""
+    if choice not in ("刪除", "不刪"):
+        raise ValueError("只能選：刪除、不刪")
+    workdir = Path(workdir)
+    sug = next((x for x in load_cut_suggestions(workdir) if x["id"] == sid), None)
+    if sug is None:
+        raise KeyError(f"找不到這筆建議：{sid}")
+    with _lock:
+        dec = load_decisions(workdir)
+        dec["刪除建議"][sid] = {"決定": choice, "更新時間": _now()}
+        _save_decisions(workdir, dec)
+        existing = next((x for x in dec["刪除段落"] if x.get("建議id") == sid), None)
+    if existing is None and choice == "刪除":
+        return _upsert_range(workdir, "刪除段落", "D", {"start": sug["start"], "end": sug["end"], "狀態": "刪除",
+                                                     "建議id": sid, "備註": sug.get("原因", "")}, snap=False)
+    if existing is not None:
+        return _upsert_range(workdir, "刪除段落", "D", {"id": existing["id"],
+                                                     "狀態": "刪除" if choice == "刪除" else "還原"}, snap=False)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +281,8 @@ def has_real_name(text: str, words: list[str]) -> bool:
 
 
 def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
-    """`GET /api/review`：覆核工作台一次要的全部資料。"""
+    """`GET /api/review`：覆核工作台一次要的全部資料。每一筆都帶 `建議`（做法＋一行原因），
+    落在確認刪除範圍裡、或保留原聲學員的學員段落帶 `不用處理`（原因）。"""
     from bookclub import overlap as overlap_mod
     from bookclub import turns as turns_mod
 
@@ -185,27 +298,50 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     turns = tdata.get("段落", []) if has_turns else []
     people = tdata.get("學員", {}) if has_turns else {}
     dec = load_decisions(workdir)
+    voices = {name: dec["學員聲音"].get(name, "重新生成") for name in people}
     for name, p in people.items():
-        p["聲音"] = dec["學員聲音"].get(name, "重新生成")
+        p["聲音"] = voices[name]
 
-    # 時間軸色帶：老師（灰）、每位學員、冥想導讀（淡藍）
+    # 時間軸色帶：老師（灰）、學員、冥想導讀（淡藍）
     bands = [{"start": t["start"], "end": t["end"], "說話者": t["說話者"],
               "冥想導讀": t.get("內容類型") in CALM_KINDS, "id": t["id"]} for t in turns]
     if not bands and sents:   # 還沒有段落分析：用逐句判斷畫
         bands = [{"start": s["start"], "end": s["end"], "說話者": "老師" if s.get("label") == "老師" else "學員?",
                   "冥想導讀": False, "id": s["id"]} for s in sents]
 
+    # 刪除段落：建議（第 1 步影片分析產生）＋人手動加的
+    suggestions = load_cut_suggestions(workdir)
+    cut_ranges = [(c["start"], c["end"]) for c in dec["刪除段落"] if c.get("狀態") != "還原"]
+
+    def skip_reason(a: float, b: float) -> str | None:
+        return "落在確認刪除的段落裡" if _in_ranges(a, b, cut_ranges) else None
+
     words = roster_words()
+    table = replace_table()
     items: list[dict] = []
     for k, t in enumerate(turns):
         if t["說話者"] == "老師":
             continue
+        draft, changes = (t["校對稿"], []) if t["已確認"] else replace_real_names(t["校對稿"], table)
+        keep = voices.get(t["說話者"]) == "保留原聲"
+        why = "逐字稿看過、沒有錯字就通過（成品會照這份文字重念）"
+        if changes:
+            why = f"已把名冊上的名字換成代號：{'、'.join(sorted({c['換成'] for c in changes}))}；" + why
+        if t.get("學員是猜的"):
+            why = "這段太短、學員是猜的，聽一下是誰；" + why
         items.append({"類型": "學員段落", "id": t["id"], "序": k + 1, "start": t["start"], "end": t["end"],
-                      "說話者": t["說話者"], "校對稿": t["校對稿"], "原文": t["原文"], "已確認": t["已確認"],
+                      "說話者": t["說話者"], "校對稿": t["校對稿"], "建議稿": draft, "換過的字": changes,
+                      "原文": t["原文"], "已確認": t["已確認"],
                       "問老師": bool(t.get("問老師")), "問老師備註": t.get("問老師備註", ""),
-                      "內容類型": t.get("內容類型"), "換人依據": t.get("換人依據"),
-                      "學員是猜的": bool(t.get("學員是猜的")), "含本名": has_real_name(t["校對稿"], words)})
-    items += _names_items(workdir, sents)
+                      "內容類型": t.get("內容類型"), "換人依據": t.get("換人依據"), "手動標記": bool(t.get("手動標記")),
+                      "學員是猜的": bool(t.get("學員是猜的")), "含本名": has_real_name(draft, words),
+                      "建議": {"做法": "通過", "原因": why},
+                      "不用處理": "保留原聲，不用校對逐字稿" if keep else skip_reason(t["start"], t["end"])})
+    for it in _names_items(workdir, sents):
+        cut_hint = f"；第 1 步切點分析建議：{it['建議做法']}" if it.get("建議做法") and it["建議做法"] != nameplan_whole() else ""
+        it["建議"] = {"做法": nameplan_whole(), "原因": "預設整句用老師 AI 聲音重念、名字換成代號（09-25 定案）" + cut_hint}
+        it["不用處理"] = skip_reason(it["start"], it["end"])
+        items.append(it)
 
     ov = wd.read_json(wd.overlap_path(workdir), default=None)
     skipped = []
@@ -220,16 +356,31 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                 skipped.append({**base, "原因": o.get("原因")})
                 continue
             defaults = _overlap_defaults(o, sents, turns)
+            who = d.get("學員說話者", defaults["學員說話者"])
             items.append({"類型": "重疊", **base, **defaults,
                           "老師文字": d.get("老師文字", defaults["老師文字"]),
                           "學員文字": d.get("學員文字", defaults["學員文字"]),
-                          "學員說話者": d.get("學員說話者", defaults["學員說話者"]),
+                          "學員說話者": who,
                           "做法": d.get("做法"), "排法": d.get("排法", OVERLAP_ARRANGE[0]),
-                          "備註": d.get("備註", ""), "已確認": bool(d.get("已確認")), "救回": bool(d.get("救回"))})
+                          "備註": d.get("備註", ""), "已確認": bool(d.get("已確認")), "救回": bool(d.get("救回")),
+                          "建議": suggest_overlap(o, turns, who, voices),
+                          "不用處理": skip_reason(o["start"], o["end"])})
+    for sg in suggestions:
+        d = dec["刪除建議"].get(sg["id"], {})
+        items.append({"類型": "刪除段落", "id": sg["id"], "start": sg["start"], "end": sg["end"], "來源": "建議",
+                      "建議類型": sg.get("類型"), "決定": d.get("決定"), "已確認": bool(d.get("決定")),
+                      "狀態": "還原" if d.get("決定") == "不刪" else "刪除",
+                      "建議": {"做法": "刪除", "原因": f"{sg.get('類型', '')}：{sg.get('原因', '')}".strip("：")},
+                      "不用處理": None})
     for c in dec["刪除段落"]:
-        items.append({"類型": "刪除段落", **c, "已確認": True})
+        if c.get("建議id"):
+            continue
+        items.append({"類型": "刪除段落", **c, "來源": "手動", "已確認": True,
+                      "建議": {"做法": "刪除" if c.get("狀態") != "還原" else "還原", "原因": "人手動加的"},
+                      "不用處理": None})
     for m in dec["局部消音"]:
-        items.append({"類型": "局部消音", **m, "已確認": True})
+        items.append({"類型": "局部消音", **m, "已確認": True,
+                      "建議": {"做法": m.get("方式", MUTE_WAYS[0]), "原因": "人手動加的"}, "不用處理": None})
     items.sort(key=lambda x: (x["start"], x["類型"]))
 
     return {
@@ -242,23 +393,33 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "代號選項": tdata.get("代號選項", []),
         "項目": items,
         "已自動跳過的重疊": skipped,
+        "刪除建議": [{**sg, "決定": dec["刪除建議"].get(sg["id"], {}).get("決定")} for sg in suggestions],
+        "開始前確認": dec["開始前確認"],
         "選項": {"重疊": OVERLAP_HOWS, "重疊排法": OVERLAP_ARRANGE, "名字": NAME_HOWS, "名字標記": NAME_TAGS,
                  "消音": MUTE_WAYS, "聲音": VOICE_CHOICES},
         "進度": progress(items, dec, duration),
     }
 
 
+def nameplan_whole() -> str:
+    from bookclub import nameplan
+
+    return nameplan.WHOLE
+
+
 def progress(items: list[dict], dec: dict, duration: float) -> dict:
     """已確認／總數、覆核花的時間、推算整支要多久（純函式）。"""
     total = len(items)
-    done = sum(1 for x in items if x.get("已確認"))
+    done = sum(1 for x in items if x.get("已確認") or x.get("不用處理"))
     spent = float(dec.get("覆核秒數") or 0.0)
-    est = spent / done * total if done else None
+    passed = sum(1 for x in items if x.get("已確認") and not x.get("不用處理"))
+    need = sum(1 for x in items if not x.get("不用處理"))
+    est = spent / passed * need if passed else None
     by_type: dict[str, list[int]] = {}
     for x in items:
         c = by_type.setdefault(x["類型"], [0, 0])
         c[1] += 1
-        c[0] += bool(x.get("已確認"))
+        c[0] += bool(x.get("已確認") or x.get("不用處理"))
     return {"已確認": done, "總數": total, "已花秒數": round(spent), "推算全部秒數": round(est) if est else None,
             "各類": {k: {"已確認": v[0], "總數": v[1]} for k, v in by_type.items()}}
 

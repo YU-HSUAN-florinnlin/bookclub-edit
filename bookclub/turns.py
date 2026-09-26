@@ -560,3 +560,125 @@ def set_person_code(workdir: str | Path, person: str, code: str | None) -> dict:
         data["學員"].setdefault(person, {"秒數": 0.0, "段數": 0, "點名線索": {}})["代號"] = code or None
         wd.write_json(turns_path(workdir), data)
         return {"ok": True}
+
+
+# ---------- 09-26：開始前確認「學員是誰」、漏抓的學員發言 ----------
+
+def _new_student_name(data: dict) -> str:
+    used = set(data["學員"]) | {t["說話者"] for t in data["段落"]}
+    n = 1 + max([int(k[2:]) for k in used if k.startswith("學員") and k[2:].isdigit()] or [0])
+    return f"學員{n}"
+
+
+def _unique_id(data: dict, base: str) -> str:
+    ids = {t["id"] for t in data["段落"]}
+    k = 1
+    while f"{base}m{k}" in ids:
+        k += 1
+    return f"{base}m{k}"
+
+
+def merge_person(workdir: str | Path, src: str, dst: str) -> dict:
+    """`POST /api/turns/merge_person`：兩位其實是同一人（例如學員 3 和 7），src 的段落全部改成 dst。"""
+    if src == dst:
+        raise ValueError("要合併的兩位是同一位")
+    workdir = Path(workdir)
+    with _lock:
+        data = wd.read_json(turns_path(workdir))
+        if dst not in data["學員"]:
+            raise KeyError(f"找不到 {dst}")
+        n = 0
+        for t in data["段落"]:
+            if t["說話者"] == src:
+                t["說話者"], t["說話者是人改的"] = dst, True
+                n += 1
+        old = data["學員"].pop(src, None) or {}
+        if not data["學員"][dst].get("代號") and old.get("代號"):
+            data["學員"][dst]["代號"] = old["代號"]
+        _recount_people(data)
+        wd.write_json(turns_path(workdir), data)
+        return {"ok": True, "改了幾段": n}
+
+
+def reassign_turns(workdir: str | Path, ids: list[str], who: str) -> dict:
+    """`POST /api/turns/reassign`：幾段一起改說話者（把一位拆成兩位：選幾段改成「新學員」）。"""
+    workdir = Path(workdir)
+    with _lock:
+        data = wd.read_json(turns_path(workdir))
+        if who == "新學員":
+            who = _new_student_name(data)
+            data["學員"][who] = {"秒數": 0.0, "段數": 0, "點名線索": {}, "代號": None}
+        want = set(ids)
+        hit = [t for t in data["段落"] if t["id"] in want]
+        if not hit:
+            raise KeyError("找不到要改的段落")
+        for t in hit:
+            t["說話者"], t["說話者是人改的"] = who, True
+        _recount_people(data)
+        wd.write_json(turns_path(workdir), data)
+        return {"ok": True, "說話者": who, "改了幾段": len(hit)}
+
+
+def mark_student(workdir: str | Path, start: float, end: float, who: str) -> dict:
+    """`POST /api/turns/mark_student`：用 I／O 標一段改成學員段落（段落分析漏抓、判成老師的學員發言）。
+
+    句子中點落在起訖裡的句子切出來成學員段落，原本的段落在句子邊界切開；一句都沒有（例如只有 2 秒、
+    被併進老師的長句）就照標的起訖建一段「手動標記」的段落，逐字稿先放蓋到的句子當初稿。"""
+    if end <= start:
+        raise ValueError("結束時間要晚於開始時間")
+    workdir = Path(workdir)
+    with _lock:
+        data = wd.read_json(turns_path(workdir))
+        speakers = wd.read_json(wd.speakers_path(workdir)) or {}
+        sent = {s["id"]: s for s in speakers.get("sentences", [])}
+        if who == "新學員":
+            who = _new_student_name(data)
+        data["學員"].setdefault(who, {"秒數": 0.0, "段數": 0, "點名線索": {}, "代號": None})
+        inside = {sid for sid, s in sent.items() if start <= (s["start"] + s["end"]) / 2 <= end}
+        mark = {"說話者": who, "文字判斷": "學員", "說話者是人改的": True, "換人依據": "人工標記（I／O）",
+                "內容類型": "學員分享", "已確認": False, "校對秒數": None}
+        out, made = [], []
+        for t in data["段落"]:
+            ids = t["句子"]
+            if not any(i in inside for i in ids):
+                out.append(t)
+                continue
+            runs: list[tuple[bool, list[str]]] = []
+            for i in ids:
+                if runs and runs[-1][0] == (i in inside):
+                    runs[-1][1].append(i)
+                else:
+                    runs.append((i in inside, [i]))
+            for k, (isin, run) in enumerate(runs):
+                part = {**t, "句子": run, "start": sent[run[0]]["start"], "end": sent[run[-1]]["end"],
+                        "原文": "".join(sent[s]["text"] for s in run)}
+                part["校對稿"] = t["校對稿"] if len(runs) == 1 else part["原文"]
+                if k:
+                    part["id"] = _unique_id({"段落": out + [t]}, t["id"])
+                if isin:
+                    part.update(mark)
+                    made.append(part)
+                out.append(part)
+        if not made:
+            near = [s for s in sorted(sent.values(), key=lambda s: s["start"]) if s["start"] < end and start < s["end"]]
+            n = 1 + sum(1 for t in out if t["id"].startswith("U"))
+            text = "".join(s["text"] for s in near)
+            part = {"id": f"U{n:03d}", "start": round(start, 3), "end": round(end, 3), "句子": [], "原文": text,
+                    "校對稿": text, "聲音判斷": "不確定", "信心": None, "老師點名": None, "文字學員編號": None,
+                    "手動標記": True, **mark}
+            out.append(part)
+            made.append(part)
+        # 同一次標出來、前後相連的學員段落併成一段
+        made_ids = {id(t) for t in made}
+        merged: list[dict] = []
+        for t in sorted(out, key=lambda x: x["start"]):
+            if merged and id(t) in made_ids and id(merged[-1]) in made_ids:
+                a = merged[-1]
+                a.update({"end": t["end"], "句子": a["句子"] + t["句子"], "原文": a["原文"] + t["原文"],
+                          "校對稿": a["校對稿"] + t["校對稿"]})
+                continue
+            merged.append(t)
+        data["段落"] = merged
+        _recount_people(data)
+        wd.write_json(turns_path(workdir), data)
+        return {"ok": True, "說話者": who, "段落": [t["id"] for t in merged if id(t) in made_ids]}
