@@ -381,19 +381,27 @@ def test_home_path_and_browse_stay_in_home():
 
 def test_projects_list_and_dir_for_video():
     data = Path(tempfile.mkdtemp())
+    videos = Path(tempfile.mkdtemp())
     old = os.environ.get("BOOKCLUB_DATA_DIR")
     os.environ["BOOKCLUB_DATA_DIR"] = str(data)
     try:
-        assert srv.project_dir_for(Path("/x/2025-04-09 第一堂.mp4")) == data / "工作區" / "2025-04-09 第一堂"
-        a = data / "工作區" / "第一堂"
-        a.mkdir(parents=True)
-        (a / "分析結果.json").write_text(json.dumps({"video": "/v/第一堂.mp4", "影片長度": 90.0,
-                                                     "elapsed": {"總耗時": 5}}), encoding="utf-8")
-        (data / "工作區" / "第二堂").mkdir()
-        r = srv.list_projects(a)
-        names = {p["名稱"]: p for p in r["專案"]}
-        assert set(names) == {"第一堂", "第二堂"} and r["目前"] == str(a)
-        assert names["第一堂"]["分析完成"] and names["第一堂"]["影片"] == "第一堂.mp4" and not names["第二堂"]["分析完成"]
+        # 09-27：工作資料夾建在影片旁邊
+        assert srv.project_dir_for(videos / "2025-04-09 第一堂.mp4") == videos / "2025-04-09 第一堂_剪輯工作區"
+        new = srv.project_dir_for(videos / "第三堂.mp4")
+        new.mkdir()
+        srv.register_project(new)
+        srv.register_project(new)                                   # 重複登記只記一次
+        assert srv.registered_projects() == [new]
+        old_dir = data / "工作區" / "第一堂"                         # 舊位置的專案照樣列得出來
+        old_dir.mkdir(parents=True)
+        (old_dir / "分析結果.json").write_text(json.dumps({"video": "/v/第一堂.mp4", "影片長度": 90.0,
+                                                         "elapsed": {"總耗時": 5}}), encoding="utf-8")
+        r = srv.list_projects(new)
+        rows = {p["名稱"]: p for p in r["專案"]}
+        assert set(rows) == {"第三堂_剪輯工作區", "第一堂"} and r["目前"] == str(new)
+        assert rows["第一堂"]["舊位置"] and rows["第一堂"]["分析完成"] and not rows["第三堂_剪輯工作區"]["舊位置"]
+        assert srv.known_project(new) and srv.known_project(old_dir)
+        assert not srv.known_project(videos) and not srv.known_project(Path.home())   # 清單外的資料夾不能切過去
     finally:
         if old is None:
             os.environ.pop("BOOKCLUB_DATA_DIR")

@@ -175,9 +175,16 @@ def run_analyze(
     ref_exclude = [(o["start"], o["end"]) for o in overlap_result.get("overlaps", [])]
     ref_exclude += [tuple(r) for r in calm_regions]
     t0 = time.time()
-    ref_record = pick_reference(video, workdir, n=ref_n, exclude_regions=ref_exclude)
-    elapsed["5_挑參考音"] = round(time.time() - t0, 1)
-    print(f"[分析一條龍] 5/7 挑參考音完成：{ref_record.get('候選數', 0)} 個候選")
+    ref_dir = workdir / "參考音"
+    cached_ref = read_json(ref_dir / "挑選紀錄.json", default=None) if (ref_dir / "候選.json").exists() else None
+    if cached_ref and cached_ref.get("候選數"):
+        # 09-27：已經挑過就沿用（以前每次重挑、重打 Groq，候選順序也可能變，第 2 步選好的名次會對不上）
+        ref_record = cached_ref
+        print(f"[分析一條龍] 5/7 挑參考音：已有 {ref_record['候選數']} 個候選，沿用（要重挑就把 參考音/ 資料夾改名）")
+    else:
+        ref_record = pick_reference(video, workdir, n=ref_n, exclude_regions=ref_exclude)
+        elapsed["5_挑參考音"] = round(time.time() - t0, 1)
+        print(f"[分析一條龍] 5/7 挑參考音完成：{ref_record.get('候選數', 0)} 個候選")
 
     # ---------- 6. 找名字 ----------
     if roster_path:

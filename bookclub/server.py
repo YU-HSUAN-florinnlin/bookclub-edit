@@ -93,13 +93,56 @@ def safe_join(base: Path, relative: str) -> Path:
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi")
 
 
+GROQ_KEY_MISSING = ("這個網頁伺服器讀不到 Groq 金鑰，沒辦法轉文字。金鑰設在 ~/.zshrc 時，要從會讀 ~/.zshrc 的地方啟動："
+                    "雙擊「啟動.command」，或在終端機（zsh）執行 .venv/bin/bookclub serve")
+
+
+def groq_key_ready() -> bool:
+    """轉文字（Groq）要的金鑰這個程式讀不讀得到。只檢查有沒有，不讀出內容。"""
+    import os
+
+    return bool(os.environ.get("GROQ_API_KEY"))
+
+
 class NoProject(Exception):
     """還沒選專案（`bookclub serve` 沒帶工作區、網頁上也還沒選影片）。"""
 
 
 def workroot() -> Path:
-    """所有專案的工作區放在這裡：`~/讀書會剪輯資料/工作區/`。"""
+    """09-26 以前的工作區都放在這裡：`~/讀書會剪輯資料/工作區/`（舊專案照樣列得出來、切得過去）。"""
     return data_dir() / "工作區"
+
+
+PROJECT_SUFFIX = "_剪輯工作區"
+
+
+def registry_path() -> Path:
+    """專案清單：工作資料夾建在影片旁邊（09-27 宇軒），散在各處，靠這份清單列出、切換。"""
+    return data_dir() / "專案清單.json"
+
+
+def registered_projects() -> list[Path]:
+    data = read_json(registry_path(), default=None) or {}
+    return [Path(x) for x in data.get("專案", [])]
+
+
+def register_project(d: Path) -> None:
+    items = [str(x) for x in registered_projects()]
+    if str(d) not in items:
+        items.append(str(d))
+        write_json(registry_path(), {"專案": items})
+
+
+def known_project(d: Path) -> bool:
+    """只能切換到清單上的專案，或舊的 `~/讀書會剪輯資料/工作區/` 底下的資料夾。"""
+    d = Path(d).resolve()
+    if any(d == x.resolve() for x in registered_projects()):
+        return True
+    try:
+        d.relative_to(workroot().resolve())
+        return d.parent == workroot().resolve()
+    except ValueError:
+        return False
 
 
 def home_path(text: str | None) -> Path:
@@ -144,29 +187,39 @@ def browse(path_text: str | None) -> dict:
 
 
 def project_dir_for(video: Path) -> Path:
-    """影片對應的專案資料夾：`工作區/<影片檔名（不含副檔名）>/`。"""
-    name = Path(video).stem.strip().replace("/", "_") or "未命名"
-    return workroot() / name
+    """影片對應的專案資料夾：建在影片旁邊，`<影片檔名（不含副檔名）>_剪輯工作區/`（09-27 宇軒）。"""
+    video = Path(video)
+    name = video.stem.strip().replace("/", "_") or "未命名"
+    return video.parent / f"{name}{PROJECT_SUFFIX}"
+
+
+def _project_row(d: Path, current: Path | None) -> dict:
+    analysis = read_json(analysis_result_path(d), default={}) or {}
+    video = analysis.get("video")
+    return {
+        "名稱": d.name, "路徑": str(d), "位置": str(d.parent),
+        "影片": Path(video).name if video else None,
+        "長度": fmt_time(analysis["影片長度"]) if analysis.get("影片長度") else None,
+        "分析完成": bool(analysis.get("elapsed", {}).get("總耗時")) or bool(analysis.get("句數")),
+        "有覆核": (d / "覆核" / "覆核決定.json").exists(),
+        "舊位置": d.parent == workroot(),
+        "修改時間": datetime.fromtimestamp(d.stat().st_mtime).strftime("%m-%d %H:%M"),
+    }
 
 
 def list_projects(current: Path | None = None) -> dict:
-    """`GET /api/projects`：工作區底下已有的專案（影片、長度、做到哪、最後修改時間）。"""
+    """`GET /api/projects`：專案清單上的專案（影片旁邊的工作資料夾）＋舊位置 `工作區/` 底下的資料夾。"""
+    dirs = [d for d in registered_projects() if d.is_dir()]
     root = workroot()
-    out = []
     if root.is_dir():
-        for d in sorted((x for x in root.iterdir() if x.is_dir() and not x.name.startswith(".")),
-                        key=lambda x: x.stat().st_mtime, reverse=True):
-            analysis = read_json(analysis_result_path(d), default={}) or {}
-            video = analysis.get("video")
-            out.append({
-                "名稱": d.name, "路徑": str(d),
-                "影片": Path(video).name if video else None,
-                "長度": fmt_time(analysis["影片長度"]) if analysis.get("影片長度") else None,
-                "分析完成": bool(analysis.get("elapsed", {}).get("總耗時")),
-                "有覆核": (d / "覆核" / "覆核決定.json").exists(),
-                "修改時間": datetime.fromtimestamp(d.stat().st_mtime).strftime("%m-%d %H:%M"),
-            })
-    return {"目前": str(current) if current else None, "工作區根目錄": str(root), "專案": out}
+        dirs += [x for x in root.iterdir() if x.is_dir() and not x.name.startswith(".")]
+    seen, rows = set(), []
+    for d in sorted(dirs, key=lambda x: x.stat().st_mtime, reverse=True):
+        if str(d) in seen:
+            continue
+        seen.add(str(d))
+        rows.append(_project_row(d, current))
+    return {"目前": str(current) if current else None, "工作區根目錄": str(root), "專案": rows}
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +673,9 @@ class BookclubServer(ThreadingHTTPServer):
                     "error": "不知道影片路徑：啟動伺服器時帶 --video，或這次呼叫帶 body.video",
                 }
 
+            if not merged_transcript_path(self.workdir).exists() and not groq_key_ready():
+                return {"started": False, "error": GROQ_KEY_MISSING}
+
             self.run_state = self._fresh_run_state()
             self.run_state["running"] = True
             self.run_state["started_at"] = time.time()
@@ -762,7 +818,7 @@ class Handler(BaseHTTPRequestHandler):
             out = profile.export_profile()
             self._serve_file(Path(out["檔案"]), content_type="application/zip")
         elif path == "/api/projects":
-            self._send_json(200, list_projects(server._workdir))
+            self._send_json(200, {**list_projects(server._workdir), "轉文字金鑰": groq_key_ready()})
         elif path == "/api/browse":
             self._send_json(200, browse((query.get("path") or [None])[0]))
         elif path == "/api/refs":
@@ -841,9 +897,9 @@ class Handler(BaseHTTPRequestHandler):
     def _route_post_api(self, path: str, body: dict) -> None:
         server = self.server
         if path == "/api/projects/switch":
-            d = safe_join(workroot(), str(body["名稱"]))
-            if not d.is_dir():
-                raise FileNotFoundError(f"沒有這個專案：{body['名稱']}")
+            d = Path(str(body["路徑"])) if body.get("路徑") else safe_join(workroot(), str(body["名稱"]))
+            if not d.is_dir() or not known_project(d):
+                raise SecurityError(f"不是專案清單上的專案：{d}")
             analysis = read_json(analysis_result_path(d), default={}) or {}
             server.use_project(d, analysis.get("video"))
             self._send_json(200, {"ok": True, "目前": str(d)})
@@ -856,7 +912,8 @@ class Handler(BaseHTTPRequestHandler):
             existed = d.exists()
             if server.run_status_running():
                 raise ValueError("分析還在跑，等它結束再開始另一支")
-            d.mkdir(parents=True, exist_ok=True)          # 按下「開始分析」才建資料夾
+            d.mkdir(parents=True, exist_ok=True)          # 按下「開始分析」才建資料夾（在影片旁邊）
+            register_project(d)
             server.use_project(d, video)
             opts = {k: body[k] for k in ("skip_turns", "skip_overlap") if k in body}
             result = server.start_analyze({"video": str(video), **opts})
@@ -957,6 +1014,8 @@ def serve(
     url = f"http://127.0.0.1:{port}/"
     print(f"[網頁伺服器] 網址：{url}")
     print(f"[網頁伺服器] 工作區：{workdir or '（還沒選，到網頁總覽選影片）'}")
+    if not groq_key_ready():
+        print(f"⚠️ [網頁伺服器] {GROQ_KEY_MISSING}（已經轉好文字的專案不受影響）")
     print("[網頁伺服器] Ctrl+C 結束")
 
     if open_browser:

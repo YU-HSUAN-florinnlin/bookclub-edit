@@ -244,16 +244,17 @@ async function renderOverview() {
   }
   const list = projects["專案"] || [];
   const rows = list.map((p) => `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
-      <td><b>${esc(p["名稱"])}</b>${p["路徑"] === projects["目前"] ? "　（目前）" : ""}</td>
+      <td><b>${esc(p["名稱"])}</b>${p["路徑"] === projects["目前"] ? "　（目前）" : ""}<div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）" : esc(p["位置"])}</div></td>
       <td>${esc(p["長度"] || "—")}</td>
       <td>${p["分析完成"] ? "分析完成" : "還沒分析完"}${p["有覆核"] ? "、覆核中" : ""}</td>
       <td>${esc(p["修改時間"])}</td>
-      <td>${p["路徑"] === projects["目前"] ? "" : `<button class="secondary pj-switch" data-name="${esc(p["名稱"])}">切換</button>`}</td></tr>`).join("");
+      <td>${p["路徑"] === projects["目前"] ? "" : `<button class="secondary pj-switch" data-path="${esc(p["路徑"])}">切換</button>`}</td></tr>`).join("");
   contentEl.innerHTML = `
     <h1>總覽</h1>
+    ${projects["轉文字金鑰"] === false ? `<div class="hint">這個網頁伺服器讀不到 Groq 金鑰，新影片沒辦法轉文字（已經轉好文字的專案不受影響）。關掉這個伺服器，改用雙擊「啟動.command」重開。</div>` : ""}
     <div class="card pick">
       <h2 style="margin-top:0">選影片</h2>
-      <p class="muted">選一支影片，按「開始分析」才會在 <code>${esc(projects["工作區根目錄"])}</code> 建這支影片的資料夾。同一支影片已經做到一半的，會接著做（做完的步驟自動跳過）。</p>
+      <p class="muted">選一支影片，按「開始分析」才會在影片旁邊建這支影片的工作資料夾（<code>影片檔名_剪輯工作區</code>）。同一支影片已經做到一半的，會接著做（做完的步驟自動跳過）。</p>
       <div id="pickerSel"></div>
       <div id="picker"></div>
     </div>
@@ -261,7 +262,7 @@ async function renderOverview() {
     <h2>已有的專案（${list.length}）</h2>
     <div class="card">${list.length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">還沒有專案。</p>`}</div>`;
   contentEl.querySelectorAll(".pj-switch").forEach((b) => b.addEventListener("click", async () => {
-    try { await apiPost("/api/projects/switch", { "名稱": b.dataset.name }); } catch (e) { alert(e.message); return; }
+    try { await apiPost("/api/projects/switch", { "路徑": b.dataset.path }); } catch (e) { alert(e.message); return; }
     await render();
   }));
   let start = null;
@@ -296,10 +297,11 @@ async function renderPicker(path, projectList) {
   box.querySelectorAll(".pk-video").forEach((b) => b.addEventListener("click", () => {
     pickedVideo = `${d["路徑"]}/${b.dataset.name}`;
     const stem = b.dataset.name.replace(/\.[^.]+$/, "");
-    const existing = (projectList || []).find((p) => p["名稱"] === stem);
+    const target = `${d["路徑"]}/${stem}_剪輯工作區`;
+    const existing = (projectList || []).find((p) => p["路徑"] === target);
     document.getElementById("pickerSel").innerHTML = `
       <div class="pk-sel"><div>選了：<b>${esc(b.dataset.name)}</b></div>
-        <div class="muted">${existing ? `已經有這支影片的專案（${esc(existing["分析完成"] ? "分析完成" : "還沒分析完")}），按開始分析會接著做。` : `會建立資料夾：工作區/${esc(stem)}/`}</div>
+        <div class="muted">${existing ? `已經有這支影片的專案（${esc(existing["分析完成"] ? "分析完成" : "還沒分析完")}），按開始分析會接著做。` : `會在影片旁邊建立資料夾：${esc(stem)}_剪輯工作區/`}</div>
         <button id="pkStart">開始分析</button> <span id="pkMsg"></span></div>`;
     document.getElementById("pkStart").addEventListener("click", startPicked);
   }));
