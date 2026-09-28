@@ -70,6 +70,19 @@ def test_diff_marks():
     assert render.diff_marks("一樣，", "一樣")[2] == 0
 
 
+def test_onset_ignores_short_blip_and_lag_finds_shift():
+    import numpy as np
+
+    sr = render.SR
+    x = np.zeros(sr * 4, dtype=np.float32)
+    x[int(0.5 * sr):int(0.52 * sr)] = 0.5          # 20 毫秒的雜音不算開口
+    t = np.arange(sr) / sr
+    x[int(1.5 * sr):int(2.5 * sr)] = 0.3 * np.sin(2 * np.pi * 200 * t)
+    assert abs(render.onset(x) - 1.5) < 0.02
+    y = np.roll(x, int(0.3 * sr))
+    assert abs(render.envelope_lag(x, y) - 0.3) < 0.02
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

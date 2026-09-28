@@ -581,7 +581,8 @@ def marks_md(rows: list[dict], rng: str, extra: list[str]) -> str:
             out.append(f"- 不一樣的字數：{r['不一樣字數']}")
         if r.get("精準度"):
             p = r["精準度"]
-            out.append(f"- 開口時間差：{p.get('開口差毫秒', '—')} 毫秒；生成長度 vs 時間格：{p.get('長度差秒', '—')} 秒")
+            out.append(f"- 開口時間差：{p.get('開口差毫秒', '—')} 毫秒；整段對位差：{p.get('對位差毫秒', '—')} 毫秒；"
+                       f"生成長度 vs 時間格：{p.get('長度差秒', '—')} 秒")
         out.append("")
     return "\n".join(out)
 
@@ -606,7 +607,8 @@ def marks_html(rows: list[dict], rng: str, extra: list[str]) -> str:
             + (f" <small>({html.escape(r['id'])})</small>" if r.get("id") else "")
             + (f"<br><small>生成 {r['生成秒數']:.1f} 秒・{html.escape(r.get('放回做法') or '')}"
                + (f" {r['差異比例']:+.0%}" if r.get('差異比例') is not None else "") + "</small>" if r.get("生成秒數") else "")
-            + (f"<br><small>開口差 {p.get('開口差毫秒')} ms</small>" if p.get("開口差毫秒") is not None else "")
+            + (f"<br><small>開口差 {p.get('開口差毫秒')} ms・對位差 {p.get('對位差毫秒')} ms</small>"
+               if p.get("開口差毫秒") is not None else "")
             + f"{text}</td><td>{'要' if r['要人聽'] else ''}</td></tr>")
     css = (":root{color-scheme:light dark;--bg:#fff;--fg:#222;--mut:#666;--line:#ddd;--hl:#ffe08a;--flag:#fff3f3}"
            "@media (prefers-color-scheme:dark){:root{--bg:#1b1b1d;--fg:#eee;--mut:#aaa;--line:#444;--hl:#7a5d00;--flag:#3a2222}}"
@@ -721,15 +723,48 @@ def merge_windows(wins: list[dict]) -> list[dict]:
 
 # ---------- 精準度 ----------
 
-def onset(x: np.ndarray, sr: int = SR, db: float = -35.0) -> float | None:
-    """第一個比這段最大聲低不到 db 的 10 毫秒音框（開口時間，秒）。"""
-    f = int(sr * 0.01)
+def _env_db(x: np.ndarray, sr: int = SR, hop_s: float = 0.01) -> np.ndarray:
+    f = int(sr * hop_s)
     n = len(x) // f
     if n == 0:
-        return None
+        return np.zeros(0)
     rms = np.sqrt(np.mean(x[: n * f].reshape(n, f).astype(np.float64) ** 2, axis=1)) + 1e-12
-    on = np.where(20 * np.log10(rms / rms.max()) > db)[0]
-    return float(on[0] * f / sr) if len(on) else None
+    return 20 * np.log10(rms)
+
+
+def onset(x: np.ndarray, sr: int = SR, db: float = -25.0, min_run_s: float = 0.1) -> float | None:
+    """開口時間（秒）：第一段「連續 min_run_s 秒都比這段最大聲低不到 db」的起點。
+    要連續才算，避免小聲的雜音、呼吸被當成開口。"""
+    e = _env_db(x, sr)
+    if not len(e):
+        return None
+    on = e > e.max() + db
+    run = int(round(min_run_s / 0.01))
+    for i in range(0, len(on) - run + 1):
+        if on[i:i + run].all():
+            return i * 0.01
+    return None
+
+
+def envelope_lag(orig: np.ndarray, new: np.ndarray, sr: int = SR, max_lag_s: float = 2.0) -> float | None:
+    """整段對位差（秒，正數＝生成的比較晚）：兩條音量曲線（dB，低於最大聲 40 dB 的當安靜）互相比對，
+    找最吻合的平移量。聲音不同人，但說話與停頓的節奏對得上時，這個值接近 0。"""
+    a, b = _env_db(orig, sr), _env_db(new, sr)
+    n = min(len(a), len(b))
+    if n < 50:
+        return None
+    a = np.clip(a[:n] - a[:n].max() + 40, 0, None)
+    b = np.clip(b[:n] - b[:n].max() + 40, 0, None)
+    a, b = a - a.mean(), b - b.mean()
+    if not a.any() or not b.any():
+        return None
+    m = int(max_lag_s / 0.01)
+    best, best_v = 0, None
+    for lag in range(-m, m + 1):
+        v = float(np.dot(a[max(0, -lag):n - max(0, lag)], b[max(0, lag):n - max(0, -lag)]))
+        if best_v is None or v > best_v:
+            best, best_v = lag, v
+    return best * 0.01
 
 
 def measure(d: dict, orig: np.ndarray, placed: np.ndarray) -> dict:
@@ -741,8 +776,10 @@ def measure(d: dict, orig: np.ndarray, placed: np.ndarray) -> dict:
             continue
         s, t = int((e["start"] - a) * SR), int((e["end"] - a) * SR)
         o1, o2 = onset(orig[s:t]), onset(placed[s:t])
+        lag = envelope_lag(orig[s:t], placed[s:t])
         gen = e.get("生成秒數")
         res[e["id"]] = {"開口差毫秒": None if o1 is None or o2 is None else int(round((o2 - o1) * 1000)),
+                        "對位差毫秒": None if lag is None else int(round(lag * 1000)),
                         "長度差秒": None if gen is None else round(gen - (e["end"] - e["start"]), 2)}
     return res
 
@@ -876,8 +913,11 @@ def _placed_track(workdir: Path, d: dict, orig: np.ndarray) -> np.ndarray:
 
 def _prec_summary(prec: dict) -> dict:
     ds = [abs(v["開口差毫秒"]) for v in prec.values() if v["開口差毫秒"] is not None]
+    xs = [abs(v["對位差毫秒"]) for v in prec.values() if v.get("對位差毫秒") is not None]
     ls = [v["長度差秒"] for v in prec.values() if v["長度差秒"] is not None]
     return {"筆數": len(prec), "開口差平均毫秒": round(float(np.mean(ds))) if ds else None,
             "開口差最大毫秒": max(ds) if ds else None, "開口差超過100毫秒筆數": sum(1 for x in ds if x > 100),
+            "對位差平均毫秒": round(float(np.mean(xs))) if xs else None, "對位差最大毫秒": max(xs) if xs else None,
+            "對位差超過100毫秒筆數": sum(1 for x in xs if x > 100),
             "長度差平均秒": round(float(np.mean(ls)), 2) if ls else None,
             "長度差最大秒": round(max(ls, key=abs), 2) if ls else None}
