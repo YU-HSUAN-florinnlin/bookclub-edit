@@ -1,10 +1,9 @@
 """指令列入口：`bookclub`。
 
-`doctor`、`models download`、`run analyze`、`run turns`、`serve`、`ref`、`gen teacher`、`gen names`、`render audio`、
-`review export`／`review import`、`proofread prepare` 是真的會動的指令；
-`bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
-功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列
-第 1、2、3 步是真的（影片分析、挑選老師參考聲音片段、覆核工作台），其餘步驟頁面只顯示「還沒做」。
+`doctor`、`models download`、`run analyze`、`run turns`、`run execute`、`serve`、`ref`、`gen teacher`、`gen names`、
+`gen students`、`render audio`、`render video`、`redo list`、`review export`／`review import`、`proofread prepare`
+是真的會動的指令；`bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
+功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列第 0～5 步都有頁面。
 """
 
 from __future__ import annotations
