@@ -118,6 +118,17 @@ def build_parser() -> argparse.ArgumentParser:
     gen_names_parser.add_argument("--plan-only", action="store_true", help="只排計畫、不生成")
     gen_names_parser.add_argument("--redo", action="store_true", help="忽略上次生成結果，全部重新生成")
 
+    gen_st = gen_sub.add_parser("students", help="學員段落用匿名聲線（男聲／女聲）重念（測試版）")
+    gen_st.add_argument("workdir", help="工作區路徑（要先跑過 run analyze）")
+    gen_st.add_argument("--start", help="從幾分幾秒開始（例如 37:00）")
+    gen_st.add_argument("--end", help="到幾分幾秒（例如 55:23）")
+    gen_st.add_argument("--only", help="只做這幾個學員段落（逗號分隔，例如 T038,T032）")
+    gen_st.add_argument("--male", help="男聲參考音（預設 ~/讀書會剪輯資料/聲線/男聲_暫定.wav，逐字稿同檔名 .txt）")
+    gen_st.add_argument("--female", help="女聲參考音（預設 ~/讀書會剪輯資料/聲線/女聲_暫定.wav）")
+    gen_st.add_argument("--no-check", action="store_true", help="不用 Groq 轉回文字檢查")
+    gen_st.add_argument("--no-pauses", action="store_true", help="不照原片停頓插入空白")
+    gen_st.add_argument("--plan-only", action="store_true", help="只列出會生成哪幾段（不載入模型）")
+
     pr_parser = sub.add_parser("proofread", help="第 3 步：學員逐字稿校對")
     pr_sub = pr_parser.add_subparsers(dest="pr_command")
     pr_prep = pr_sub.add_parser("prepare", help="整理一段時間內學員說的句子，給校對頁用")
@@ -254,7 +265,32 @@ def main(argv: list[str] | None = None) -> int:
                 generate_teacher(args.workdir, sentences_path(_Path(args.workdir).expanduser()), redo=args.redo)
             print("下一步：bookclub render audio <工作區>")
             return 0
+        if args.gen_command == "students":
+            from pathlib import Path as _Path
+
+            from bookclub import students
+            from bookclub.review import parse_time
+
+            start = parse_time(args.start) if args.start else None
+            end = parse_time(args.end) if args.end else None
+            only = [x.strip() for x in args.only.split(",") if x.strip()] if args.only else None
+            if args.plan_only:
+                items, _ = students.build_items(_Path(args.workdir).expanduser(), start, end, only)
+                for it in items:
+                    print(f"{it['id']}\t{it['學員']}\t{it['slot'][0]:.1f}–{it['slot'][1]:.1f}\t{it['slot_s']:.1f} 秒\t"
+                          f"{len(it['句子'])} 句\t換代號 {it['換成代號']}")
+                print(f"共 {len(items)} 段、{sum(it['slot_s'] for it in items):.0f} 秒")
+                return 0
+            refs = students.default_refs()
+            if args.male:
+                refs["男"] = _Path(args.male).expanduser()
+            if args.female:
+                refs["女"] = _Path(args.female).expanduser()
+            students.generate_students(args.workdir, start=start, end=end, only=only, refs=refs,
+                                       check_content=not args.no_check, use_pauses=not args.no_pauses)
+            return 0
         print("用法：bookclub gen teacher <工作區> <句子清單> [--ref-wav 檔案] [--ref-text 檔案] [--no-check] [--redo]")
+        print("     bookclub gen students <工作區> [--start 37:00 --end 55:23] [--only T038] [--plan-only]")
         print("     bookclub gen names <工作區> [--only 1,5,9] [--plan-only]")
         return 2
 
