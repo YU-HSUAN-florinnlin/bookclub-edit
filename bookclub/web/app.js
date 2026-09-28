@@ -1,19 +1,20 @@
 "use strict";
 
 /* 讀書會剪輯工具｜前端骨架。原生 HTML/CSS/JS，不用打包工具、不用 CDN 套件。
- * 左側步驟列 0～6 步（09-25 宇軒：原本第 3、4 步合成第 3 步「覆核工作台」，後面往前）；
+ * 左側步驟列 0～6 步（09-25 宇軒：原本第 3、4 步合成第 3 步「覆核工作台」，後面往前），每步標 AI／人工，可以收合；
  * 還沒做的步驟顯示「還沒做」的說明頁，不假裝可用。路由用 URL hash（#step1、#step2…）。
  * 第 3 步覆核工作台在 review.js。 */
 
+// who：這一步是誰做（09-29 宇軒：步驟列標「AI」或「人工」，一眼看出現在輪到誰）
 const STEP_DEFS = [
   { id: "overview", num: null, title: "總覽", real: true },
-  { id: "step0", num: 0, title: "初始化設定", real: true },
-  { id: "step1", num: 1, title: "影片分析", real: true },
-  { id: "step2", num: 2, title: "挑選老師參考聲音片段", real: true },
-  { id: "step3", num: 3, title: "覆核工作台", real: true },
-  { id: "step4", num: 4, title: "AI 執行", real: false },
-  { id: "step5", num: 5, title: "成品逐筆覆核", real: false },
-  { id: "step6", num: 6, title: "整片檢查", real: false },
+  { id: "step0", num: 0, title: "初始化設定", real: true, who: "人工" },
+  { id: "step1", num: 1, title: "影片分析", real: true, who: "AI" },
+  { id: "step2", num: 2, title: "挑選老師參考聲音片段", real: true, who: "人工" },
+  { id: "step3", num: 3, title: "覆核工作台", real: true, who: "人工" },
+  { id: "step4", num: 4, title: "AI 執行", real: false, who: "AI" },
+  { id: "step5", num: 5, title: "成品逐筆覆核", real: false, who: "人工" },
+  { id: "step6", num: 6, title: "整片檢查", real: false, who: "人工" },
 ];
 
 const contentEl = document.getElementById("content");
@@ -97,11 +98,37 @@ async function renderSidebar() {
       badgeText = "…";
     }
     const label = s.num === null ? s.title : `${s.num}　${s.title}`;
-    return `<li><a href="#${s.id}" class="${s.id === active ? "active" : ""}">
-      <span class="step-badge ${badgeClass}">${badgeText}</span>${esc(label)}
+    const short = s.num === null ? "總" : String(s.num);
+    const who = s.who ? `<span class="step-who ${s.who === "AI" ? "ai" : "human"}">${esc(s.who)}</span>` : "";
+    return `<li><a href="#${s.id}" class="${s.id === active ? "active" : ""}" title="${esc(label)}${s.who ? `（${esc(s.who)}）` : ""}">
+      <span class="step-badge ${badgeClass}">${badgeText}</span><span class="step-num ${badgeClass}">${esc(short)}${badgeClass === "done" ? "✓" : ""}</span><span class="step-label">${esc(label)}</span>${who}
     </a></li>`;
   }).join("");
 }
+
+// 收合／展開（記在 localStorage；讀不到、私密視窗丟例外時一律當作展開）
+const NAV_KEY = "nav-collapsed";
+
+function navCollapsedSaved() {
+  try { return localStorage.getItem(NAV_KEY) === "1"; } catch (e) { return false; }
+}
+
+function setNavCollapsed(on, save = true) {
+  document.querySelector(".app").classList.toggle("nav-collapsed", on);
+  const b = document.getElementById("navToggle");
+  b.textContent = on ? "»" : "«";
+  b.title = on ? "展開步驟列" : "收合步驟列";
+  b.setAttribute("aria-expanded", String(!on));
+  if (save) {
+    try { localStorage.setItem(NAV_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係，只是下次不記得 */ }
+  }
+  window.dispatchEvent(new Event("resize"));   // 時間軸這類照寬度畫的東西重畫
+}
+
+setNavCollapsed(navCollapsedSaved(), false);
+document.getElementById("navToggle").addEventListener("click", () => {
+  setNavCollapsed(!document.querySelector(".app").classList.contains("nav-collapsed"));
+});
 
 function stepDoneFromState(num, state) {
   const sub = state.substeps || {};
