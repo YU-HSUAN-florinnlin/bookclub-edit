@@ -7,7 +7,9 @@
  *   → 下半部：篩選列＋一行一筆的清單。
  * 一進來先做「開始前 3 件事」（學員是誰、誰保留原聲、建議刪除段落），做完按「開始逐筆看」才進清單。
  * 播放完全由人控制；影片播到下一筆的起點時，右欄自動換過去（焦點在文字框時不換）。
- * 快捷鍵：Enter 通過（不跳）、E 改做法、↑／↓ 上一筆／下一筆、空白鍵播放暫停、J／L 前後 5 秒、I／O 標起訖、
+ * 「＋新增修改」面板（09-29）：選類型、起點終點（打時間／用目前播放位置／±0.1 秒）、試聽，按新增後後端對齊時間，
+ *   畫面顯示「你標的 → 對齊後」；已經有的項目按「改時間」用同一個面板。
+ * 快捷鍵：Enter 通過（不跳）、E 改做法、↑／↓ 上一筆／下一筆、空白鍵播放暫停、J／L 前後 5 秒、I／O 把目前時間填進起點／終點、
  * Esc（文字框裡）從頭播這一筆。資料：GET /api/review；存檔：/api/turns/*、/api/review/*。
  * 依賴 app.js 的 apiGet／apiPost／esc／contentEl／currentRouteId。 */
 
@@ -24,8 +26,21 @@ const RV_STU_SHADES = ["#3f8f5a", "#6aae7f", "#2d6b43", "#8cc49d", "#4f9d6b", "#
 
 const rv = {
   data: null, video: null, cur: null, filter: "全部", open: false, prepOpen: false, prepTab: "學員",
-  inMark: null, outMark: null, lastT: 0, hold: null, lastActivity: Date.now(), timeTimer: null, splitOpen: null,
+  lastT: 0, hold: null, lastActivity: Date.now(), timeTimer: null, splitOpen: null, stopAt: null,
+  ed: { open: false, kind: "刪除段落", id: null, a: null, b: null, busy: false, result: null },
 };
+
+// 「新增修改」的類型（後端 review.MANUAL_KINDS）與對齊規則的說明（bookclub/align.py）
+const RV_KINDS = [["刪除段落", "刪除段落"], ["局部消音", "局部消音"], ["學員發言", "漏抓的學員發言"],
+  ["名字", "漏抓的「老師提到名字」"], ["重疊", "漏抓的重疊"]];
+const RV_RULE_HINT = {
+  "刪除段落": "按新增後，起點終點各自對齊附近 0.5 秒內的安靜處（不切在字中間）",
+  "局部消音": "按新增後，起點終點各自對齊附近 0.5 秒內的安靜處",
+  "學員發言": "按新增後，對齊句子的開頭、結尾（1 秒內）",
+  "名字": "按新增後，對齊逐字稿裡字的時間，前後留一點停頓",
+  "重疊": "按新增後，對齊句子的開頭、結尾（1 秒內）",
+};
+const RV_ITEM_KIND = { "學員段落": "學員發言", "名字": "名字", "重疊": "重疊", "刪除段落": "刪除段落", "局部消音": "局部消音" };
 
 function rvKey(it) { return `${it["類型"]}:${it.id}`; }
 function rvItem(key) { return rv.data["項目"].find((x) => rvKey(x) === key); }
@@ -100,7 +115,7 @@ async function renderReview() {
           <dt>↑ ↓</dt><dd>上一筆／下一筆（影片跳到那筆前 2 秒）</dd>
           <dt>空白鍵</dt><dd>播放／暫停</dd>
           <dt>J　L</dt><dd>往前／往後 5 秒</dd>
-          <dt>I　O</dt><dd>標起點／終點（標好之後可以新增刪除段落、局部消音、學員段落）</dd>
+          <dt>I　O</dt><dd>把目前播放位置填進「新增修改」的起點／終點（面板沒開會自動打開）</dd>
           <dt>Esc</dt><dd>在文字框裡：從頭播這一筆</dd>
         </dl>
       </div>
@@ -117,7 +132,7 @@ async function renderReview() {
           </div>
           <div class="rv-tl" id="rv-tl" title="點一下或拖拉，跳到那個時間"></div>
           <div class="rv-legend" id="rv-legend"></div>
-          <div class="rv-io" id="rv-io" hidden></div>
+          <div class="rv-io" id="rv-io"></div>
         </div>
         <div class="rv-right" id="rv-right"></div>
       </section>
@@ -194,6 +209,7 @@ function rvBindVideo() {
   const v = rv.video;
   v.addEventListener("timeupdate", () => {
     document.getElementById("rv-clock").textContent = rvFmt(v.currentTime, 1);
+    if (rv.stopAt != null && v.currentTime >= rv.stopAt) { v.pause(); rv.stopAt = null; }
     rvMovePlayhead();
     rvFollow(v.currentTime);
   });
@@ -290,7 +306,7 @@ function rvRenderTimeline() {
     }
     return "";
   }).join("");
-  const io = [rv.inMark, rv.outMark].map((t) => (t != null ? `<i class="io" style="left:${pct(t)}%"></i>` : "")).join("");
+  const io = rv.ed.open ? [rv.ed.a, rv.ed.b].map((t) => (t != null ? `<i class="io" style="left:${pct(t)}%"></i>` : "")).join("") : "";
   const cur = rv.cur && rvItem(rv.cur);
   const curMark = cur ? `<i class="cur" style="left:${pct(cur.start)}%;width:${Math.max(0.3, pct(cur.end - cur.start))}%"></i>` : "";
   el.innerHTML = `<div class="track">${bands}</div>${marks}${curMark}${io}<i class="head" id="rv-head"></i>`;
@@ -378,11 +394,11 @@ function rvRenderCard() {
   box.innerHTML = `
     <article class="rv-card" data-key="${esc(rv.cur)}">
       <header>
-        ${rvChip(it)}
+        ${rvChip(it)}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}
         <span class="rv-when">${esc(rvFmt(it.start, 1))}–${esc(rvFmt(it.end, 1))}</span>
         <span class="rv-count">第 ${idx + 1}／${all.length} 筆</span>
       </header>
-      <div class="rv-body">${rvBodyHtml(it)}</div>
+      <div class="rv-body">${rvBodyHtml(it)}${rvAlignLine(it)}</div>
       <div class="rv-sug">
         <p class="what">建議：${esc(rvSuggestText(it))}</p>
         <p class="why">${esc(sug["原因"] || "")}</p>
@@ -392,6 +408,7 @@ function rvRenderCard() {
       <div class="rv-actions">
         <button class="primary" id="rv-pass" title="已通過的再按一次會取消">${it["已確認"] ? "已通過" : "通過"}<kbd>Enter</kbd></button>
         <button class="ghost" id="rv-change" aria-expanded="${rv.open}">改做法<kbd>E</kbd></button>
+        <button class="ghost" id="rv-retime" title="用「新增修改」面板改這一筆的起點終點">改時間</button>
         <span class="spacer"></span>
         <button class="ghost" id="rv-prev" aria-label="上一筆">上一筆</button>
         <button class="ghost" id="rv-next" aria-label="下一筆">下一筆</button>
@@ -400,6 +417,7 @@ function rvRenderCard() {
     </article>`;
   document.getElementById("rv-pass").addEventListener("click", () => rvPass());
   document.getElementById("rv-change").addEventListener("click", rvToggleMore);
+  document.getElementById("rv-retime").addEventListener("click", () => rvOpenEditor(it));
   document.getElementById("rv-prev").addEventListener("click", () => rvStep(-1));
   document.getElementById("rv-next").addEventListener("click", () => rvStep(1));
   rvBindBody(it);
@@ -489,13 +507,11 @@ function rvMoreHtml(it) {
   }
   if (t === "刪除段落" && it["來源"] === "建議") {
     return `<div class="rv-field rv-choices">${rvRadios("rv-cutdo", ["刪除", "不刪"], rvChosen(it), "rv-cutdo")}</div>
-      <p class="rv-meta">要調整起訖：選「不刪」，再用 I／O 標一段新的刪除段落。</p>`;
+      <p class="rv-meta">要調整起訖：按上面的「改時間」（改完就算確認刪除）。</p>`;
   }
   const isCut = t === "刪除段落";
   const off = it["狀態"] === "還原";
-  return `<div class="rv-field rv-row">起 <input class="rv-t" id="rv-a" value="${esc(rvFmt(it.start, 2))}"> 訖 <input class="rv-t" id="rv-b" value="${esc(rvFmt(it.end, 2))}">
-      <button class="ghost" id="rv-saverange">更新時間</button></div>
-    ${isCut ? "" : `<div class="rv-field rv-choices">${rvRadios("rv-muteway", opts["消音"], it["方式"], "rv-muteway")}</div>`}
+  return `${isCut ? "" : `<div class="rv-field rv-choices">${rvRadios("rv-muteway", opts["消音"], it["方式"], "rv-muteway")}</div>`}
     <div class="rv-field"><button class="ghost" id="rv-toggle">${off ? (isCut ? "改回刪除" : "改回消音") : "還原（不處理）"}</button></div>
     <div class="rv-field"><input id="rv-note" placeholder="備註（選填）" value="${esc(it["備註"] || "")}"></div>`;
 }
@@ -562,12 +578,6 @@ function rvBindMore(it) {
     q("rv-toggle").addEventListener("click", async () => {
       const on = t === "刪除段落" ? "刪除" : "消音";
       await apiPost(api, { id: it.id, "狀態": it["狀態"] === "還原" ? on : "還原" }); await rvReload();
-    });
-    q("rv-saverange").addEventListener("click", async () => {
-      const a = rvParseTime(q("rv-a").value), b = rvParseTime(q("rv-b").value);
-      if (a == null || b == null || b <= a) { alert("起訖時間格式不對，或訖早於起"); return; }
-      try { await apiPost(api, { id: it.id, start: a, end: b }); } catch (err) { alert(err.message); return; }
-      await rvReload();
     });
     document.querySelectorAll(".rv-muteway").forEach((el) => el.addEventListener("change", () => apiPost(api, { id: it.id, "方式": el.value })));
     q("rv-note").addEventListener("change", (e) => apiPost(api, { id: it.id, "備註": e.target.value }));
@@ -680,7 +690,7 @@ function rvRenderList() {
     return `<li class="${key === rv.cur ? "cur" : ""} ${rvDone(it) ? "done" : ""}" data-key="${esc(key)}" tabindex="-1">
       <span class="tm">${esc(rvFmt(it.start))}</span>
       <span class="ty">${rvChip(it)}</span>
-      <span class="tx">${esc(rvPreview(it))}</span>
+      <span class="tx">${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${esc(rvPreview(it))}</span>
       <span class="sg">${esc(sug)}</span>
       ${st}</li>`;
   }).join("");
@@ -854,47 +864,162 @@ function rvBindPrep(root) {
 }
 
 // ---------------------------------------------------------------------------
-// I／O 標起訖：新增刪除段落、局部消音、學員段落
+// 「＋新增修改」面板（09-29 宇軒：取代不直覺的 I／O 標起訖）
 // ---------------------------------------------------------------------------
+
+function rvAlignLine(it) {   // 「你標的 → 對齊後」（人工新增、改過時間的才有）
+  const m = it["標的起訖"];
+  if (!m) return "";
+  const ok = it["對齊"] || [];
+  const note = ok[0] && ok[1] ? `對齊${it["對齊到"] || ""}` : !ok[0] && !ok[1] ? "沒對齊，保留你標的時間" : `${ok[0] ? "終點" : "起點"}沒對齊`;
+  return `<p class="rv-meta">你標的 ${esc(rvFmt(m[0], 2))}–${esc(rvFmt(m[1], 2))} → ${esc(rvFmt(it.start, 2))}–${esc(rvFmt(it.end, 2))}（${esc(note)}）</p>`;
+}
+
+function rvOpenEditor(it) {
+  const ed = rv.ed;
+  ed.open = true;
+  ed.result = null;
+  if (it) { ed.kind = RV_ITEM_KIND[it["類型"]]; ed.id = it.id; ed.a = it.start; ed.b = it.end; ed.label = `${(RV_TYPE[it["類型"]] || {}).label || it["類型"]} ${rvFmt(it.start)}`; }
+  else { ed.id = null; ed.label = null; }
+  rvRenderIO();
+  rvRenderTimeline();
+  const box = document.getElementById("rv-io");
+  if (box) box.scrollIntoView({ block: "nearest" });
+}
+
+function rvCloseEditor() {
+  Object.assign(rv.ed, { open: false, id: null, a: null, b: null, result: null, label: null });
+  rvRenderIO();
+  rvRenderTimeline();
+}
+
+function rvEdTimeRow(which, label) {
+  const t = rv.ed[which];
+  return `<div class="rv-edrow"><span class="rv-edlab">${label}</span>
+      <input class="rv-t" id="rv-ed-${which}" value="${t != null ? esc(rvFmt(t, 2)) : ""}" placeholder="43:15.2" aria-label="${label}（例如 43:15.2）">
+      <button class="ghost small" data-now="${which}" title="${which === "a" ? "快捷鍵 I" : "快捷鍵 O"}">用目前播放位置</button>
+      <button class="ghost small" data-nudge="${which}" data-d="-0.1" aria-label="${label}往前 0.1 秒">−0.1</button>
+      <button class="ghost small" data-nudge="${which}" data-d="0.1" aria-label="${label}往後 0.1 秒">＋0.1</button></div>`;
+}
 
 function rvRenderIO() {
   const el = document.getElementById("rv-io");
-  if (rv.inMark == null && rv.outMark == null) { el.hidden = true; el.innerHTML = ""; return; }
-  el.hidden = false;
-  const ok = rv.inMark != null && rv.outMark != null && rv.outMark > rv.inMark;
-  const whoOpts = [...rvStudents(), "新學員"].map((n) => `<option value="${esc(n)}">${esc(n === "新學員" ? "新的一位學員" : rvWho(n))}</option>`).join("");
-  el.innerHTML = `
-    <span>起 <input class="rv-t" id="rv-in" value="${rv.inMark != null ? esc(rvFmt(rv.inMark, 2)) : ""}" placeholder="按 I"></span>
-    <span>訖 <input class="rv-t" id="rv-out" value="${rv.outMark != null ? esc(rvFmt(rv.outMark, 2)) : ""}" placeholder="按 O"></span>
-    <button class="ghost small" id="rv-add-cut" ${ok ? "" : "disabled"}>新增刪除段落</button>
-    <button class="ghost small" id="rv-add-mute" ${ok ? "" : "disabled"}>新增局部消音</button>
-    <span class="rv-stu-mark"><button class="ghost small" id="rv-add-stu" ${ok ? "" : "disabled"}>改成學員段落</button>
-      <select id="rv-add-who" aria-label="是哪位學員">${whoOpts}</select></span>
-    <button class="ghost small" id="rv-io-clear">清掉</button>`;
-  for (const [id, k] of [["rv-in", "inMark"], ["rv-out", "outMark"]]) {
-    const box = document.getElementById(id);
-    const take = () => {
-      if (!box.value.trim()) { rv[k] = null; rvRenderIO(); rvRenderTimeline(); return; }
+  if (!el) return;
+  const ed = rv.ed;
+  if (!ed.open) {
+    el.innerHTML = `<button class="ghost" id="rv-ed-open">＋新增修改</button>
+      <span class="rv-meta">刪除段落、局部消音、漏抓的學員發言／名字／重疊</span>`;
+    document.getElementById("rv-ed-open").addEventListener("click", () => rvOpenEditor(null));
+    return;
+  }
+  const kindSel = ed.id ? `<b>改時間：${esc(ed.label || "")}</b>`
+    : `<label>類型 <select id="rv-ed-kind">${RV_KINDS.map(([k, l]) => `<option value="${esc(k)}" ${k === ed.kind ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>`;
+  let extra = "";
+  if (!ed.id && ed.kind === "學員發言") {
+    extra = `<label>是哪位學員 <select id="rv-ed-who">${[...rvStudents(), "新學員"].map((n) => `<option value="${esc(n)}" ${n === ed.who ? "selected" : ""}>${esc(n === "新學員" ? "新的一位學員" : rvWho(n))}</option>`).join("")}</select></label>`;
+  } else if (ed.kind === "名字" && !ed.id) {
+    const codes = rv.data["代號選項"] || [];
+    extra = `<label>換成代號 <select id="rv-ed-code"><option value="">（選一個）</option>${codes.map((c) => `<option ${c === ed.code ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
+      <label>逐字稿裡寫成 <input id="rv-ed-word" size="6" placeholder="不填就用對齊到的字" value="${esc(ed.word || "")}"></label>`;
+  } else if (ed.kind === "局部消音" && !ed.id) {
+    extra = rvRadios("rv-ed-way", rv.data["選項"]["消音"], ed.way || rv.data["選項"]["消音"][0], "rv-ed-way");
+  }
+  const res = ed.result;
+  const resHtml = !res ? "" : res.error ? `<p class="rv-warnline">${esc(res.error)}</p>`
+    : `<p class="rv-edres">✓ ${res["新增"] ? "新增了" : "改好了"}。你標的 ${esc(rvFmt(res["標的起訖"][0], 2))}–${esc(rvFmt(res["標的起訖"][1], 2))}
+       → 對齊後 <b>${esc(rvFmt(res.start, 3))}–${esc(rvFmt(res.end, 3))}</b>
+       ${res["對齊"][0] && res["對齊"][1] ? `（對齊${esc(res["對齊到"])}）`
+         : `<span class="rv-warn">（${!res["對齊"][0] && !res["對齊"][1] ? "沒對齊" : res["對齊"][0] ? "終點沒對齊" : "起點沒對齊"}：附近找不到${esc(res["對齊到"])}，保留你標的時間）</span>`}</p>`;
+  el.innerHTML = `<section class="rv-editor" aria-label="新增修改">
+      <div class="rv-edrow">${kindSel}<span class="spacer"></span><button class="ghost small" id="rv-ed-close">收起來</button></div>
+      ${rvEdTimeRow("a", "起點")}
+      ${rvEdTimeRow("b", "終點")}
+      ${extra ? `<div class="rv-edrow">${extra}</div>` : ""}
+      <p class="rv-meta">${esc(RV_RULE_HINT[ed.kind] || "")}</p>
+      <div class="rv-edrow"><button class="ghost" id="rv-ed-play">試聽這段</button>
+        <button class="primary" id="rv-ed-save">${ed.busy ? "對齊中…" : ed.id ? "儲存修改" : "新增"}</button>
+        <span class="rv-meta" id="rv-ed-dur"></span></div>
+      <div id="rv-ed-res">${resHtml}</div></section>`;
+  const q = (id) => document.getElementById(id);
+  q("rv-ed-close").addEventListener("click", rvCloseEditor);
+  const kind = q("rv-ed-kind");
+  if (kind) kind.addEventListener("change", () => { ed.kind = kind.value; ed.result = null; rvRenderIO(); });
+  for (const w of ["a", "b"]) {
+    const box = q(`rv-ed-${w}`);
+    const take = () => {   // 只更新數值，不重畫面板（重畫會把正在失去焦點的輸入框拿掉）
+      if (!box.value.trim()) { rvEdSet(w, null, false); return; }
       const t = rvParseTime(box.value);
       box.classList.toggle("bad", t == null);
-      if (t != null) { rv[k] = t; rvRenderIO(); rvRenderTimeline(); }
+      if (t != null) rvEdSet(w, t, false);
     };
     box.addEventListener("change", take);
     box.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); take(); } });
   }
-  document.getElementById("rv-add-cut").addEventListener("click", () => rvAddRange("/api/review/cut", {}));
-  document.getElementById("rv-add-mute").addEventListener("click", () => rvAddRange("/api/review/mute", {}));
-  document.getElementById("rv-add-stu").addEventListener("click", () => rvAddRange("/api/turns/mark_student", { "說話者": document.getElementById("rv-add-who").value }));
-  document.getElementById("rv-io-clear").addEventListener("click", () => { rv.inMark = rv.outMark = null; rvRenderIO(); rvRenderTimeline(); });
+  el.querySelectorAll("[data-now]").forEach((b) => b.addEventListener("click", () => rvEdSet(b.dataset.now, rv.video ? rv.video.currentTime : null)));
+  el.querySelectorAll("[data-nudge]").forEach((b) => b.addEventListener("click", () => {
+    const w = b.dataset.nudge;
+    if (ed[w] == null) return;
+    rvEdSet(w, Math.max(0, Math.round((ed[w] + Number(b.dataset.d)) * 100) / 100));
+  }));
+  const who = q("rv-ed-who"); if (who) who.addEventListener("change", () => { ed.who = who.value; });
+  const code = q("rv-ed-code"); if (code) code.addEventListener("change", () => { ed.code = code.value; });
+  const word = q("rv-ed-word"); if (word) word.addEventListener("change", () => { ed.word = word.value; });
+  el.querySelectorAll(".rv-ed-way").forEach((r) => r.addEventListener("change", () => { ed.way = r.value; }));
+  q("rv-ed-play").addEventListener("click", () => {
+    if (!rv.video || !rvEdOk()) return;
+    rv.stopAt = ed.b;
+    rvSeek(ed.a, true);
+  });
+  q("rv-ed-save").addEventListener("click", rvEdSave);
+  rvEdRefresh();
 }
 
-async function rvAddRange(api, extra) {
-  try { await apiPost(api, { start: rv.inMark, end: rv.outMark, ...extra }); } catch (err) { alert(err.message); return; }
-  const t = rv.inMark;
-  rv.inMark = rv.outMark = null;
+function rvEdOk() { const ed = rv.ed; return ed.a != null && ed.b != null && ed.b > ed.a; }
+
+function rvEdRefresh() {   // 起點終點改了：更新輸入框、按鈕、長度，不重畫整個面板
+  const ed = rv.ed, ok = rvEdOk();
+  for (const w of ["a", "b"]) {
+    const box = document.getElementById(`rv-ed-${w}`);
+    if (box && document.activeElement !== box) box.value = ed[w] != null ? rvFmt(ed[w], 2) : "";
+  }
+  const play = document.getElementById("rv-ed-play"), save = document.getElementById("rv-ed-save");
+  if (play) play.disabled = !ok;
+  if (save) save.disabled = !ok || ed.busy;
+  const dur = document.getElementById("rv-ed-dur");
+  if (dur) dur.textContent = ok ? `共 ${(ed.b - ed.a).toFixed(1)} 秒` : "起點、終點都填好（終點晚於起點）才能新增";
+}
+
+function rvEdSet(which, t, fromButton = true) {
+  const ed = rv.ed;
+  if (t == null && fromButton) return;
+  ed[which] = t;
+  if (ed.result) { ed.result = null; const r = document.getElementById("rv-ed-res"); if (r) r.innerHTML = ""; }
+  if (fromButton) { const box = document.getElementById(`rv-ed-${which}`); if (box) { box.value = rvFmt(t, 2); box.classList.remove("bad"); } }
+  rvEdRefresh();
+  rvRenderTimeline();
+}
+
+async function rvEdSave() {
+  const ed = rv.ed;
+  if (ed.a == null || ed.b == null || ed.b <= ed.a) return;
+  const body = { "類型": ed.kind, start: ed.a, end: ed.b };
+  if (ed.id) body.id = ed.id;
+  else if (ed.kind === "學員發言") body["說話者"] = ed.who || rvStudents()[0] || "新學員";
+  else if (ed.kind === "名字") { body["代號"] = ed.code || ""; if (ed.word) body["名字"] = ed.word; }
+  else if (ed.kind === "局部消音") body["方式"] = ed.way || rv.data["選項"]["消音"][0];
+  ed.busy = true;
+  rvRenderIO();
+  let r;
+  try { r = await apiPost("/api/review/manual", body); } catch (err) {
+    ed.busy = false; ed.result = { error: err.message }; rvRenderIO(); return;
+  }
+  ed.busy = false;
+  const res = { ...r["對齊結果"], "新增": r["新增"] };
+  // 新增完清空起點終點，可以接著標下一筆；結果留在面板上
+  Object.assign(ed, { id: null, label: null, a: null, b: null, result: res, word: "", code: "" });   // 代號每筆重選，免得沿用上一筆
   await rvReload();
-  const it = rvItems().find((x) => Math.abs(x.start - t) < 4 && (api.includes("turns") ? x["類型"] === "學員段落" : true));
-  if (it) rvSelect(rvKey(it), { seek: false });
+  const key = `${r["類型"]}:${r.id}`;
+  if (rvItem(key)) { rv.filter = "全部"; rvRenderList(); rvSelect(key, { seek: false }); }
 }
 
 // ---------------------------------------------------------------------------
@@ -974,8 +1099,10 @@ document.addEventListener("keydown", (e) => {
   if (e.key === " ") { e.preventDefault(); if (rv.video) rv.video.paused ? rv.video.play().catch(() => {}) : rv.video.pause(); }
   else if (k === "j" && rv.video) { rvSeek(rv.video.currentTime - 5); }
   else if (k === "l" && rv.video) { rvSeek(rv.video.currentTime + 5); }
-  else if (k === "i" && rv.video) { rv.inMark = rv.video.currentTime; rvRenderIO(); rvRenderTimeline(); }
-  else if (k === "o" && rv.video) { rv.outMark = rv.video.currentTime; rvRenderIO(); rvRenderTimeline(); }
+  else if ((k === "i" || k === "o") && rv.video) {   // I／O：把目前時間填進「新增修改」的起點／終點
+    if (!rv.ed.open) rvOpenEditor(null);
+    rvEdSet(k === "i" ? "a" : "b", rv.video.currentTime);
+  }
   else if (k === "e" && !rv.prepOpen) { e.preventDefault(); rvToggleMore(); }
   else if (e.key === "ArrowDown" && !rv.prepOpen) { e.preventDefault(); rvStep(1); }
   else if (e.key === "ArrowUp" && !rv.prepOpen) { e.preventDefault(); rvStep(-1); }

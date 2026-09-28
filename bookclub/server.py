@@ -969,6 +969,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, rv.save_cut(server.workdir, body))
             elif path == "/api/review/mute":
                 self._send_json(200, rv.save_mute(server.workdir, body))
+            elif path == "/api/review/manual":
+                self._send_json(200, rv.manual_edit(server.workdir, body))
             elif path == "/api/review/voice":
                 self._send_json(200, rv.set_voice(server.workdir, body.get("學員"), str(body["聲音"])))
             elif path == "/api/review/prep":

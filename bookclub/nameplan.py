@@ -102,6 +102,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
     pos = {x["id"]: k for k, x in enumerate(ordered)}
 
     for i, c in enumerate(candidates, start=1):
+        i = c.get("id", i)             # 人工補的名字（覆核工作台「新增修改」）自己帶 id（NM001…）
         d = decisions.get(str(i), {}) or {}
         tags = set(d.get("tags", []))
         if tags & SKIP_TAGS:
@@ -115,7 +116,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             continue
 
         if how == NAME_ONLY:
-            gen.append({"id": f"N{i:03d}", "text": c["代號"], "slot": [c["start"] - pad, c["end"] + pad], "候選": [i]})
+            gen.append({"id": f"N{_num(i)}", "text": c["代號"], "slot": [c["start"] - pad, c["end"] + pad], "候選": [i]})
             continue
 
         sid = c.get("sentence_id")
@@ -137,7 +138,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             item["text"] = full
             item["候選"].append(i)
         else:
-            whole[key] = {"id": f"S{i:03d}", "text": full, "slot": [group[0]["start"], group[-1]["end"]],
+            whole[key] = {"id": f"S{_num(i)}", "text": full, "slot": [group[0]["start"], group[-1]["end"]],
                           "候選": [i], "句子": [g["id"] for g in group], "_texts": texts}
 
     for item in whole.values():
@@ -145,6 +146,10 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
     gen.extend(whole.values())
     gen.sort(key=lambda g: g["slot"][0])
     return {"生成": gen, "消音": mutes, "略過": skipped, "要人處理": manual}
+
+
+def _num(i) -> str:
+    return f"{i:03d}" if isinstance(i, int) else str(i)
 
 
 IMPORTED_PATH = Path("覆核") / "覆核結果.json"   # `bookclub review import` 放進來的覆核結果
@@ -174,7 +179,11 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     sentences = {s["id"]: s for s in speakers.get("sentences", [])}
     decisions = wd.read_json(workdir / DECISIONS_FILE_NAME, default={}) or {}
     candidates = names.get("candidates", [])
+    from bookclub import review
+
+    candidates = review.effective_name_candidates(workdir, candidates, decisions)   # 人工補的、改過時間的
     if only:
+        candidates = [c for c in candidates if "id" not in c]     # 測試只處理幾筆時，人工補的先不做
         keep = set(only)
         decisions = dict(decisions)
         for i in range(1, len(candidates) + 1):

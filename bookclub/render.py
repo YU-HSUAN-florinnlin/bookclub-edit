@@ -153,6 +153,7 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Tr
     # 重疊：這輪測試所有學員都重念（不管覆核的「保留原聲」），建議照 voices={} 重算
     ov = wd.read_json(wd.overlap_path(workdir), default=None) or {}
     overlap_mod.apply_simple_filters(ov)
+    ov["overlaps"] = review.effective_overlaps(workdir, ov.get("overlaps", []), dec)   # 覆核時人工補的、改過時間的
     tdata = turns_mod.page_data(workdir)
     turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
     freezes = []

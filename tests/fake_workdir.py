@@ -7,6 +7,7 @@
 （一處要人決定、一處兩位學員之間、一處 0 秒的邊界誤差）；參考音 ref.wav／ref.txt；發音對照表。
 09-26 加：一段學員發言藏在老師段落裡（164–168 秒，段落分析判成老師）、兩位學員被分成同一人
 （學員1 的第二段其實是另一個人的聲音）、建議刪除 2 段（`校對/刪除建議.json`）。
+09-29 加：逐字時間（`merged.json` 的 `words`，每個字平均排在句子裡）。
 """
 
 from __future__ import annotations
@@ -73,6 +74,19 @@ def _sentences() -> list[dict]:
     return out
 
 
+def _words(sents: list[dict]) -> list[dict]:
+    """逐字時間（09-29 加，「新增修改」的名字對齊到字用）：每句的字（不含標點）平均排在句子裡，
+    頭尾各留 0.1 秒。"""
+    out = []
+    for s in sents:
+        chars = [c for c in s["text"] if c.isalnum()]
+        step = (s["end"] - s["start"] - 0.2) / max(1, len(chars))
+        for k, c in enumerate(chars):
+            a = s["start"] + 0.1 + k * step
+            out.append({"word": c, "start": round(a, 3), "end": round(a + step * 0.9, 3)})
+    return out
+
+
 def _audio(sents: list[dict]) -> np.ndarray:
     x = np.zeros(int(DUR * SR), dtype=np.float32)
     for s in sents:
@@ -101,7 +115,7 @@ def make(root: str | Path) -> Path:
                         "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(video)], check=True)
 
     merged_sents = [{k: s[k] for k in ("id", "start", "end", "text", "avg_logprob")} for s in sents]
-    _write(w / "transcript" / "merged.json", {"sentences": merged_sents, "words": [], "duration": DUR,
+    _write(w / "transcript" / "merged.json", {"sentences": merged_sents, "words": _words(sents), "duration": DUR,
                                               "source": str(video)})
     center = [0.0] * 8
     _write(w / "說話者判斷.json", {"sentences": sents, "cluster_info": {
