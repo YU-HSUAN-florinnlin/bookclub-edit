@@ -1,9 +1,10 @@
 "use strict";
 
 /* 讀書會剪輯工具｜前端骨架。原生 HTML/CSS/JS，不用打包工具、不用 CDN 套件。
- * 左側步驟列 0～6 步（09-25 宇軒：原本第 3、4 步合成第 3 步「覆核工作台」，後面往前），每步標 AI／人工，可以收合；
+ * 左側步驟列 0～5 步（09-25 宇軒：原本第 3、4 步合成第 3 步「覆核工作台」；09-29：原本第 5 步逐筆覆核、第 6 步整片檢查
+ * 合成第 5 步「成品檢查」），每步標 AI／人工，可以收合；
  * 還沒做的步驟顯示「還沒做」的說明頁，不假裝可用。路由用 URL hash（#step1、#step2…）。
- * 第 3 步覆核工作台在 review.js。 */
+ * 第 3 步覆核工作台在 review.js，第 5 步成品檢查在 finalcheck.js。 */
 
 // who：這一步是誰做（09-29 宇軒：步驟列標「AI」或「人工」，一眼看出現在輪到誰）
 const STEP_DEFS = [
@@ -13,8 +14,7 @@ const STEP_DEFS = [
   { id: "step2", num: 2, title: "挑選老師參考聲音片段", real: true, who: "人工" },
   { id: "step3", num: 3, title: "覆核工作台", real: true, who: "人工" },
   { id: "step4", num: 4, title: "AI 執行", real: false, who: "AI" },
-  { id: "step5", num: 5, title: "成品逐筆覆核", real: false, who: "人工" },
-  { id: "step6", num: 6, title: "整片檢查", real: false, who: "人工" },
+  { id: "step5", num: 5, title: "成品檢查", real: true, who: "人工" },
 ];
 
 const contentEl = document.getElementById("content");
@@ -158,6 +158,7 @@ async function render() {
     if (id === "step1") return await renderStep1();
     if (id === "step2") return await renderStep2();
     if (id === "step3") return await renderReview();
+    if (id === "step5") return await renderFinal();
     if (id === "step0") return await renderProfile();
     const def = STEP_DEFS.find((s) => s.id === id);
     return renderNotYet(def);

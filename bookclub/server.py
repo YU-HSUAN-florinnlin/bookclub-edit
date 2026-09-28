@@ -851,6 +851,18 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file(Path(out["檔案"]), content_type="application/zip")
         elif path == "/api/audio":
             self._handle_audio(query)
+        elif path == "/api/final":
+            from bookclub import finalcheck
+
+            self._send_json(200, finalcheck.page_data(server.workdir))
+        elif path == "/api/final/video":
+            from bookclub import finalcheck
+
+            self._serve_file(finalcheck.video_file(server.workdir))
+        elif path == "/api/final/clip":
+            from bookclub import finalcheck
+
+            self._serve_file(finalcheck.clip(server.workdir, query["which"][0], query["key"][0]), content_type="audio/wav")
         elif path == "/api/run/status":
             self._send_json(200, server.run_status())
         else:
@@ -983,6 +995,28 @@ class Handler(BaseHTTPRequestHandler):
                 from bookclub.exchange import export_review
 
                 self._send_json(200, export_review(server.workdir, video=server.video))
+            else:
+                self._send_json(404, {"error": f"沒有這個 API：{path}"})
+        elif path.startswith("/api/final/"):
+            from bookclub import finalcheck as fc
+
+            w = server.workdir
+            if path == "/api/final/item":
+                self._send_json(200, fc.decide_record(w, str(body["鍵"]), body.get("結果"), str(body.get("原因", ""))))
+            elif path == "/api/final/unlogged":
+                self._send_json(200, fc.decide_unlogged(w, str(body["鍵"]), body.get("結果"), str(body.get("原因", ""))))
+            elif path == "/api/final/flag":
+                self._send_json(200, fc.add_whole_redo(w, float(body["成品秒"]), str(body.get("原因", ""))))
+            elif path == "/api/final/unflag":
+                self._send_json(200, fc.remove_whole_redo(w, str(body["id"])))
+            elif path == "/api/final/watched":
+                self._send_json(200, fc.add_watched(w, body.get("區段", []), body.get("成品影片")))
+            elif path == "/api/final/product":
+                self._send_json(200, fc.choose_product(w, str(body["成品影片"])))
+            elif path == "/api/final/sendback":
+                self._send_json(200, fc.send_back(w))
+            elif path == "/api/final/export":
+                self._send_json(200, fc.export_final(w))
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
         elif path == "/api/run/analyze":

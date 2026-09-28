@@ -155,6 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
     pimp = prof_sub.add_parser("import", help="匯入設定包：第一欄當鑰匙，新的加進去、已經有的不動，內容不同列出衝突")
     pimp.add_argument("zip", help="設定包 zip")
 
+    redo_parser = sub.add_parser("redo", help="第 5 步成品檢查退回的項目（第 4 步只重做這幾筆）")
+    redo_sub = redo_parser.add_subparsers(dest="redo_command")
+    redo_list = redo_sub.add_parser("list", help="列出要重做的項目（成品檢查按了「送回 AI 重做」的那一份）")
+    redo_list.add_argument("workdir", help="工作區路徑")
+
     render_parser = sub.add_parser("render", help="組裝：把生成的聲音、消音放回原本的時間")
     render_sub = render_parser.add_subparsers(dest="render_command")
     render_audio_parser = render_sub.add_parser("audio", help="組出跟原片等長的新聲音軌＋處理前後試聽")
@@ -345,6 +350,26 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print("用法：bookclub profile export [--out 檔案.zip]")
         print("     bookclub profile import <設定包.zip>")
+        return 2
+
+    if args.command == "redo":
+        if args.redo_command == "list":
+            from bookclub.finalcheck import redo_list
+            from bookclub.workdir import fmt_time
+
+            r = redo_list(args.workdir)
+            if not r["項目"]:
+                print("沒有要重做的項目（第 5 步成品檢查沒有退回的）。")
+                return 0
+            print(("已送回 AI 重做（" + r["時間"] + "）" if r["已送回"] else "還沒按「送回 AI 重做」，先列出目前退回的")
+                  + f"：{len(r['項目'])} 筆")
+            for i, it in enumerate(r["項目"], 1):
+                t = fmt_time(it["原片"][0]) if it.get("原片") else "—"
+                print(f"{i}. 原片 {t}　{it['類型']}　{('、'.join(it['覆核項目']) or '—')}　原因：{it['原因']}")
+                print(f"   → {it['建議指令']}")
+            print("（TODO：一鍵只重做這幾筆還沒串；照上面的指令重做後，再跑一次 render video 同一個範圍）")
+            return 0
+        print("用法：bookclub redo list <工作區>")
         return 2
 
     if args.command == "render":

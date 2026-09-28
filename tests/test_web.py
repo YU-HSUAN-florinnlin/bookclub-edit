@@ -31,6 +31,13 @@ def test_steps_marked_ai_or_human():
         assert got.get(n) == who, (n, got.get(n))
 
 
+def test_steps_zero_to_five():
+    # 09-29：原本第 5 步逐筆覆核＋第 6 步整片檢查合成第 5 步「成品檢查」
+    assert [n for n, _ in _step_defs()] == [0, 1, 2, 3, 4, 5]
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    assert '"成品檢查"' in js and "整片檢查" not in js.split("const STEP_DEFS")[1].split("];")[0]
+
+
 def test_local_storage_wrapped_in_try():
     # 私密視窗、封鎖網站資料時 localStorage 會丟例外；讀不到要當作預設值，不能讓整頁掛掉
     for name in ("app.js", "review.js", "finalcheck.js"):
