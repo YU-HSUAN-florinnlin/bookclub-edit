@@ -13,7 +13,7 @@ const STEP_DEFS = [
   { id: "step1", num: 1, title: "影片分析", real: true, who: "AI" },
   { id: "step2", num: 2, title: "挑選老師參考聲音片段", real: true, who: "人工" },
   { id: "step3", num: 3, title: "覆核工作台", real: true, who: "人工" },
-  { id: "step4", num: 4, title: "AI 執行", real: false, who: "AI" },
+  { id: "step4", num: 4, title: "AI 執行", real: true, who: "AI" },
   { id: "step5", num: 5, title: "成品檢查", real: true, who: "人工" },
 ];
 
@@ -158,6 +158,7 @@ async function render() {
     if (id === "step1") return await renderStep1();
     if (id === "step2") return await renderStep2();
     if (id === "step3") return await renderReview();
+    if (id === "step4") return await renderExecute();
     if (id === "step5") return await renderFinal();
     if (id === "step0") return await renderProfile();
     const def = STEP_DEFS.find((s) => s.id === id);
@@ -182,13 +183,91 @@ function stopStatusPoll() {
 // ---------------------------------------------------------------------------
 
 function renderNotYet(def) {
-  const notes = {
-    step4: "覆核工作台確認完、匯出覆核結果之後，交給夥伴的電腦執行：bookclub review import → bookclub gen names → bookclub render audio。網頁版還沒做。",
-  };
+  const notes = {};
   contentEl.innerHTML = `
     <h1>${esc(def.num)}　${esc(def.title)}</h1>
     <div class="notyet-card">${esc(notes[def.id] || "這一步還沒做，之後的階段才會做。")}</div>
   `;
+}
+
+// ---------------------------------------------------------------------------
+// 第 4 步：AI 執行（09-29：一個按鈕依序跑老師名字 → 學員重念 → 組裝，做過的跳過）
+// ---------------------------------------------------------------------------
+
+let execPollTimer = null;
+
+async function renderExecute() {
+  contentEl.innerHTML = "<p>載入中…</p>";
+  await renderExecuteBody();
+}
+
+async function renderExecuteBody() {
+  const d = await apiGet("/api/execute");
+  const pre = d["前置檢查"];
+  const prog = d["進度"] || {};
+  const steps = prog["步驟"] || {};
+  const names = [["老師名字", "老師提到名字：用老師 AI 聲音整句重念"], ["學員重念", "學員段落：匿名聲線重念"], ["組裝", "換聲音＋刪除＋停格，輸出成品影片"]];
+  const badge = (st) => ({ "做完": "done", "跳過": "done", "進行中": "running", "失敗": "error" }[st] || "");
+  const rows = names.map(([k, desc]) => {
+    const st = (steps[k] || {})["狀態"] || "還沒跑";
+    return `<tr><td><b>${esc(k)}</b><div class="muted">${esc(desc)}</div></td>
+      <td><span class="badge ${badge(st)}">${esc(st)}</span></td><td class="muted">${esc((steps[k] || {})["訊息"] || "")}</td></tr>`;
+  }).join("");
+  const running = d.running;
+  const redo = d["退回清單"] || [];
+  contentEl.innerHTML = `
+    <h1>4　AI 執行</h1>
+    <p class="muted">依序跑三步：老師提到名字 → 學員重念 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
+    <div class="hint">從第 4 步直接開始（例如老師已經自己看完全片、挑好參考聲音）：<b>第 1 步轉文字還是要跑</b>（學員的話要照逐字稿重念，電腦自動）；
+      能省掉的是第 2、3 步的人工。第 3 步沒覆核的話，照第 1 步的建議做（名字整句換掉、學員全部重念、建議刪除的段落不刪）。</div>
+    ${pre["缺"].length ? `<div class="card"><b>還不能開始：</b><ul>${pre["缺"].map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+    ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
+    <div class="card"><table class="kv exec">
+      <thead><tr><th style="text-align:left">步驟</th><th style="text-align:left">狀態</th><th style="text-align:left">說明</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+      ${prog["開始時間"] ? `<p class="muted">上次：${esc(prog["開始時間"])} 開始${prog["結束時間"] ? `，${esc(prog["結束時間"])} 結束` : ""}；範圍 ${esc(fmtRange(prog["範圍"]))}</p>` : ""}
+    </div>
+    <div class="card">
+      <div class="exec-opts">
+        <label>從 <input type="text" id="exStart" class="short" placeholder="0:00"></label>
+        <label>到 <input type="text" id="exEnd" class="short" placeholder="${esc(d["影片長度"] ? fmtRange([0, d["影片長度"]]).split("–")[1] : "結尾")}"></label>
+        <label>輸出做法 <select id="exMethod">${["hw", "sw", "smart"].map((m) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${{ hw: "硬體編碼（Mac）", sw: "軟體編碼", smart: "只重做有動到的片段" }[m]}</option>`).join("")}</select></label>
+      </div>
+      <button id="btnExec" ${running || !pre["可以開始"] ? "disabled" : ""}>${running ? "執行中…" : "開始執行"}</button>
+      ${d.error ? `<p><span class="badge error">失敗</span> ${esc(d.error)}</p>` : ""}
+      <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
+    </div>
+    ${redo.length ? `<h2>第 5 步退回重做的（${redo.length} 筆）</h2>
+      <div class="card"><p class="muted">只重做這幾筆的串接還沒做（TODO）：照每一筆的指令重做，再按「開始執行」重新組裝。</p>
+      <table class="kv">${redo.map((it) => `<tr><td>${esc(it["類型"])}　${esc((it["覆核項目"] || []).join("、") || "—")}</td>
+        <td>${esc(it["原因"])}<div class="muted"><code>${esc(it["建議指令"])}</code></div></td></tr>`).join("")}</table></div>` : ""}`;
+  document.getElementById("btnExec").addEventListener("click", async () => {
+    const body = { start: document.getElementById("exStart").value.trim() || null, end: document.getElementById("exEnd").value.trim() || null,
+      methods: [document.getElementById("exMethod").value] };
+    try { await apiPost("/api/execute/start", body); } catch (e) { alert(`無法開始：${e.message}`); return; }
+    await renderExecuteBody();
+  });
+  if (running) startExecPoll();
+}
+
+function fmtRange(r) {
+  if (!r) return "—";
+  const f = (t) => { t = Math.round(t); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+    return `${h ? h + ":" + String(m).padStart(2, "0") : m}:${String(s).padStart(2, "0")}`; };
+  return `${f(r[0])}–${f(r[1])}`;
+}
+
+function startExecPoll() {
+  if (execPollTimer) clearInterval(execPollTimer);
+  execPollTimer = setInterval(async () => {
+    if (currentRouteId() !== "step4") { clearInterval(execPollTimer); execPollTimer = null; return; }
+    try {
+      const d = await apiGet("/api/execute");
+      const el = document.getElementById("execLog");
+      if (el) { el.textContent = (d.messages || []).join("\n") || "（還沒有訊息）"; el.scrollTop = el.scrollHeight; }
+      if (!d.running) { clearInterval(execPollTimer); execPollTimer = null; await renderExecuteBody(); }
+    } catch (e) { /* 輪詢失敗，下一次再試 */ }
+  }, 2000);
 }
 
 // ---------------------------------------------------------------------------

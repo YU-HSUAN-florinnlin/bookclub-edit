@@ -554,3 +554,8 @@ tr.t-hide { display:none; }
   border-top: 1px solid rgba(0,0,0,.08); font-size: 15px; }
 .fc-h2 { font-size: 17px; margin: 8px 0; }
 @media (max-width: 760px) { .fc-unlogged li { grid-template-columns: 1fr; } }
+
+/* ---------- 第 4 步：AI 執行（09-29） ---------- */
+.exec-opts { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 12px; font-size: 14px; }
+.exec-opts input.short { width: 90px; }
+table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg); }

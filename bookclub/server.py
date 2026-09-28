@@ -623,6 +623,7 @@ class BookclubServer(ThreadingHTTPServer):
         self.video = Path(video) if video else None
         self.run_lock = threading.Lock()
         self.run_state: dict = self._fresh_run_state()
+        self.exec_state: dict = self._fresh_run_state()   # 第 4 步「開始執行」（09-29），跟影片分析同一時間只跑一個
 
     @property
     def workdir(self) -> Path:
@@ -637,11 +638,12 @@ class BookclubServer(ThreadingHTTPServer):
     def use_project(self, workdir: Path, video: Path | None = None) -> None:
         """切換「目前的工作區」（所有 API 都讀這個）。分析跑到一半不能換。"""
         with self.run_lock:
-            if self.run_state["running"]:
-                raise ValueError("分析還在跑，等它結束再切換專案")
+            if self.run_state["running"] or self.exec_state["running"]:
+                raise ValueError("分析或 AI 執行還在跑，等它結束再切換專案")
             self._workdir = Path(workdir)
             self.video = Path(video) if video else None
             self.run_state = self._fresh_run_state()
+            self.exec_state = self._fresh_run_state()
 
     @staticmethod
     def _fresh_run_state() -> dict:
@@ -658,10 +660,51 @@ class BookclubServer(ThreadingHTTPServer):
         state.update(build_state(self.workdir, video=self.video))
         return state
 
+    def start_execute(self, opts: dict) -> dict:
+        """第 4 步「開始執行」：背景跑 `execute.run_execute`（老師名字 → 學員重念 → 組裝）。"""
+        from bookclub.execute import precheck
+
+        with self.run_lock:
+            if self.run_state["running"] or self.exec_state["running"]:
+                return {"started": False, "error": "已經有分析或 AI 執行在跑，等它結束再按一次"}
+            pre = precheck(self.workdir)
+            if not pre["可以開始"]:
+                return {"started": False, "error": "還不能開始：" + "；".join(pre["缺"])}
+            self.exec_state = self._fresh_run_state()
+            self.exec_state.update(running=True, started_at=time.time())
+            threading.Thread(target=self._exec_job, args=(opts,), daemon=True).start()
+        return {"started": True}
+
+    def _exec_job(self, opts: dict) -> None:
+        from bookclub.execute import run_execute
+        from bookclub.review import parse_time
+
+        tee = _TeeWriter(sys.stdout, self.exec_state["messages"], self.run_lock)
+        try:
+            with contextlib.redirect_stdout(tee):
+                run_execute(self.workdir, start=parse_time(opts["start"]) if opts.get("start") else None,
+                            end=parse_time(opts["end"]) if opts.get("end") else None,
+                            methods=opts.get("methods") or None, skip_precheck=True)
+        except Exception as e:  # noqa: BLE001 — 背景執行緒要把失敗記下來給網頁看
+            with self.run_lock:
+                self.exec_state["error"] = f"{type(e).__name__}：{e}"
+        finally:
+            with self.run_lock:
+                self.exec_state["running"] = False
+                self.exec_state["finished_at"] = time.time()
+
+    def exec_status(self) -> dict:
+        from bookclub.execute import status
+
+        with self.run_lock:
+            state = {k: v for k, v in self.exec_state.items() if k != "messages"}
+            state["messages"] = list(self.exec_state["messages"][-80:])
+        return {**state, **status(self.workdir)}
+
     def start_analyze(self, opts: dict) -> dict:
         with self.run_lock:
-            if self.run_state["running"]:
-                return {"started": False, "error": "已經有分析在跑，請等它結束再按一次"}
+            if self.run_state["running"] or self.exec_state["running"]:
+                return {"started": False, "error": "已經有分析或 AI 執行在跑，請等它結束再按一次"}
 
             video = opts.get("video") or (str(self.video) if self.video else None)
             if not video:
@@ -865,6 +908,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file(finalcheck.clip(server.workdir, query["which"][0], query["key"][0]), content_type="audio/wav")
         elif path == "/api/run/status":
             self._send_json(200, server.run_status())
+        elif path == "/api/execute":
+            self._send_json(200, server.exec_status())
         else:
             self._send_json(404, {"error": f"沒有這個 API：{path}"})
 
@@ -1019,6 +1064,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, fc.export_final(w))
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
+        elif path == "/api/execute/start":
+            result = server.start_execute(body)
+            self._send_json(202 if result.get("started") else 409, result)
         elif path == "/api/run/analyze":
             result = server.start_analyze(body)
             self._send_json(202 if result.get("started") else 409, result)

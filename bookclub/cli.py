@@ -67,6 +67,14 @@ def build_parser() -> argparse.ArgumentParser:
     cuts_parser.add_argument("--video", help="原片路徑（檢查畫面靜止用；預設讀分析結果記錄的影片）")
     cuts_parser.add_argument("--force", action="store_true", help="已經有結果也重跑")
 
+    ex_parser = run_sub.add_parser("execute", help="流程第 4 步一次跑完：老師名字 → 學員重念 → 組裝（做過的跳過，可以中斷續跑）")
+    ex_parser.add_argument("workdir", help="工作區路徑（要先跑過第 1 步轉文字、選定老師參考音）")
+    ex_parser.add_argument("--start", help="從幾分幾秒（預設 0:00）")
+    ex_parser.add_argument("--end", help="到幾分幾秒（預設影片結尾）")
+    ex_parser.add_argument("--methods", help="組裝的輸出做法（逗號分隔：hw、sw、smart；預設 Mac 用 hw、其他用 sw）")
+    ex_parser.add_argument("--only", help="只跑這幾步（逗號分隔：老師名字,學員重念,組裝）")
+    ex_parser.add_argument("--redo", action="store_true", help="做過的也重跑（生成本身還是會沿用快取，見 README）")
+
     sub.add_parser("export", help="匯出成品（Phase 5 才會做）")
 
     ref_parser = sub.add_parser("ref", help="老師參考音相關指令")
@@ -220,6 +228,20 @@ def main(argv: list[str] | None = None) -> int:
             from bookclub.cutsuggest import suggest_cuts
 
             suggest_cuts(args.workdir, video=args.video, force=args.force)
+            return 0
+        if args.run_command == "execute":
+            from bookclub.execute import run_execute
+            from bookclub.review import parse_time
+
+            try:
+                run_execute(args.workdir, start=parse_time(args.start) if args.start else None,
+                            end=parse_time(args.end) if args.end else None,
+                            methods=[m.strip() for m in args.methods.split(",") if m.strip()] if args.methods else None,
+                            only_steps=[x.strip() for x in args.only.split(",") if x.strip()] if args.only else None,
+                            redo=args.redo)
+            except (FileNotFoundError, ValueError) as e:   # 前置檢查沒過：印清楚缺什麼就好，不印程式追蹤
+                print(f"⚠️ {e}")
+                return 1
             return 0
         if args.run_command == "turns":
             from bookclub.turns import build_turns

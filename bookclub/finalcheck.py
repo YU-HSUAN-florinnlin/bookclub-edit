@@ -389,7 +389,12 @@ def redo_list(workdir: str | Path) -> dict:
     workdir = Path(workdir)
     log, check = _current(workdir)
     sent = check.get("送回AI重做")
-    items = sent["項目"] if sent else redo_items(log, check)
+    now = redo_items(log, check)
+    if sent:   # 送回之後又改成通過的、重新組裝後不算數的，拿掉
+        keys = {i["鍵"] for i in now}
+        items = [i for i in sent["項目"] if i["鍵"] in keys]
+        sent = sent if items else None
+    items = items if sent else now
     for it in items:
         it["建議指令"] = suggest_command(workdir, it)
     return {"已送回": bool(sent), "時間": (sent or {}).get("時間"), "項目": items}
