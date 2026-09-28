@@ -398,6 +398,37 @@ def smart_plan(plist: list[dict], keys: list[float], blur: list[float] | None) -
     return out
 
 
+def avconcat_helper() -> Path | None:
+    """macOS 上把 `avconcat.swift` 編譯到 ~/.cache/bookclub/avconcat（原始碼比較新才重編）；不是 macOS 或沒有 swiftc 回傳 None。"""
+    import shutil
+    import sys
+
+    if sys.platform != "darwin" or not shutil.which("swiftc"):
+        return None
+    src = Path(__file__).with_name("avconcat.swift")
+    exe = Path.home() / ".cache" / "bookclub" / "avconcat"
+    if not exe.is_file() or exe.stat().st_mtime < src.stat().st_mtime:
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(["swiftc", "-O", "-swift-version", "5", "-o", str(exe), str(src)], capture_output=True, text=True)
+        if r.returncode != 0:
+            return None
+    return exe
+
+
+def quicktime_ok(path: Path) -> bool | None:
+    """用 macOS 內建的 avconvert（跟 QuickTime 同一套 AVFoundation）把整支轉成小尺寸，轉得完＝QuickTime 解得了。
+    不是 macOS 回傳 None。轉出來的小檔案放暫存資料夾。"""
+    import shutil
+    import tempfile
+
+    if not shutil.which("avconvert"):
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        r = subprocess.run(["avconvert", "--source", str(path), "--preset", "Preset640x480",
+                            "--output", str(Path(tmp) / "t.mov"), "--replace"], capture_output=True, text=True)
+        return r.returncode == 0 and (Path(tmp) / "t.mov").is_file()
+
+
 def render_smart(video: Path, d: dict, plist: list[dict], audio: Path, dst: Path, work: Path) -> tuple[float, dict]:
     keys = keyframes(video, *d["範圍"])
     plan = smart_plan(plist, keys, d["模糊"])
@@ -429,11 +460,26 @@ def render_smart(video: Path, d: dict, plist: list[dict], audio: Path, dst: Path
         listing.append(f"file '{part}'")
     lst = work / "片段.txt"
     lst.write_text("\n".join(listing) + "\n", encoding="utf-8")
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(audio),
-                    "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ac", "2",
-                    "-movflags", "+faststart", str(dst)], check=True)
+    helper = avconcat_helper()
+    if helper:
+        # macOS：用 AVFoundation 接（各段編碼參數不同，ffmpeg 接成一支 mp4 時 QuickTime 會在接縫解不了）
+        mp4s = []
+        for i in range(len(plan)):
+            mp4 = work / f"{i:03d}.mp4"
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(work / f"{i:03d}.ts"), "-c", "copy",
+                            str(mp4)], check=True)
+            mp4s.append(str(mp4))
+        (work / "片段_mp4.txt").write_text("\n".join(mp4s) + "\n", encoding="utf-8")
+        m4a = work / "聲音.m4a"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(audio), "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+                        str(m4a)], check=True)
+        subprocess.run([str(helper), str(work / "片段_mp4.txt"), str(m4a), str(dst)], check=True, capture_output=True)
+    else:
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(audio),
+                        "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-ac", "2",
+                        "-movflags", "+faststart", str(dst)], check=True)
     spent = time.time() - t0
-    stat = {"片段數": len(plan), "重做段數": sum(1 for sg in plan if sg["做法"] == "重做"),
+    stat = {"接片段": "AVFoundation" if helper else "ffmpeg（QuickTime 可能在接縫解不了）", "片段數": len(plan), "重做段數": sum(1 for sg in plan if sg["做法"] == "重做"),
             "重做秒數": round(sum(sg["src"][1] - sg["src"][0] for sg in plan if sg["做法"] == "重做"), 1),
             "複製秒數": round(sum(sg["src"][1] - sg["src"][0] for sg in plan if sg["做法"] == "複製"), 1)}
     return spent, stat
@@ -484,8 +530,9 @@ def verify(path: Path, expected: float, joins: list[float], full_decode: bool = 
            "剪點黑畫面": black_near(path, joins)}
     if full_decode:
         res["解碼錯誤行數"] = decode_errors(path)
+        res["QuickTime能解"] = quicktime_ok(path)
     res["通過"] = abs(res["長度誤差秒"]) < 0.1 and abs(res["聲畫差秒"]) < 0.1 and not res["剪點黑畫面"] \
-        and res.get("解碼錯誤行數", 0) == 0
+        and res.get("解碼錯誤行數", 0) == 0 and res.get("QuickTime能解") is not False
     return res
 
 
@@ -855,6 +902,9 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
                "停格秒": round(sum(f["dur"] for f in d["停格"]), 3), "預期成品秒": round(expected, 3),
                "片段數": len(plist), "聲音處理秒": round(audio_s, 1), "動作數": len(d["動作"]),
                "警告": d["警告"], "輸出": {}}
+    old = wd.read_json(out / f"輸出摘要_{tag}.json", default=None) or {}
+    if old.get("範圍") == [a, b]:
+        summary["輸出"] = old.get("輸出", {})   # 只重跑某幾種做法時，其他做法的紀錄留著
 
     # 精準度（原片時間軸上換好的聲音 vs 原聲）
     orig, _ = sf.read(str(au["原聲"]), dtype="float32")
@@ -884,7 +934,7 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
             spent, stat = render_smart(video, d, plist, au["新聲音"], dst, out / f"_片段_{tag}")
         else:
             spent, stat = render_full(video, d, plist, au["新聲音"], dst, m), {}
-        ver = verify(dst, expected, joins, full_decode=(m == "smart"))
+        ver = verify(dst, expected, joins, full_decode=True)
         summary["輸出"][m] = {"耗時秒": round(spent, 1), "大小MB": round(dst.stat().st_size / 1e6, 1),
                             "倍速": round((b - a) / spent, 2), "推估整支98分鐘秒": round(spent * 5864 / (b - a)),
                             **stat, "驗證": ver, "檔案": dst.name}
@@ -900,7 +950,8 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
         dst = out / f"成品_{tag}_標字版.mp4"
         spent = render_full(video, d, plist, au["新聲音"], dst, "hw", overlays=wins)
         summary["輸出"]["標字版"] = {"耗時秒": round(spent, 1), "大小MB": round(dst.stat().st_size / 1e6, 1),
-                                  "標字時段數": len(wins), "驗證": verify(dst, expected, joins), "檔案": dst.name}
+                                  "標字時段數": len(wins), "驗證": verify(dst, expected, joins, full_decode=True),
+                                  "檔案": dst.name}
     wd.write_json(out / f"輸出摘要_{tag}.json", summary)
     return summary
 
