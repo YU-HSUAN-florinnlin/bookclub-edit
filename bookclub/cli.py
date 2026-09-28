@@ -128,6 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     gen_st.add_argument("--no-check", action="store_true", help="不用 Groq 轉回文字檢查")
     gen_st.add_argument("--no-pauses", action="store_true", help="不照原片停頓插入空白")
     gen_st.add_argument("--plan-only", action="store_true", help="只列出會生成哪幾段（不載入模型）")
+    gen_st.add_argument("--redo", action="store_true", help="範圍內的段落重做（已經生成過的聲音從快取沿用，只重做插入停頓、放回時間格）")
 
     pr_parser = sub.add_parser("proofread", help="第 3 步：學員逐字稿校對")
     pr_sub = pr_parser.add_subparsers(dest="pr_command")
@@ -296,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.female:
                 refs["女"] = _Path(args.female).expanduser()
             students.generate_students(args.workdir, start=start, end=end, only=only, refs=refs,
-                                       check_content=not args.no_check, use_pauses=not args.no_pauses)
+                                       check_content=not args.no_check, use_pauses=not args.no_pauses, redo=args.redo)
             return 0
         print("用法：bookclub gen teacher <工作區> <句子清單> [--ref-wav 檔案] [--ref-text 檔案] [--no-check] [--redo]")
         print("     bookclub gen students <工作區> [--start 37:00 --end 55:23] [--only T038] [--plan-only]")

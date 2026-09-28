@@ -353,6 +353,22 @@ def test_pron_table_applies_only_to_synth_text():
         assert said[-1] == "讓人覺得愉快。"
 
 
+def test_start_offset_and_prepend_silence():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        t = np.arange(SR) / SR
+        tone = (0.3 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
+        orig = np.concatenate([np.zeros(int(1.2 * SR), np.float32), tone])     # 原片 1.2 秒後才開口
+        gen = np.concatenate([np.zeros(int(0.05 * SR), np.float32), tone])     # 生成檔 0.05 秒就開口
+        sf.write(str(tmp / "o.wav"), orig, SR)
+        sf.write(str(tmp / "g.wav"), gen, SR)
+        lead = tts.start_offset(tmp / "o.wav", tmp / "g.wav")
+        assert abs(lead - 1.15) < 0.03, lead
+        tts.prepend_silence(tmp / "g.wav", tmp / "s.wav", lead)
+        assert abs(tts.start_offset(tmp / "o.wav", tmp / "s.wav")) < 0.03
+        assert tts.start_offset(tmp / "g.wav", tmp / "o.wav") == 0.0   # 生成的比較晚開口：不補
+
+
 def test_trim_silence_skips_blip_and_keeps_margin():
     x = np.concatenate([_sil(0.12), _tone_s(0.06), _sil(0.5), _tone_s(2.0), _sil(0.3)])
     y = pauses.trim_silence(x, SR)

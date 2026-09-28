@@ -253,7 +253,7 @@ def assign_voices(workdir: Path, students: list[str], spans: dict, codes: dict |
 def generate_students(
     workdir: str | Path, *, start: float | None = None, end: float | None = None, only: list[str] | None = None,
     refs: dict[str, Path] | None = None, check_content: bool = True, use_pauses: bool = True,
-    pron_table: str | Path | None = None, synth_factory=None, hear=None, align=None,
+    pron_table: str | Path | None = None, synth_factory=None, hear=None, align=None, redo: bool = False,
     log: Callable[[str], None] = print,
 ) -> dict:
     """`bookclub gen students`。synth_factory(ref_wav, ref_text) 可以從外面傳（測試用假的）。"""
@@ -276,6 +276,8 @@ def generate_students(
     lp = log_path(workdir)
     record = wd.read_json(lp, default=None) or {}
     done = {r["id"]: r for r in record.get("句子", [])}
+    if redo:   # 重做放回時間格等後段；每次生成的結果在 _嘗試快取.json，不會重生成
+        done = {k: v for k, v in done.items() if k not in {it["id"] for it in items}}
     od = out_dir(workdir)
     od.mkdir(parents=True, exist_ok=True)
     load_total = float(record.get("統計", {}).get("載入模型秒") or 0.0)

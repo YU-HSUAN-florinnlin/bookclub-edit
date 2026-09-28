@@ -82,6 +82,23 @@ def pauses_after_chars(chars: list[Char], silences: list[tuple[float, float]]) -
     return out
 
 
+def speech_start(x: np.ndarray, sr: int, db: float = SILENCE_DB, min_active_s: float = 0.1) -> float:
+    """開始講話的時間（秒）：第一段連續 min_active_s 秒以上夠大聲的地方（規則同 trim_silence）。找不到回傳 0。"""
+    if x.ndim > 1:
+        x = x.mean(axis=1)
+    fr = max(1, int(sr * FRAME_S))
+    n = len(x) // fr
+    if n == 0:
+        return 0.0
+    rms = np.sqrt(np.mean(x[: n * fr].reshape(n, fr).astype(np.float64) ** 2, axis=1)) + 1e-9
+    active = 20 * np.log10(rms / rms.max()) >= db
+    run = max(1, int(round(min_active_s / FRAME_S)))
+    for i in range(n - run + 1):
+        if active[i:i + run].all():
+            return i * fr / sr
+    return 0.0
+
+
 def trim_silence(x: np.ndarray, sr: int, db: float = SILENCE_DB, min_active_s: float = 0.1,
                  keep_s: float = 0.05) -> np.ndarray:
     """裁掉頭尾的空白，前後各留 keep_s 秒。

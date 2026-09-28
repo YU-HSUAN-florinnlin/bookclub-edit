@@ -469,6 +469,16 @@ def _finalize(
     variants = []
 
     def add(name: str, src: Path, n: int, length: float) -> dict:
+        # 「插入停頓」已經照原片對齊開頭；其他版本也要補上原片開口前的空白，不然會比原本早開口（09-29 實測差到 1.7 秒）
+        lead = 0.0
+        if ctx and name != "插入停頓":
+            lead = start_offset(ctx["clip"], src)
+            if lead >= 0.02:
+                shifted = out_dir / f"{sid}_{name}_對齊開頭.wav"
+                prepend_silence(src, shifted, lead)
+                src, length = shifted, length + lead
+            else:
+                lead = 0.0
         plan = fit.plan_fit(length, slot_s, role, tolerance)
         dst = out_dir / f"{sid}_{name}_放回時間格.wav"
         fit.apply_fit(src, dst, slot_s, plan)
@@ -476,6 +486,7 @@ def _finalize(
             "版本": name, "來源第幾次": n, "長度秒": round(length, 2), "放回做法": plan["做法"],
             "差異比例": plan["差異比例"], "atempo": plan["atempo"], "原因": plan["原因"],
             "檔案": str(dst.relative_to(workdir)), "來源檔案": str(Path(src).relative_to(workdir)),
+            "開頭對齊秒": round(lead, 3),
         }
         variants.append(v)
         return v
@@ -512,6 +523,25 @@ def _finalize(
     log(f"[{tag}] 第 {sid} 句放回時間格：{summary} → 建議「{rec['版本']}」"
         + ("（都超過容許範圍，要人聽）" if not ok else ""))
     return record
+
+
+def start_offset(original: Path, generated: Path) -> float:
+    """原片開口時間 − 生成檔開口時間（秒，至少 0）：生成檔前面要補這麼多空白，開口才會跟原片對齊。"""
+    import soundfile as sf
+
+    from bookclub.pauses import speech_start
+
+    a, sra = sf.read(str(original))
+    b, srb = sf.read(str(generated))
+    return max(0.0, speech_start(a, sra) - speech_start(b, srb))
+
+
+def prepend_silence(src: Path, dst: Path, seconds: float) -> None:
+    import soundfile as sf
+
+    x, sr = sf.read(str(src))
+    pad = np.zeros((int(round(seconds * sr)),) + x.shape[1:], dtype=x.dtype)
+    _save_wav(dst, np.concatenate([pad, x]), sr)
 
 
 def _free_memory() -> None:
