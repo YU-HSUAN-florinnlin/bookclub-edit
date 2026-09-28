@@ -40,6 +40,7 @@ FONT_CANDIDATES = ["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/
 DEMO_FREEZE_S = 1.0
 BLUR_S = 30.0
 JOIN_FADE_S = 0.01
+ROOM_UNDER = True   # 生成的聲音底下墊附近原片的環境底噪（生成檔的停頓是數位全靜音，接在原片中間會像突然真空）
 
 
 # ---------- 時間（純函式） ----------
@@ -250,10 +251,15 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
         gain = _gain(clip, x[s:t])
         clip = (clip * gain).astype(np.float32)
         head = assemble.fit_length(clip, t - s)
+        room = assemble.room_tone(x, s, t, len(clip) + (t - s), SR) if ROOM_UNDER else None
+        if room is not None:
+            head = head + room[:t - s]
         assemble.splice(y, s, head, SR)
         if e.get("停格秒"):
             n = int(round(e["停格秒"] * SR))
             tail = assemble.fit_length(clip[t - s:], n)
+            if room is not None:
+                tail = tail + assemble.fit_length(room[t - s:], n)
             f = min(int(SR * 0.02), len(tail) // 2)
             if f:
                 tail[-f:] *= np.linspace(1, 0, f, dtype=np.float32)
@@ -758,7 +764,7 @@ def envelope_lag(orig: np.ndarray, new: np.ndarray, sr: int = SR, max_lag_s: flo
     a, b = a - a.mean(), b - b.mean()
     if not a.any() or not b.any():
         return None
-    m = int(max_lag_s / 0.01)
+    m = min(int(max_lag_s / 0.01), n // 2)   # 短片段：平移不超過一半長度
     best, best_v = 0, None
     for lag in range(-m, m + 1):
         v = float(np.dot(a[max(0, -lag):n - max(0, lag)], b[max(0, lag):n - max(0, -lag)]))
