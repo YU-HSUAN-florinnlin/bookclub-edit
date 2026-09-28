@@ -820,6 +820,8 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     (out / f"處理標記_{tag}.md").write_text(marks_md(rows, rng, extra), encoding="utf-8")
     (out / f"處理標記_{tag}.html").write_text(marks_html(rows, rng, extra), encoding="utf-8")
     wd.write_json(out / f"剪輯決策_{tag}.json", {**d, "片段": plist, "精準度": prec, "摘要": summary})
+    from bookclub import proclog   # 09-29：AI 處理紀錄＋沒登記的變動檢查（生成/處理紀錄.json，第 5 步讀）
+    proclog.write_render_log(workdir, d, plist, au["原聲"], au["新聲音"], tag)
 
     for m in methods:
         free = shutil.disk_usage(str(out)).free / 1e9
