@@ -35,6 +35,13 @@ def test_cut_outside_range_ignored():
     assert [p["src"] for p in pl] == [[100, 190]]
 
 
+def test_clip_to_cuts_after_frame_snap():
+    a, b = render.clip_to_cuts(2491.79, 2511.14, [(2328.88, 2491.8)])
+    assert (a, b) == (2491.8, 2511.14)
+    pl = render.pieces(2220, 3323, [(2328.88, 2491.8)], [])
+    assert render.to_output_time(a, pl) is not None
+
+
 def test_snap_and_ceil_frames():
     assert render.snap(2328.93) == 2328.92
     assert render.ceil_frames(0.25) == 0.28

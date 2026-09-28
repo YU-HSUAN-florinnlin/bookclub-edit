@@ -188,11 +188,22 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Tr
             continue
         kept.append(e)
     kept.sort(key=lambda e: e["start"])
-    # 落在刪除範圍裡的換聲音不用做
+    # 落在刪除範圍裡的換聲音不用做；頭尾碰到刪除範圍（剪點對齊畫面格後差幾毫秒）的推到邊界
     kept = [e for e in kept if not any(x <= e["start"] and e["end"] <= y for x, y in cuts)]
+    for e in kept:
+        e["start"], e["end"] = clip_to_cuts(e["start"], e["end"], cuts)
     blur = pick_blur(kept, cuts, a, b)
     return {"範圍": [a, b], "刪除": cuts, "動作": kept, "停格": sorted(freezes, key=lambda f: f["at"]),
             "模糊": blur, "標記": marks, "警告": warnings, "學員聲線": voices}
+
+
+def clip_to_cuts(a: float, b: float, cuts: list[tuple[float, float]]) -> tuple[float, float]:
+    for x, y in cuts:
+        if x < a < y:
+            a = y
+        if x < b < y:
+            b = x
+    return a, b
 
 
 def _chosen_len(r: dict) -> float | None:
