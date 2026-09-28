@@ -160,6 +160,15 @@ def build_parser() -> argparse.ArgumentParser:
     render_audio_parser = render_sub.add_parser("audio", help="組出跟原片等長的新聲音軌＋處理前後試聽")
     render_audio_parser.add_argument("workdir", help="工作區路徑")
     render_audio_parser.add_argument("--video", help="原片影片路徑（預設讀逐字稿記錄的來源）")
+    rv = render_sub.add_parser("video", help="組裝一段範圍的影片：換聲音＋刪除＋停格＋模糊示範（測試版）")
+    rv.add_argument("workdir", help="工作區路徑")
+    rv.add_argument("--start", required=True, help="從幾分幾秒（例如 37:00）")
+    rv.add_argument("--end", required=True, help="到幾分幾秒（例如 55:23）")
+    rv.add_argument("--video", help="原片影片路徑")
+    rv.add_argument("--label", action="store_true", help="另外輸出標字試看版（AI 處理的時段左上角標字、下方字幕是餵給模型的文字）")
+    rv.add_argument("--methods", default="hw,sw,smart", help="輸出做法（逗號分隔）：hw 硬體編碼、sw 軟體編碼、smart 只重做有動到的片段")
+    rv.add_argument("--tag", help="輸出檔名標記（預設「開始分-結束分」）")
+    rv.add_argument("--no-demo-freeze", action="store_true", help="範圍內沒有需要停格的重疊時，不做停格示範")
 
     return parser
 
@@ -344,7 +353,19 @@ def main(argv: list[str] | None = None) -> int:
 
             render_audio(args.workdir, video=args.video)
             return 0
+        if args.render_command == "video":
+            import json as _json
+
+            from bookclub.render import render_video
+            from bookclub.review import parse_time
+
+            methods = [m.strip() for m in args.methods.split(",") if m.strip()]
+            s = render_video(args.workdir, parse_time(args.start), parse_time(args.end), video=args.video,
+                             label=args.label, methods=methods, tag=args.tag, demo_freeze=not args.no_demo_freeze)
+            print(_json.dumps({k: v for k, v in s.items() if k != "警告"}, ensure_ascii=False, indent=1))
+            return 0
         print("用法：bookclub render audio <工作區> [--video 影片]")
+        print("     bookclub render video <工作區> --start 37:00 --end 55:23 [--label] [--methods hw,sw,smart]")
         return 2
 
     parser.print_help()
