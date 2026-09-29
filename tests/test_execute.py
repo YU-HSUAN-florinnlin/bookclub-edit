@@ -70,13 +70,13 @@ def test_runs_in_order_then_skips_done():
     calls: list = []
     runners, checks = _fake(calls)
     prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, methods=["sw"], log=lambda s: None)
-    assert calls == ["老師名字", "學員重念", "組裝"]
-    assert [prog["步驟"][k]["狀態"] for k, _ in execute.STEPS] == ["做完", "做完", "做完"]
+    assert calls == ["老師名字", "學員重念", "保留原聲學員名字", "組裝"]
+    assert [prog["步驟"][k]["狀態"] for k, _ in execute.STEPS] == ["做完"] * len(execute.STEPS)
     assert prog["範圍"] == [0.0, 180.0] and prog["輸出做法"] == ["sw"]
     saved = wd.read_json(execute.progress_path(w))
     assert saved["結束時間"] and saved["步驟"]["組裝"]["狀態"] == "做完"
     prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, log=lambda s: None)
-    assert calls == ["老師名字", "學員重念", "組裝"]            # 第二次全部跳過
+    assert calls == ["老師名字", "學員重念", "保留原聲學員名字", "組裝"]            # 第二次全部跳過
     assert all(prog["步驟"][k]["狀態"] == "跳過" for k, _ in execute.STEPS)
 
 
@@ -96,7 +96,7 @@ def test_resume_after_failure():
     state["失敗"] = None                          # 修好了再跑一次：老師名字做過了跳過，從學員重念接著做
     calls.clear()
     prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, log=lambda s: None)
-    assert calls == ["學員重念", "組裝"] and prog["步驟"]["老師名字"]["狀態"] == "跳過"
+    assert calls == ["學員重念", "保留原聲學員名字", "組裝"] and prog["步驟"]["老師名字"]["狀態"] == "跳過"
 
 
 def test_only_steps_and_range():

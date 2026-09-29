@@ -1,4 +1,4 @@
-"""第 4 步「AI 執行」一個指令跑完：老師名字 → 學員重念 → 組裝（09-29 宇軒）。
+"""第 4 步「AI 執行」一個指令跑完：老師名字 → 學員重念 → 保留原聲學員的名字 → 組裝（09-29 宇軒）。
 
 `bookclub run execute <工作區> [--start 0:00 --end 1:38:00] [--methods sw]`
 
@@ -11,14 +11,16 @@
   「放回時間格」就跳過
 - 學員重念：`gen students`（`students.generate_students`，本來就沿用已經生成好的段落）；範圍內每一段都已經生成、
   文字沒變就跳過
+- 保留原聲學員的名字：`gen stunames`（`studentgen.generate`）；選了換成代號的每一句都生成好（或挑不到參考音、退回直接消音）
+  就跳過；直接消音的不用生成，組裝時處理
 - 組裝：`render video`；成品影片比它讀的東西（覆核決定、名字計畫、老師／學員紀錄）都新就跳過
+- 輸出做法預設「整段軟體編碼」（09-29 宇軒：Mac、Windows 結果一樣）
 
 進度寫在 `生成/執行進度.json`（網頁第 4 步讀），終端機照常印。這支不改生成與組裝的邏輯，只負責排順序、判斷做過沒有。
 """
 
 from __future__ import annotations
 
-import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +30,7 @@ from bookclub import workdir as wd
 
 STEPS = (("老師名字", "老師提到名字：用老師 AI 聲音整句重念（gen names）"),
          ("學員重念", "學員段落：匿名聲線重念（gen students）"),
+         ("保留原聲學員名字", "保留原聲的學員講到名字：選了換成代號的，用他自己的聲音生成（gen stunames）"),
          ("組裝", "換聲音＋刪除＋停格，輸出成品影片（render video）"))
 
 
@@ -40,8 +43,8 @@ def _now() -> str:
 
 
 def default_methods() -> list[str]:
-    """Mac 用硬體編碼（快）；其他平台沒有 videotoolbox，用軟體編碼。"""
-    return ["hw"] if sys.platform == "darwin" else ["sw"]
+    """整段軟體編碼（09-29 宇軒定案：Mac、Windows 同一套 libx264，結果一樣；硬體編碼、只重做片段是選項）。"""
+    return ["sw"]
 
 
 def video_duration(workdir: Path) -> float | None:
@@ -115,11 +118,26 @@ def students_done(workdir: Path, a: float | None, b: float | None) -> tuple[bool
     return (not left), (f"{len(items)} 段都生成好了" if not left else f"還有 {len(left)}／{len(items)} 段要生成")
 
 
+def stunames_done(workdir: Path) -> tuple[bool, str]:
+    from bookclub import studentgen, studentnames
+
+    sp = studentnames.plan(workdir)
+    if not sp["生成"]:
+        return True, f"沒有選換成代號的（直接消音 {len(sp['消音'])} 筆，組裝時處理）"
+    rec = wd.read_json(studentgen.log_path(workdir), default=None) or {}
+    recs = {r["id"]: r for r in rec.get("句子", [])}
+    back = rec.get("退回直接消音") or {}
+    left = [g["id"] for g in sp["生成"] if g["id"] not in back
+            and not ((recs.get(g["id"]) or {}).get("放回時間格") and recs[g["id"]].get("text") == g["text"])]
+    return (not left), (f"{len(sp['生成'])} 句都處理好了" if not left else f"還有 {len(left)}／{len(sp['生成'])} 句要生成")
+
+
 def render_inputs(workdir: Path) -> list[Path]:
-    from bookclub import nameplan, review, students, tts
+    from bookclub import nameplan, review, studentgen, studentnames, students, tts
 
     return [p for p in (review.review_path(workdir), nameplan.plan_path(workdir), tts.teacher_log_path(workdir),
-                        students.log_path(workdir), workdir / "校對" / "段落.json", workdir / "名字覆核決定.json")
+                        students.log_path(workdir), workdir / "校對" / "段落.json", workdir / "名字覆核決定.json",
+                        studentnames.decisions_path(workdir), studentgen.log_path(workdir))
             if p.exists()]
 
 
@@ -148,17 +166,23 @@ def _default_runners() -> dict[str, Callable]:
 
         students.generate_students(workdir, start=ctx["範圍"][0], end=ctx["範圍"][1])
 
+    def stunames(workdir: Path, ctx: dict) -> None:
+        from bookclub import studentgen
+
+        studentgen.generate(workdir)
+
     def render(workdir: Path, ctx: dict) -> None:
         from bookclub.render import render_video
 
         render_video(workdir, ctx["範圍"][0], ctx["範圍"][1], methods=ctx["輸出做法"], tag=ctx["標記"])
 
-    return {"老師名字": names, "學員重念": stu, "組裝": render}
+    return {"老師名字": names, "學員重念": stu, "保留原聲學員名字": stunames, "組裝": render}
 
 
 def _default_checks() -> dict[str, Callable]:
     return {"老師名字": lambda w, c: names_done(w),
             "學員重念": lambda w, c: students_done(w, *c["範圍"]),
+            "保留原聲學員名字": lambda w, c: stunames_done(w),
             "組裝": lambda w, c: render_done(w, c["標記"], c["輸出做法"])}
 
 

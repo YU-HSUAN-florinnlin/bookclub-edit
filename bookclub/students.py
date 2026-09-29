@@ -186,8 +186,9 @@ def cut_ranges(workdir: Path) -> list[tuple[float, float]]:
 
 
 def build_items(workdir: Path, start: float | None = None, end: float | None = None,
-                only: list[str] | None = None) -> tuple[list[dict], dict]:
-    """學員段落 → 生成項目（每段 id＝`<段落id>_<序號>`）。回傳（項目、各學員說話片段）。"""
+                only: list[str] | None = None, include_kept: bool = False) -> tuple[list[dict], dict]:
+    """學員段落 → 生成項目（每段 id＝`<段落id>_<序號>`）。回傳（項目、各學員說話片段）。
+    第 3 步設成「保留原聲」的學員不重念（include_kept=True 才照樣重念，測試聽生成效果用）。"""
     from bookclub import review
     from bookclub import turns as turns_mod
 
@@ -199,12 +200,13 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
     by_id = {s["id"]: s for s in speakers.get("sentences", [])}
     table = review.replace_table()
     cuts = cut_ranges(workdir)
+    kept = set() if include_kept else {k for k, v in review.load_decisions(workdir)["學員聲音"].items() if v == "保留原聲"}
     lo, hi = start if start is not None else -1.0, end if end is not None else 1e12
 
     items, spans = [], {}
     for t in tdata["段落"]:
         who = t.get("說話者")
-        if not who or who == "老師":
+        if not who or who == "老師" or who in kept:
             continue
         if t["end"] <= lo or t["start"] >= hi:
             continue
@@ -254,6 +256,7 @@ def generate_students(
     workdir: str | Path, *, start: float | None = None, end: float | None = None, only: list[str] | None = None,
     refs: dict[str, Path] | None = None, check_content: bool = True, use_pauses: bool = True,
     pron_table: str | Path | None = None, synth_factory=None, hear=None, align=None, redo: bool = False,
+    include_kept: bool = False,
     log: Callable[[str], None] = print,
 ) -> dict:
     """`bookclub gen students`。synth_factory(ref_wav, ref_text) 可以從外面傳（測試用假的）。"""
@@ -262,7 +265,7 @@ def generate_students(
 
     workdir = wd.ensure(workdir)
     refs = refs or default_refs()
-    items, spans = build_items(workdir, start, end, only)
+    items, spans = build_items(workdir, start, end, only, include_kept=include_kept)
     if not items:
         log("[學員聲音] 範圍內沒有要生成的學員段落。")
         return {}

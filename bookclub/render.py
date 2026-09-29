@@ -107,8 +107,8 @@ def _chosen_heard(r: dict) -> str | None:
     return tries[k].get("轉回文字") if 0 <= k < len(tries) else None
 
 
-def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = True) -> dict:
-    """讀工作區，排出範圍內的所有動作（原片時間）。"""
+def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = True, include_kept: bool = False) -> dict:
+    """讀工作區，排出範圍內的所有動作（原片時間）。第 3 步設成保留原聲的學員不換聲音（include_kept=True 才照樣換，測試用）。"""
     from bookclub import assemble, nameplan, overlap as overlap_mod, review, students, tts
     from bookclub import turns as turns_mod
 
@@ -120,7 +120,10 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Tr
 
     st = wd.read_json(students.log_path(workdir), default=None) or {}
     voices = st.get("學員聲線", {})
+    kept_now = set() if include_kept else {k for k, v in dec["學員聲音"].items() if v == "保留原聲"}
     for r in st.get("句子", []):
+        if r.get("學員") in kept_now:
+            continue
         s0, s1 = r["slot"]
         if not _in(s0, s1, a, b) or not r.get("放回時間格"):
             continue
@@ -890,8 +893,8 @@ def join_jumps(new: np.ndarray, joins: list[float]) -> list[dict]:
 # ---------- 入口 ----------
 
 def render_video(workdir: str | Path, start: float, end: float, *, video: str | Path | None = None,
-                 label: bool = False, methods: list[str] = ("hw", "sw", "smart"), tag: str | None = None,
-                 demo_freeze: bool = True, min_free_gb: float = 5.0) -> dict:
+                 label: bool = False, methods: list[str] = ("sw",), tag: str | None = None,
+                 demo_freeze: bool = True, min_free_gb: float = 5.0, include_kept: bool = False) -> dict:
     import shutil
 
     import soundfile as sf
@@ -906,7 +909,7 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     tag = tag or f"{int(a // 60)}-{int(b // 60)}"
     out = workdir / "輸出"
     out.mkdir(parents=True, exist_ok=True)
-    d = build_decisions(workdir, a, b, demo_freeze=demo_freeze)
+    d = build_decisions(workdir, a, b, demo_freeze=demo_freeze, include_kept=include_kept)
     t = time.time()
     au = build_audio(workdir, video, d, out, tag)
     audio_s = time.time() - t

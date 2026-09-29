@@ -140,6 +140,7 @@ def build_parser() -> argparse.ArgumentParser:
     gen_st.add_argument("--no-check", action="store_true", help="不用 Groq 轉回文字檢查")
     gen_st.add_argument("--no-pauses", action="store_true", help="不照原片停頓插入空白")
     gen_st.add_argument("--plan-only", action="store_true", help="只列出會生成哪幾段（不載入模型）")
+    gen_st.add_argument("--include-kept", action="store_true", help="設成保留原聲的學員也照樣重念（測試聽生成效果用）")
     gen_st.add_argument("--redo", action="store_true", help="範圍內的段落重做（已經生成過的聲音從快取沿用，只重做插入停頓、放回時間格）")
 
     pr_parser = sub.add_parser("proofread", help="第 3 步：學員逐字稿校對")
@@ -184,7 +185,8 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--end", required=True, help="到幾分幾秒（例如 55:23）")
     rv.add_argument("--video", help="原片影片路徑")
     rv.add_argument("--label", action="store_true", help="另外輸出標字試看版（AI 處理的時段左上角標字、下方字幕是餵給模型的文字）")
-    rv.add_argument("--methods", default="hw,sw,smart", help="輸出做法（逗號分隔）：hw 硬體編碼、sw 軟體編碼、smart 只重做有動到的片段")
+    rv.add_argument("--methods", default="sw", help="輸出做法（逗號分隔，預設 sw）：sw 整段軟體編碼、hw 硬體編碼（Mac）、smart 只重做有動到的片段")
+    rv.add_argument("--include-kept", action="store_true", help="設成保留原聲的學員也照樣換聲音（測試用）")
     rv.add_argument("--tag", help="輸出檔名標記（預設「開始分-結束分」）")
     rv.add_argument("--no-demo-freeze", action="store_true", help="範圍內沒有需要停格的重疊時，不做停格示範")
 
@@ -323,7 +325,8 @@ def main(argv: list[str] | None = None) -> int:
             end = parse_time(args.end) if args.end else None
             only = [x.strip() for x in args.only.split(",") if x.strip()] if args.only else None
             if args.plan_only:
-                items, _ = students.build_items(_Path(args.workdir).expanduser(), start, end, only)
+                items, _ = students.build_items(_Path(args.workdir).expanduser(), start, end, only,
+                                                include_kept=args.include_kept)
                 for it in items:
                     print(f"{it['id']}\t{it['學員']}\t{it['slot'][0]:.1f}–{it['slot'][1]:.1f}\t{it['slot_s']:.1f} 秒\t"
                           f"{len(it['句子'])} 句\t換代號 {it['換成代號']}")
@@ -335,7 +338,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.female:
                 refs["女"] = _Path(args.female).expanduser()
             students.generate_students(args.workdir, start=start, end=end, only=only, refs=refs,
-                                       check_content=not args.no_check, use_pauses=not args.no_pauses, redo=args.redo)
+                                       check_content=not args.no_check, use_pauses=not args.no_pauses, redo=args.redo,
+                                       include_kept=args.include_kept)
             return 0
         print("用法：bookclub gen teacher <工作區> <句子清單> [--ref-wav 檔案] [--ref-text 檔案] [--no-check] [--redo]")
         print("     bookclub gen students <工作區> [--start 37:00 --end 55:23] [--only T038] [--plan-only]")
@@ -420,7 +424,8 @@ def main(argv: list[str] | None = None) -> int:
 
             methods = [m.strip() for m in args.methods.split(",") if m.strip()]
             s = render_video(args.workdir, parse_time(args.start), parse_time(args.end), video=args.video,
-                             label=args.label, methods=methods, tag=args.tag, demo_freeze=not args.no_demo_freeze)
+                             label=args.label, methods=methods, tag=args.tag, demo_freeze=not args.no_demo_freeze,
+                             include_kept=args.include_kept)
             print(_json.dumps({k: v for k, v in s.items() if k != "警告"}, ensure_ascii=False, indent=1))
             return 0
         print("用法：bookclub render audio <工作區> [--video 影片]")
