@@ -501,7 +501,7 @@ function rvRenderCard() {
   box.innerHTML = `
     <article class="rv-card" data-key="${esc(rv.cur)}">
       <header>
-        ${rvChip(it)}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}
+        ${rvChip(it)}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}
         <span class="rv-when">${esc(rvFmt(it.start, 1))}–${esc(rvFmt(it.end, 1))}</span>
         <span class="rv-count">第 ${idx + 1}／${all.length} 筆</span>
       </header>
@@ -569,6 +569,7 @@ function rvBodyHtml(it) {
     return `<p class="rv-who">${esc(rvWho(it["說話者"]))}${it["手動標記"] ? "　（人工標記的段落）" : ""}</p>
       <textarea id="rv-text" rows="${rows}" aria-label="逐字稿（可以直接改）">${esc(text)}</textarea>
       ${(it["換過的字"] || []).length && !it["已確認"] ? `<p class="rv-note">自動換成代號的地方：${rvMarkChanges(it["建議稿"], it["換過的字"])}</p>` : ""}
+      ${it["代號改過"] ? `<p class="rv-warnline">代號改過，請再看一次（原本的代號：${esc(it["代號改過"])}，別人也在用，沒有自動換）。</p>` : ""}
       ${it["含本名"] ? `<p class="rv-warnline">文字裡還有名冊上的本名，要換成代號。</p>` : ""}
       ${it["問老師"] ? `<p class="rv-note">已標「聽不清楚，問老師」${it["問老師備註"] ? "：" + esc(it["問老師備註"]) : ""}</p>` : ""}`;
   }
@@ -872,7 +873,7 @@ function rvRenderList() {
     return `<li class="${key === rv.cur ? "cur" : ""} ${rvDone(it) ? "done" : ""}" data-key="${esc(key)}" tabindex="-1">
       <span class="tm">${esc(rvFmt(it.start))}</span>
       <span class="ty">${rvChip(it)}</span>
-      <span class="tx">${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${esc(rvPreview(it))}</span>
+      <span class="tx">${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}${esc(rvPreview(it))}</span>
       <span class="sg">${esc(sug)}</span>
       ${st}</li>`;
   }).join("");

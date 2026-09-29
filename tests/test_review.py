@@ -387,5 +387,25 @@ def test_prep_items_block_and_auto_revert():
         raise AssertionError("④ 不該被擋")
 
 
+def test_code_changed_flag_shown_until_passed():
+    # 09-30：epcodes.propagate 改回還沒確認的段落帶「代號改過」，卡片提醒；人按通過就拿掉
+    from bookclub import turns
+    from bookclub import workdir as wd
+
+    w = _fresh()
+    tp = turns.turns_path(w)
+    data = wd.read_json(tp)
+    tid = next(t["id"] for t in data["段落"] if t["說話者"] != "老師")
+    t = next(t for t in data["段落"] if t["id"] == tid)
+    t["代號改過"] = "Grace"
+    t["已確認"] = False
+    wd.write_json(tp, data)
+    it = next(x for x in review.page_data(w)["項目"] if x["類型"] == "學員段落" and x["id"] == tid)
+    assert it["代號改過"] == "Grace"
+    turns.save_turn(w, tid, {"已確認": True})
+    it = next(x for x in review.page_data(w)["項目"] if x["類型"] == "學員段落" and x["id"] == tid)
+    assert not it["代號改過"]
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

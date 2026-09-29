@@ -545,6 +545,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                       "內容類型": t.get("內容類型"), "換人依據": t.get("換人依據"), "手動標記": bool(t.get("手動標記")),
                       "學員是猜的": bool(t.get("學員是猜的")), "含本名": has_real_name(draft, words),
                       "人工新增": bool(t.get("人工新增")), **_align_info(t),
+                      "代號改過": t.get("代號改過"),   # 09-30：epcodes.propagate 改了代號、改回還沒確認的
                       "建議": {"做法": "通過", "原因": why},
                       "短句保留": bool(t.get("短句保留")),
                       "不用處理": "保留原聲，不用校對逐字稿" if keep else skip_reason(t["start"], t["end"])})

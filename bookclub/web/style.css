@@ -616,3 +616,4 @@ table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg)
 .rv-busy { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--lowconf-border); border-radius: 6px; padding: 8px 12px; margin: 6px 0; }
 .rv-busy[hidden] { display: none; }
 .rv2.readonly textarea, .rv2.readonly select, .rv2.readonly input { background: var(--bg-soft); }
+.rv-tag.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--lowconf-border); }

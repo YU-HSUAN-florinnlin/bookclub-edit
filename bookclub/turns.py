@@ -508,6 +508,8 @@ def save_turn(workdir: str | Path, tid: str, fields: dict) -> dict:
             t["校對稿"] = str(fields["校對稿"]).strip()
         if "已確認" in fields:
             t["已確認"] = bool(fields["已確認"])
+            if t["已確認"]:
+                t.pop("代號改過", None)   # 09-30：人重新看過、按了通過，就不再提醒
         if "問老師" in fields:          # 聽不清楚，問老師（覆核工作台）
             t["問老師"] = bool(fields["問老師"])
         if "問老師備註" in fields:
