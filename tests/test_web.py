@@ -88,6 +88,14 @@ def test_save_failure_banner():
     assert "showSaveError" in post and "catch" in post   # 連不上伺服器（fetch 丟例外）也算
 
 
+def test_step3_wording():
+    # 09-30：主按鈕寫動作「通過」（不是狀態「未通過」）；名字卡是「不是名字，不用改」；開始前是 4 件事
+    js = (WEB / "review.js").read_text(encoding="utf-8")
+    assert "未通過" not in js and "✓ 已通過（再按取消）" in js
+    assert "保留原聲（不用改）" not in js and "不是名字，不用改" in js
+    assert "3 件事" not in js and "開始前 4 件事" in js
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

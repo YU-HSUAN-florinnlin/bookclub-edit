@@ -1,7 +1,7 @@
 "use strict";
 
 /* 第 3 步「覆核工作台」（09-26 改版：邊看影片邊逐筆通過）。
- * 版面：頂端一行（進度、花了多少時間、推算整支要多久、開始前 3 件事、設定、快捷鍵、匯出）
+ * 版面：頂端一行（進度、花了多少時間、推算整支要多久、開始前 4 件事、設定、快捷鍵、匯出）
  *   → 上半部左欄：影片、時間列、整支時間軸（老師灰、學員綠、冥想導讀淡藍；名字、重疊、刪除標記）、圖例
  *     上半部右欄：「目前這一筆」卡片（內容、藍底建議＋原因、通過／改做法／上一筆／下一筆）
  *   → 下半部：篩選列＋一行一筆的清單。
@@ -110,7 +110,7 @@ async function renderReview() {
         <h1>3　覆核工作台</h1>
         <div class="rv-progress" id="rv-progress"></div>
         <div class="rv-bar-btns">
-          <button class="ghost" id="rv-prep-btn">開始前 3 件事</button>
+          <button class="ghost" id="rv-prep-btn">開始前 4 件事</button>
           <button class="ghost" id="rv-set-btn" aria-expanded="false">設定</button>
           <button class="ghost" id="rv-key-btn" aria-expanded="false">快捷鍵</button>
           <button class="ghost" id="rv-export">匯出覆核結果</button>
@@ -439,7 +439,7 @@ function rvSuggestText(it) {
 function rvChosen(it) {   // 現在會套用的做法：人改過的，或建議
   const t = it["類型"];
   if (t === "重疊") return it["做法"] || (it["建議"] || {})["做法"];
-  if (rvIsName(t)) return rvNotName(it) ? "保留原聲（不用改）" : it["做法"];
+  if (rvIsName(t)) return rvNotName(it) ? "不是名字，不用改" : it["做法"];
   if (t === "刪除段落") return it["來源"] === "建議" ? (it["決定"] || "刪除") : (it["狀態"] === "還原" ? "不刪" : "刪除");
   if (t === "局部消音") return it["方式"];
   return null;
@@ -454,7 +454,7 @@ function rvRenderCard() {
   }
   const all = rvItems();
   const idx = all.findIndex((x) => rvKey(x) === rv.cur);
-  const state = it["類型"] === "名字" && rvNotName(it) ? `<span class="rv-state ok">✓ 保留原聲（不用改）：抓錯了、這裡沒有人名，照原音保留（這個寫法以後不會再被抓成名字）</span>`
+  const state = it["類型"] === "名字" && rvNotName(it) ? `<span class="rv-state ok">✓ 不是名字，不用改：抓錯了、這裡沒有人名，照原音保留（這個寫法以後不會再被抓成名字；再按一次取消）</span>`
     : rvInCut(it) ? `<span class="rv-state ok">✓ 通過：這段在前面已確認整段刪除（要救回：把那段刪除段落改成不刪／還原）</span>`
     : it["不用處理"] ? `<span class="rv-state skip">不用處理：${esc(it["不用處理"])}</span>`
     : it["已確認"] ? `<span class="rv-state ok">✓ 已通過</span>` : "";
@@ -476,10 +476,10 @@ function rvRenderCard() {
       </div>
       ${state ? `<div class="rv-statebox">${state}</div>` : ""}
       <div class="rv-actions">
-        <button class="primary" id="rv-pass" title="已通過的再按一次會取消">${it["已確認"] || rvInCut(it) ? "已通過" : "未通過"}<kbd>Enter</kbd></button>
+        <button class="primary" id="rv-pass" title="已通過的再按一次會取消">${rvInCut(it) ? "✓ 已通過" : it["已確認"] ? "✓ 已通過（再按取消）" : "通過"}<kbd>Enter</kbd></button>
         <button class="ghost" id="rv-change" aria-expanded="${rv.open}">改做法<kbd>E</kbd></button>
         <button class="ghost" id="rv-retime" title="用「新增修改」面板改這一筆的起點終點">改時間</button>
-        ${it["類型"] === "名字" ? `<button class="${rvNotName(it) ? "primary" : "ghost"}" id="rv-notname" aria-pressed="${rvNotName(it)}" title="抓錯了，這裡其實沒有人名：照原音不改，這個寫法以後也不會再抓（已選的再按一次取消）">${rvNotName(it) ? "✓ " : ""}保留原聲（不用改）</button>` : ""}
+        ${it["類型"] === "名字" ? `<button class="${rvNotName(it) ? "primary" : "ghost"}" id="rv-notname" aria-pressed="${rvNotName(it)}" title="抓錯了，這裡其實沒有人名：照原音不改，這個寫法以後也不會再抓（已選的再按一次取消）">${rvNotName(it) ? "✓ " : ""}不是名字，不用改</button>` : ""}
         ${it["類型"] === "學員段落" ? `<button class="ghost" id="rv-isteacher" title="聲音辨識判錯：這一段其實是老師在講話">這段其實是老師</button>` : ""}
         <span class="spacer"></span>
         <button class="ghost" id="rv-prev" aria-label="上一筆">上一筆</button>
@@ -869,7 +869,7 @@ function rvMarkListRow(scroll) {
 }
 
 // ---------------------------------------------------------------------------
-// 開始前 3 件事
+// 開始前 4 件事
 // ---------------------------------------------------------------------------
 
 const RV_PREP = [["刪除", "① 建議刪除段落"], ["學員", "② 辨識學員聲音是誰"], ["名字", "③ 辨識其他名稱如何替換"], ["保留原聲", "④ 誰保留原聲"]];   // 09-29 宇軒：刪除先做，學員是誰才看得出誰只在要刪的段落裡

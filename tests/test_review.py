@@ -330,5 +330,24 @@ def test_name_decisions_follow_candidate_content():
     assert fp1 in dec["_找不到的候選"] and k not in dec
 
 
+def test_not_name_toggle_updates_exclusion_list():
+    # 09-30：名字卡「不是名字，不用改」取消時，也要從全域排除清單拿掉（以前只加不拿）
+    from bookclub import names
+    from bookclub import workdir as wd
+
+    w = _fresh()
+    ex = _DATA / "名字排除清單.csv"
+    term = wd.read_json(wd.names_path(w))["candidates"][0]["matched_text"]
+    ex.write_text("詞,原因,建立日期\n別的詞,不是名字,2026-09-01\n", encoding="utf-8")
+    r = review.save_name(w, "1", {"tags": ["不是名字"], "已確認": True})
+    assert r["已加入排除清單"] and r["決定"]["排除的詞"] == term
+    assert [x["詞"] for x in names.load_exclusion_list(ex)] == ["別的詞", term]
+    r = review.save_name(w, "1", {"tags": [], "已確認": False})
+    assert r["已從排除清單拿掉"] and "排除的詞" not in r["決定"]
+    assert [x["詞"] for x in names.load_exclusion_list(ex)] == ["別的詞"]          # 別人加的不動
+    assert review.save_name(w, "1", {"tags": []})["已從排除清單拿掉"] is False     # 本來就沒標：不動清單
+    ex.unlink()
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

@@ -556,6 +556,29 @@ def _append_exclusion(term: str, reason: str) -> bool:
     return True
 
 
+
+def _remove_exclusion(term: str) -> bool:
+    """從 `名字排除清單.csv` 拿掉這個詞（09-30：名字卡「不是名字，不用改」取消時，連排除清單一起拿掉）。
+    正規化後相同的都拿掉；其他列照原樣留著。回傳有沒有真的拿掉。"""
+    import os
+
+    path = data_dir() / EXCLUSION_CSV_NAME
+    norm = names_mod._normalize_match_text(term)
+    if not norm or not path.exists():
+        return False
+    rows = names_mod.load_exclusion_list(path)
+    keep = [r for r in rows if names_mod._normalize_match_text(r["詞"]) != norm]
+    if len(keep) == len(rows):
+        return False
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["詞", "原因", "建立日期"])
+        for r in keep:
+            writer.writerow([r["詞"], r["原因"], r["建立日期"]])
+    os.replace(tmp, path)
+    return True
+
 def _import_profile_bytes(raw: bytes) -> dict:
     """`POST /api/profile/import`：網頁上傳的設定包（body 是 zip）先存成暫存檔再匯入。"""
     import tempfile

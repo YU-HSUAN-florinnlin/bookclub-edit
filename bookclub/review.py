@@ -650,6 +650,7 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
             if fields["做法"] not in NAME_HOWS:
                 raise ValueError(f"名字的做法只能是：{'、'.join(NAME_HOWS)}")
             d["做法"] = fields["做法"]
+        was_not_name = any(t in ("是地名", "不是名字") for t in d.get("tags", []))
         if "tags" in fields:
             d["tags"] = [t for t in fields["tags"] if t in NAME_TAGS]
         if "note" in fields:
@@ -664,16 +665,27 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
                 d.pop("改稿", None)
         d["更新時間"] = _now()
         wd.write_json(name_decisions_path(workdir), decisions)
-    added = False
-    if any(t in ("是地名", "不是名字") for t in d.get("tags", [])) and "tags" in fields:
-        from bookclub.server import _append_exclusion
+    added = removed = False
+    is_not_name = any(t in ("是地名", "不是名字") for t in d.get("tags", []))
+    if "tags" in fields and is_not_name != was_not_name:
+        from bookclub.server import _append_exclusion, _remove_exclusion
 
-        cands = (wd.read_json(wd.names_path(workdir), default={}) or {}).get("candidates", [])
         idx = int(cid) - 1 if cid.isdigit() else -1     # 人工補的名字（NM001…）不在候選清單裡
-        if 0 <= idx < len(cands) and cands[idx].get("matched_text"):
-            added = _append_exclusion(cands[idx]["matched_text"],
-                                      "、".join(t for t in d["tags"] if t in ("是地名", "不是名字")))
-    return {"ok": True, "id": cid, "決定": d, "已加入排除清單": added}
+        term = cands[idx].get("matched_text") if 0 <= idx < len(cands) else None
+        if is_not_name and term:
+            added = _append_exclusion(term, "、".join(t for t in d["tags"] if t in ("是地名", "不是名字")))
+        elif not is_not_name:   # 09-30：取消「不是名字」，連排除清單一起拿掉（不然以後這個寫法永遠抓不到）
+            removed = _remove_exclusion(d.get("排除的詞") or term or "")
+        with _lock:
+            decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
+            dd = decisions.setdefault(cid, d)
+            if added:
+                dd["排除的詞"] = term
+            elif removed or not is_not_name:
+                dd.pop("排除的詞", None)
+            wd.write_json(name_decisions_path(workdir), decisions)
+            d = dd
+    return {"ok": True, "id": cid, "決定": d, "已加入排除清單": added, "已從排除清單拿掉": removed}
 
 
 def save_overlap(workdir: str | Path, oid: str, fields: dict) -> dict:
