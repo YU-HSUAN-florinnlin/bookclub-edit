@@ -166,6 +166,20 @@ def test_mark_turn_as_teacher_rescans_teacher_names():
     assert len(wd.read_json(wd.names_path(w))["candidates"]) == len(after)
 
 
+def test_reassign_turns_to_teacher_from_people_section():
+    """「學員是誰」勾幾段改成老師：學員那一位整個是老師的話從學員名單消失，並補找老師名字。"""
+    from bookclub import turns as turns_mod
+    from bookclub import workdir as wd
+
+    w = _fresh()
+    ids = [t["id"] for t in turns_mod.page_data(w)["段落"] if t["說話者"] == "學員2"]
+    n0 = len(wd.read_json(wd.names_path(w))["candidates"])
+    res = turns_mod.reassign_turns(w, ids, "老師")
+    assert res["改了幾段"] == len(ids) and res["補找到的老師名字"] == 1
+    assert "學員2" not in turns_mod.page_data(w)["學員"]
+    assert len(wd.read_json(wd.names_path(w))["candidates"]) == n0 + 1
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

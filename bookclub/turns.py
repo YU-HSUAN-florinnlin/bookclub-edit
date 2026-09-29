@@ -610,7 +610,8 @@ def merge_person(workdir: str | Path, src: str, dst: str) -> dict:
 
 
 def reassign_turns(workdir: str | Path, ids: list[str], who: str) -> dict:
-    """`POST /api/turns/reassign`：幾段一起改說話者（把一位拆成兩位：選幾段改成「新學員」）。"""
+    """`POST /api/turns/reassign`：幾段一起改說話者（把一位拆成兩位：選幾段改成「新學員」；
+    09-29 加：聲音辨識把老師判成學員時，選幾段改成「老師」，並補找這幾段裡老師提到的名字）。"""
     workdir = Path(workdir)
     with _lock:
         data = wd.read_json(turns_path(workdir))
@@ -625,7 +626,15 @@ def reassign_turns(workdir: str | Path, ids: list[str], who: str) -> dict:
             t["說話者"], t["說話者是人改的"] = who, True
         _recount_people(data)
         wd.write_json(turns_path(workdir), data)
-        return {"ok": True, "說話者": who, "改了幾段": len(hit)}
+    added = 0
+    if who == "老師":
+        from bookclub import names
+
+        try:
+            added = names.append_candidates(workdir, [sid for t in hit for sid in t.get("句子", [])])
+        except Exception as exc:   # 補找失敗不要擋住改說話者
+            print(f"⚠️ 改成老師後補找名字失敗：{exc}")
+    return {"ok": True, "說話者": who, "改了幾段": len(hit), "補找到的老師名字": added}
 
 
 def mark_student(workdir: str | Path, start: float, end: float, who: str) -> dict:
