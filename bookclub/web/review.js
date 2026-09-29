@@ -411,6 +411,7 @@ function rvRenderCard() {
         <button class="primary" id="rv-pass" title="已通過的再按一次會取消">${it["已確認"] ? "已通過" : "通過"}<kbd>Enter</kbd></button>
         <button class="ghost" id="rv-change" aria-expanded="${rv.open}">改做法<kbd>E</kbd></button>
         <button class="ghost" id="rv-retime" title="用「新增修改」面板改這一筆的起點終點">改時間</button>
+        ${it["類型"] === "學員段落" ? `<button class="ghost" id="rv-isteacher" title="聲音辨識判錯：這一段其實是老師在講話">這段其實是老師</button>` : ""}
         <span class="spacer"></span>
         <button class="ghost" id="rv-prev" aria-label="上一筆">上一筆</button>
         <button class="ghost" id="rv-next" aria-label="下一筆">下一筆</button>
@@ -420,6 +421,15 @@ function rvRenderCard() {
   document.getElementById("rv-pass").addEventListener("click", () => rvPass());
   document.getElementById("rv-change").addEventListener("click", rvToggleMore);
   document.getElementById("rv-retime").addEventListener("click", () => rvOpenEditor(it));
+  const isT = document.getElementById("rv-isteacher");
+  if (isT) isT.addEventListener("click", async () => {
+    // 09-29 宇軒：聲音辨識把老師判成學員時，一鍵改回老師（只有一部分是老師：先用「改做法」裡的「從游標處切開」）
+    if (!confirm(`把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 這一段改成老師？\n改了之後這段不會重念，也會補找這段裡老師提到的名字。\n只有一部分是老師的話，先按「改做法」→「從游標處切開」。`)) return;
+    await rvSaveTurnText(it);
+    const res = await apiPost("/api/turns/save", { id: it.id, "說話者": "老師" });
+    if (res["補找到的老師名字"]) alert(`這段裡補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
+    await rvReload();
+  });
   document.getElementById("rv-prev").addEventListener("click", () => rvStep(-1));
   document.getElementById("rv-next").addEventListener("click", () => rvStep(1));
   rvBindBody(it);
