@@ -22,6 +22,7 @@ from bookclub import workdir as wd
 
 REF_MIN_S, REF_MAX_S = 10.0, 29.0
 REF_MAX_GAP_S = 1.2
+REF_MIN_CPS = 2.0      # 每秒至少 2 個字：太稀疏的段落大多是空白，當參考音學不到聲音
 TAG = "保留原聲學員名字"
 
 
@@ -86,11 +87,19 @@ def pick_ref(workdir: Path, who: str, turns: list[dict], sentences: dict, blocke
     import soundfile as sf
 
     d = ref_dir(workdir, who)
-    if (d / "ref.wav").is_file() and (d / "ref.txt").is_file():
+    owned = {sid for t in turns if t.get("說話者") == who for sid in t.get("句子", [])}
+    meta = wd.read_json(d / "ref.json", default=None) or {}
+    if (d / "ref.wav").is_file() and (d / "ref.txt").is_file() and meta.get("句子") and set(meta["句子"]) <= owned:
+        # 沿用；段落改過（例如那幾句改成老師）就重挑
         return {"ok": True, "wav": d / "ref.wav", "text": (d / "ref.txt").read_text(encoding="utf-8").strip(), "沿用": True}
-    sents = [sentences[sid] for t in turns if t.get("說話者") == who for sid in t.get("句子", []) if sid in sentences]
+    sents = [sentences[sid] for sid in owned if sid in sentences]
     sents = [s for s in sents if s.get("label") != "老師"]
-    wins = ref_windows(sents, blocked)
+
+    def cps(g: list[dict]) -> float:
+        dur = g[-1]["end"] - g[0]["start"]
+        return sum(len([c for c in x.get("text", "") if c.isalnum()]) for x in g) / dur if dur else 0.0
+
+    wins = [g for g in ref_windows(sents, blocked) if cps(g) >= REF_MIN_CPS]
     if not wins:
         return {"ok": False, "原因": f"參考音挑不到：{who} 找不到 {REF_MIN_S:.0f} 秒以上、沒有重疊也沒有名字的連續段落"}
     best, best_score, best_x, sr = None, -1.0, None, 16000
@@ -109,6 +118,8 @@ def pick_ref(workdir: Path, who: str, turns: list[dict], sentences: dict, blocke
     sf.write(str(d / "ref.wav"), best_x, sr)
     text = "".join(g["text"] for g in best).strip()
     (d / "ref.txt").write_text(text + "\n", encoding="utf-8")
+    wd.write_json(d / "ref.json", {"學員": who, "句子": [g["id"] for g in best], "起訖": [best[0]["start"], best[-1]["end"]],
+                                  "分數": best_score})
     return {"ok": True, "wav": d / "ref.wav", "text": text, "長度秒": round(len(best_x) / sr, 1), "分數": best_score,
             "候選組數": len(wins)}
 
