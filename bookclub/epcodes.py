@@ -53,12 +53,21 @@ def same_person_names(workdir: str | Path) -> set[str]:
 
 def duplicates(workdir: str | Path, only: set[str] | None = None) -> dict[str, list[str]]:
     """同一集裡兩個以上本名用同一個代號：{代號: [本名…]}。`only`＝只看這一集有出現的本名。"""
+    from bookclub import personnames
+
     by_code: dict[str, list[str]] = {}
     alias = same_person_names(workdir)
     for real, code in episode_codes(workdir).items():
         if (only is None or real in only) and real not in alias:
             by_code.setdefault(code, []).append(real)
-    return {c: sorted(rs) for c, rs in by_code.items() if len(rs) > 1}
+    # 人名清單裡寫成同一個人的（例如「宜君」其他寫法「怡君」）不算重複
+    groups = [{p["名字"], *p["其他寫法"], *([p["名冊本名"]] if p.get("名冊本名") else [])}
+              for p in (wd.read_json(personnames.people_path(Path(workdir)), default={}) or {}).get("人名", [])]
+
+    def distinct(rs: list[str]) -> bool:
+        return not any(set(rs) <= g for g in groups)
+
+    return {c: sorted(rs) for c, rs in by_code.items() if len(rs) > 1 and distinct(rs)}
 
 
 def replace_table(workdir: str | Path | None = None) -> list[dict]:
