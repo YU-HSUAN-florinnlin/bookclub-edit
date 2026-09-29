@@ -114,7 +114,7 @@ class Busy(Exception):
 
 
 # 第 4 步跑的時候擋掉的寫入（第 3 步覆核工作台的存檔）；計時、匯出不算修改
-STEP3_WRITES = ("/api/review/", "/api/turns/", "/api/people/", "/api/codes/")
+STEP3_WRITES = ("/api/review/", "/api/turns/", "/api/people/", "/api/codes/", "/api/students/")
 STEP3_WRITES_OK = ("/api/review/time", "/api/review/export")
 
 
@@ -1119,6 +1119,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, _turns.set_person_code(server.workdir, str(body["學員"]), body.get("代號")))
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
+        elif path == "/api/students/voice":   # 09-30：第 3 步「學員是誰」改某位學員的聲線（空白＝回到自動配）
+            from bookclub import students
+
+            self._send_json(200, students.set_voice_choice(server.workdir, str(body["學員"]), body.get("聲線") or None))
         elif path == "/api/codes/auto":   # 09-29：幫還沒代號的自動配
             from bookclub import epcodes
 

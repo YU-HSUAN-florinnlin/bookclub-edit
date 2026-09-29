@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -38,7 +39,36 @@ def voice_dir() -> Path:
 
 
 def default_refs() -> dict[str, Path]:
+    """沒有候選聲線時的後備（09-28 暫定：男 1、女 1 各一份）。"""
     return {"男": voice_dir() / "男聲_暫定.wav", "女": voice_dir() / "女聲_暫定.wav"}
+
+
+CANDIDATE_DIR = "候選_0928"
+SKIP_VOICES = {"女5"}   # 09-29 宇軒聽過：女 5 不用
+
+
+def voice_pool() -> dict[str, list[Path]]:
+    """學員匿名聲線候選（09-30）：`聲線/候選_0928/男1.wav…`、`女1.wav…`，照編號排、跳過不用的；
+    逐字稿同檔名 `.txt` 要在。某個性別一個都沒有時，用 `default_refs()` 的暫定聲線當後備。"""
+    import re
+
+    pool: dict[str, list[tuple[int, Path]]] = {"男": [], "女": []}
+    d = voice_dir() / CANDIDATE_DIR
+    if d.is_dir():
+        for f in d.glob("*.wav"):
+            m = re.fullmatch(r"(男|女)(\d+)", f.stem)
+            if m and f.stem not in SKIP_VOICES and f.with_suffix(".txt").is_file():
+                pool[m.group(1)].append((int(m.group(2)), f))
+    out = {g: [f for _, f in sorted(v)] for g, v in pool.items()}
+    for g, fb in default_refs().items():
+        if not out[g] and fb.is_file() and fb.with_suffix(".txt").is_file():
+            out[g] = [fb]
+    return out
+
+
+def voice_name(path: str | Path) -> str:
+    """聲線檔 → 畫面上的名稱（男1、女3；後備的暫定聲線照檔名）。"""
+    return Path(path).stem
 
 
 def out_dir(workdir: Path) -> Path:
@@ -157,20 +187,21 @@ def estimate_student_f0(workdir: Path, spans: list[tuple[float, float]], max_s: 
     return median_f0(x, sr)
 
 
-def roster_gender(student: str, code: str | None) -> str | None:
-    """名冊裡這個代號有填性別就回傳「男」「女」。"""
+def roster_gender(real: str | None) -> str | None:
+    """名冊（用本名找）這個人有填性別就回傳「男」「女」。09-30：名冊拿掉代號欄後改用本名找（以前用代號找，永遠找不到）。"""
     import csv
 
     from bookclub.config import data_dir
 
-    if not code:
+    if not real:
         return None
     path = data_dir() / "名冊.csv"
     if not path.is_file():
         return None
     with open(path, encoding="utf-8-sig", newline="") as f:
         for r in csv.DictReader(f):
-            if (r.get("英文代號") or "").strip() == code:
+            names = [(r.get("中文名") or "").strip()] + [x.strip() for x in re.split(r"[、,，/]", r.get("其他寫法") or "")]
+            if real in [n for n in names if n]:
                 g = (r.get("性別") or "").strip()
                 return "男" if g.startswith("男") else "女" if g.startswith("女") else None
     return None
@@ -293,27 +324,130 @@ def empty_chunks(workdir: Path, start: float | None = None, end: float | None = 
             for it in items]
 
 
-def assign_voices(workdir: Path, students: list[str], spans: dict, codes: dict | None = None,
-                  log: Callable[[str], None] = print) -> dict:
-    """每位學員用男聲或女聲，記在 `生成/學員聲線.json`（算過就沿用）。"""
-    path = Path(workdir) / "生成" / "學員聲線.json"
-    known = wd.read_json(path, default=None) or {}
+def voices_path(workdir: Path) -> Path:
+    return Path(workdir) / "生成" / "學員聲線.json"
+
+
+def voice_key(person: str, info: dict | None) -> str:
+    """聲線記在誰名下：選了本名的用本名（合併／拆開學員後不會沿用錯的，09-30）；還沒本名的用「學員N」。"""
+    real = (info or {}).get("本名")
+    return real if real else person
+
+
+def load_voice_table(workdir: Path) -> dict:
+    """`生成/學員聲線.json` 的 `學員` 表：{鍵（本名或學員N）: {檔案, 名稱, 性別, 依據, 人選的}}。
+    09-29 以前的舊格式（{學員N: {聲線: 男／女}}）只拿來當性別參考。"""
+    data = wd.read_json(voices_path(workdir), default=None) or {}
+    if data.get("版本") == 2:
+        return data
+    legacy = {k: v for k, v in data.items() if isinstance(v, dict) and v.get("聲線") in ("男", "女")}
+    return {"版本": 2, "學員": {}, "舊的性別判斷": legacy}
+
+
+def _student_gender(workdir: Path, person: str, info: dict, spans: dict, table: dict,
+                    estimate: bool) -> tuple[str | None, str]:
+    g = roster_gender(info.get("本名"))
+    if g:
+        return g, "名冊性別"
+    old = (table.get("舊的性別判斷") or {}).get(person)
+    if old and "基頻" in old.get("依據", ""):
+        return old["聲線"], old["依據"]
+    if not estimate:
+        return None, "還沒判斷"
+    f0 = estimate_student_f0(Path(workdir), spans.get(person, []))
+    if f0 is None:
+        return "女", "基頻估不出來，先用女聲"
+    return ("男" if f0 < MALE_F0_HZ else "女"), f"原音中位數基頻 {f0:.0f} Hz（< {MALE_F0_HZ:.0f} 算男聲）"
+
+
+def assign_voices(workdir: Path, students: list[str], spans: dict, people: dict | None = None,
+                  estimate: bool = True, log: Callable[[str], None] = print) -> dict:
+    """每位學員一個聲線檔（09-30 宇軒：依男女自動輪流，同一集每位學員不同）。記在 `生成/學員聲線.json`。
+
+    - students：這一集要重念的學員（學員N），照第一次出現的時間排；男生依序用男 1、男 2⋯，女生用女 1、女 2⋯（女 5 不用）
+    - 已經配過（或人在第 3 步改過）的沿用；新的拿同性別還沒人用的下一個，用完了才重複（記在依據）
+    - 性別：名冊（用本名找）→ 舊判斷 → 原音估基頻；estimate=False 時不估（網頁載入不跑重的計算）
+    回傳 {學員N: {檔案, 名稱, 性別, 依據, 鍵, 人選的}}。"""
+    workdir = Path(workdir)
+    people = people if people is not None else _people(workdir)
+    table = load_voice_table(workdir)
+    known: dict = table.setdefault("學員", {})
+    pool = voice_pool()
+    out: dict = {}
+    # 這一集的學員（全部，不只這次範圍內的）已經用掉的聲線；舊鍵（改過本名、合併掉的）不佔位子，人選的照樣佔
+    here = {voice_key(n, i) for n, i in people.items()} | set(students)
+    used = {g: {v["檔案"] for k, v in known.items() if v.get("性別") == g and v.get("檔案")
+                and (k in here or v.get("人選的"))} for g in ("男", "女")}
+    changed = False
     for who in students:
-        if who in known:
+        info = people.get(who, {})
+        key = voice_key(who, info)
+        rec = known.get(key)
+        if rec and rec.get("檔案") and Path(rec["檔案"]).is_file():
+            out[who] = {**rec, "鍵": key}
             continue
-        g = roster_gender(who, (codes or {}).get(who))
-        if g:
-            known[who] = {"聲線": g, "依據": "名冊性別"}
+        g, why = _student_gender(workdir, who, info, spans, table, estimate)
+        if g is None:
+            out[who] = {"檔案": None, "名稱": None, "性別": None, "依據": why, "鍵": key, "人選的": False}
             continue
-        f0 = estimate_student_f0(Path(workdir), spans.get(who, []))
-        if f0 is None:
-            known[who] = {"聲線": "女", "依據": "基頻估不出來，先用女聲"}
+        free = [f for f in pool.get(g, []) if str(f) not in used[g]]
+        if free:
+            pick = free[0]
+        elif pool.get(g):
+            pick = pool[g][len(used[g]) % len(pool[g])]
+            why += f"；{g}聲候選不夠，跟別人重複"
         else:
-            known[who] = {"聲線": "男" if f0 < MALE_F0_HZ else "女", "依據": f"原音中位數基頻 {f0:.0f} Hz（< {MALE_F0_HZ:.0f} 算男聲）",
-                          "基頻Hz": round(f0, 1)}
-        log(f"[學員聲音] {who}：{known[who]['聲線']}聲（{known[who]['依據']}）")
-    wd.write_json(path, known)
-    return known
+            raise FileNotFoundError(f"找不到{g}聲的匿名聲線：{voice_dir() / CANDIDATE_DIR}／{default_refs()[g]}")
+        used[g].add(str(pick))
+        known[key] = {"檔案": str(pick), "名稱": voice_name(pick), "性別": g, "依據": why, "人選的": False}
+        changed = True
+        out[who] = {**known[key], "鍵": key}
+        log(f"[學員聲音] {key}：{voice_name(pick)}（{g}聲，{why}）")
+    if changed:
+        wd.write_json(voices_path(workdir), table)
+    return out
+
+
+def set_voice_choice(workdir: str | Path, person: str, name: str | None) -> dict:
+    """`POST /api/students/voice`：第 3 步「學員是誰」改某位學員的聲線（name＝男1、女3⋯；空白＝回到自動配）。"""
+    workdir = Path(workdir)
+    people = _people(workdir)
+    if person not in people:
+        raise KeyError(f"沒有這位學員：{person}")
+    key = voice_key(person, people[person])
+    table = load_voice_table(workdir)
+    known = table.setdefault("學員", {})
+    if not name:
+        known.pop(key, None)
+        wd.write_json(voices_path(workdir), table)
+        return {"ok": True, "學員": person, "鍵": key, "聲線": None}
+    pick = next((f for g, fs in voice_pool().items() for f in fs if voice_name(f) == name), None)
+    if pick is None:
+        raise ValueError(f"沒有這個聲線：{name}")
+    g = "男" if name.startswith("男") else "女" if name.startswith("女") else (known.get(key) or {}).get("性別")
+    known[key] = {"檔案": str(pick), "名稱": name, "性別": g, "依據": "人在第 3 步選的", "人選的": True}
+    wd.write_json(voices_path(workdir), table)
+    return {"ok": True, "學員": person, "鍵": key, "聲線": name}
+
+
+def voice_page(workdir: Path, people: dict) -> dict:
+    """第 3 步「學員是誰」每位學員旁邊顯示的聲線（不估基頻，網頁載入要快；還沒配的寫「開始生成時自動配」）。"""
+    order = sorted(people, key=lambda n: people[n].get("第一次", 0.0))
+    got = assign_voices(workdir, order, {}, people=people, estimate=False, log=lambda s: None)
+    return {"每位": got, "選項": {g: [voice_name(f) for f in fs] for g, fs in voice_pool().items()}}
+
+
+def _people(workdir: Path) -> dict:
+    """段落分析的學員表（學員N → 本名等），加上第一次出現的時間（輪流配聲線照這個順序）。"""
+    from bookclub import turns as turns_mod
+
+    tdata = wd.read_json(turns_mod.turns_path(Path(workdir)), default={}) or {}
+    people = {k: dict(v) for k, v in (tdata.get("學員") or {}).items()}
+    for t in tdata.get("段落", []):
+        who = t.get("說話者")
+        if who in people:
+            people[who]["第一次"] = min(people[who].get("第一次", t["start"]), t["start"])
+    return people
 
 
 # ---------- 入口 ----------
@@ -330,15 +464,24 @@ def generate_students(
     from bookclub.config import load_settings
 
     workdir = wd.ensure(workdir)
-    refs = refs or default_refs()
+    refs = refs or {}   # 指令列 --male／--female：那個性別全部用這一個（測試用）；沒給就每位學員各自的聲線
     items, spans = build_items(workdir, start, end, only, include_kept=include_kept)
     if not items:
         log("[學員聲音] 範圍內沒有要生成的學員段落。")
         return {}
-    voices = assign_voices(workdir, sorted({it["學員"] for it in items}), spans, log=log)
+    people = _people(workdir)
+    first = {}
+    for it in items:
+        first.setdefault(it["學員"], it["slot"][0])
+    order = sorted(first, key=lambda n: people.get(n, {}).get("第一次", first[n]))
+    voices = assign_voices(workdir, order, spans, people=people, log=log)
     table = tts.load_pron_table(pron_table)
     for it in items:
-        it["聲線"] = voices[it["學員"]]["聲線"]
+        v = voices[it["學員"]]
+        it["聲線"] = v["性別"]
+        ref = Path(refs[v["性別"]]).expanduser() if refs.get(v["性別"]) else Path(v["檔案"])
+        it["參考音檔"] = str(ref)
+        it["聲線名稱"] = voice_name(ref)
         it["生成用文字"], it["發音對照"] = tts.apply_pron(it["text"], table)
     tolerance = load_settings().thresholds.length_tolerance
 
@@ -356,28 +499,27 @@ def generate_students(
         attempts = [a for r in sents for a in r["嘗試"]]
         audio = sum(a["長度秒"] for a in attempts)
         spent = sum(a["耗時秒"] for a in attempts)
-        data = {"參考音": {k: str(v) for k, v in refs.items()}, "學員聲線": voices, "句子": sents,
+        data = {"參考音": {n: v["檔案"] for n, v in voices.items()}, "學員聲線": voices, "句子": sents,
                 "統計": {"段數": len(sents), "要人聽": sum(1 for r in sents if r["要人聽"]),
                        "生成次數": len(attempts), "生成總秒數": round(audio, 1), "生成總耗時秒": round(spent, 1),
                        "平均倍數": round(spent / audio, 1) if audio else None, "載入模型秒": round(load_total, 1)}}
         wd.write_json(lp, data)
         return data
 
-    for sex in ("男", "女"):
-        group = [it for it in items if it["聲線"] == sex]
-        if not group:
-            continue
-        ref_wav = Path(refs[sex]).expanduser()
+    for ref_path in sorted({it["參考音檔"] for it in items}):   # 09-30：每位學員各自的聲線，同一個聲線一起生成（只載入一次）
+        group = [it for it in items if it["參考音檔"] == ref_path]
+        ref_wav = Path(ref_path)
         ref_txt = ref_wav.with_suffix(".txt")
         for p in (ref_wav, ref_txt):
             if not p.is_file():
-                raise FileNotFoundError(f"找不到{sex}聲參考音：{p}")
+                raise FileNotFoundError(f"找不到學員聲線參考音：{p}")
         ref_text = ref_txt.read_text(encoding="utf-8").strip()
         todo = [it for it in group if tts.record_stale(done.get(it["id"]), it, ref_wav)]
-        log(f"[學員聲音] {sex}聲：{len(group)} 段（{sum(it['slot_s'] for it in group):.0f} 秒），要生成 {len(todo)} 段")
+        log(f"[學員聲音] {voice_name(ref_wav)}（{'、'.join(sorted({it['學員'] for it in group}))}）："
+            f"{len(group)} 段（{sum(it['slot_s'] for it in group):.0f} 秒），要生成 {len(todo)} 段")
         if not todo:
             continue
-        extra = {it["id"]: {k: it[k] for k in ("段落", "學員", "聲線", "句子", "換成代號", "文字來源")} for it in todo}
+        extra = {it["id"]: {k: it[k] for k in ("段落", "學員", "聲線", "聲線名稱", "句子", "換成代號", "文字來源")} for it in todo}
 
         def save_group() -> None:
             for sid, ex in extra.items():

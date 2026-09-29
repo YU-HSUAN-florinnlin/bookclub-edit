@@ -111,10 +111,11 @@ def precheck(workdir: str | Path) -> dict:
     ref = wd.ref_dir(workdir)
     if not ((ref / "ref.wav").is_file() and (ref / "ref.txt").is_file()):
         missing.append("還沒選定老師參考音（參考音/ref.wav、ref.txt）：第 2 步，或 bookclub ref use")
-    refs = students.default_refs()
-    lack = [str(p) for p in refs.values() if not (Path(p).is_file() and Path(p).with_suffix(".txt").is_file())]
+    pool = students.voice_pool()   # 09-30：每位學員各自的聲線（候選_0928），沒有候選才用暫定的
+    lack = [g for g in ("男", "女") if not pool.get(g)]
     if lack:
-        missing.append("找不到學員匿名聲線參考音：" + "、".join(lack))
+        missing.append(f"找不到學員匿名聲線（{'、'.join(lack)}聲）：{students.voice_dir() / students.CANDIDATE_DIR}"
+                       f" 或 {'、'.join(str(students.default_refs()[g]) for g in lack)}")
     from bookclub import review
 
     if not review.video_path(workdir):

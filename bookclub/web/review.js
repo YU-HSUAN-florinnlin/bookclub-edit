@@ -1010,6 +1010,7 @@ function rvPrepPeopleHtml() {
       <div class="ctl">
         <button class="ghost small rv-sample" data-person="${esc(n)}">試聽</button>
         <label>本名 <select class="rv-real" data-person="${esc(n)}">${realOpts}</select></label>
+        ${rvVoiceSelect(n, p)}
       </div>
       <details class="rv-more-ctl"><summary>其他（合併、拆開）</summary><div class="ctl">
         ${others ? `<label>跟誰是同一人 <select class="rv-mergeto" data-person="${esc(n)}"><option value="">—</option>${others}</select></label>` : ""}
@@ -1033,6 +1034,20 @@ function rvPrepPeopleHtml() {
   return `${rvDupHtml()}<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個英文代號（只影響這一集，老師講到他的名字、學員稿子裡的名字都會照這裡換）。</p>${rvAutoHtml()}
     <div class="rv-people2"><div><h4>聲紋分出來的人</h4><ul class="rv-people">${left}</ul></div>
       <div><h4>本名 → 這支影片的英文代號</h4><ul class="rv-people">${right}</ul></div></div>`;
+}
+
+// 09-30 宇軒：學員聲線依男女自動輪流（男 1、男 2⋯／女 1、女 2⋯，女 5 不用），每位不同；這裡顯示、可以改
+function rvVoiceSelect(n, p) {
+  if (p["聲音"] === "保留原聲") return `<span class="rv-meta">保留原聲，不用聲線</span>`;
+  const v = p["聲線"] || {};
+  const opts = rv.data["聲線選項"] || {};
+  const all = [...(opts["男"] || []), ...(opts["女"] || [])];
+  if (!all.length) return "";
+  const cur = v["名稱"] || "";
+  const auto = cur ? `自動配（${v["人選的"] ? "改回自動" : cur}）` : "開始生成時自動配";
+  const og = (g) => (opts[g] || []).length ? `<optgroup label="${g}聲">${opts[g].map((x) => `<option value="${esc(x)}" ${v["人選的"] && x === cur ? "selected" : ""}>${esc(x)}</option>`).join("")}</optgroup>` : "";
+  return `<label title="${esc(v["依據"] || "")}">聲線 <select class="rv-voicepick" data-person="${esc(n)}">
+    <option value="" ${v["人選的"] ? "" : "selected"}>${esc(auto)}</option>${og("男")}${og("女")}</select></label>`;
 }
 
 function rvAutoHtml() {
@@ -1218,6 +1233,9 @@ function rvBindPrep(root) {
     rv.splitOpen = null;
     await reload();
   });
+  root.querySelectorAll(".rv-voicepick").forEach((el) => el.addEventListener("change", async () => {
+    await apiPost("/api/students/voice", { "學員": el.dataset.person, "聲線": el.value || null }); await reload();
+  }));
   root.querySelectorAll(".rv-voice").forEach((el) => el.addEventListener("change", async () => {
     await apiPost("/api/review/voice", { "學員": el.dataset.person, "聲音": el.value }); await reload();
   }));

@@ -610,6 +610,20 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                       "建議": {"做法": m.get("方式", MUTE_WAYS[0]), "原因": "人手動加的"}, "不用處理": None})
     items.sort(key=lambda x: (x["start"], x["類型"]))
 
+    # 09-30：每位要重念的學員用哪個聲線（依男女輪流配；網頁載入不估基頻，性別不知道的寫「開始生成時自動配」）
+    try:
+        from bookclub import students as students_mod
+
+        live = {n: {**p, "第一次": min((t["start"] for t in turns if t["說話者"] == n), default=0.0)}
+                for n, p in people.items() if not p.get("都會刪掉") and p.get("聲音") != "保留原聲"}
+        vp = students_mod.voice_page(workdir, live)
+        for n, v in vp["每位"].items():
+            people[n]["聲線"] = {k: v.get(k) for k in ("名稱", "性別", "依據", "人選的")}
+        voice_opts = vp["選項"]
+    except Exception as exc:  # noqa: BLE001 — 聲線配不出來不要擋住工作台
+        print(f"⚠️ 學員聲線配不出來：{exc}")
+        voice_opts = {}
+
     mentioned = _unlisted_names(workdir, {p["本名"] for p in tdata.get("學員", {}).values() if p.get("本名")}, will_cut)
     ep_codes = epcodes.episode_codes(workdir)
     pending = prep_pending(dec, people, suggestions, mentioned, ep_codes)
@@ -625,6 +639,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "色帶": bands,
         "學員": people,
         "代號選項": tdata.get("代號選項", []),
+        "聲線選項": voice_opts,
         "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號", "這一集的名字")},   # 09-29「學員是誰」兩欄
         "代號重複": _dup_codes(workdir, tdata),
         "這一集代號": ep_codes,   # 09-29：名冊拿掉代號欄，② ③ 顯示用這張

@@ -106,6 +106,66 @@ def test_median_f0_male_female():
     assert students.median_f0(high.astype(np.float32), sr) > students.MALE_F0_HZ
 
 
+
+
+def test_voices_rotate_by_gender_and_key_by_real_name():
+    # 09-30 宇軒：男生依序男 1、男 2⋯，女生女 1、女 2⋯（女 5 不用）；同一集每位不同；鍵用本名；可以改
+    import json
+    import os
+    import tempfile
+
+    data = Path(tempfile.mkdtemp())
+    w = Path(tempfile.mkdtemp()) / "工作區"
+    w.mkdir()
+    old = os.environ.get("BOOKCLUB_DATA_DIR")
+    os.environ["BOOKCLUB_DATA_DIR"] = str(data)
+    try:
+        d = data / "聲線" / "候選_0928"
+        d.mkdir(parents=True)
+        for name in ("男1", "男2", "男10", "女1", "女5", "女6"):
+            (d / f"{name}.wav").write_bytes(b"x")
+            (d / f"{name}.txt").write_text("參考音逐字稿", encoding="utf-8")
+        (data / "名冊.csv").write_text("中文名,其他寫法,性別\n王小明,小明,男\n李小華,,女\n陳大同,,男\n林美美,,女\n",
+                                      encoding="utf-8")
+        pool = students.voice_pool()
+        assert [f.stem for f in pool["男"]] == ["男1", "男2", "男10"] and [f.stem for f in pool["女"]] == ["女1", "女6"]
+        assert students.roster_gender("小明") == "男" and students.roster_gender("不在名冊") is None
+        people = {"學員1": {"本名": "王小明", "第一次": 10.0}, "學員2": {"本名": "李小華", "第一次": 20.0},
+                  "學員3": {"本名": "陳大同", "第一次": 30.0}, "學員4": {"本名": "林美美", "第一次": 40.0},
+                  "學員5": {"第一次": 50.0}}
+        order = ["學員1", "學員2", "學員3", "學員4", "學員5"]
+        got = students.assign_voices(w, order, {}, people=people, estimate=False, log=lambda s: None)
+        assert [got[n]["名稱"] for n in order[:4]] == ["男1", "女1", "男2", "女6"]
+        assert got["學員5"]["檔案"] is None                                    # 性別不知道、不估：先不配
+        saved = json.loads(students.voices_path(w).read_text(encoding="utf-8"))
+        assert set(saved["學員"]) == {"王小明", "李小華", "陳大同", "林美美"}   # 鍵是本名
+        # 合併／拆開後學員編號變了（王小明變成學員7）：照本名沿用同一個聲線
+        people2 = {"學員7": {"本名": "王小明", "第一次": 5.0}, **{k: v for k, v in people.items() if k != "學員1"}}
+        got2 = students.assign_voices(w, ["學員7", "學員2"], {}, people=people2, estimate=False, log=lambda s: None)
+        assert got2["學員7"]["名稱"] == "男1" and got2["學員2"]["名稱"] == "女1"
+        # 人改聲線：選男 10；空白＝回到自動配
+        people_file = {"學員": {k: {kk: vv for kk, vv in v.items() if kk != "第一次"} for k, v in people.items()},
+                       "段落": [{"說話者": k, "start": v["第一次"], "end": v["第一次"] + 1} for k, v in people.items()]}
+        (w / "校對").mkdir()
+        (w / "校對" / "段落.json").write_text(json.dumps(people_file, ensure_ascii=False), encoding="utf-8")
+        students.set_voice_choice(w, "學員3", "男10")
+        got3 = students.assign_voices(w, order[:4], {}, people=people, estimate=False, log=lambda s: None)
+        assert got3["學員3"]["名稱"] == "男10" and got3["學員3"]["人選的"]
+        students.set_voice_choice(w, "學員3", None)
+        got4 = students.assign_voices(w, order[:4], {}, people=people, estimate=False, log=lambda s: None)
+        assert got4["學員3"]["名稱"] == "男2" and not got4["學員3"]["人選的"]
+        try:
+            students.set_voice_choice(w, "學員3", "女5")                      # 不用的聲線選不到
+            raise AssertionError
+        except ValueError:
+            pass
+    finally:
+        if old is None:
+            os.environ.pop("BOOKCLUB_DATA_DIR")
+        else:
+            os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

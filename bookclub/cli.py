@@ -139,8 +139,8 @@ def build_parser() -> argparse.ArgumentParser:
     gen_st.add_argument("--start", help="從幾分幾秒開始（例如 37:00）")
     gen_st.add_argument("--end", help="到幾分幾秒（例如 55:23）")
     gen_st.add_argument("--only", help="只做這幾個學員段落（逗號分隔，例如 T038,T032）")
-    gen_st.add_argument("--male", help="男聲參考音（預設 ~/讀書會剪輯資料/聲線/男聲_暫定.wav，逐字稿同檔名 .txt）")
-    gen_st.add_argument("--female", help="女聲參考音（預設 ~/讀書會剪輯資料/聲線/女聲_暫定.wav）")
+    gen_st.add_argument("--male", help="男生全部用這個參考音（測試用；預設每位學員各自的聲線，依男女輪流配 聲線/候選_0928/，逐字稿同檔名 .txt）")
+    gen_st.add_argument("--female", help="女生全部用這個參考音（測試用）")
     gen_st.add_argument("--no-check", action="store_true", help="不用 Groq 轉回文字檢查")
     gen_st.add_argument("--no-pauses", action="store_true", help="不照原片停頓插入空白")
     gen_st.add_argument("--plan-only", action="store_true", help="只列出會生成哪幾段（不載入模型）")
@@ -341,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
                           f"{len(it['句子'])} 句\t換代號 {it['換成代號']}")
                 print(f"共 {len(items)} 段、{sum(it['slot_s'] for it in items):.0f} 秒")
                 return 0
-            refs = students.default_refs()
+            refs = {}   # 09-30：沒給 --male／--female 就每位學員各自的聲線（依男女輪流配）
             if args.male:
                 refs["男"] = _Path(args.male).expanduser()
             if args.female:
