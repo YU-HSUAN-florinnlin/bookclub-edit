@@ -16,12 +16,14 @@
 const RV_TYPE = {
   "學員段落": { cls: "stu", label: "學員段落" },
   "名字": { cls: "name", label: "老師提到名字" },
+  "學員名字": { cls: "name", label: "學員提到名字" },   // 09-29：保留原聲的學員自己講到名字
   "重疊": { cls: "ov", label: "重疊" },
   "刪除段落": { cls: "cut", label: "刪除段落" },
   "局部消音": { cls: "mute", label: "局部消音" },
 };
 const RV_FILTERS = [["全部", "全部"], ["還沒確認", "還沒確認"], ["學員段落", "學員段落"], ["名字", "名字"],
-  ["重疊", "重疊"], ["刪除段落", "建議刪除"]];
+  ["學員名字", "學員提到名字"], ["重疊", "重疊"], ["刪除段落", "建議刪除"]];
+const rvIsName = (t) => t === "名字" || t === "學員名字";
 const RV_STU_SHADES = ["#3f8f5a", "#6aae7f", "#2d6b43", "#8cc49d", "#4f9d6b", "#1f5434"];
 
 const rv = {
@@ -299,7 +301,7 @@ function rvRenderTimeline() {
   }).join("");
   const marks = rvItems().map((it) => {
     const t = it["類型"];
-    if (t === "名字") return `<i class="m name" style="left:${pct(it.start)}%"></i>`;
+    if (rvIsName(t)) return `<i class="m name" style="left:${pct(it.start)}%"></i>`;
     if (t === "重疊") return `<i class="m ov" style="left:${pct(it.start)}%"></i>`;
     if (t === "刪除段落" && it["狀態"] !== "還原") {
       return `<i class="m cut${it["來源"] === "建議" && !it["決定"] ? " pending" : ""}" style="left:${pct(it.start)}%;width:${Math.max(0.3, pct(it.end - it.start))}%"></i>`;
@@ -371,7 +373,7 @@ function rvSuggestText(it) {
 function rvChosen(it) {   // 現在會套用的做法：人改過的，或建議
   const t = it["類型"];
   if (t === "重疊") return it["做法"] || (it["建議"] || {})["做法"];
-  if (t === "名字") return it["做法"];
+  if (rvIsName(t)) return it["做法"];
   if (t === "刪除段落") return it["來源"] === "建議" ? (it["決定"] || "刪除") : (it["狀態"] === "還原" ? "不刪" : "刪除");
   if (t === "局部消音") return it["方式"];
   return null;
@@ -446,6 +448,12 @@ function rvBodyHtml(it) {
       ${it["含本名"] ? `<p class="rv-warnline">文字裡還有名冊上的本名，要換成代號。</p>` : ""}
       ${it["問老師"] ? `<p class="rv-note">已標「聽不清楚，問老師」${it["問老師備註"] ? "：" + esc(it["問老師備註"]) : ""}</p>` : ""}`;
   }
+  if (t === "學員名字") {
+    const w = it["整句"];
+    return `<p class="rv-who">${esc(rvWho(it["學員"]))}（保留原聲）講到名字</p><p class="rv-quote">${it.sentence_html}</p>
+      ${w ? `<p class="rv-note">選「換成代號」時，用${esc(rvWho(it["學員"]))}自己的聲音重念這句：${esc(w["換成代號"] || w["原文"])}${w["換成代號"] ? "" : "（句子裡找不到比對到的字，會退回直接消音）"}</p>` : ""}
+      <p class="rv-meta">代號 ${esc(it["代號"] || "（沒有）")}${it["信心"] === "低" ? "　低信心，先聽清楚是不是名字" : ""}</p>`;
+  }
   if (t === "名字") {
     const w = it["整句"];
     return `<p class="rv-quote">${it.sentence_html}</p>
@@ -487,9 +495,9 @@ function rvMoreHtml(it) {
         <input id="rv-asknote" placeholder="要問老師什麼" value="${esc(it["問老師備註"] || "")}" ${it["問老師"] ? "" : "hidden"}></div>
       ${it["原文"] !== it["校對稿"] ? `<details class="rv-orig"><summary>看原本轉出來的文字</summary>${esc(it["原文"])}</details>` : ""}`;
   }
-  if (t === "名字") {
+  if (rvIsName(t)) {
     const tags = opts["名字標記"].map((g) => `<label class="rv-check"><input type="checkbox" class="rv-tag" value="${esc(g)}" ${it.tags.includes(g) ? "checked" : ""}> ${esc(g)}</label>`).join("");
-    return `<div class="rv-field rv-choices">${rvRadios("rv-namehow", opts["名字"], it["做法"], "rv-namehow")}</div>
+    return `<div class="rv-field rv-choices">${rvRadios("rv-namehow", opts[t], it["做法"], "rv-namehow")}</div>
       <div class="rv-field rv-choices">${tags}</div>
       <div class="rv-field"><input id="rv-note" placeholder="備註（選填）" value="${esc(it.note || "")}"></div>`;
   }
@@ -553,7 +561,7 @@ function rvBindMore(it) {
       it["問老師"] = res["段落"]["問老師"];
     });
     q("rv-asknote").addEventListener("change", (e) => { it["問老師備註"] = e.target.value; apiPost("/api/turns/save", { id: it.id, "問老師備註": e.target.value }); });
-  } else if (t === "名字") {
+  } else if (rvIsName(t)) {
     document.querySelectorAll(".rv-namehow").forEach((el) => el.addEventListener("change", () => rvSaveName(it, { "做法": el.value })));
     document.querySelectorAll(".rv-tag").forEach((el) => el.addEventListener("change", () => rvSaveName(it, {
       tags: [...document.querySelectorAll(".rv-tag:checked")].map((x) => x.value) })));
@@ -600,7 +608,7 @@ async function rvSaveTurnText(it) {
 }
 
 async function rvSaveName(it, fields) {
-  const res = await apiPost("/api/review/name", { id: it.id, ...fields });
+  const res = await apiPost(it["類型"] === "學員名字" ? "/api/review/stuname" : "/api/review/name", { id: it.id, ...fields });
   Object.assign(it, { "做法": res["決定"]["做法"] || it["做法"], tags: res["決定"].tags || [], note: res["決定"].note || "" });
   rvRefreshSug();
 }
@@ -638,8 +646,8 @@ async function rvPass() {
       await apiPost("/api/turns/save", { id: it.id, "校對稿": text, "已確認": !undo });
       it["校對稿"] = it["建議稿"] = text;
       it["換過的字"] = [];
-    } else if (t === "名字") {
-      await apiPost("/api/review/name", { id: it.id, "做法": it["做法"], "已確認": !undo });
+    } else if (rvIsName(t)) {
+      await apiPost(t === "名字" ? "/api/review/name" : "/api/review/stuname", { id: it.id, "做法": it["做法"], "已確認": !undo });
     } else if (t === "重疊") {
       const how = rvChosen(it);
       const ar = it["排法"] || (it["建議"] || {})["排法"] || "前後排開";
@@ -671,6 +679,7 @@ function rvPreview(it) {
   const t = it["類型"];
   if (t === "學員段落") return `${rvWho(it["說話者"])}：${(it["已確認"] ? it["校對稿"] : it["建議稿"]) || ""}`;
   if (t === "名字") return (it["整句"] && (it["整句"]["換成代號"] || it["整句"]["原文"])) || it["代號"] || "";
+  if (t === "學員名字") return `${rvWho(it["學員"])}講到名字：${it["代號"] || ""}`;
   if (t === "重疊") return `老師：${it["老師文字"] || "—"}／${rvWho(it["學員說話者"])}：${it["學員文字"] || "—"}`;
   if (t === "刪除段落") return `${rvFmt(it.start)}–${rvFmt(it.end)}（${(it.end - it.start).toFixed(0)} 秒）${it["建議類型"] ? " " + it["建議類型"] : ""}`;
   return `${rvFmt(it.start)}–${rvFmt(it.end)} ${it["方式"] || ""}`;

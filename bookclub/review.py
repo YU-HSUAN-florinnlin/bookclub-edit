@@ -402,6 +402,13 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         it["建議"] = {"做法": nameplan_whole(), "原因": "預設整句用老師 AI 聲音重念、名字換成代號（09-25 定案）" + cut_hint}
         it["不用處理"] = skip_reason(it["start"], it["end"])
         items.append(it)
+    # 09-29：保留原聲的學員自己講到名字（設成保留原聲才會列；改回重新生成就不列）
+    from bookclub import studentnames
+
+    try:
+        items.extend(studentnames.items(workdir, cut_ranges))
+    except Exception as exc:   # 找名字失敗不要擋住整個工作台
+        print(f"⚠️ 保留原聲學員的名字找不到：{exc}")
 
     ov = wd.read_json(wd.overlap_path(workdir), default=None)
     if ov is None and dec["人工重疊"]:
@@ -462,6 +469,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "刪除建議": [{**sg, "決定": dec["刪除建議"].get(sg["id"], {}).get("決定")} for sg in suggestions],
         "開始前確認": dec["開始前確認"],
         "選項": {"重疊": OVERLAP_HOWS, "重疊排法": OVERLAP_ARRANGE, "名字": NAME_HOWS, "名字標記": NAME_TAGS,
+                 "學員名字": list(studentnames.HOWS),
                  "消音": MUTE_WAYS, "聲音": VOICE_CHOICES},
         "進度": progress(items, dec, duration),
     }

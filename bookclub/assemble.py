@@ -73,7 +73,7 @@ def build_edl(plan: dict, teacher_log: dict | None) -> tuple[list[dict], list[st
     return kept, warnings
 
 
-MUTE_KINDS = ("消音", "名字消音", "局部消音")   # 墊環境底噪的動作（其他是換聲音）
+MUTE_KINDS = ("消音", "名字消音", "局部消音", "學員名字消音")   # 墊環境底噪的動作（其他是換聲音）
 SWAP_KINDS = ("換聲音", "學員重念", "名字整句換掉")
 
 
@@ -119,6 +119,32 @@ def add_local_mutes(edits: list[dict], mutes: list[dict], cuts: list[tuple[float
         for s, e in parts:
             out.append({"類型": "局部消音", "start": s, "end": e, "id": m["id"], "方式": m.get("方式", "墊底噪"),
                         "霧化": m.get("方式") == "霧化", "候選": []})
+    out.sort(key=lambda e: e["start"])
+    return out, warnings
+
+
+def student_name_edits(sp: dict) -> list[dict]:
+    """保留原聲學員講到名字（`studentnames.plan()`）→ 剪輯決策：直接消音的墊底噪、換成代號的放生成檔（有生成紀錄才放）。"""
+    out = [{"類型": "學員名字消音", "start": m["start"], "end": m["end"], "id": m["id"], "學員": m["學員"], "候選": [m["id"]]}
+           for m in sp.get("消音", [])]
+    return out
+
+
+def add_student_name_edits(edits: list[dict], workdir: Path, a: float = 0.0, b: float = 1e12,
+                           cuts: list[tuple[float, float]] = ()) -> tuple[list[dict], list[str]]:
+    """把保留原聲學員講到名字的處理加進剪輯決策；跟既有動作重疊時以既有那筆為準（例如測試時學員整段重念）。"""
+    from bookclub import studentgen, studentnames
+
+    sp = studentnames.plan(workdir)
+    new = [e for e in student_name_edits(sp) + studentgen.swap_edits(workdir, sp) if e["start"] < b and a < e["end"]]
+    out, warnings = list(edits), []
+    for e in new:
+        if any(x <= e["start"] and e["end"] <= y for x, y in cuts):
+            continue
+        if any(e["start"] < k["end"] and k["start"] < e["end"] for k in out):
+            warnings.append(f"{e['類型']} {e['id']} 跟別筆重疊，以那一筆為準")
+            continue
+        out.append(e)
     out.sort(key=lambda e: e["start"])
     return out, warnings
 
@@ -262,6 +288,8 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
 
     edits, w2 = add_local_mutes(edits, local_mutes(review.load_decisions(workdir)))   # 聲音軌跟原片等長，刪除段落不套用
     warnings += w2
+    edits, w3 = add_student_name_edits(edits, workdir)
+    warnings += w3
     for w in warnings:
         print(f"⚠️ {w}")
 

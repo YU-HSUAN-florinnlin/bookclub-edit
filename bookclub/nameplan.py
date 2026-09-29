@@ -56,7 +56,7 @@ def _ends_open(text: str) -> bool:
     return bool(t) and t[-1] in CONT_PUNCT
 
 
-def expand_sentence(ordered: list[dict], idx: int) -> list[dict]:
+def expand_sentence(ordered: list[dict], idx: int, same=None) -> list[dict]:
     """把 Groq 切的半句擴成完整句子（純函式，09-25 宇軒：句子起訖照標點，不斷在句子中間）。
 
     往前：前一段以逗號類結尾（句子還沒完）、也是老師、中間空白不超過 MAX_JOIN_GAP_S → 接上；
@@ -65,8 +65,8 @@ def expand_sentence(ordered: list[dict], idx: int) -> list[dict]:
     group = [ordered[idx]]
     lo, hi = idx, idx
 
-    def ok(s: dict) -> bool:
-        return s.get("label", "老師") == "老師"
+    def ok(s: dict) -> bool:   # 同一個人說的才接（預設：老師；學員講到名字時由呼叫端給判斷）
+        return same(s) if same else s.get("label", "老師") == "老師"
 
     while lo > 0:
         prev = ordered[lo - 1]

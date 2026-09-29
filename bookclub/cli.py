@@ -125,6 +125,11 @@ def build_parser() -> argparse.ArgumentParser:
     gen_names_parser.add_argument("--plan-only", action="store_true", help="只排計畫、不生成")
     gen_names_parser.add_argument("--redo", action="store_true", help="忽略上次生成結果，全部重新生成")
 
+    gen_sn = gen_sub.add_parser("stunames", help="保留原聲的學員講到名字、選了換成代號的：用他自己的聲音生成代號短句")
+    gen_sn.add_argument("workdir", help="工作區路徑")
+    gen_sn.add_argument("--no-check", action="store_true", help="不用 Groq 轉回文字檢查")
+    gen_sn.add_argument("--no-pauses", action="store_true", help="不照原片停頓插入空白")
+
     gen_st = gen_sub.add_parser("students", help="學員段落用匿名聲線（男聲／女聲）重念（測試版）")
     gen_st.add_argument("workdir", help="工作區路徑（要先跑過 run analyze）")
     gen_st.add_argument("--start", help="從幾分幾秒開始（例如 37:00）")
@@ -300,6 +305,13 @@ def main(argv: list[str] | None = None) -> int:
 
                 generate_teacher(args.workdir, sentences_path(_Path(args.workdir).expanduser()), redo=args.redo)
             print("下一步：bookclub render audio <工作區>")
+            return 0
+        if args.gen_command == "stunames":
+            from bookclub import studentgen, studentnames
+
+            sp = studentnames.plan(args.workdir)
+            print(f"[保留原聲學員名字] 直接消音 {len(sp['消音'])} 筆、換成代號 {len(sp['生成'])} 句、要人處理 {len(sp['要人處理'])} 筆")
+            studentgen.generate(args.workdir, check_content=not args.no_check, use_pauses=not args.no_pauses)
             return 0
         if args.gen_command == "students":
             from pathlib import Path as _Path

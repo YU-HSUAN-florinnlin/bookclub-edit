@@ -1020,6 +1020,10 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/review/name":
                 self._send_json(200, rv.save_name(server.workdir, str(body["id"]), body))
+            elif path == "/api/review/stuname":
+                from bookclub import studentnames
+
+                self._send_json(200, studentnames.save(server.workdir, str(body["id"]), body))
             elif path == "/api/review/overlap":
                 self._send_json(200, rv.save_overlap(server.workdir, str(body["id"]), body))
             elif path == "/api/review/cut":

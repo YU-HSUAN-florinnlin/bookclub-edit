@@ -34,7 +34,8 @@ REL_DB = -26.0            # 相減的音量比原片低超過這麼多 → 當�
 MERGE_GAP_S = 0.2         # 兩處變動中間隔不到 0.2 秒，併成一處（人看的時候是同一件事）
 
 # 會動到聲音的紀錄類型（檢查只拿這些當「有登記」）；模糊是畫面、重疊標記只是說明，不算
-AUDIO_KINDS = ("學員重念", "名字整句換掉", "名字消音", "局部消音", "刪除", "停格", "換聲音", "消音")
+AUDIO_KINDS = ("學員重念", "名字整句換掉", "名字消音", "局部消音", "學員名字消音", "學員名字換代號", "刪除", "停格",
+               "換聲音", "消音")
 
 
 def log_path(workdir: Path) -> Path:
@@ -90,6 +91,10 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
         elif kind == "局部消音":
             rec["覆核項目"] = [f"局部消音:{e['id']}"]
             rec["做了什麼"] = mute_text(e)
+        elif kind in ("學員名字消音", "學員名字換代號"):
+            rec["覆核項目"] = [f"學員名字:{c}" for c in e.get("候選", [])]
+            rec["做了什麼"] = student_name_text(e)
+            rec["檔案"] = e.get("檔案")
         else:
             rec["做了什麼"] = kind
         recs.append(rec)
@@ -136,6 +141,13 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
     return recs
 
 
+def student_name_text(e: dict) -> str:
+    who = e.get("學員") or "學員"
+    if e["類型"] == "學員名字消音":
+        return f"{who}（保留原聲）講到名字：名字消音（墊環境底噪）"
+    return f"{who}（保留原聲）講到名字：用{who}自己的聲音重念這句、名字換成代號——學員聲音生成，音色可能有差"
+
+
 def mute_text(e: dict) -> str:
     return f"第 3 步標的局部消音 {e['id']}（墊環境底噪" + ("；選的是霧化，霧化還沒做，先墊底噪）" if e.get("霧化") else "）")
 
@@ -146,11 +158,15 @@ def records_from_edl(edits: list[dict]) -> list[dict]:
     for e in edits:
         swap = e["類型"] == "換聲音"
         local = e["類型"] == "局部消音"
+        stu = e["類型"] in ("學員名字消音", "學員名字換代號")
         recs.append({"類型": e["類型"], "原片": [_r(e["start"]), _r(e["end"])], "成品": [_r(e["start"]), _r(e["end"])],
-                     "動到聲音": True, "要人聽": bool(e.get("要人聽")), "檔案": e.get("檔案") if swap else None,
-                     "文字": e.get("文字"),
-                     "覆核項目": [f"局部消音:{e['id']}"] if local else [f"名字:{c}" for c in e.get("候選", [])],
-                     "做了什麼": mute_text(e) if local else "老師提到名字：用老師 AI 聲音重念、名字換成代號" if swap
+                     "動到聲音": True, "要人聽": bool(e.get("要人聽")),
+                     "檔案": e.get("檔案") if swap or e["類型"] == "學員名字換代號" else None,
+                     "文字": e.get("文字") or e.get("text"),
+                     "覆核項目": [f"局部消音:{e['id']}"] if local else [f"學員名字:{c}" for c in e.get("候選", [])] if stu
+                     else [f"名字:{c}" for c in e.get("候選", [])],
+                     "做了什麼": mute_text(e) if local else student_name_text(e) if stu
+                     else "老師提到名字：用老師 AI 聲音重念、名字換成代號" if swap
                      else "老師提到名字：名字消音（墊環境底噪）"})
     for i, r in enumerate(recs, start=1):
         r["編號"] = i

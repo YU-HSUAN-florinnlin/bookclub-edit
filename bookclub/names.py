@@ -280,6 +280,12 @@ def find_names(
     roster_path: Path,
     sensitive_path: Path | None = None,
     exclusion_path: Path | None = None,
+    *,
+    select=None,
+    cache_path: Path | None = None,
+    clip_dir: Path | None = None,
+    use_cache: bool = True,
+    annotate=None,
 ) -> dict:
     """在標成「老師」的句子裡找名冊上的名字與敏感詞。回傳 dict：
         candidates: 每筆 {start, end, sentence, name, canonical, code, position,
@@ -297,11 +303,15 @@ def find_names(
 
     `workdir/名字候選.json` 已存在就直接讀出來回傳。名字與句子內容只寫進檔案，
     不印在終端機。
+
+    09-29 加（保留原聲學員講到名字，`bookclub/studentnames.py` 用）：`select(句子) → bool` 換掉「只掃老師」、
+    `cache_path`／`clip_dir` 換存放位置、`use_cache=False` 不沿用舊結果、`annotate(句子) → dict` 每筆候選多加的欄位。
+    都不給時行為跟以前一樣。
     """
     workdir = Path(workdir)
     audio_path = Path(audio_path)
-    cache_path = names_path(workdir)
-    cached = read_json(cache_path, default=None)
+    cache_path = Path(cache_path) if cache_path else names_path(workdir)
+    cached = read_json(cache_path, default=None) if use_cache else None
     if cached is not None:
         print("[4/找名字] 已有 名字候選.json，略過")
         return cached
@@ -324,7 +334,7 @@ def find_names(
     if not terms:
         print("[4/找名字] 名冊／敏感詞都是空的，沒有東西可以找")
 
-    clip_dir = name_candidates_dir(workdir)
+    clip_dir = Path(clip_dir) if clip_dir else name_candidates_dir(workdir)
     clip_dir.mkdir(parents=True, exist_ok=True)
 
     with sf.SoundFile(str(audio_path)) as f:
@@ -339,7 +349,8 @@ def find_names(
     action_counts: dict[str, int] = {}
     confidence_counts = {"雙邊乾淨": 0, "單邊乾淨": 0, "都不乾淨": 0}
 
-    teacher_sentences = [s for s in sentences if s.get("label") == "老師"]
+    select = select or (lambda s: s.get("label") == "老師")
+    teacher_sentences = [s for s in sentences if select(s)]
     audio_full = None  # 延遲載入，名冊是空的、或這句的命中全部被排除清單擋掉時完全不用碰音檔
 
     for sent in teacher_sentences:
@@ -423,6 +434,7 @@ def find_names(
                 "切點信心": confidence,
                 "建議緩衝秒數": DEFAULT_BUFFER_S,
                 "候選音檔": str(clip_path.relative_to(workdir)),
+                **(annotate(sent) if annotate else {}),
             })
             if not term.get("_sensitive"):
                 level_counts[level] += 1

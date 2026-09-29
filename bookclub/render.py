@@ -200,6 +200,11 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Tr
     mutes = [{**m, "start": max(m["start"], a), "end": min(m["end"], b)} for m in mutes]
     kept, w = assemble.add_local_mutes(kept, mutes, cuts)
     warnings += w
+    # 保留原聲的學員自己講到名字（09-29）：直接消音、或用他自己的聲音生成代號短句
+    kept, w = assemble.add_student_name_edits(kept, workdir, a, b, cuts)
+    warnings += w
+    for e in kept:
+        e["start"], e["end"] = clip_to_cuts(e["start"], e["end"], cuts)
     blur = pick_blur(kept, cuts, a, b)
     return {"範圍": [a, b], "刪除": cuts, "動作": kept, "停格": sorted(freezes, key=lambda f: f["at"]),
             "模糊": blur, "標記": marks, "警告": warnings, "學員聲線": voices}
@@ -553,6 +558,10 @@ def label_text(e: dict) -> str:
         return "AI：名字整句換掉"
     if e["類型"] == "局部消音":
         return "局部消音" + ("（霧化還沒做，先墊底噪）" if e.get("霧化") else "")
+    if e["類型"] == "學員名字消音":
+        return f"AI：{e.get('學員', '學員')} 講到名字消音"
+    if e["類型"] == "學員名字換代號":
+        return f"AI：{e.get('學員', '學員')} 講到名字換代號（學員聲音生成，音色可能有差）"
     return "AI：名字消音"
 
 
