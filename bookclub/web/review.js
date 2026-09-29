@@ -47,6 +47,9 @@ const RV_ITEM_KIND = { "學員段落": "學員發言", "名字": "名字", "重�
 function rvKey(it) { return `${it["類型"]}:${it.id}`; }
 function rvItem(key) { return rv.data["項目"].find((x) => rvKey(x) === key); }
 function rvItems() { return rv.data["項目"]; }
+// 09-29 宇軒：落在前面已確認刪除的段落裡＝前面核對過了，顯示成「通過」
+function rvInCut(it) { return (it["不用處理"] || "").includes("刪除"); }
+
 function rvDone(it) { return !!(it["已確認"] || it["不用處理"]); }
 
 function rvFmt(sec, digits = 0) {
@@ -426,7 +429,7 @@ function rvChip(it) {
 function rvSuggestText(it) {
   const s = it["建議"] || {};
   if (it["類型"] === "重疊" && s["做法"] === "兩邊都重生成" && s["排法"]) return `${s["做法"]}、${s["排法"]}`;
-  if (it["類型"] === "學員段落") return "學員整句生成（逐字稿沒問題就通過）";
+  if (it["類型"] === "學員段落") return s["做法"] === "刪除這段" ? "刪除這段" : "學員整句生成（逐字稿沒問題就通過）";
   return rvHowLabel(s["做法"]) || "—";
 }
 
@@ -448,7 +451,8 @@ function rvRenderCard() {
   }
   const all = rvItems();
   const idx = all.findIndex((x) => rvKey(x) === rv.cur);
-  const state = it["不用處理"] ? `<span class="rv-state skip">不用處理：${esc(it["不用處理"])}</span>`
+  const state = rvInCut(it) ? `<span class="rv-state ok">✓ 通過：這段在前面已確認整段刪除（要救回：把那段刪除段落改成不刪／還原）</span>`
+    : it["不用處理"] ? `<span class="rv-state skip">不用處理：${esc(it["不用處理"])}</span>`
     : it["已確認"] ? `<span class="rv-state ok">✓ 已通過</span>` : "";
   const sug = it["建議"] || {};
   const chosen = rvChosen(it);
@@ -468,7 +472,7 @@ function rvRenderCard() {
       </div>
       ${state ? `<div class="rv-statebox">${state}</div>` : ""}
       <div class="rv-actions">
-        <button class="primary" id="rv-pass" title="已通過的再按一次會取消">${it["已確認"] ? "已通過" : "通過"}<kbd>Enter</kbd></button>
+        <button class="primary" id="rv-pass" title="已通過的再按一次會取消">${it["已確認"] || rvInCut(it) ? "已通過" : "通過"}<kbd>Enter</kbd></button>
         <button class="ghost" id="rv-change" aria-expanded="${rv.open}">改做法<kbd>E</kbd></button>
         <button class="ghost" id="rv-retime" title="用「新增修改」面板改這一筆的起點終點">改時間</button>
         ${it["類型"] === "學員段落" ? `<button class="ghost" id="rv-isteacher" title="聲音辨識判錯：這一段其實是老師在講話">這段其實是老師</button>` : ""}
@@ -580,7 +584,11 @@ function rvMoreHtml(it) {
   const opts = rv.data["選項"];
   if (t === "學員段落") {
     const whoOpts = ["老師", ...rvStudents(), "新學員"].map((n) => `<option value="${esc(n)}" ${n === it["說話者"] ? "selected" : ""}>${esc(n === "新學員" ? "新的一位學員" : rvWho(n))}</option>`).join("");
-    return `<div class="rv-field"><label>說話者 <select id="rv-who">${whoOpts}</select></label></div>
+    const minor = (it["建議"] || {})["做法"] === "刪除這段" || it["短句保留"];
+    const cur = it["短句保留"] || (it["建議"] || {})["做法"] !== "刪除這段" ? "學員整句生成" : "刪除這段";
+    return `${minor ? `<div class="rv-field rv-choices">${rvRadios("rv-minor", ["學員整句生成", "刪除這段"], cur, "rv-minor")}
+        <span class="rv-meta">不重要的短句預設刪除；選「刪除這段」後按通過才會真的刪</span></div>` : ""}
+      <div class="rv-field"><label>說話者 <select id="rv-who">${whoOpts}</select></label></div>
       <div class="rv-field rv-row">
         <button class="ghost" id="rv-merge">併進上一段</button>
         <button class="ghost" id="rv-split">從游標處切開</button>
@@ -639,6 +647,10 @@ function rvBindMore(it) {
   });
   const q = (id) => document.getElementById(id);
   const t = it["類型"];
+  document.querySelectorAll(".rv-minor").forEach((el) => el.addEventListener("change", async () => {
+    await apiPost("/api/turns/save", { id: it.id, "短句保留": el.value === "學員整句生成" });
+    await rvReload();
+  }));
   if (t === "學員段落") {
     q("rv-who").addEventListener("change", async (e) => {
       await rvSaveTurnText(it);
@@ -743,6 +755,12 @@ async function rvPass() {
   const t = it["類型"];
   const undo = !!it["已確認"];
   try {
+    if (t === "學員段落" && !undo && (it["建議"] || {})["做法"] === "刪除這段") {
+      // 09-29 宇軒：不重要的短句，通過＝刪除這段（聲音畫面一起刪，不用生成）
+      await apiPost("/api/review/cut", { start: it.start, end: it.end, "備註": "不重要的短句（通過＝刪除）" });
+      await rvReload();
+      return;
+    }
     if (t === "學員段落") {
       const ta = document.getElementById("rv-text");
       const text = ta ? ta.value.trim() : it["校對稿"];
@@ -795,10 +813,12 @@ function rvRenderList() {
     : items.filter((x) => x["類型"] === f).length;
   const rows = rvVisible().map((it) => {
     const key = rvKey(it);
-    const st = key === rv.cur ? `<span class="st now">目前</span>` : it["不用處理"] ? `<span class="st skip">不用處理</span>`
+    const st = key === rv.cur ? `<span class="st now">目前</span>` : rvInCut(it) ? `<span class="st ok" title="前面已確認整段刪除">✓ 通過</span>`
+      : it["不用處理"] ? `<span class="st skip">不用處理</span>`
       : it["已確認"] ? `<span class="st ok">✓ 通過</span>` : `<span class="st">—</span>`;
     const chosen = rvChosen(it);
-    const sug = it["類型"] === "學員段落" ? "學員整句生成" : rvHowLabel(chosen) || rvSuggestText(it);
+    const sug = rvInCut(it) ? "整段刪除" : it["類型"] === "學員段落" ? ((it["建議"] || {})["做法"] === "刪除這段" ? "刪除這段" : "學員整句生成")
+      : rvHowLabel(chosen) || rvSuggestText(it);
     return `<li class="${key === rv.cur ? "cur" : ""} ${rvDone(it) ? "done" : ""}" data-key="${esc(key)}" tabindex="-1">
       <span class="tm">${esc(rvFmt(it.start))}</span>
       <span class="ty">${rvChip(it)}</span>

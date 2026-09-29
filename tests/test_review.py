@@ -294,5 +294,18 @@ def _run_all() -> int:
     return 1 if failed else 0
 
 
+def test_minor_student_and_filler_overlap_rules():
+    """09-29 宇軒：不重要的短句（< 3 秒或只有招呼附和笑聲）預設建議刪除；重疊學員只是附和 → 只留老師原聲。"""
+    assert review.is_filler("謝謝老師～") and review.is_filler("呵呵呵") and review.is_filler("好，對。")
+    assert not review.is_filler("我覺得很好") and not review.is_filler("")
+    assert review.is_minor_student("今天分享很多東西", 2.0) == "只有 2.0 秒"
+    assert review.is_minor_student("老師再見", 5.0) == "只有招呼、附和或笑聲"
+    assert review.is_minor_student("我覺得今天很有收穫", 6.0) is None
+    s = review.suggest_overlap({"start": 1.0, "end": 1.3}, [], None, {}, "嗯")
+    assert s["做法"] == "只留老師原聲學員消音"
+    s = review.suggest_overlap({"start": 1.0, "end": 1.3}, [], None, {}, "我想問一下這個練習")
+    assert s["做法"] == "兩邊都重生成"
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

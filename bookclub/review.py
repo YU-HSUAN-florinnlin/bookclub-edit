@@ -111,7 +111,35 @@ def video_path(workdir: Path, override: str | Path | None = None) -> Path | None
 # 每一筆的建議（09-26：使用者只要看、按通過）
 # ---------------------------------------------------------------------------
 
-def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict) -> dict:
+SHORT_S = 3.0   # 09-29 宇軒：學員發言短於這個秒數，預設建議刪除這段（先試 3 秒）
+FILLER_WORDS = ("謝謝老師", "老師好", "老師再見", "大家好", "謝謝", "再見", "拜拜", "晚安", "好的", "沒有",
+                "好", "對", "嗯", "恩", "呵", "哈", "喔", "哦", "欸", "啊", "是", "ok", "OK")
+_PUNCT = "，。、！？；：,.!?;: …～~﹝﹞()（）「」『』\n\t"
+
+
+def is_filler(text: str) -> bool:
+    """只有招呼、附和、笑聲（純函式）：去掉標點後，全部由 FILLER_WORDS 組成。空字串不算。"""
+    t = "".join(ch for ch in (text or "") if ch not in _PUNCT)
+    if not t:
+        return False
+    while t:
+        w = next((w for w in FILLER_WORDS if t.startswith(w)), None)
+        if not w:
+            return False
+        t = t[len(w):]
+    return True
+
+
+def is_minor_student(text: str, seconds: float) -> str | None:
+    """不重要的學員短句：回傳原因，不是就 None。"""
+    if seconds < SHORT_S:
+        return f"只有 {seconds:.1f} 秒"
+    if is_filler(text):
+        return "只有招呼、附和或笑聲"
+    return None
+
+
+def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict, stu_text: str | None = None) -> dict:
     """重疊的預設建議（純函式，規則照 02 規格第三節的定案，減少人的決策）：
     1. 學員是「保留原聲」的人 → 不用改
     2. 一來一往交接（老師收尾、學員開口，或反過來；重疊離換人的地方 1.5 秒內）→ 兩邊都重生成、前後排開
@@ -120,6 +148,11 @@ def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict) -
     5. 判斷不出來 → 兩邊都重生成、前後排開（最保險）"""
     if who and voices.get(who) == "保留原聲":
         return {"做法": "不用改", "排法": None, "原因": f"{who} 保留原聲，重疊照原樣"}
+    if stu_text is not None:   # 09-29 宇軒：學員只是附和（3 個字以內或聽不出字）→ 學員那一點點消掉，省生成
+        bare = "".join(ch for ch in stu_text if ch not in _PUNCT)
+        if len(bare) <= 3 or is_filler(bare):
+            return {"做法": "只留老師原聲學員消音", "排法": None,
+                    "原因": "學員只是附和（3 個字以內或只有嗯、對），留老師原聲、學員消音，不用生成"}
     ordered = sorted(turns, key=lambda t: t["start"])
     for a, b in zip(ordered, ordered[1:]):
         if (a["說話者"] == "老師") == (b["說話者"] == "老師"):
@@ -412,7 +445,11 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                       "學員是猜的": bool(t.get("學員是猜的")), "含本名": has_real_name(draft, words),
                       "人工新增": bool(t.get("人工新增")), **_align_info(t),
                       "建議": {"做法": "通過", "原因": why},
+                      "短句保留": bool(t.get("短句保留")),
                       "不用處理": "保留原聲，不用校對逐字稿" if keep else skip_reason(t["start"], t["end"])})
+        minor = None if (keep or items[-1]["不用處理"] or t.get("短句保留")) else is_minor_student(draft, t["end"] - t["start"])
+        if minor:   # 09-29 宇軒：不重要的短句預設剪掉（生成聲音反而花時間）；按通過＝刪除這段
+            items[-1]["建議"] = {"做法": "刪除這段", "原因": f"不重要的短句（{minor}）：預設刪掉、省生成時間；要留下在「改做法」選「學員整句生成」"}
     for it in _names_items(workdir, sents):
         cut_hint = f"；第 1 步切點分析建議：{it['建議做法']}" if it.get("建議做法") and it["建議做法"] != nameplan_whole() else ""
         it["建議"] = {"做法": nameplan_whole(), "原因": "預設整句用老師 AI 聲音重念、名字換成代號（09-25 定案）" + cut_hint}
@@ -449,7 +486,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                           "做法": d.get("做法"), "排法": d.get("排法", OVERLAP_ARRANGE[0]),
                           "備註": d.get("備註", ""), "已確認": bool(d.get("已確認")), "救回": bool(d.get("救回")),
                           "人工新增": bool(o.get("人工新增")), **_align_info(o),
-                          "建議": suggest_overlap(o, turns, who, voices),
+                          "建議": suggest_overlap(o, turns, who, voices, d.get("學員文字", defaults["學員文字"])),
                           "不用處理": skip_reason(o["start"], o["end"])})
     linked = {c["建議id"]: c for c in dec["刪除段落"] if c.get("建議id")}
     for sg in suggestions:

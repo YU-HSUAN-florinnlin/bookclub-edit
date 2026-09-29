@@ -512,6 +512,8 @@ def save_turn(workdir: str | Path, tid: str, fields: dict) -> dict:
             t["問老師"] = bool(fields["問老師"])
         if "問老師備註" in fields:
             t["問老師備註"] = str(fields["問老師備註"])
+        if "短句保留" in fields:        # 09-29：不重要的短句預設建議刪除；人選「學員整句生成」＝留下
+            t["短句保留"] = bool(fields["短句保留"])
         if fields.get("加秒數"):
             t["校對秒數"] = round((t["校對秒數"] or 0.0) + min(float(fields["加秒數"]), MAX_COUNT_S), 1)
         wd.write_json(turns_path(workdir), data)
