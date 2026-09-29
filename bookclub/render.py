@@ -121,8 +121,13 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Tr
     st = wd.read_json(students.log_path(workdir), default=None) or {}
     voices = st.get("學員聲線", {})
     kept_now = set() if include_kept else {k for k, v in dec["學員聲音"].items() if v == "保留原聲"}
+    tinfo = turns_mod.page_data(workdir)
+    turn_who = {t["id"]: t.get("說話者") for t in tinfo.get("段落", [])} if not tinfo.get("尚未準備") else {}
     for r in st.get("句子", []):
         if r.get("學員") in kept_now:
+            continue
+        if turn_who and r.get("段落") in turn_who and turn_who[r["段落"]] != r.get("學員"):
+            warnings.append(f"{r['id']}：段落 {r['段落']} 現在是{turn_who[r['段落']]}，舊的重念不用")
             continue
         s0, s1 = r["slot"]
         if not _in(s0, s1, a, b) or not r.get("放回時間格"):
