@@ -4,7 +4,7 @@
  * 版面沿用第 3 步：最上面固定一行「沒列在時間軸上的地方＝原片沒動」→ 頂端（進度、看過比例、模式、送回 AI 重做、輸出成品）
  *   → 左邊成品影片＋時間軸（處理紀錄的每一筆都標出來、沒登記的變動標紅、看過的區段）；右邊「目前這一筆」或整片看的面板
  *   → 下面：沒登記的變動（要人確認）＋全部處理紀錄清單。
- * 逐筆看：處理前／處理後試聽、通過、退回重做（要寫原因）。整片看：記錄實際播放過的區段（video.played，取聯集），
+ * 逐筆看：處理前／處理後試聽、通過、退回重做（要寫原因）。整片看：記錄實際播放過的區段（只算 2 倍速以下連續播的，取聯集），
  * 看到問題按一下就在目前時間建一筆退回重做。全部通過、整片看過 100% 才能按「輸出成品」。
  * 資料：GET /api/final；存檔：/api/final/*（bookclub/finalcheck.py）。依賴 app.js 的 apiGet／apiPost／esc／contentEl。 */
 
@@ -13,7 +13,10 @@ const FC_TYPE = {
   "刪除": "cut", "停格": "frz", "模糊示範": "blur", "重疊": "ov", "名字要人處理": "name",
 };
 
-const fc = { data: null, video: null, audio: null, cur: null, mode: "逐筆", sentRanges: "", timer: null, redoOpen: false, lastT: 0 };
+// 09-29 宇軒：2 倍速以下播過的才算「看過」（快轉看完不算有人完整看過）
+const FC_MAX_RATE = 2;
+
+const fc = { seen: [], seg: null, data: null, video: null, audio: null, cur: null, mode: "逐筆", sentRanges: "", timer: null, redoOpen: false, lastT: 0 };
 
 function fcFmt(t, d = 1) { return typeof rvFmt === "function" ? rvFmt(t, d) : String(t); }
 function fcRecs() { return fc.data["紀錄"]; }
@@ -52,6 +55,7 @@ async function renderFinal() {
           ${prodSel}
           <video id="fc-video" controls preload="metadata" src="${esc(d["影片網址"])}?v=${encodeURIComponent(d["成品影片"])}"></video>
           <div class="rv-timebar"><span class="rv-clock"><b id="fc-clock">0:00</b> ／ ${esc(fcFmt(d["成品長度"], 0))}（成品時間）</span>
+            <span class="rv-warnline" id="fc-ratewarn" hidden>超過 2 倍速播的不算看過</span>
             <select id="fc-rate" aria-label="播放速度"><option value="1">1 倍速</option><option value="1.25">1.25 倍速</option><option value="1.5">1.5 倍速</option><option value="2">2 倍速</option></select></div>
           <div class="rv-tl fc-tl" id="fc-tl" title="點一下或拖拉，跳到那個時間"></div>
           <div class="rv-legend">
@@ -66,6 +70,7 @@ async function renderFinal() {
       <audio id="fc-audio" preload="none"></audio>
     </div>`;
   fc.video = document.getElementById("fc-video");
+  Object.assign(fc, { seen: [], seg: null, sentRanges: "" });   // 這次打開頁面播的，後端再跟之前的取聯集
   fc.audio = document.getElementById("fc-audio");
   if (!fc.cur || !fcRec(fc.cur)) fc.cur = (fcRecs().find((r) => !r["結果"]) || fcRecs()[0] || {})["鍵"] || null;
   for (const m of ["逐筆", "整片"]) document.getElementById(`fc-mode-${m}`).addEventListener("click", () => { fc.mode = m; fcRenderAll(); });
@@ -127,9 +132,21 @@ function fcBindVideo() {
     const head = document.getElementById("fc-head");
     if (head) head.style.left = `${(v.currentTime / (fc.data["成品長度"] || 1)) * 100}%`;
     fcFollow(v.currentTime);
+    fcTrack();
   });
-  v.addEventListener("pause", fcSendWatched);
-  v.addEventListener("ended", fcSendWatched);
+  const stop = () => {   // 暫停、播完、要跳走、換速度：先把播到這裡的接上再斷開
+    const t = v.currentTime;
+    if (fc.seg && t >= fc.seg[1] && t - fc.seg[1] < 1.0) fc.seg[1] = t;
+    fcEndSeg();
+  };
+  v.addEventListener("pause", () => { stop(); fcSendWatched(); });
+  v.addEventListener("ended", () => { stop(); fcSendWatched(); });
+  v.addEventListener("seeking", stop);
+  v.addEventListener("ratechange", () => {
+    fcEndSeg();
+    const w = document.getElementById("fc-ratewarn");
+    if (w) w.hidden = v.playbackRate <= FC_MAX_RATE;
+  });
 }
 
 function fcFollow(t) {   // 逐筆看：影片照常播、跨過某一筆的起點，右邊換到那一筆（正在寫原因時不換）
@@ -278,7 +295,7 @@ function fcRenderWhole() {
       <header><span class="rv-chip"><i></i>整片看</span></header>
       <p class="fc-big">已經看過全片的 <b>${pct}%</b></p>
       <div class="fc-seen" aria-hidden="true">${fc.data["看過區段"].map(([s, e]) => `<i style="left:${(s / (st["成品長度"] || 1)) * 100}%;width:${((e - s) / (st["成品長度"] || 1)) * 100}%"></i>`).join("")}</div>
-      <p class="rv-meta">看過 ${esc(fcFmt(st["看過秒數"], 0))}／${esc(fcFmt(st["成品長度"], 0))}。只算真的播過的地方（拖過去跳過的不算），看到 100% 才能輸出。</p>
+      <p class="rv-meta">看過 ${esc(fcFmt(st["看過秒數"], 0))}／${esc(fcFmt(st["成品長度"], 0))}。只算用 2 倍速以下真的播過的地方（拖過去跳過的、超過 2 倍速快轉的都不算），看到 100% 才能輸出。</p>
       <div class="rv-field"><label>看到問題：寫一句原因，按下去就在目前時間建一筆退回重做
         <input id="fc-flag-why" placeholder="例如：這裡聲音突然變小"></label></div>
       <div class="rv-actions"><button class="primary" id="fc-flag">這裡有問題（退回重做）</button></div>
@@ -342,13 +359,26 @@ function fcMarkRow() {
   if (top < list.scrollTop || top + li.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = Math.max(0, top - list.clientHeight / 3);
 }
 
-// ---------- 看過比例：送 video.played（實際播過的區段）給後端取聯集 ----------
+// ---------- 看過比例：自己記播過的區段（2 倍速以下、連續播的才算），送給後端取聯集 ----------
+// 不用 video.played：它連 16 倍速快轉的也算進去。
+
+function fcTrack() {   // 每次 timeupdate：這一小段是正常播過去的就接上，跳過、快轉、暫停就斷開
+  const v = fc.video;
+  const t = v.currentTime;
+  const ok = !v.paused && !v.seeking && v.playbackRate <= FC_MAX_RATE;
+  if (ok && fc.seg && t >= fc.seg[1] && t - fc.seg[1] < 1.0) { fc.seg[1] = t; return; }
+  fcEndSeg();
+  if (ok) fc.seg = [t, t];
+}
+
+function fcEndSeg() {
+  if (fc.seg && fc.seg[1] > fc.seg[0]) fc.seen.push([Number(fc.seg[0].toFixed(3)), Number(fc.seg[1].toFixed(3))]);
+  fc.seg = null;
+}
 
 function fcPlayedRanges() {
-  const p = fc.video && fc.video.played;
-  const out = [];
-  if (!p) return out;
-  for (let i = 0; i < p.length; i++) out.push([Number(p.start(i).toFixed(3)), Number(p.end(i).toFixed(3))]);
+  const out = fc.seen.slice();
+  if (fc.seg && fc.seg[1] > fc.seg[0]) out.push([Number(fc.seg[0].toFixed(3)), Number(fc.seg[1].toFixed(3))]);
   return out;
 }
 

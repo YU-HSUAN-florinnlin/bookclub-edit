@@ -49,6 +49,13 @@ def test_local_storage_wrapped_in_try():
                 assert "try" in line, f"{name}：{line.strip()}"
 
 
+def test_watched_only_counts_up_to_2x():
+    # 09-29 宇軒：2 倍速以下播過的才算看過；不能改回用 video.played（它連快轉的也算）
+    js = (WEB / "finalcheck.js").read_text(encoding="utf-8")
+    assert "const FC_MAX_RATE = 2;" in js and "playbackRate <= FC_MAX_RATE" in js
+    assert "fc.video.played" not in js and "v.played" not in js
+
+
 def test_nav_toggle_exists():
     html = (WEB / "index.html").read_text(encoding="utf-8")
     assert 'id="navToggle"' in html

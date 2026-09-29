@@ -5,7 +5,7 @@
 
 兩種模式：
 - 逐筆看：每一筆切換「處理前／處理後」試聽，按「通過」或「退回重做」（要寫原因）
-- 整片看：記錄實際播放過的時間區段（取聯集），顯示「已經看過全片的 x%」；看到問題按一下就在目前時間建一筆退回重做
+- 整片看：記錄實際播放過的時間區段（網頁只送 2 倍速以下連續播的，09-29 宇軒；取聯集），顯示「已經看過全片的 x%」；看到問題按一下就在目前時間建一筆退回重做
 
 另外一區：處理紀錄的「未登記的變動」（聲音變了但沒有紀錄），要人一筆一筆確認（沒問題／退回重做）。
 
@@ -343,7 +343,7 @@ def remove_whole_redo(workdir: str | Path, rid: str) -> dict:
 
 
 def add_watched(workdir: str | Path, ranges: list, product: str | None = None) -> dict:
-    """`POST /api/final/watched`：播放器實際播過的區段（`video.played`，成品秒數），跟之前的取聯集。"""
+    """`POST /api/final/watched`：播放器實際播過的區段（網頁只送 2 倍速以下連續播的，成品秒數），跟之前的取聯集。"""
     workdir = Path(workdir)
     with _lock:
         log, check = _current(workdir)
@@ -401,7 +401,7 @@ def redo_list(workdir: str | Path) -> dict:
 
 
 def suggest_command(workdir: Path, it: dict) -> str:
-    """每一筆退回要怎麼重做（目前給指令，串接成一鍵重做留到下一版）。
+    """每一筆退回要怎麼重做（09-29 宇軒：先給指令手動做；之後改一鍵只重做這幾筆，方向見 docs/之後要做.md）。
 
     TODO（09-29）：真的只重做這幾筆，要（1）清掉那一段的生成快取（`生成/學員/_嘗試快取.json` 那一段、
     `生成/老師紀錄.json` 那一句），不然重跑會沿用舊的結果；（2）把退回原因交給 AI（例如改稿子、換種子、改停頓）；
