@@ -253,7 +253,11 @@ def rescan_names(workdir: Path) -> int:
     tdata = turns_mod.page_data(workdir)
     teacher_ids = {sid for t in tdata.get("段落", []) if t.get("說話者") == "老師" for sid in t.get("句子", [])}
     teacher_ids |= {s["id"] for s in speakers.get("sentences", []) if s.get("label") == "老師"}
-    return names.append_candidates(workdir, sorted(teacher_ids))
+    n = names.append_candidates(workdir, sorted(teacher_ids))
+    from bookclub import epcodes
+
+    epcodes.sync(workdir)   # 補找到的用名冊代號，換成這一集的
+    return n
 
 
 def unlisted(workdir: str | Path, chosen: set[str] | None = None,
@@ -312,9 +316,10 @@ def decide(workdir: str | Path, name: str, how: str, code: str | None = None, sa
 
         if not same_as:
             raise ValueError("要選是上面哪一位學員")
-        tdata = wd.read_json(turns_mod.turns_path(workdir), default={}) or {}
+        from bookclub import epcodes
+
         roster = {r["canonical"]: r["代號"] for r in names.load_roster(data_dir() / "名冊.csv") if r.get("canonical")}
-        code = (tdata.get("本名代號") or {}).get(same_as) or roster.get(same_as)
+        code = epcodes.episode_codes(workdir).get(same_as)
         if not code:
             raise ValueError(f"「{same_as}」還沒有英文代號：先在「學員是誰」右欄幫他選")
         if same_as in roster:
@@ -326,9 +331,7 @@ def decide(workdir: str | Path, name: str, how: str, code: str | None = None, sa
         code = (code or "").strip()
         if not code:
             raise ValueError("換成代號要選一個英文代號")
-        added = int(add_to_roster(name, p["其他寫法"], code))
-        if not added:   # 09-29：名冊上已經有（之前選過代號）→ 改成這次選的代號，不然畫面上選不到、看起來沒反應
-            set_roster_code(name, code)
+        added = int(add_to_roster(name, p["其他寫法"], code))   # 已經在名冊上：不改名冊，這一集的代號記在決定裡（epcodes）
         rescanned = rescan_names(workdir)
     elif how == "不是名字":
         from bookclub.server import _append_exclusion
@@ -339,4 +342,7 @@ def decide(workdir: str | Path, name: str, how: str, code: str | None = None, sa
     dec[name] = {"做法": how, "代號": code if how in ("換成代號", "是上面的學員") else None,
                  "同一人": same_as if how == "是上面的學員" else None, "更新時間": datetime.now().isoformat(timespec="seconds")}
     wd.write_json(decisions_path(workdir), dec)
+    from bookclub import epcodes
+
+    epcodes.sync(workdir)
     return {"ok": True, "名字": name, "做法": how, "加進名冊": bool(added), "補找到的老師名字": rescanned}

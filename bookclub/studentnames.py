@@ -94,6 +94,10 @@ def find(workdir: str | Path, force: bool = False) -> dict:
     res["保留原聲學員"] = kept
     res["段落指紋"] = sig
     wd.write_json(cands_path(workdir), res)
+    from bookclub import epcodes
+
+    if epcodes.sync(workdir):   # 名冊代號換成這一集的
+        res = wd.read_json(cands_path(workdir))
     return res
 
 

@@ -160,11 +160,11 @@ def replace_real_names(text: str, table: list[dict]) -> tuple[str, list[dict]]:
     return "".join(out), changes
 
 
-def replace_table() -> list[dict]:
-    from bookclub import names
-    from bookclub.config import data_dir
+def replace_table(workdir: Path | None = None) -> list[dict]:
+    """名冊寫法＋敏感詞；給 workdir 就用這一集的代號（`bookclub/epcodes.py`）。"""
+    from bookclub import epcodes
 
-    return names.load_roster(data_dir() / "名冊.csv") + names.load_sensitive_words(data_dir() / "敏感詞.csv")
+    return epcodes.replace_table(workdir)
 
 
 def cut_suggest_path(workdir: Path) -> Path:
@@ -352,6 +352,9 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     analysis = wd.read_json(wd.analysis_result_path(workdir), default={}) or {}
     duration = analysis.get("影片長度") or merged.get("duration") or (sents[-1]["end"] if sents else 0)
 
+    from bookclub import epcodes
+
+    epcodes.sync(workdir)   # 09-29：名字候選的代號跟這一集的代號表對齊（沒變就不寫檔）
     tdata = turns_mod.page_data(workdir)
     has_turns = not tdata.get("尚未準備")
     turns = tdata.get("段落", []) if has_turns else []
@@ -384,7 +387,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         p["都會刪掉"] = bool(segs) and all(_in_ranges(t["start"], t["end"], will_cut) for t in segs)
 
     words = roster_words()
-    table = replace_table()
+    table = replace_table(workdir)
     items: list[dict] = []
     for k, t in enumerate(turns):
         if t["說話者"] == "老師":
@@ -473,6 +476,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "學員": people,
         "代號選項": tdata.get("代號選項", []),
         "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號", "這一集的名字")},   # 09-29「學員是誰」兩欄
+        "代號重複": _dup_codes(workdir, tdata),
         "名冊上沒有的名字": _unlisted_names(workdir, {p["本名"] for p in tdata.get("學員", {}).values() if p.get("本名")},
                                            will_cut),
         "項目": items,
@@ -484,6 +488,16 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                  "消音": MUTE_WAYS, "聲音": VOICE_CHOICES},
         "進度": progress(items, dec, duration),
     }
+
+
+def _dup_codes(workdir: Path, tdata: dict) -> dict:
+    """這一集有出現的人（選成本名的學員＋老師講到的名字）裡，兩個以上用同一個代號的。"""
+    from bookclub import epcodes
+
+    here = {p["本名"] for p in tdata.get("學員", {}).values() if p.get("本名")}
+    here |= {c.get("canonical") for c in (wd.read_json(wd.names_path(workdir), default={}) or {}).get("candidates", [])
+             if c.get("canonical") and not c.get("敏感詞")}
+    return epcodes.duplicates(workdir, here)
 
 
 def _unlisted_names(workdir: Path, chosen: set[str] | None = None, cuts: list | None = None) -> list[dict]:

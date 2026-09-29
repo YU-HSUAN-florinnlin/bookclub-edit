@@ -906,9 +906,16 @@ function rvPrepPeopleHtml() {
       <div class="ctl"><label>英文代號 <select class="rv-namecode" data-real="${esc(r)}">${opts}</select></label>
       ${rosterCode[r] && cur !== rosterCode[r] ? `<span class="rv-meta">名冊上是 ${esc(rosterCode[r])}</span>` : ""}</div></li>`;
   }).join("") : `<li class="rv-meta">左邊選了本名之後，這裡會列出來。</li>`;
-  return `<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的）。</p>
+  return `${rvDupHtml()}<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的；只影響這一集，老師講到他的名字、學員稿子裡的名字都會照這裡換）。</p>
     <div class="rv-people2"><div><h4>聲紋分出來的人</h4><ul class="rv-people">${left}</ul></div>
       <div><h4>本名 → 這支影片的英文代號</h4><ul class="rv-people">${right}</ul></div></div>`;
+}
+
+function rvDupHtml() {
+  // 09-29：這一集的代號表（右欄＞③ 換成代號＞名冊預設）裡，兩個人用同一個代號
+  const dup = Object.entries(rv.data["代號重複"] || {});
+  if (!dup.length) return "";
+  return `<p class="rv-warnline">同一集有人用了同一個代號，成品裡會分不出是誰：${dup.map(([c, rs]) => `${esc(c)}（${esc(rs.join("、"))}）`).join("；")}。如果其實是同一個人（轉錯字、暱稱），不用改，或在「③」選「是上面的學員」合併；不同人的話，學員在「② 學員是誰」右欄改，其他人在「③ 名冊上沒有的名字」改。</p>`;
 }
 
 function rvPrepNamesHtml() {
@@ -940,7 +947,7 @@ function rvPrepNamesHtml() {
   const cutBlock = cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只出現在確認刪除的段落裡（${cutOnly.length} 個：${esc(cutOnly.map((u) => u["名字"]).join("、"))}），不用處理</summary>
       <p class="rv-meta">這些段落會整段刪掉。如果在「① 建議刪除段落」改成不刪，會回到上面。</p></details></li>` : "";
   if (!un.length && !cutOnly.length) return `<p class="rv-meta">沒有要處理的名字（上一步已經選成本名的，代號在上一步右欄定）。</p>`;
-  return `<p class="rv-meta">第 1 步請 Claude 讀整支逐字稿找出來、名冊上沒有的名字。上一步「學員是誰」已經選成本名的不會列在這裡。其實是上一步某位學員（轉錯字、暱稱）選「是上面的學員」，會直接用他的代號；家人、朋友、沒登記的人選「換成代號」（會加進名冊、自動補找老師提到的地方）；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
+  return `${rvDupHtml()}<p class="rv-meta">第 1 步請 Claude 讀整支逐字稿找出來、名冊上沒有的名字。上一步「學員是誰」已經選成本名的不會列在這裡。其實是上一步某位學員（轉錯字、暱稱）選「是上面的學員」，會直接用他的代號；家人、朋友、沒登記的人選「換成代號」（會加進名冊、自動補找老師提到的地方）；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
     <p class="rv-meta">${un.length} 個，${un.filter((u) => !u["做法"]).length} 個還沒決定。</p>
     <ul class="rv-people">${unRows}${cutBlock}</ul>`;
 }

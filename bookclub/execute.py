@@ -198,6 +198,11 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
             raise FileNotFoundError("還不能開始第 4 步：\n- " + "\n- ".join(pre["缺"]))
         for n in pre["提醒"]:
             log(f"[AI 執行] 提醒：{n}")
+    from bookclub import epcodes
+
+    n = epcodes.sync(workdir)   # 09-29：名字候選的代號跟這一集的代號表對齊
+    if n:
+        log(f"[AI 執行] 名字代號照這一集的代號表更新了 {n} 筆")
     a = 0.0 if start is None else float(start)
     b = float(end) if end is not None else float(video_duration(workdir) or 0.0)
     if b <= a:

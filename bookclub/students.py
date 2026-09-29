@@ -198,7 +198,7 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
         raise FileNotFoundError("還沒有段落分析（校對/段落.json），先跑 `bookclub run analyze`。")
     speakers = wd.read_json(wd.speakers_path(workdir)) or {}
     by_id = {s["id"]: s for s in speakers.get("sentences", [])}
-    table = review.replace_table()
+    table = review.replace_table(workdir)
     cuts = cut_ranges(workdir)
     kept = set() if include_kept else {k for k, v in review.load_decisions(workdir)["學員聲音"].items() if v == "保留原聲"}
     lo, hi = start if start is not None else -1.0, end if end is not None else 1e12

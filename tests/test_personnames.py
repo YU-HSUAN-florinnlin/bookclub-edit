@@ -118,9 +118,19 @@ def test_unlisted_decide_adds_to_roster_and_rescans():
         new = wd.read_json(wd.names_path(w))["candidates"][n0:]
         assert res["補找到的老師名字"] == len(new) and any(c["代號"] == "Kevin" and c["補找"] for c in new), res
         assert personnames.unlisted(w)[0]["做法"] == "換成代號" and personnames.unlisted(w)[0]["已決定"]
-        # 已經在名冊上、再選一個新代號：名冊跟著改（09-29 宇軒：之前這樣按沒反應）
+        # 已經在名冊上、再選一個新代號：名冊不改（只是預設），這一集的代號表跟名字候選換成新的（09-29 宇軒：只要同一集一致）
+        from bookclub import epcodes
+
         res = personnames.decide(w, "阿強", "換成代號", "Kyle")
-        assert not res["加進名冊"] and any(r["寫法"] == "阿強" and r["代號"] == "Kyle" for r in names.load_roster(_DATA / "名冊.csv"))
+        assert not res["加進名冊"] and any(r["寫法"] == "阿強" and r["代號"] == "Kevin" for r in names.load_roster(_DATA / "名冊.csv"))
+        assert epcodes.episode_codes(w)["阿強"] == "Kyle"
+        cands = [c for c in wd.read_json(wd.names_path(w))["candidates"] if c["canonical"] == "阿強"]
+        assert cands and all(c["代號"] == "Kyle" for c in cands)
+        # 「學員是誰」右欄優先：同一集的學員重念稿、老師講到的名字都跟著換
+        turns_mod.set_name_code(w, "阿強", "Karl")
+        assert epcodes.episode_codes(w)["阿強"] == "Karl"
+        assert all(c["代號"] == "Karl" for c in wd.read_json(wd.names_path(w))["candidates"] if c["canonical"] == "阿強")
+        assert any(r["寫法"] == "阿強" and r["代號"] == "Karl" for r in epcodes.replace_table(w))
         # 「學員是誰」已經選成本名的不列；每次出現都在刪除段落裡的標起來
         assert [u["名字"] for u in personnames.unlisted(w, chosen={"阿強"})] == ["某作者"]
         u = next(x for x in personnames.unlisted(w, cuts=[(sents[i]["start"], sents[i]["end"])]) if x["名字"] == "阿強")

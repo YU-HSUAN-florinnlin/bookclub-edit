@@ -463,6 +463,12 @@ def page_data(workdir: str | Path) -> dict:
     from bookclub import personnames   # 09-29：這一集被叫到的名字（第 1 步人名清單），本名選單排最前面
 
     data["這一集的名字"] = personnames.called_names(workdir)
+    from bookclub import epcodes   # 09-29：學員 N 的代號一律照這一集的代號表（右欄＞③＞名冊）
+
+    codes = epcodes.episode_codes(workdir)
+    for p in data["學員"].values():
+        if p.get("本名") and codes.get(p["本名"]):
+            p["代號"] = codes[p["本名"]]
     data["進度"] = turns_progress(data)
     return data
 
@@ -619,7 +625,9 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
         p["本名"] = real or None
         p.pop("本名未知", None)
         if real:
-            p["代號"] = (data.get("本名代號") or {}).get(real) or roster.get(real) or p.get("代號")
+            from bookclub import epcodes
+
+            p["代號"] = epcodes.episode_codes(workdir).get(real) or roster.get(real) or p.get("代號")
         wd.write_json(turns_path(workdir), data)
         return {"ok": True, "學員": person, "本名": p["本名"], "代號": p.get("代號")}
 
@@ -646,7 +654,10 @@ def set_name_code(workdir: str | Path, real: str, code: str | None) -> dict:
                 p["代號"] = code or None
                 n += 1
         wd.write_json(turns_path(workdir), data)
-        return {"ok": True, "本名": real, "代號": code, "改了幾位": n, "補找到的老師名字": added}
+    from bookclub import epcodes
+
+    epcodes.sync(workdir)   # 老師講到這個名字、保留原聲學員講到的，一起換成這個代號
+    return {"ok": True, "本名": real, "代號": code, "改了幾位": n, "補找到的老師名字": added}
 
 
 # ---------- 09-26：開始前確認「學員是誰」、漏抓的學員發言 ----------
