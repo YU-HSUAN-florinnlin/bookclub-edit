@@ -333,7 +333,24 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
         placed[e["id"]] = {"增益": round(float(gain), 3)}
 
     plist = pieces(a, b, d["刪除"], d["停格"])
-    parts = []
+    # 09-30：一段一段寫進檔案，不在記憶體裡接成一整條（整支 98 分鐘一條 48kHz 就 1.1 GB，以前同時握四、五條）
+    dst = out / f"新聲音_{tag}.wav"
+    tmp = out / f"_組聲音中_{dst.name}"
+    total = 0
+    with sf.SoundFile(str(tmp), "w", SR, 1, subtype="PCM_16") as fw:
+        for seg in output_segments(x, y, plist, tails, a):
+            fw.write(np.clip(seg, -1, 1))
+            total += len(seg)
+    tmp.replace(dst)
+    del x, y
+    return {"原聲": orig, "新聲音": dst, "片段": plist, "放置": placed, "長度": total / SR}
+
+
+def output_segments(x: np.ndarray, y: np.ndarray, plist: list[dict], tails: dict, a: float):
+    """原片時間軸上換好的聲音 y → 依片段（刪除、停格）一段一段吐出成品聲音（09-30 從 build_audio 抽出來，
+    讓組聲音可以邊組邊寫檔）。x 是原聲（停格示範墊底噪用）。"""
+    from bookclub import assemble
+
     for i, p in enumerate(plist):
         s, e = (int(round((t - a) * SR)) for t in p["src"])
         seg = y[s:e].copy()
@@ -346,18 +363,14 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
             seg[-f:] *= np.linspace(1, 0, f, dtype=np.float32)
         if prev_cut and f:
             seg[:f] *= np.linspace(0, 1, f, dtype=np.float32)
-        parts.append(seg)
+        yield seg
         if p["freeze"]:
             n = int(round(p["freeze"] * SR))
             fz = p["停格"]
             fill = tails.get(fz.get("edit")) if fz.get("edit") else None
             if fill is None:   # 停格示範：墊環境底噪
                 fill = assemble.room_tone(x, e, e + 1, n, SR)
-            parts.append(assemble.fit_length(fill.astype(np.float32), n))
-    new = np.concatenate(parts)
-    dst = out / f"新聲音_{tag}.wav"
-    sf.write(str(dst), np.clip(new, -1, 1), SR, subtype="PCM_16")
-    return {"原聲": orig, "新聲音": dst, "片段": plist, "放置": placed, "長度": len(new) / SR}
+            yield assemble.fit_length(fill.astype(np.float32), n)
 
 
 def _gain(clip: np.ndarray, ref: np.ndarray, max_gain: float = 8.0) -> float:
@@ -974,11 +987,13 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     orig, _ = sf.read(str(au["原聲"]), dtype="float32")
     placed_track = _placed_track(workdir, d, orig)
     prec = measure(d, orig, placed_track)
+    del placed_track, orig   # 09-30：用完馬上放掉（整支一條 1.1 GB），後面的處理紀錄分段讀檔
     new, _ = sf.read(str(au["新聲音"]), dtype="float32")
     cut_joins = [to_output_time(x, plist) for x, _y in d["刪除"]]
     cut_joins = [j if j is not None else to_output_time(_y, plist) for j, (_x, _y) in zip(cut_joins, d["刪除"])]
     summary["精準度"] = _prec_summary(prec)
     summary["剪點聲音"] = join_jumps(new, [j for j in cut_joins if j is not None])
+    del new
 
     rng = f"{wd.fmt_time(a)}–{wd.fmt_time(b)}"
     rows = build_marks(d, plist, prec)

@@ -146,6 +146,36 @@ def test_check_files_streams():
     assert recs[0]["覆核項目"] == ["名字:3"]
 
 
+
+def test_render_check_chunked_matches_whole():
+    # 09-30：render video 的處理紀錄改成分段讀、分段比；結果要跟整條讀進來比一模一樣
+    a = 10.0
+    x = _speech(40.0)
+    plist = render.pieces(a, a + 40.0, [(13.0, 15.0), (31.0, 33.5)], [{"at": 20.0, "dur": 0.5}, {"at": 44.0, "dur": 1.0}])
+    y = x.copy()
+    y[int(6.0 * SR):int(6.5 * SR)] = 0.0              # 原片 16–16.5 沒登記
+    y[int(25.0 * SR):int(26.0 * SR)] *= 0.1            # 原片 35–36 沒登記
+    y[int(9.0 * SR):int(12.0 * SR)] = 0.2 * y[int(9.0 * SR):int(12.0 * SR)]   # 原片 19–22 有登記
+    parts = []
+    for p in plist:
+        s0, e0 = (int(round((t - a) * SR)) for t in p["src"])
+        parts.append(y[s0:e0])
+        if p["freeze"]:
+            parts.append(np.full(int(round(p["freeze"] * SR)), 0.3, dtype=np.float32))
+    new = np.concatenate(parts)
+    recs = [_rec("刪除", 13.0, 15.0), _rec("刪除", 31.0, 33.5), _rec("學員重念", 19.0, 22.0)]
+    with tempfile.TemporaryDirectory() as d:
+        po, pn = Path(d) / "原聲.wav", Path(d) / "新聲音.wav"
+        sf.write(str(po), x, SR, subtype="PCM_16")
+        sf.write(str(pn), new, SR, subtype="PCM_16")
+        xo, _ = sf.read(str(po), dtype="float32")
+        xn, _ = sf.read(str(pn), dtype="float32")
+        whole = proclog.check_arrays(xo, proclog.to_source_timeline(xn, plist, a, SR, xo), SR, recs, offset=a)
+        for block in (0.7, 7.3, 60.0):                  # 塊的邊界切在片段中間、停格旁邊都要對
+            got = proclog.check_render_files(po, pn, plist, a, recs, block_s=block)
+            assert got == whole, (block, got["檢查"], whole["檢查"])
+    assert len(whole["未登記的變動"]) == 2
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

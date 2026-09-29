@@ -96,6 +96,33 @@ def test_onset_ignores_short_blip_and_lag_finds_shift():
     assert abs(render.envelope_lag(x, y) - 0.3) < 0.02
 
 
+
+def test_output_segments_stream_same_as_concat():
+    # 09-30：組聲音改成一段一段寫檔；吐出來的段落接起來要等於成品長度，剪點淡出淡入、停格補的聲音照舊
+    import tempfile
+
+    import numpy as np
+    import soundfile as sf
+
+    a, SR = 100.0, render.SR
+    t = np.arange(int(20 * SR)) / SR
+    x = (0.3 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    y = x.copy()
+    plist = render.pieces(a, a + 20.0, [(105.0, 107.0)], [{"at": 112.0, "dur": 0.4, "edit": "E1"}])
+    tails = {"E1": np.full(int(0.4 * SR), 0.1, dtype=np.float32)}
+    segs = list(render.output_segments(x, y, plist, tails, a))
+    whole = np.concatenate(segs)
+    assert abs(len(whole) / SR - render.output_length(plist)) < 1e-3
+    k = int(round((105.0 - a) * SR))                       # 剪點前 10 毫秒淡出到 0
+    assert abs(whole[k - 1]) < 1e-3
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "新.wav"
+        with sf.SoundFile(str(out), "w", SR, 1, subtype="PCM_16") as fw:
+            for seg in render.output_segments(x, y, plist, tails, a):
+                fw.write(np.clip(seg, -1, 1))
+        got, _ = sf.read(str(out), dtype="float32")
+    assert len(got) == len(whole) and np.max(np.abs(got - np.clip(whole, -1, 1))) < 1e-4
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

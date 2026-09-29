@@ -269,6 +269,49 @@ def check_files(orig_path: Path, new_path: Path, records: list[dict], block_s: f
                                      "有變動的格數": int(flags.sum()), "未登記處數": len(found)}}
 
 
+def check_render_files(orig_path: Path, new_path: Path, plist: list[dict], a: float, records: list[dict],
+                       block_s: float = 60.0) -> dict:
+    """`render video` 的原聲（原片時間軸）與新聲音（成品時間軸，刪除、停格之後）分段比（09-30）。
+    結果跟 `check_arrays(orig, to_source_timeline(new, …))` 一樣，但一次只讀一塊（預設 60 秒），
+    也不轉 float64 整條相減——整支 98 分鐘以前要十幾 GB 記憶體。"""
+    import soundfile as sf
+
+    parts = []
+    with sf.SoundFile(str(orig_path)) as fo, sf.SoundFile(str(new_path)) as fn:
+        sr = fo.samplerate
+        f = int(round(sr * FRAME_S))
+        block = max(f, int(block_s * sr) // f * f)      # 每塊是整數格，跟整條一起算的格子對得上
+        maps, acc = [], 0                                 # 每個片段：原片 [s, e) ← 新聲音從 acc 開始
+        for p in plist:
+            s = int(round((p["src"][0] - a) * sr))
+            e = int(round((p["src"][1] - a) * sr))
+            maps.append((s, e, acc))
+            acc += (e - s) + int(round(p["freeze"] * sr))
+        pos = 0
+        while True:
+            o = fo.read(block, dtype="float32")
+            if len(o) == 0:
+                break
+            if o.ndim > 1:
+                o = o.mean(axis=1)
+            x = o.copy()
+            for s, e, off in maps:
+                lo, hi = max(s, pos), min(e, pos + len(o))
+                if lo >= hi:
+                    continue
+                fn.seek(min(off + (lo - s), fn.frames))
+                r = fn.read(hi - lo, dtype="float32")
+                if r.ndim > 1:
+                    r = r.mean(axis=1)
+                x[lo - pos:lo - pos + len(r)] = r
+            parts.append(changed_frames(o, x, sr))
+            pos += len(o)
+    flags = np.concatenate(parts) if parts else np.zeros(0, dtype=bool)
+    found = find_unlogged(flags, audio_spans(records), offset=a)
+    return {"未登記的變動": found, "檢查": {"每格秒": FRAME_S, "前後留秒": PAD_S, "比了幾格": int(len(flags)),
+                                     "有變動的格數": int(flags.sum()), "未登記處數": len(found)}}
+
+
 # ---------- 讀寫工作區 ----------
 
 def collect_links(workdir: Path, d: dict) -> dict:
@@ -300,14 +343,10 @@ def _write(workdir: Path, data: dict) -> dict:
 def write_render_log(workdir: str | Path, d: dict, plist: list[dict], orig_path: Path, new_path: Path,
                      tag: str) -> dict:
     """`render video` 組完聲音之後呼叫（一行）：寫 `生成/處理紀錄.json`。"""
-    import soundfile as sf
-
     workdir = Path(workdir)
     recs = build_records(d, plist, collect_links(workdir, d))
-    orig, sr = sf.read(str(orig_path), dtype="float32")
-    new, _ = sf.read(str(new_path), dtype="float32")
     a = d["範圍"][0]
-    chk = check_arrays(orig, to_source_timeline(new, plist, a, sr, orig), sr, recs, offset=a)
+    chk = check_render_files(orig_path, new_path, plist, a, recs)   # 09-30：分段讀、分段比，不整條讀進來
     return _write(workdir, {"版本": 1, "來源": f"render video {tag}", "範圍": d["範圍"],
                             "產生時間": datetime.now().isoformat(timespec="seconds"),
                             "原聲": str(Path(orig_path).relative_to(workdir)), "新聲音": str(Path(new_path).relative_to(workdir)),
