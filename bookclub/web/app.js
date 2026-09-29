@@ -242,8 +242,10 @@ async function renderExecuteBody() {
     <h1>4　AI 執行</h1>
     <p class="muted">依序跑四步：老師提到名字 → 學員重念 → 保留原聲學員講到名字 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
     <div class="hint">從第 4 步直接開始（例如老師已經自己看完全片、挑好參考聲音）：<b>第 1 步轉文字還是要跑</b>（學員的話要照逐字稿重念，電腦自動）；
-      能省掉的是第 2、3 步的人工。第 3 步沒覆核的話，照第 1 步的建議做（名字整句換掉、學員全部重念、建議刪除的段落不刪）。</div>
-    ${pre["缺"].length ? `<div class="card"><b>還不能開始：</b><ul>${pre["缺"].map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+      <b>第 2 步的老師參考音也要選好</b>，會出現的名字都要有英文代號（沒有的按下面「幫還沒代號的自動配」）。
+      能省掉的是第 3 步逐筆覆核的人工：沒覆核的話，照第 1 步的建議做（名字整句換掉、學員全部重念、建議刪除的段落不刪）。</div>
+    ${pre["缺"].length ? `<div class="card"><b>還不能開始：</b><ul>${pre["缺"].map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+      ${pre["缺代號"] ? `<button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">配常用英文名，之後在第 3 步 ②③ 可以改</span>` : ""}</div>` : ""}
     ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
     <h2>要修改的項目</h2>
     <div class="card" id="execStats">${execStatsHtml(d)}</div>
@@ -269,13 +271,22 @@ async function renderExecuteBody() {
       <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
     </div>
     ${redo.length ? `<h2>第 5 步退回重做的（${redo.length} 筆）</h2>
-      <div class="card"><p class="muted">只重做這幾筆的串接還沒做（TODO）：照每一筆的指令重做，再按「開始執行」重新組裝。</p>
+      <div class="card"><p class="muted">「一鍵只重做這幾筆」還沒做好：目前要照每一筆下面的指令，在終端機一筆一筆重做，再按「開始執行」重新組裝。</p>
       <table class="kv">${redo.map((it) => `<tr><td>${esc(it["類型"])}　${esc((it["覆核項目"] || []).join("、") || "—")}</td>
         <td>${esc(it["原因"])}<div class="muted"><code>${esc(it["建議指令"])}</code></div></td></tr>`).join("")}</table></div>` : ""}`;
   document.getElementById("btnExec").addEventListener("click", async () => {
     const body = { start: document.getElementById("exStart").value.trim() || null, end: document.getElementById("exEnd").value.trim() || null,
       methods: [document.getElementById("exMethod").value] };
     try { await apiPost("/api/execute/start", body, { quiet: true }); } catch (e) { alert(`無法開始：${e.message}`); return; }
+    await renderExecuteBody();
+  });
+  const auto = document.getElementById("btnAutoCode");   // 09-30：前置檢查缺代號時直接配
+  if (auto) auto.addEventListener("click", async () => {
+    auto.disabled = true;
+    try {
+      const r = await apiPost("/api/codes/auto", {});
+      if (r["代號不夠"]) alert("常用英文名不夠用，剩下的請到第 3 步 ②③ 自己打新代號。");
+    } catch (e) { return; }
     await renderExecuteBody();
   });
   const stop = document.getElementById("btnStop");

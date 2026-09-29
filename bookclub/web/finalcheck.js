@@ -446,7 +446,7 @@ function fcStartWatchTracking() {
 
 async function fcSendBack() {
   const n = fc.data["狀態"]["退回數"];
-  if (!confirm(`把 ${n} 筆退回的送回 AI 重做？第 4 步會照這份清單只重做這幾筆。`)) return;
+  if (!confirm(`把 ${n} 筆退回的送回 AI 重做？\n會寫進重做清單；「一鍵只重做這幾筆」還沒做好，目前要照第 4 步頁面每一筆的指令手動重做，再按「開始執行」重新組裝。`)) return;
   try { await apiPost("/api/final/sendback", {}); } catch (e) { alert(e.message); return; }
   await fcReload();
 }

@@ -104,6 +104,16 @@ def test_step4_stop_and_step3_readonly():
     assert 'id="rv-busy"' in rv and "rvApplyReadonly" in rv and 'rv.data["AI執行中"]' in rv
 
 
+def test_no_promises_of_unbuilt_redo():
+    # 09-30：第 5 步退回、第 4 步「從這裡開始」的說明要跟實際一致（一鍵只重做還沒做好；第 2 步參考音要選好）
+    fc = (WEB / "finalcheck.js").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert "第 4 步會照這份清單只重做這幾筆" not in fc and "手動重做" in fc
+    assert "能省掉的是第 2、3 步的人工" not in app and 'id="btnAutoCode"' in app
+    skill = (REPO_ROOT / "skills" / "bookclub-edit" / "SKILL.md").read_text(encoding="utf-8")
+    assert "0.1.1" not in skill and "總覽選影片" in skill
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
