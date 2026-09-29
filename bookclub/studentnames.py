@@ -61,13 +61,17 @@ def find(workdir: str | Path, force: bool = False) -> dict:
     from bookclub import turns as turns_mod
     from bookclub.config import data_dir
 
+    import hashlib
+
     workdir = Path(workdir)
     kept = kept_students(review.load_decisions(workdir))
-    cached = wd.read_json(cands_path(workdir), default=None)
-    if cached is not None and cached.get("保留原聲學員") == kept and not force:
-        return cached
-    empty = {"保留原聲學員": kept, "candidates": [], "統計": {"總筆數": 0}}
     tdata = turns_mod.page_data(workdir)
+    owner0 = sentence_owner(tdata.get("段落", []), kept) if not tdata.get("尚未準備") else {}
+    sig = hashlib.sha1(repr(sorted(owner0.items())).encode()).hexdigest()[:12]   # 段落改了（例如改成老師）也要重算
+    cached = wd.read_json(cands_path(workdir), default=None)
+    if cached is not None and cached.get("保留原聲學員") == kept and cached.get("段落指紋") == sig and not force:
+        return cached
+    empty = {"保留原聲學員": kept, "段落指紋": sig, "candidates": [], "統計": {"總筆數": 0}}
     speakers = wd.read_json(wd.speakers_path(workdir), default={}) or {}
     merged = wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}
     roster = data_dir() / "名冊.csv"
@@ -84,6 +88,7 @@ def find(workdir: str | Path, force: bool = False) -> dict:
     for c in res["candidates"]:
         c["id"] = cand_id(c)
     res["保留原聲學員"] = kept
+    res["段落指紋"] = sig
     wd.write_json(cands_path(workdir), res)
     return res
 
@@ -127,7 +132,7 @@ def items(workdir: str | Path, cut_ranges: list[tuple[float, float]] = ()) -> li
     pos = {s["id"]: k for k, s in enumerate(ordered)}
     out = []
     for c in res["candidates"]:
-        if c.get("學員") not in kept:
+        if c.get("學員") not in kept or owner.get(c.get("sentence_id")) != c.get("學員"):
             continue
         d = decisions.get(c["id"], {}) or {}
         out.append({

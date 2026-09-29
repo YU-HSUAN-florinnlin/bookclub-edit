@@ -158,6 +158,9 @@ def test_mark_turn_as_teacher_rescans_teacher_names():
     assert after[:len(before)] == before and after[-1]["代號"] == "Amy" and after[-1]["補找"]
     items, _ = students.build_items(w)
     assert all(it["段落"] != turn["id"] for it in items)
+    # 保留原聲時列的「學員提到名字」：那句改成老師就不再列
+    review.set_voice(w, "學員2", "保留原聲")
+    assert _stu_names(w) == []
     # 再改一次不會重複補
     turns_mod.save_turn(w, turn["id"], {"說話者": "老師"})
     assert len(wd.read_json(wd.names_path(w))["candidates"]) == len(after)
