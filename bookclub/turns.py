@@ -582,6 +582,9 @@ def set_person_code(workdir: str | Path, person: str, code: str | None) -> dict:
         return {"ok": True}
 
 
+UNKNOWN_REAL = "__unknown"   # 「學員是誰」左欄：不知道是誰（照樣換聲音）
+
+
 def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
     """`POST /api/turns/realname`：學員 N 的本名（09-29 宇軒：「學員是誰」左欄）。
     選老師（`settings.toml` 的 `[teacher] name`，預設「老師」）＝這一位的段落全部改成老師，並補找老師提到的名字。
@@ -591,6 +594,13 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
 
     workdir = Path(workdir)
     teacher = load_settings().teacher.name
+    if real == UNKNOWN_REAL:   # 09-29 宇軒：聽得出不是其他人、但不知道本名：照樣換聲音，不用本名
+        with _lock:
+            data = wd.read_json(turns_path(workdir))
+            p = data["學員"].setdefault(person, {"秒數": 0.0, "段數": 0, "點名線索": {}})
+            p["本名"], p["本名未知"], p["代號"] = None, True, None   # 自動配的代號是名冊上別人的，清掉
+            wd.write_json(turns_path(workdir), data)
+        return {"ok": True, "學員": person, "本名": None, "本名未知": True, "代號": None}
     if real and real in (teacher, "老師"):
         ids = [t["id"] for t in wd.read_json(turns_path(workdir))["段落"] if t["說話者"] == person]
         if not ids:
@@ -607,6 +617,7 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
         data = wd.read_json(turns_path(workdir))
         p = data["學員"].setdefault(person, {"秒數": 0.0, "段數": 0, "點名線索": {}})
         p["本名"] = real or None
+        p.pop("本名未知", None)
         if real:
             p["代號"] = (data.get("本名代號") or {}).get(real) or roster.get(real) or p.get("代號")
         wd.write_json(turns_path(workdir), data)

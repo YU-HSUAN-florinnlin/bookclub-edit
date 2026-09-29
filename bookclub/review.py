@@ -355,7 +355,8 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     tdata = turns_mod.page_data(workdir)
     has_turns = not tdata.get("尚未準備")
     turns = tdata.get("段落", []) if has_turns else []
-    people = tdata.get("學員", {}) if has_turns else {}
+    # 09-29 宇軒：段落都被併走／改成老師的學員（0 段）點試聽沒反應，不列
+    people = {k: p for k, p in (tdata.get("學員", {}) if has_turns else {}).items() if p.get("段數")}
     dec = load_decisions(workdir)
     voices = {name: dec["學員聲音"].get(name, "重新生成") for name in people}
     for name, p in people.items():
@@ -374,6 +375,13 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
 
     def skip_reason(a: float, b: float) -> str | None:
         return "落在確認刪除的段落裡" if _in_ranges(a, b, cut_ranges) else None
+
+    # 09-29 宇軒：只在結尾道別這類要刪的段落裡講話的學員，不用判斷是誰（建議刪除還沒選「不刪」的也算）
+    will_cut = cut_ranges + [(sg["start"], sg["end"]) for sg in suggestions
+                             if dec["刪除建議"].get(sg["id"], {}).get("決定") != "不刪"]
+    for name, p in people.items():
+        segs = [t for t in turns if t["說話者"] == name]
+        p["都會刪掉"] = bool(segs) and all(_in_ranges(t["start"], t["end"], will_cut) for t in segs)
 
     words = roster_words()
     table = replace_table()

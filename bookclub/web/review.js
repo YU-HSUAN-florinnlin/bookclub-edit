@@ -858,7 +858,9 @@ function rvPrepPeopleHtml() {
   const teacher = tp["老師名稱"] || "老師";
   const rosterCode = tp["名冊代號"] || {};
   const nameCode = tp["本名代號"] || {};
-  const left = people.map(([n, p]) => {
+  // 09-29 宇軒：只在結尾道別這類要刪的段落裡講話的，收到最下面，不用判斷
+  const cutOnly = people.filter(([, p]) => p["都會刪掉"]);
+  const left = people.filter(([, p]) => !p["都會刪掉"]).map(([n, p]) => {
     const others = people.filter(([m]) => m !== n).map(([m]) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
     // 09-29：這一集被叫到的名字（第 1 步人名清單，依次數）排最前面；名冊上其他人放後面；最後是老師
     const called = tp["這一集的名字"] || [];
@@ -867,6 +869,7 @@ function rvPrepPeopleHtml() {
     const realOpts = ['<option value="">（還沒指定）</option>']
       .concat(called.length ? [`<optgroup label="這一集被叫到的名字">${called.map((c) => opt(c["名字"], `${c["名字"]}（${c["次數"]} 次${c["名冊上有"] ? "" : "・名冊上沒有"}）`)).join("")}</optgroup>`] : [])
       .concat([`<optgroup label="${called.length ? "名冊上其他人" : "名冊"}">${reals.filter((r) => !calledSet.has(r)).map((r) => opt(r)).join("")}</optgroup>`])
+      .concat([`<option value="__unknown" ${p["本名未知"] ? "selected" : ""}>不知道是誰（照樣換聲音）</option>`])   // 09-29 宇軒
       .concat([`<option value="${esc(teacher)}">${esc(teacher)}（這位其實是老師）</option>`]).join("");
     const segs = rvSegsOf(n);
     const split = rv.splitOpen === n ? `<div class="rv-splitbox">
@@ -887,7 +890,9 @@ function rvPrepPeopleHtml() {
         ${others ? `<label>跟誰是同一人 <select class="rv-mergeto" data-person="${esc(n)}"><option value="">—</option>${others}</select></label>` : ""}
         <button class="ghost small rv-splitopen" data-person="${esc(n)}" title="一位其實是兩個人、或有幾段其實是老師">拆開／有幾段其實是老師</button>
       </div></details>${split}</li>`;
-  }).join("");
+  }).join("") + (cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只在要刪的段落裡講話（${cutOnly.length} 位：${esc(cutOnly.map(([n]) => n).join("、"))}），不用判斷</summary>
+      <p class="rv-meta">例如結尾跟老師說再見。這幾段會整段刪掉；如果在「③ 建議刪除段落」改成不刪，他們會回到上面。</p>
+      <div class="ctl">${cutOnly.map(([n]) => `<button class="ghost small rv-sample" data-person="${esc(n)}">試聽 ${esc(n)}</button>`).join("")}</div></details></li>` : "");
   const chosen = [...new Set(people.map(([, p]) => p["本名"]).filter(Boolean))];
   const right = chosen.length ? chosen.map((r) => {
     const cur = nameCode[r] || rosterCode[r] || "";
@@ -916,7 +921,7 @@ function rvPrepPeopleHtml() {
   const unBlock = un.length ? `<h4 class="rv-unhead">這一集提到、名冊上沒有的名字（${un.length} 個，${un.filter((u) => !u["做法"]).length} 個還沒決定）</h4>
     <p class="rv-meta">第 1 步請 Claude 讀整支逐字稿找出來的。學員本人的名字，在上面左欄選本名就好；家人、朋友、沒登記的人選「換成代號」（會加進名冊、自動補找老師提到的地方）；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
     <ul class="rv-people">${unRows}</ul>` : "";
-  return `<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的）。</p>
+  return `<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的）。</p>
     <div class="rv-people2"><div><h4>聲紋分出來的人</h4><ul class="rv-people">${left}</ul></div>
       <div><h4>本名 → 這支影片的英文代號</h4><ul class="rv-people">${right}</ul></div></div>${unBlock}`;
 }
@@ -946,7 +951,8 @@ function rvBindPrep(root) {
   const play = (t) => { rvSeek(Number(t), true); };
   root.querySelectorAll(".rv-segplay").forEach((b) => b.addEventListener("click", () => play(b.dataset.t)));
   root.querySelectorAll(".rv-sample").forEach((b) => b.addEventListener("click", () => {
-    const segs = rvSegsOf(b.dataset.person);
+    let segs = rvSegsOf(b.dataset.person);
+    if (!segs.length) segs = (rv.data["色帶"] || []).filter((x) => x["說話者"] === b.dataset.person);   // 落在刪除段落裡、不在清單上的
     const seg = segs.find((x) => x.end - x.start >= 3) || segs[0];
     if (seg) play(seg.start);
   }));
