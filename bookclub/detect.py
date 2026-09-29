@@ -82,6 +82,7 @@ class DetectedItem:
     detail: str = ""
     is_default: bool = False  # 是不是「倉庫自己的／預設位置」，resolve_* 用來排序
     commit: str = ""
+    manual: bool = False      # 安裝腳本不會裝、要自己準備的（沒找到時標「要自己準備」，不是「會安裝」）
 
 
 # ── 共用小工具 ───────────────────────────────────────────────
@@ -525,6 +526,37 @@ def external_cosyvoice_model() -> str | None:
 # ── 彙整與輸出 ───────────────────────────────────────────────
 
 
+def detect_manual_items() -> list[DetectedItem]:
+    """安裝腳本不會處理、要自己準備的三樣（09-29 夥伴 WSL2 實測：Claude Code 裝在 Windows 那邊，
+    WSL2 裡找不到，第 1 步段落分析整個跳過）。一開始檢查環境就列出來，免得跑到一半才發現。"""
+    linux = platform.system() == "Linux"
+    home = Path.home()
+
+    claude = shutil.which("claude") or (str(home / ".local/bin/claude") if (home / ".local/bin/claude").exists() else "")
+    claude_fix = ("WSL2 裡要另外裝一份（Windows 那份在 WSL2 用不到）：curl -fsSL https://claude.ai/install.sh | bash，"
+                  "裝完執行 claude 登入一次" if linux else "安裝 Claude Code 並登入一次")
+    items = [DetectedItem("Claude Code（段落分析、建議刪除段落、人名清單要用）", bool(claude), path=claude,
+                          detail="" if claude else f"沒有找到。{claude_fix}。沒有的話第 3 步不會有學員段落", manual=True)]
+
+    key_file = ".profile" if linux else ".zshrc"
+    try:
+        in_file = "GROQ_API_KEY" in (home / key_file).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        in_file = False
+    has_key = bool(os.environ.get("GROQ_API_KEY")) or in_file
+    items.append(DetectedItem("Groq 金鑰（轉文字要用）", has_key,
+                              detail="" if has_key else f"還沒設定。到 console.groq.com 申請，在 ~/{key_file} 加一行 "
+                              "export GROQ_API_KEY=你的金鑰" + ("（不要放 ~/.bashrc，工具讀不到）" if linux else ""),
+                              manual=True))
+
+    hf_token = bool(os.environ.get("HF_TOKEN")) or (home / ".cache/huggingface/token").is_file()
+    items.append(DetectedItem("Hugging Face 登入（分辨說話者的模型要先同意條款）", hf_token,
+                              detail="" if hf_token else "還沒登入。先到 huggingface.co 同意 pyannote/segmentation-3.0 與 "
+                              "pyannote/speaker-diarization-3.1 的條款，裝好後跑 .venv/bin/hf auth login",
+                              manual=True))
+    return items
+
+
 def full_report() -> "OrderedDict[str, list[DetectedItem]]":
     sections: "OrderedDict[str, list[DetectedItem]]" = OrderedDict()
     sections["系統工具"] = detect_system_tools()
@@ -533,6 +565,7 @@ def full_report() -> "OrderedDict[str, list[DetectedItem]]":
     sections["pyannote 聲紋／分辨說話者模型"] = detect_pyannote_models()
     sections["Silero VAD"] = [detect_silero_vad()]
     sections["Python 環境"] = detect_python_envs()
+    sections["要自己準備的（安裝腳本不會處理）"] = detect_manual_items()
     return sections
 
 
@@ -542,7 +575,7 @@ def format_report_text(sections: "OrderedDict[str, list[DetectedItem]]" | None =
     for title, items in sections.items():
         lines.append(f"── {title} ──")
         for it in items:
-            mark = "✅ 已找到" if it.found else "⬜ 沒有，會安裝／下載"
+            mark = "✅ 已找到" if it.found else ("⚠️ 要自己準備" if it.manual else "⬜ 沒有，會安裝／下載")
             loc = f"（{it.path}）" if it.path else ""
             detail = f"：{it.detail}" if it.detail else ""
             lines.append(f"{mark}　{it.name}{loc}{detail}")
