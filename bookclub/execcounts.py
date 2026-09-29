@@ -151,5 +151,9 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
 
 def remaining_seconds(rows: list[dict]) -> int | None:
     """生成類預估還要多久（秒）。還沒有任何一句生成過、算不出平均的類別不算；全部都算不出來回 None。"""
-    vals = [r["預估剩餘秒數"] for r in rows if r.get("預估剩餘秒數") is not None]
-    return sum(vals) if vals else None
+    gen = [r for r in rows if "已生成" in r and r.get("總數")]
+    left = [r for r in gen if r["總數"] > r["已生成"]]
+    if not left:
+        return 0 if gen else None
+    vals = [r["預估剩餘秒數"] for r in left if r.get("預估剩餘秒數") is not None]
+    return sum(vals) if vals else None   # 還有要生成的、但一句都還沒生成完：算不出來

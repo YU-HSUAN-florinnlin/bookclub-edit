@@ -313,7 +313,8 @@ function execStepRows(d) {
 // 09-30：預估剩餘時間（從每一句生成花的時間推算，只算生成類；組裝另外算）
 function execEtaText(d) {
   const s = d["預估剩餘秒數"];
-  if (!d.running || s == null) return "";
+  if (!d.running) return "";
+  if (s == null) return "預估剩餘時間：第一句生成完才算得出來";
   if (s <= 0) return "生成都做完了，接著組裝";
   const m = Math.round(s / 60);
   return `預估生成還要約 ${m >= 60 ? `${Math.floor(m / 60)} 小時 ${m % 60} 分` : `${Math.max(1, m)} 分`}（不含組裝）`;

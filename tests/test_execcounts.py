@@ -64,6 +64,10 @@ def test_cache_counts_generated_before_log_and_eta():
         assert r["預估剩餘秒數"] == (len(items) - 1) * 120
         assert execcounts.remaining_seconds(list(_rows(w).values())) >= r["預估剩餘秒數"]
         assert execcounts.cache_progress({}, items) == (0, None)
+        # 09-30 夜間實點發現：一句都還沒生成時不能說「生成都做完了」
+        rows = [{"已生成": 0, "總數": 4, "預估剩餘秒數": None}, {"已生成": 0, "總數": 0, "預估剩餘秒數": 0}]
+        assert execcounts.remaining_seconds(rows) is None
+        assert execcounts.remaining_seconds([{"已生成": 4, "總數": 4, "預估剩餘秒數": 0}]) == 0
 
 
 def test_render_stage_rows_done_only_after_render():
