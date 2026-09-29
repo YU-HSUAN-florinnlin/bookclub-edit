@@ -109,6 +109,15 @@ class NoProject(Exception):
     """還沒選專案（`bookclub serve` 沒帶工作區、網頁上也還沒選影片）。"""
 
 
+class Busy(Exception):
+    """AI 執行（第 4 步）還在跑：第 3 步的東西這時候不能改（09-30）。"""
+
+
+# 第 4 步跑的時候擋掉的寫入（第 3 步覆核工作台的存檔）；計時、匯出不算修改
+STEP3_WRITES = ("/api/review/", "/api/turns/", "/api/people/", "/api/codes/")
+STEP3_WRITES_OK = ("/api/review/time", "/api/review/export")
+
+
 def workroot() -> Path:
     """09-26 以前的工作區都放在這裡：`~/讀書會剪輯資料/工作區/`（舊專案照樣列得出來、切得過去）。"""
     return data_dir() / "工作區"
@@ -163,6 +172,19 @@ def known_project(d: Path) -> bool:
         return d.parent == workroot().resolve()
     except ValueError:
         return False
+
+
+def _mark_interrupted(workdir: Path | None) -> None:
+    """進度檔殘留「進行中」＝上次跑到一半伺服器被關掉 → 改成「中斷」（09-30）。"""
+    if not workdir:
+        return
+    from bookclub.execute import mark_interrupted
+
+    try:
+        if mark_interrupted(workdir):
+            print("[網頁伺服器] 上次第 4 步跑到一半伺服器被關掉，進度改成「中斷」（按開始執行會接著做）")
+    except Exception as e:  # noqa: BLE001 — 進度檔壞掉不擋啟動
+        print(f"⚠️ [網頁伺服器] 讀不了第 4 步進度：{e}")
 
 
 def home_path(text: str | None) -> Path:
@@ -691,6 +713,11 @@ class BookclubServer(ThreadingHTTPServer):
             remember_current(self._workdir)
         except OSError as e:   # 記不下來只是下次重開要重選，不擋切換
             print(f"⚠️ [網頁伺服器] 記不下目前的專案：{e}")
+        _mark_interrupted(self._workdir)
+
+    def exec_running(self) -> bool:
+        with self.run_lock:
+            return bool(self.exec_state["running"])
 
     @staticmethod
     def _fresh_run_state() -> dict:
@@ -729,9 +756,11 @@ class BookclubServer(ThreadingHTTPServer):
         tee = _TeeWriter(sys.stdout, self.exec_state["messages"], self.run_lock)
         try:
             with contextlib.redirect_stdout(tee):
-                run_execute(self.workdir, start=parse_time(opts["start"]) if opts.get("start") else None,
-                            end=parse_time(opts["end"]) if opts.get("end") else None,
-                            methods=opts.get("methods") or None, skip_precheck=True)
+                prog = run_execute(self.workdir, start=parse_time(opts["start"]) if opts.get("start") else None,
+                                   end=parse_time(opts["end"]) if opts.get("end") else None,
+                                   methods=opts.get("methods") or None, skip_precheck=True)
+            with self.run_lock:
+                self.exec_state["stopped"] = bool((prog or {}).get("停止"))
         except Exception as e:  # noqa: BLE001 — 背景執行緒要把失敗記下來給網頁看
             with self.run_lock:
                 self.exec_state["error"] = f"{type(e).__name__}：{e}"
@@ -753,6 +782,10 @@ class BookclubServer(ThreadingHTTPServer):
         rng = prog.get("範圍") or [None, None]
         done = ((prog.get("步驟") or {}).get("組裝") or {}).get("狀態") in ("做完", "跳過")
         st["統計"] = execcounts.counts(self.workdir, rng[0], rng[1], render_done=done)
+        st["預估剩餘秒數"] = execcounts.remaining_seconds(st["統計"]) if state.get("running") else None
+        from bookclub.execute import stop_requested
+
+        st["停止中"] = bool(state.get("running")) and stop_requested(self.workdir)
         return {**state, **st}
 
     def start_analyze(self, opts: dict) -> dict:
@@ -933,7 +966,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/review":
             from bookclub.review import page_data as review_page
 
-            self._send_json(200, review_page(server.workdir, video=server.video))
+            self._send_json(200, {**review_page(server.workdir, video=server.video),
+                                  "AI執行中": server.exec_running()})   # 09-30：執行中第 3 步變唯讀
         elif path == "/api/video":
             from bookclub.review import video_path
 
@@ -998,6 +1032,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(403, {"error": str(e)})
         except NoProject as e:
             self._send_json(409, {"error": str(e), "沒有專案": True})
+        except Busy as e:
+            self._send_json(409, {"error": str(e), "執行中": True})
         except FileNotFoundError as e:
             self._send_json(404, {"error": str(e)})
         except (ValueError, KeyError, json.JSONDecodeError) as e:
@@ -1007,6 +1043,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route_post_api(self, path: str, body: dict) -> None:
         server = self.server
+        if path.startswith(STEP3_WRITES) and path not in STEP3_WRITES_OK and server.exec_running():
+            raise Busy("AI 正在執行第 4 步，第 3 步這時候不能改（改了這次執行也用不到）。等它跑完，或到第 4 步按「停止」")
+        if path == "/api/execute/stop":
+            if not server.exec_running():
+                raise ValueError("第 4 步現在沒有在執行")
+            from bookclub.execute import request_stop
+
+            request_stop(server.workdir)
+            self._send_json(200, {"ok": True, "停止中": True})
+            return
         if path == "/api/projects/switch":
             d = Path(str(body["路徑"])) if body.get("路徑") else safe_join(workroot(), str(body["名稱"]))
             if not d.is_dir() or not known_project(d):
@@ -1170,6 +1216,7 @@ def serve(
         ("127.0.0.1", port), Handler,
         workdir=workdir or None, video=Path(video).expanduser() if video else None,
     )
+    _mark_interrupted(workdir or None)   # 09-30：上次跑到一半伺服器被關掉，進度改「中斷」
     url = f"http://127.0.0.1:{port}/"
     print(f"[網頁伺服器] 網址：{url}")
     print(f"[網頁伺服器] 工作區：{workdir or '（還沒選，到網頁總覽選影片）'}")

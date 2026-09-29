@@ -611,3 +611,8 @@ table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg)
 .save-error .why { opacity: 0.9; font-size: 13px; }
 .save-error button { background: #fff; color: var(--danger); border: 0; }
 .save-error button.ghost { background: transparent; color: #fff; border: 1px solid #fff; }
+
+/* ---------- 第 4 步執行中，第 3 步唯讀（09-30） ---------- */
+.rv-busy { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--lowconf-border); border-radius: 6px; padding: 8px 12px; margin: 6px 0; }
+.rv-busy[hidden] { display: none; }
+.rv2.readonly textarea, .rv2.readonly select, .rv2.readonly input { background: var(--bg-soft); }

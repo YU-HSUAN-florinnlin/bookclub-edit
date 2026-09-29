@@ -96,6 +96,14 @@ def test_step3_wording():
     assert "3 件事" not in js and "開始前 4 件事" in js
 
 
+def test_step4_stop_and_step3_readonly():
+    # 09-30：第 4 步有停止按鈕、預估剩餘時間；執行中第 3 步唯讀＋上方橫幅
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    assert 'id="btnStop"' in app and "/api/execute/stop" in app and "execEtaText" in app
+    assert 'id="rv-busy"' in rv and "rvApplyReadonly" in rv and 'rv.data["AI執行中"]' in rv
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

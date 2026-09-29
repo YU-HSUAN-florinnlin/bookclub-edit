@@ -53,6 +53,44 @@ def video_duration(workdir: Path) -> float | None:
     return analysis.get("影片長度") or merged.get("duration")
 
 
+def request_stop(workdir: str | Path) -> None:
+    """`POST /api/execute/stop`：放停止旗標，生成完目前這一次就停（組裝中按的話等組裝做完才停）。"""
+    from bookclub import tts
+
+    f = tts.stop_flag_path(Path(workdir))
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(_now(), encoding="utf-8")
+
+
+def _clear_stop(workdir: Path) -> None:
+    from bookclub import tts
+
+    tts.stop_flag_path(workdir).unlink(missing_ok=True)
+
+
+def stop_requested(workdir: str | Path) -> bool:
+    from bookclub import tts
+
+    return tts.stop_flag_path(Path(workdir)).exists()
+
+
+def mark_interrupted(workdir: str | Path) -> bool:
+    """網頁伺服器啟動（或切換專案）時：進度檔殘留「進行中」＝上次跑到一半伺服器被關掉，改成「中斷」。
+    回傳有沒有改。"""
+    path = progress_path(Path(workdir))
+    prog = wd.read_json(path, default=None)
+    if not prog:
+        return False
+    hit = [k for k, st in (prog.get("步驟") or {}).items() if st.get("狀態") == "進行中"]
+    if not hit:
+        return False
+    for k in hit:
+        prog["步驟"][k].update({"狀態": "中斷", "訊息": "上次跑到一半網頁伺服器被關掉了；按「開始執行」會接著做（做好的不重做）"})
+    prog["中斷"] = True
+    wd.write_json(path, prog)
+    return True
+
+
 def tag_for(a: float, b: float) -> str:
     return f"{int(a // 60)}-{int(b // 60)}"      # 跟 render.render_video 的預設檔名標記一樣
 
@@ -242,12 +280,19 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     def save() -> None:
         wd.write_json(progress_path(workdir), prog)
 
+    from bookclub.tts import StopRequested, check_stop
+
+    _clear_stop(workdir)   # 上次按的停止不算這一次
     save()
     for key, _desc in STEPS:
         st = prog["步驟"][key]
         if only_steps and key not in only_steps:
             st.update({"狀態": "略過", "訊息": "這次沒選這一步"})
             continue
+        try:
+            check_stop(workdir)
+        except StopRequested as e:
+            return _stopped(prog, st, e, save, log)
         done, why = checks[key](workdir, ctx)
         if done and not redo:
             st.update({"狀態": "跳過", "訊息": f"做過了：{why}"})
@@ -259,6 +304,8 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
         log(f"[AI 執行] {key}：開始（{why}）")
         try:
             runners[key](workdir, ctx)
+        except StopRequested as e:
+            return _stopped(prog, st, e, save, log)
         except Exception as e:  # noqa: BLE001 — 記下來再往外丟，網頁看得到是哪一步、什麼錯
             st.update({"狀態": "失敗", "結束": _now(), "訊息": f"{type(e).__name__}：{e}"})
             prog["錯誤"] = f"{key}：{type(e).__name__}：{e}"
@@ -272,6 +319,16 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     prog["結束時間"] = _now()
     save()
     log("[AI 執行] 全部做完。下一步：網頁第 5 步「成品檢查」")
+    return prog
+
+
+def _stopped(prog: dict, st: dict, e: Exception, save: Callable[[], None], log: Callable[[str], None]) -> dict:
+    """按了停止：這一步標「停止」、整份標停止，不算失敗。"""
+    st.update({"狀態": "停止", "結束": _now(), "訊息": str(e)})
+    prog["停止"] = True
+    prog["結束時間"] = _now()
+    save()
+    log(f"[AI 執行] {e}")
     return prog
 
 

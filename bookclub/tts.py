@@ -70,6 +70,22 @@ def teacher_log_path(workdir: Path) -> Path:
     return gen_dir(workdir) / "老師紀錄.json"
 
 
+STOP_FLAG = "_停止執行"   # 09-30：網頁第 4 步按「停止」時放這個檔，生成完目前這一次就停
+
+
+class StopRequested(Exception):
+    """網頁第 4 步按了「停止」：停在目前這一次生成之後（每一次都記在 `_嘗試快取.json`，下次接著做）。"""
+
+
+def stop_flag_path(workdir: Path) -> Path:
+    return gen_dir(Path(workdir)) / STOP_FLAG
+
+
+def check_stop(workdir: Path) -> None:
+    if stop_flag_path(workdir).exists():
+        raise StopRequested("按了停止：停在目前這一句生成完之後，下次按「開始執行」會接著做")
+
+
 # ---------- 文字處理（純函式） ----------
 
 _s2t = None
@@ -635,6 +651,7 @@ def run_generation(
         if hit and (out_dir / f"{it['id']}_第{n}次.wav").is_file():
             log(f"  第 {n} 次：沿用上次生成的檔案")
             return Attempt(**hit)
+        check_stop(workdir)   # 09-30：按了停止就不再開始新的生成（已經生成的都在快取裡）
         nonlocal synth
         if synth is None:
             synth = load_synth()

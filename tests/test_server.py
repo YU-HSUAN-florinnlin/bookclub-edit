@@ -438,6 +438,41 @@ def test_current_project_remembered_across_restart():
             os.environ["BOOKCLUB_DATA_DIR"] = old
 
 
+def test_step3_writes_blocked_while_executing():
+    # 09-30：第 4 步執行中，第 3 步的存檔回 409（網頁同時變唯讀）；計時照常；停止只在執行中能按
+    import threading
+    import urllib.error
+    import urllib.request
+
+    with _TmpWorkdir() as w:
+        httpd = srv.BookclubServer(("127.0.0.1", 0), srv.Handler, workdir=w, video=None)
+        th = threading.Thread(target=httpd.serve_forever, daemon=True)
+        th.start()
+        port = httpd.server_address[1]
+
+        def post(path, body):
+            req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            try:
+                with urllib.request.urlopen(req) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read())
+
+        try:
+            assert post("/api/execute/stop", {})[0] == 400                  # 沒在跑
+            httpd.exec_state["running"] = True
+            code, body = post("/api/review/prep", {"項目": "刪除", "完成": False})
+            assert code == 409 and body.get("執行中") and "第 4 步" in body["error"]
+            assert post("/api/turns/realname", {"學員": "學員1", "本名": None})[0] == 409
+            assert post("/api/review/time", {"秒數": 1})[0] == 200          # 計時不算修改
+            code, body = post("/api/execute/stop", {})
+            assert code == 200 and (w / "生成" / "_停止執行").exists()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

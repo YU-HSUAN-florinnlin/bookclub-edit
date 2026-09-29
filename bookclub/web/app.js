@@ -260,6 +260,11 @@ async function renderExecuteBody() {
         <label>輸出做法 <select id="exMethod">${["hw", "sw", "smart"].map((m) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${{ hw: "硬體編碼（Mac）", sw: "軟體編碼", smart: "只重做有動到的片段" }[m]}</option>`).join("")}</select></label>
       </div>
       <button id="btnExec" ${running || !pre["可以開始"] ? "disabled" : ""}>${running ? "執行中…" : "開始執行"}</button>
+      ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
+      <span class="muted" id="execEta">${execEtaText(d)}</span>
+      ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「開始執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
+      ${!running && prog["停止"] ? `<p><span class="badge">已停止</span> 上次按了停止；按「開始執行」會接著做（做好的不重做）。</p>` : ""}
+      ${!running && prog["中斷"] ? `<p><span class="badge error">中斷</span> 上次跑到一半網頁伺服器被關掉了；按「開始執行」會接著做（做好的不重做）。</p>` : ""}
       ${d.error ? `<p><span class="badge error">失敗</span> ${esc(d.error)}</p>` : ""}
       <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
     </div>
@@ -273,6 +278,12 @@ async function renderExecuteBody() {
     try { await apiPost("/api/execute/start", body, { quiet: true }); } catch (e) { alert(`無法開始：${e.message}`); return; }
     await renderExecuteBody();
   });
+  const stop = document.getElementById("btnStop");
+  if (stop) stop.addEventListener("click", async () => {
+    stop.disabled = true;
+    stop.textContent = "停止中…（等目前這一句生成完）";
+    try { await apiPost("/api/execute/stop", {}, { quiet: true }); } catch (e) { alert(`停不了：${e.message}`); }
+  });
   if (running) startExecPoll();
 }
 
@@ -280,12 +291,21 @@ function execStepRows(d) {
   const steps = (d["進度"] || {})["步驟"] || {};
   const names = [["老師名字", "老師提到名字：用老師 AI 聲音整句重念"], ["學員重念", "學員段落：匿名聲線重念"],
     ["保留原聲學員名字", "保留原聲的學員講到名字：選了換成代號的，用他自己的聲音生成"], ["組裝", "換聲音＋刪除＋停格，輸出成品影片"]];
-  const badge = (st) => ({ "做完": "done", "跳過": "done", "進行中": "running", "失敗": "error" }[st] || "");
+  const badge = (st) => ({ "做完": "done", "跳過": "done", "進行中": "running", "失敗": "error", "中斷": "error" }[st] || "");
   return names.map(([k, desc]) => {
     const st = (steps[k] || {})["狀態"] || "還沒跑";
     return `<tr><td><b>${esc(k)}</b><div class="muted">${esc(desc)}</div></td>
       <td><span class="badge ${badge(st)}">${esc(st)}</span></td><td class="muted">${esc((steps[k] || {})["訊息"] || "")}</td></tr>`;
   }).join("");
+}
+
+// 09-30：預估剩餘時間（從每一句生成花的時間推算，只算生成類；組裝另外算）
+function execEtaText(d) {
+  const s = d["預估剩餘秒數"];
+  if (!d.running || s == null) return "";
+  if (s <= 0) return "生成都做完了，接著組裝";
+  const m = Math.round(s / 60);
+  return `預估生成還要約 ${m >= 60 ? `${Math.floor(m / 60)} 小時 ${m % 60} 分` : `${Math.max(1, m)} 分`}（不含組裝）`;
 }
 
 // 逐類統計：每一類要改幾筆、做完幾筆（09-29 宇軒）。生成類邊跑邊跳；消音、刪除在組裝做完才算完成
@@ -298,8 +318,9 @@ function execStatsHtml(d) {
   const body = rows.map((r) => {
     if (r["總數"] == null) return `<tr><td><b>${esc(r["類型"])}</b><div class="muted">${esc(r["做法"])}</div></td><td class="num muted" colspan="2">讀不到</td></tr>`;
     const p = pct(r["完成"], r["總數"]);
+    const made = r["已生成"] != null && r["已生成"] > r["完成"] ? `<div class="muted">已生成 ${r["已生成"]}／${r["總數"]} 句</div>` : "";
     return `<tr class="${r["總數"] ? "" : "zero"}"><td><b>${esc(r["類型"])}</b><div class="muted">${esc(r["做法"])}${r["階段"] === "組裝" ? "（組裝時處理）" : ""}</div></td>
-      <td class="num"><b>${r["完成"]}</b>／${r["總數"]}</td>
+      <td class="num"><b>${r["完成"]}</b>／${r["總數"]}${made}</td>
       <td>${r["總數"] ? `<span class="bar" role="progressbar" aria-valuenow="${p}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(r["類型"])} ${esc(r["做法"])}"><i style="width:${p}%"></i></span>` : `<span class="muted">沒有</span>`}</td></tr>`;
   }).join("");
   return `<p class="exec-total">全部 <b>${done}</b>／${total} 筆完成（${pct(done, total)}%）</p>
@@ -326,6 +347,8 @@ function startExecPoll() {
       if (st) st.innerHTML = execStatsHtml(d);
       const sp = document.getElementById("execSteps");
       if (sp) sp.innerHTML = execStepRows(d);
+      const eta = document.getElementById("execEta");
+      if (eta) eta.textContent = execEtaText(d);
       if (!d.running) { clearInterval(execPollTimer); execPollTimer = null; await renderExecuteBody(); }
     } catch (e) { /* 輪詢失敗，下一次再試 */ }
   }, 2000);

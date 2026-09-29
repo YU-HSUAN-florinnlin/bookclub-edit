@@ -44,6 +44,28 @@ def test_generated_items_count_as_done():
         assert r["完成"] == 1 and r["總數"] == len(items)
 
 
+def test_cache_counts_generated_before_log_and_eta():
+    # 09-30：生成紀錄整組跑完才寫；進度改看 _嘗試快取.json（每生成一次就寫），並推算剩餘時間
+    from bookclub import students, tts
+
+    with tempfile.TemporaryDirectory() as t:
+        w = fake_workdir.make(t)
+        items, _ = students.build_items(w)
+        assert len(items) >= 2
+        a, b = items[0], items[1]
+        cache = {f"{a['id']}|1|42|1.0|{a['text']}|ref.wav#x": {"elapsed_s": 100.0},
+                 f"{a['id']}|2|1|1.0|{a['text']}|ref.wav#x": {"elapsed_s": 20.0},      # 同一句第二次：還是算一句
+                 f"{b['id']}|1|42|1.0|舊的文字|ref.wav#x": {"elapsed_s": 50.0},          # 文字對不上（舊的）不算
+                 f"不在範圍|1|42|1.0|x|ref.wav#x": {"elapsed_s": 50.0}}
+        (students.out_dir(w)).mkdir(parents=True, exist_ok=True)
+        wd.write_json(students.out_dir(w) / tts.ATTEMPT_CACHE, cache)
+        r = _rows(w)[("學員段落", "匿名聲線重念")]
+        assert r["完成"] == 0 and r["已生成"] == 1
+        assert r["預估剩餘秒數"] == (len(items) - 1) * 120
+        assert execcounts.remaining_seconds(list(_rows(w).values())) >= r["預估剩餘秒數"]
+        assert execcounts.cache_progress({}, items) == (0, None)
+
+
 def test_render_stage_rows_done_only_after_render():
     with tempfile.TemporaryDirectory() as t:
         w = fake_workdir.make(t)

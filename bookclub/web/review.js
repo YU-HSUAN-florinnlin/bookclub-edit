@@ -117,6 +117,7 @@ async function renderReview() {
           <button class="primary" id="rv-go4" disabled>全部通過，開始 AI 修改</button>
         </div>
       </header>
+      <div class="rv-busy" id="rv-busy" role="status" hidden></div>
       <div class="rv-drawer" id="rv-keys" hidden>
         <dl class="rv-keylist">
           <dt>Enter</dt><dd>通過這一筆（影片照常播、不跳走；文字框裡 Shift＋Enter 換行）</dd>
@@ -189,13 +190,46 @@ function rvRenderAll() {
   rvRenderProgress();
   rvRenderMain();
   rvRenderIO();
+  rvApplyReadonly();
+}
+
+// ---------------------------------------------------------------------------
+// 09-30：第 4 步 AI 執行中，第 3 步變唯讀（改了這次執行也用不到，還會跟正在跑的生成打架）
+// 看、播放、篩選、上一筆下一筆照常；其他按鈕與輸入框鎖住，上方橫幅說明。後端也擋（409）。
+// ---------------------------------------------------------------------------
+
+const RV_RO_ALLOW = "#rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-ed-play, #rv-ed-close, #rv-busy button";
+
+function rvReadonly() { return !!(rv.data && rv.data["AI執行中"]); }
+
+function rvApplyReadonly() {
+  const ro = rvReadonly();
+  const bar = document.getElementById("rv-busy");
+  if (bar) {
+    bar.hidden = !ro;
+    bar.innerHTML = ro ? `AI 正在執行第 4 步：第 3 步現在只能看、不能改。要改的話到 <a href="#step4">第 4 步</a> 按「停止」，或等它跑完。
+      <button class="ghost small" id="rv-busy-check">再檢查一次</button>` : "";
+    const b = document.getElementById("rv-busy-check");
+    if (b) b.addEventListener("click", rvReload);
+  }
+  const root = document.querySelector(".rv2");
+  if (!root) return;
+  root.classList.toggle("readonly", ro);
+  root.querySelectorAll("#rv-right, #rv-lower, #rv-settings, #rv-io, .rv-bar-btns").forEach((box) => {
+    box.querySelectorAll("button, input, select, textarea").forEach((el) => {
+      if (el.matches(RV_RO_ALLOW)) return;
+      if (ro) { if (!el.disabled) { el.disabled = true; el.dataset.ro = "1"; } }
+      else if (el.dataset.ro) { el.disabled = false; delete el.dataset.ro; }
+    });
+  });
 }
 
 function rvRenderMain() {
   document.getElementById("rv-prep-btn").classList.toggle("on", rv.prepOpen);
-  if (rv.prepOpen) { rvRenderPrepSide(); rvRenderPrep(); return; }
+  if (rv.prepOpen) { rvRenderPrepSide(); rvRenderPrep(); rvApplyReadonly(); return; }
   rvRenderCard();
   rvRenderList();
+  rvApplyReadonly();
 }
 
 async function rvReload() {
@@ -264,6 +298,7 @@ function rvSelect(key, { seek = true, auto = false } = {}) {
   if (seek) { rv.hold = key; rvSeek(Math.max(0, it.start - 2)); }
   rvRenderCard();
   rvMarkListRow(true);
+  rvApplyReadonly();
 }
 
 function rvStep(dir) {   // 上一筆／下一筆跳過「不用處理」的（目前這筆除外）
@@ -766,7 +801,7 @@ function rvRefreshSug() {   // 改了做法：只更新建議框下面的「改�
 
 async function rvPass() {
   const it = rv.cur && rvItem(rv.cur);
-  if (!it) return;
+  if (!it || rvReadonly()) return;
   const t = it["類型"];
   const undo = !!it["已確認"];
   try {
@@ -896,6 +931,7 @@ function rvRenderPrepSide() {
     rvRenderMain();
     if (rv.cur) rvSelect(rv.cur);
   });
+  rvApplyReadonly();
 }
 
 // 09-30：每一件底下還沒處理的（後端 review.prep_pending）；有的話不能標完成
@@ -932,6 +968,7 @@ function rvRenderPrep() {
     rvRenderPrepSide(); rvRenderPrep();
   });
   rvBindPrep(lower);
+  rvApplyReadonly();
 }
 
 function rvSegsOf(who) { return rvItems().filter((x) => x["類型"] === "學員段落" && x["說話者"] === who); }
@@ -1298,6 +1335,7 @@ function rvRenderIO() {
   });
   q("rv-ed-save").addEventListener("click", rvEdSave);
   rvEdRefresh();
+  rvApplyReadonly();
 }
 
 function rvEdOk() { const ed = rv.ed; return ed.a != null && ed.b != null && ed.b > ed.a; }
@@ -1371,6 +1409,7 @@ function rvRenderSettings() {
   el.querySelectorAll(".rv-voice-all").forEach((b) => b.addEventListener("click", async () => {
     await apiPost("/api/review/voice", { "學員": "全部", "聲音": b.dataset.v }); await rvReload();
   }));
+  rvApplyReadonly();
 }
 
 // ---------------------------------------------------------------------------
@@ -1397,6 +1436,7 @@ function rvStartTimeTracking() {
     const playing = rv.video && !rv.video.paused;
     if (document.hidden || (!playing && Date.now() - rv.lastActivity > 60000)) return;
     apiPost("/api/review/time", { "秒數": 30 }, { quiet: true }).then((r) => { rv.data["進度"]["已花秒數"] = r["覆核秒數"]; rvRecount(); }).catch(() => {});
+    if (rvReadonly()) apiGet("/api/execute").then((d) => { if (!d.running) rvReload(); }).catch(() => {});   // 執行完就解鎖
   }, 30000);
 }
 
@@ -1426,7 +1466,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === " ") { e.preventDefault(); if (rv.video) rv.video.paused ? rv.video.play().catch(() => {}) : rv.video.pause(); }
   else if (k === "j" && rv.video) { rvSeek(rv.video.currentTime - 5); }
   else if (k === "l" && rv.video) { rvSeek(rv.video.currentTime + 5); }
-  else if ((k === "i" || k === "o") && rv.video) {   // I／O：把目前時間填進「新增修改」的起點／終點
+  else if ((k === "i" || k === "o") && rv.video && !rvReadonly()) {   // I／O：把目前時間填進「新增修改」的起點／終點
     if (!rv.ed.open) rvOpenEditor(null);
     rvEdSet(k === "i" ? "a" : "b", rv.video.currentTime);
   }

@@ -99,6 +99,40 @@ def test_resume_after_failure():
     assert calls == ["學員重念", "保留原聲學員名字", "組裝"] and prog["步驟"]["老師名字"]["狀態"] == "跳過"
 
 
+def test_stop_requested_stops_after_current_and_resumes():
+    # 09-30：網頁按「停止」→ 停在目前這一句之後，標「停止」不算失敗；下次接著做
+    w = _fresh()
+    calls: list = []
+    state: dict = {"做過": set()}
+
+    def stu(w2, ctx):
+        calls.append("學員重念")
+        execute.request_stop(w2)            # 跑到一半有人按了停止
+        tts.check_stop(w2)                  # 生成迴圈下一句開始前會檢查
+
+    runners, checks = _fake(calls, state)
+    runners["學員重念"] = stu
+    prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, log=lambda s: None)
+    assert prog["停止"] and prog["步驟"]["學員重念"]["狀態"] == "停止" and prog["步驟"]["組裝"]["狀態"] == "等待"
+    assert not prog.get("錯誤") and execute.stop_requested(w)
+    calls.clear()
+    runners2, _ = _fake(calls, state)
+    prog = execute.run_execute(w, runners=runners2, checks=checks, skip_precheck=True, log=lambda s: None)
+    assert not execute.stop_requested(w)   # 開始時清掉上次的停止
+    assert calls == ["學員重念", "保留原聲學員名字", "組裝"] and not prog.get("停止")
+
+
+def test_stale_running_marked_interrupted():
+    # 09-30：伺服器被關掉，進度檔永遠「進行中」→ 啟動時改成「中斷」
+    w = _fresh()
+    assert execute.mark_interrupted(w) is False                 # 沒有進度檔
+    wd.write_json(execute.progress_path(w), {"步驟": {"老師名字": {"狀態": "做完"}, "學員重念": {"狀態": "進行中"}}})
+    assert execute.mark_interrupted(w) is True
+    prog = wd.read_json(execute.progress_path(w))
+    assert prog["中斷"] and prog["步驟"]["學員重念"]["狀態"] == "中斷" and prog["步驟"]["老師名字"]["狀態"] == "做完"
+    assert execute.mark_interrupted(w) is False                 # 改過一次就好
+
+
 def test_only_steps_and_range():
     w = _fresh()
     calls: list = []
