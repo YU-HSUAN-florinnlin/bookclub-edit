@@ -61,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
     turns_parser.add_argument("workdir", help="工作區路徑（要先跑過 run analyze）")
     turns_parser.add_argument("--model", help="claude -p 用的模型（預設讀 settings.toml 的 claude_models.turns）")
 
+    people_parser = run_sub.add_parser("people", help="找出這一集提到的所有人名（Claude 看整支逐字稿，名冊上沒有的也列出來）")
+    people_parser.add_argument("workdir", help="工作區路徑（要先跑過 run analyze）")
+    people_parser.add_argument("--force", action="store_true", help="已經有結果也重跑")
+
     cuts_parser = run_sub.add_parser("cuts", help="建議刪除段落（開頭空白、結尾道別、念聊天區留言、小組討論前後、技術問題）")
     cuts_parser.add_argument("workdir", help="工作區路徑（要先轉好文字）")
     cuts_parser.add_argument("--video", help="原片路徑（檢查畫面靜止用；預設讀分析結果記錄的影片）")
@@ -230,6 +234,11 @@ def main(argv: list[str] | None = None) -> int:
                 exclusion_path=args.exclusions,
                 skip_overlap=args.skip_overlap, ref_n=args.ref_n, skip_turns=args.skip_turns,
             )
+            return 0
+        if args.run_command == "people":
+            from bookclub import personnames
+
+            personnames.find_people(args.workdir, force=args.force)
             return 0
         if args.run_command == "cuts":
             from bookclub.cutsuggest import suggest_cuts

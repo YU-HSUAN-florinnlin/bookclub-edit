@@ -226,6 +226,19 @@ def run_analyze(
             print(f"⚠️ [分析一條龍] 7/7 段落分析（聲紋部分）失敗：{exc}")
             print("   → 修好之後單獨重跑：bookclub run turns <工作區>")
 
+    # 09-29：找出這一集提到的所有人名（Claude 看整支逐字稿；名冊上沒有的名字也要抓出來）。放在說話者判斷定案之後
+    if not skip_turns:
+        try:
+            from bookclub import personnames
+
+            t_pp = time.time()
+            pp = personnames.find_people(workdir, model=turns_model)
+            elapsed["2d_人名清單"] = round(time.time() - t_pp, 1)
+            print(f"[分析一條龍] 人名清單：{pp.get('統計', {}).get('名字數', 0)} 個名字"
+                  f"（名冊上沒有 {pp.get('統計', {}).get('名冊上沒有', 0)} 個，要在第 3 步決定）")
+        except Exception as exc:  # Claude 失敗就沒有清單，不擋其他步驟
+            print(f"⚠️ [分析一條龍] 人名清單（Claude）失敗：{exc}；之後可以單獨跑 bookclub run people <工作區>")
+
     # 建議刪除段落在背景跑（Claude＋候選附近的畫面檢查），不擋前面的步驟，最後才收
     cut_data = None
     if cut_future is not None:
