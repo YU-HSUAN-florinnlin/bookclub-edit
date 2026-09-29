@@ -414,6 +414,10 @@ function rvVisible() {
   return rvItems().filter((x) => f === "全部" ? true : f === "還沒確認" ? !rvDone(x) || rvKey(x) === rv.cur : x["類型"] === f);
 }
 
+// 09-29 宇軒：做法的顯示名稱（存檔的值不變）
+const RV_HOW_LABEL = { "整句換掉": "老師整句生成" };
+const rvHowLabel = (h) => RV_HOW_LABEL[h] || h;
+
 function rvChip(it) {
   const t = RV_TYPE[it["類型"]] || { cls: "", label: it["類型"] };
   return `<span class="rv-chip ${t.cls}"><i></i>${esc(t.label)}</span>`;
@@ -422,8 +426,8 @@ function rvChip(it) {
 function rvSuggestText(it) {
   const s = it["建議"] || {};
   if (it["類型"] === "重疊" && s["做法"] === "兩邊都重生成" && s["排法"]) return `${s["做法"]}、${s["排法"]}`;
-  if (it["類型"] === "學員段落") return "逐字稿沒問題就通過";
-  return s["做法"] || "—";
+  if (it["類型"] === "學員段落") return "學員整句生成（逐字稿沒問題就通過）";
+  return rvHowLabel(s["做法"]) || "—";
 }
 
 function rvChosen(it) {   // 現在會套用的做法：人改過的，或建議
@@ -460,7 +464,7 @@ function rvRenderCard() {
       <div class="rv-sug">
         <p class="what">建議：${esc(rvSuggestText(it))}</p>
         <p class="why">${esc(sug["原因"] || "")}</p>
-        ${changed ? `<p class="mine">改成：${esc(chosen)}</p>` : ""}
+        ${changed ? `<p class="mine">改成：${esc(rvHowLabel(chosen))}</p>` : ""}
       </div>
       ${state ? `<div class="rv-statebox">${state}</div>` : ""}
       <div class="rv-actions">
@@ -557,7 +561,18 @@ function rvBindBody(it) {
 }
 
 function rvRadios(name, options, current, cls) {
-  return options.map((o) => `<label class="rv-radio"><input type="radio" name="${esc(name)}" class="${cls}" value="${esc(o)}" ${o === current ? "checked" : ""}> ${esc(o)}</label>`).join("");
+  return options.map((o) => `<label class="rv-radio"><input type="radio" name="${esc(name)}" class="${cls}" value="${esc(o)}" ${o === current ? "checked" : ""}> ${esc(rvHowLabel(o))}</label>`).join("");
+}
+
+function rvCutRange(it) {   // 「刪除這段」刪的範圍：名字＝整句，其他＝這一筆
+  const w = it["整句"];
+  return w ? [w.start, w.end] : [it.start, it.end];
+}
+
+function rvCutThisHtml(it) {
+  if (it["不用處理"]) return "";
+  const [a, b] = rvCutRange(it);
+  return `<div class="rv-field rv-row"><button class="ghost" id="rv-cutthis">刪除這段（${esc(rvFmt(a, 1))}–${esc(rvFmt(b, 1))}，聲音畫面一起刪）</button></div>`;
 }
 
 function rvMoreHtml(it) {
@@ -572,13 +587,15 @@ function rvMoreHtml(it) {
       </div>
       <div class="rv-field"><label class="rv-check"><input type="checkbox" id="rv-ask" ${it["問老師"] ? "checked" : ""}> 聽不清楚，問老師</label>
         <input id="rv-asknote" placeholder="要問老師什麼" value="${esc(it["問老師備註"] || "")}" ${it["問老師"] ? "" : "hidden"}></div>
-      ${it["原文"] !== it["校對稿"] ? `<details class="rv-orig"><summary>看原本轉出來的文字</summary>${esc(it["原文"])}</details>` : ""}`;
+      ${it["原文"] !== it["校對稿"] ? `<details class="rv-orig"><summary>看原本轉出來的文字</summary>${esc(it["原文"])}</details>` : ""}
+      ${rvCutThisHtml(it)}`;
   }
   if (rvIsName(t)) {
     const tags = opts["名字標記"].map((g) => `<label class="rv-check"><input type="checkbox" class="rv-tag" value="${esc(g)}" ${it.tags.includes(g) ? "checked" : ""}> ${esc(g)}</label>`).join("");
     return `<div class="rv-field rv-choices">${rvRadios("rv-namehow", opts[t], it["做法"], "rv-namehow")}</div>
       <div class="rv-field rv-choices">${tags}</div>
-      <div class="rv-field"><input id="rv-note" placeholder="備註（選填）" value="${esc(it.note || "")}"></div>`;
+      <div class="rv-field"><input id="rv-note" placeholder="備註（選填）" value="${esc(it.note || "")}"></div>
+      ${rvCutThisHtml(it)}`;
   }
   if (t === "重疊") {
     const how = rvChosen(it);
@@ -613,6 +630,13 @@ function rvToggleMore() {
 }
 
 function rvBindMore(it) {
+  const cutThis = document.getElementById("rv-cutthis");   // 09-29 宇軒：改做法裡直接刪掉這一段
+  if (cutThis) cutThis.addEventListener("click", async () => {
+    const [a, b] = rvCutRange(it);
+    if (!confirm(`刪除 ${rvFmt(a, 1)}–${rvFmt(b, 1)}？聲音和畫面一起刪，這段就不用生成。\n之後要救回：在清單找這筆「刪除段落」改成「還原」。`)) return;
+    await apiPost("/api/review/cut", { start: a, end: b, "備註": `從「${it["類型"]}」這一筆刪除` });
+    await rvReload();
+  });
   const q = (id) => document.getElementById(id);
   const t = it["類型"];
   if (t === "學員段落") {
@@ -774,7 +798,7 @@ function rvRenderList() {
     const st = key === rv.cur ? `<span class="st now">目前</span>` : it["不用處理"] ? `<span class="st skip">不用處理</span>`
       : it["已確認"] ? `<span class="st ok">✓ 通過</span>` : `<span class="st">—</span>`;
     const chosen = rvChosen(it);
-    const sug = it["類型"] === "學員段落" ? "通過" : chosen || rvSuggestText(it);
+    const sug = it["類型"] === "學員段落" ? "學員整句生成" : rvHowLabel(chosen) || rvSuggestText(it);
     return `<li class="${key === rv.cur ? "cur" : ""} ${rvDone(it) ? "done" : ""}" data-key="${esc(key)}" tabindex="-1">
       <span class="tm">${esc(rvFmt(it.start))}</span>
       <span class="ty">${rvChip(it)}</span>
