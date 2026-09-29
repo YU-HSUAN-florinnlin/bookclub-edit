@@ -28,6 +28,7 @@ def episode_codes(workdir: str | Path) -> dict[str, str]:
     roster = names.load_roster(data_dir() / "名冊.csv")
     out = {r["canonical"]: r["代號"] for r in roster if r.get("canonical") and r.get("代號")}
     canon = {r["寫法"]: r["canonical"] for r in roster}
+    canon.update({r["canonical"]: r["canonical"] for r in roster})   # 本名優先：一個名字同時是某列本名、又是別列其他寫法時
     for name, d in (wd.read_json(personnames.decisions_path(workdir), default={}) or {}).items():
         if d.get("做法") == "換成代號" and d.get("代號"):
             out[canon.get(name, name)] = d["代號"]
@@ -46,7 +47,9 @@ def same_person_names(workdir: str | Path) -> set[str]:
     from bookclub import names, personnames
     from bookclub.config import data_dir
 
-    canon = {r["寫法"]: r["canonical"] for r in names.load_roster(data_dir() / "名冊.csv")}
+    roster = names.load_roster(data_dir() / "名冊.csv")
+    canon = {r["寫法"]: r["canonical"] for r in roster}
+    canon.update({r["canonical"]: r["canonical"] for r in roster})
     return {canon.get(n, n) for n, d in (wd.read_json(personnames.decisions_path(Path(workdir)), default={}) or {}).items()
             if d.get("做法") == "是上面的學員"}
 
