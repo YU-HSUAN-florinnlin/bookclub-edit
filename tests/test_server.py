@@ -409,6 +409,35 @@ def test_projects_list_and_dir_for_video():
             os.environ["BOOKCLUB_DATA_DIR"] = old
 
 
+def test_current_project_remembered_across_restart():
+    # 09-30：伺服器重開後接回上次在做的專案（以前不記得，所有 API 回 409）
+    data = Path(tempfile.mkdtemp())
+    videos = Path(tempfile.mkdtemp())
+    old = os.environ.get("BOOKCLUB_DATA_DIR")
+    os.environ["BOOKCLUB_DATA_DIR"] = str(data)
+    try:
+        assert srv.recall_current() is None
+        d = srv.project_dir_for(videos / "第二堂.mp4")
+        d.mkdir()
+        srv.register_project(d)
+        httpd = srv.BookclubServer(("127.0.0.1", 0), srv.Handler, workdir=None, video=None)
+        try:
+            httpd.use_project(d, videos / "第二堂.mp4")
+        finally:
+            httpd.server_close()
+        assert srv.recall_current() == d
+        assert srv.registered_projects() == [d]                        # 專案清單照舊
+        srv.register_project(videos)                                   # 登記別的專案不會洗掉「目前」
+        assert srv.recall_current() == d
+        shutil.rmtree(d)                                               # 資料夾不在了就不接
+        assert srv.recall_current() is None
+    finally:
+        if old is None:
+            os.environ.pop("BOOKCLUB_DATA_DIR")
+        else:
+            os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

@@ -386,7 +386,7 @@ function rvConfirmGo4() {
     const go = e.currentTarget;
     go.disabled = true; go.textContent = "開始中…";
     try {
-      await apiPost("/api/execute/start", { start: null, end: null, methods: null });
+      await apiPost("/api/execute/start", { start: null, end: null, methods: null }, { quiet: true });
     } catch (err) {
       if (!/已經有.*在跑/.test(err.message)) {       // 已經在跑就直接去第 4 步看進度
         dlg.querySelector("#rv-confirm-err").textContent = `還不能開始：${err.message}`;
@@ -1379,7 +1379,7 @@ function rvStartTimeTracking() {
     if (currentRouteId() !== "step3") { clearInterval(rv.timeTimer); rv.timeTimer = null; return; }
     const playing = rv.video && !rv.video.paused;
     if (document.hidden || (!playing && Date.now() - rv.lastActivity > 60000)) return;
-    apiPost("/api/review/time", { "秒數": 30 }).then((r) => { rv.data["進度"]["已花秒數"] = r["覆核秒數"]; rvRecount(); }).catch(() => {});
+    apiPost("/api/review/time", { "秒數": 30 }, { quiet: true }).then((r) => { rv.data["進度"]["已花秒數"] = r["覆核秒數"]; rvRecount(); }).catch(() => {});
   }, 30000);
 }
 

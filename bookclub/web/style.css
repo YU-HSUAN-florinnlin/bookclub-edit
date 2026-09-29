@@ -600,3 +600,14 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .exec-opts { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 12px; font-size: 14px; }
 .exec-opts input.short { width: 90px; }
 table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg); }
+
+/* ---------- 存檔失敗橫幅（09-30） ---------- */
+.save-error {
+  position: sticky; top: 0; z-index: 1000;
+  background: var(--danger); color: #fff;
+  padding: 10px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+}
+.save-error[hidden] { display: none; }
+.save-error .why { opacity: 0.9; font-size: 13px; }
+.save-error button { background: #fff; color: var(--danger); border: 0; }
+.save-error button.ghost { background: transparent; color: #fff; border: 1px solid #fff; }

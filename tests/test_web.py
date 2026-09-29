@@ -77,6 +77,17 @@ def test_step5_blurred_preview_when_no_product():
     assert "fcPreviewHtml" in js and "inert" in js
 
 
+def test_save_failure_banner():
+    # 09-30：存檔失敗時畫面最上面紅色橫幅（寫清楚沒存到、請重新整理），沒接住的錯誤也要顯示
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    assert 'id="saveError"' in html
+    assert "這次修改沒存到，請重新整理" in js
+    assert 'addEventListener("unhandledrejection"' in js
+    post = js[js.index("async function apiPost"):js.index("function showSaveError")]
+    assert "showSaveError" in post and "catch" in post   # 連不上伺服器（fetch 丟例外）也算
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

@@ -34,16 +34,46 @@ async function apiGet(path) {
   return data;
 }
 
-async function apiPost(path, body) {
-  const res = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
+// 存檔呼叫一律走 apiPost：失敗時畫面最上面出現紅色橫幅（09-30：以前伺服器重開、斷線時改的東西默默不見）。
+// quiet：呼叫的地方自己會說明失敗原因、而且不是存檔的（例如「開始執行」已經在跑、計時）。
+async function apiPost(path, body, { quiet = false } = {}) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+  } catch (e) {
+    const err = new Error("連不上網頁伺服器（可能被關掉了）");
+    if (!quiet) { showSaveError(err.message); err.shown = true; }
+    throw err;
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `${path} 失敗（${res.status}）`);
+  if (!res.ok) {
+    const err = new Error(data.error || `${path} 失敗（${res.status}）`);
+    if (!quiet) { showSaveError(err.message); err.shown = true; }
+    throw err;
+  }
   return data;
 }
+
+function showSaveError(reason) {
+  const el = document.getElementById("saveError");
+  if (!el) return;
+  el.innerHTML = `<b>這次修改沒存到，請重新整理。</b> <span class="why">${esc(reason || "")}</span>
+    <button id="saveErrorReload">重新整理</button> <button class="ghost" id="saveErrorClose" aria-label="關掉這個提示">×</button>`;
+  el.hidden = false;
+  document.getElementById("saveErrorReload").addEventListener("click", () => location.reload());
+  document.getElementById("saveErrorClose").addEventListener("click", () => { el.hidden = true; });
+}
+
+// 沒被接住的錯誤（事件裡 await 失敗）也要讓人看得到，不能默默吞掉
+window.addEventListener("unhandledrejection", (e) => {
+  const err = e.reason || {};
+  if (err.shown) return;
+  showSaveError(err.message || String(err));
+});
 
 function esc(s) {
   const d = document.createElement("div");
@@ -240,7 +270,7 @@ async function renderExecuteBody() {
   document.getElementById("btnExec").addEventListener("click", async () => {
     const body = { start: document.getElementById("exStart").value.trim() || null, end: document.getElementById("exEnd").value.trim() || null,
       methods: [document.getElementById("exMethod").value] };
-    try { await apiPost("/api/execute/start", body); } catch (e) { alert(`無法開始：${e.message}`); return; }
+    try { await apiPost("/api/execute/start", body, { quiet: true }); } catch (e) { alert(`無法開始：${e.message}`); return; }
     await renderExecuteBody();
   });
   if (running) startExecPoll();

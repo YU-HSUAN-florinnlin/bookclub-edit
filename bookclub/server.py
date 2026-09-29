@@ -128,10 +128,29 @@ def registered_projects() -> list[Path]:
 
 
 def register_project(d: Path) -> None:
-    items = [str(x) for x in registered_projects()]
+    data = read_json(registry_path(), default=None) or {}
+    items = [str(x) for x in data.get("專案", [])]
     if str(d) not in items:
         items.append(str(d))
-        write_json(registry_path(), {"專案": items})
+        write_json(registry_path(), {**data, "專案": items})
+
+
+def remember_current(d: Path | None) -> None:
+    """記下「目前在做哪支影片」（09-30）：伺服器重開後自動接回，不會所有 API 都回 409。"""
+    data = read_json(registry_path(), default=None) or {}
+    cur = str(d) if d else None
+    if data.get("目前") == cur:
+        return
+    write_json(registry_path(), {**data, "專案": data.get("專案", []), "目前": cur})
+
+
+def recall_current() -> Path | None:
+    """伺服器啟動時接回上次的專案；資料夾不在了、或不是清單上的專案就不接。"""
+    cur = (read_json(registry_path(), default=None) or {}).get("目前")
+    if not cur:
+        return None
+    d = Path(cur)
+    return d if d.is_dir() and known_project(d) else None
 
 
 def known_project(d: Path) -> bool:
@@ -645,6 +664,10 @@ class BookclubServer(ThreadingHTTPServer):
             self.video = Path(video) if video else None
             self.run_state = self._fresh_run_state()
             self.exec_state = self._fresh_run_state()
+        try:
+            remember_current(self._workdir)
+        except OSError as e:   # 記不下來只是下次重開要重選，不擋切換
+            print(f"⚠️ [網頁伺服器] 記不下目前的專案：{e}")
 
     @staticmethod
     def _fresh_run_state() -> dict:
@@ -1114,6 +1137,11 @@ def serve(
         workdir.mkdir(parents=True, exist_ok=True)
     if port is None:
         port = load_settings().server_port
+    if not workdir and not video:
+        workdir = recall_current()   # 09-30：重開後接回上次在做的專案
+        if workdir:
+            video = (read_json(analysis_result_path(workdir), default={}) or {}).get("video")
+            print(f"[網頁伺服器] 接回上次的專案：{workdir.name}")
 
     httpd = BookclubServer(
         ("127.0.0.1", port), Handler,
