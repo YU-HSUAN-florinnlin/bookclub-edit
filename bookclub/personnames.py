@@ -169,7 +169,7 @@ def called_names(workdir: str | Path) -> list[dict]:
 # ---------- 第 3 步：名冊上沒有的名字 ----------
 
 DECISIONS_FILE = "人名決定.json"          # 校對/人名決定.json：{名字: {做法, 代號, 更新時間}}
-HOWS = ("換成代號", "不是名字", "不用處理")   # 不用處理：書中人物、公眾人物這類不用去識別化的
+HOWS = ("換成代號", "是上面的學員", "不是名字", "不用處理")   # 不用處理：書中人物、公眾人物這類不用去識別化的；是上面的學員：09-29 宇軒（例如逐字稿轉錯字）
 
 
 def decisions_path(workdir: Path) -> Path:
@@ -200,8 +200,8 @@ def add_to_roster(name: str, alts: list[str], code: str) -> bool:
     return True
 
 
-def set_roster_code(name: str, code: str) -> bool:
-    """名冊上這個中文名的英文代號改成 `code`（其他欄位、順序、BOM 照舊）。"""
+def _edit_roster(name: str, change) -> bool:
+    """名冊上中文名是 `name` 的那一列交給 `change(row)` 改（其他欄位、順序、BOM 照舊）。"""
     import csv
     import io
 
@@ -219,7 +219,8 @@ def set_roster_code(name: str, code: str) -> bool:
     hit = False
     for r in rows:
         if (r.get("中文名") or "").strip() == name:
-            r["英文代號"], hit = code, True
+            change(r)
+            hit = True
     if not hit:
         return False
     buf = io.StringIO(newline="")
@@ -228,6 +229,19 @@ def set_roster_code(name: str, code: str) -> bool:
     w.writerows(rows)
     path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + buf.getvalue().encode("utf-8"))
     return True
+
+
+def set_roster_code(name: str, code: str) -> bool:
+    """名冊上這個中文名的英文代號改成 `code`。"""
+    return _edit_roster(name, lambda r: r.__setitem__("英文代號", code))
+
+
+def add_roster_alias(real: str, aliases: list[str]) -> bool:
+    """名冊上 `real` 那一列的「其他寫法」補上 `aliases`（例如逐字稿轉錯的字）。"""
+    def change(r):
+        have = [x for x in (r.get("其他寫法") or "").replace(",", "、").split("、") if x.strip()]
+        r["其他寫法"] = "、".join(have + [a for a in aliases if a and a != real and a not in have])
+    return _edit_roster(real, change)
 
 
 def rescan_names(workdir: Path) -> int:
@@ -274,11 +288,12 @@ def unlisted(workdir: str | Path, chosen: set[str] | None = None,
                     "次數": p["次數"], "老師說": p["老師說"], "學員說": p["學員說"], "第一次": p["第一次"],
                     "刪除段落外次數": len(left) if p.get("句子") else p["次數"],
                     "都在刪除段落": bool(cuts) and bool(p.get("句子")) and not left,
-                    "做法": d.get("做法") or default, "代號": d.get("代號"), "已決定": bool(d.get("做法"))})
+                    "做法": d.get("做法") or default, "代號": d.get("代號"), "同一人": d.get("同一人"),
+                    "已決定": bool(d.get("做法"))})
     return out
 
 
-def decide(workdir: str | Path, name: str, how: str, code: str | None = None) -> dict:
+def decide(workdir: str | Path, name: str, how: str, code: str | None = None, same_as: str | None = None) -> dict:
     """`POST /api/people/decide`：名冊上沒有的名字怎麼處理。換成代號＝加進名冊＋補找老師提到的地方。"""
     from datetime import datetime
 
@@ -290,7 +305,24 @@ def decide(workdir: str | Path, name: str, how: str, code: str | None = None) ->
     if p is None:
         raise KeyError(f"人名清單裡沒有：{name}")
     added = rescanned = 0
-    if how == "換成代號":
+    if how == "是上面的學員":   # 09-29 宇軒：其實是「學員是誰」選過的某位（轉錯字、暱稱）→ 用那位的代號，不用再選一次
+        from bookclub import names
+        from bookclub import turns as turns_mod
+        from bookclub.config import data_dir
+
+        if not same_as:
+            raise ValueError("要選是上面哪一位學員")
+        tdata = wd.read_json(turns_mod.turns_path(workdir), default={}) or {}
+        roster = {r["canonical"]: r["代號"] for r in names.load_roster(data_dir() / "名冊.csv") if r.get("canonical")}
+        code = (tdata.get("本名代號") or {}).get(same_as) or roster.get(same_as)
+        if not code:
+            raise ValueError(f"「{same_as}」還沒有英文代號：先在「學員是誰」右欄幫他選")
+        if same_as in roster:
+            add_roster_alias(same_as, [name, *p["其他寫法"]])
+        else:
+            added = int(add_to_roster(name, p["其他寫法"], code))
+        rescanned = rescan_names(workdir)
+    elif how == "換成代號":
         code = (code or "").strip()
         if not code:
             raise ValueError("換成代號要選一個英文代號")
@@ -304,6 +336,7 @@ def decide(workdir: str | Path, name: str, how: str, code: str | None = None) ->
         for w in [name, *p["其他寫法"]]:
             _append_exclusion(w, "人名清單：宇軒判斷不是名字")
     dec = wd.read_json(decisions_path(workdir), default={}) or {}
-    dec[name] = {"做法": how, "代號": code if how == "換成代號" else None, "更新時間": datetime.now().isoformat(timespec="seconds")}
+    dec[name] = {"做法": how, "代號": code if how in ("換成代號", "是上面的學員") else None,
+                 "同一人": same_as if how == "是上面的學員" else None, "更新時間": datetime.now().isoformat(timespec="seconds")}
     wd.write_json(decisions_path(workdir), dec)
     return {"ok": True, "名字": name, "做法": how, "加進名冊": bool(added), "補找到的老師名字": rescanned}

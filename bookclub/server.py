@@ -1029,7 +1029,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/people/decide":   # 09-29：名冊上沒有的名字怎麼處理（第 1 步人名清單）
             from bookclub import personnames
 
-            self._send_json(200, personnames.decide(server.workdir, str(body["名字"]), str(body["做法"]), body.get("代號")))
+            self._send_json(200, personnames.decide(server.workdir, str(body["名字"]), str(body["做法"]), body.get("代號"), body.get("同一人")))
         elif path.startswith("/api/review/"):
             from bookclub import review as rv
 

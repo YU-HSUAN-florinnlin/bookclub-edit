@@ -917,8 +917,14 @@ function rvPrepNamesHtml() {
   const all = rv.data["名冊上沒有的名字"] || [];
   const un = all.filter((u) => !u["都在刪除段落"]);
   const cutOnly = all.filter((u) => u["都在刪除段落"]);
-  const hows = ["換成代號", "不是名字", "不用處理"];
+  const hows = ["換成代號", "是上面的學員", "不是名字", "不用處理"];
+  // 09-29 宇軒：上一步選過的本名＋代號，給「是上面的學員」選（不用記得上一步選了什麼）
+  const tp = rv.data["學員資料"] || {};
+  const reals = [...new Set(Object.values(rv.data["學員"] || {}).map((p) => p["本名"]).filter(Boolean))];
+  const codeOf = (r) => (tp["本名代號"] || {})[r] || (tp["名冊代號"] || {})[r] || "";
   const unRows = un.map((u) => {
+    const sameOpts = ['<option value="">選是哪一位</option>'].concat(reals.map((r) =>
+      `<option value="${esc(r)}" ${u["同一人"] === r ? "selected" : ""}>${esc(r)}（${esc(codeOf(r) || "還沒選代號")}）</option>`)).join("");
     const codeOpts = ['<option value="">選代號</option>'].concat(codes.map((c) => `<option ${u["代號"] === c ? "selected" : ""}>${esc(c)}</option>`))
       .concat(u["代號"] && !codes.includes(u["代號"]) ? [`<option selected>${esc(u["代號"])}</option>`] : [])
       .concat(['<option value="__new">新的代號…</option>']).join("");
@@ -927,13 +933,14 @@ function rvPrepNamesHtml() {
       <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
         ${hows.map((h) => `<label class="rv-check"><input type="radio" name="un-${esc(u.id)}" class="rv-unhow" data-name="${esc(u["名字"])}" value="${h}" ${u["做法"] === h ? "checked" : ""}> ${h}</label>`).join("")}
         <select class="rv-uncode" data-name="${esc(u["名字"])}" ${u["做法"] === "換成代號" ? "" : "hidden"}>${codeOpts}</select>
+        <select class="rv-unsame" data-name="${esc(u["名字"])}" ${u["做法"] === "是上面的學員" ? "" : "hidden"}>${sameOpts}</select>
         ${u["已決定"] ? "" : u["做法"] ? '<span class="rv-meta">（建議，還沒確認）</span>' : '<span class="rv-warnline">還沒決定</span>'}</div>
       ${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
   }).join("");
   const cutBlock = cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只出現在確認刪除的段落裡（${cutOnly.length} 個：${esc(cutOnly.map((u) => u["名字"]).join("、"))}），不用處理</summary>
       <p class="rv-meta">這些段落會整段刪掉。如果在「① 建議刪除段落」改成不刪，會回到上面。</p></details></li>` : "";
   if (!un.length && !cutOnly.length) return `<p class="rv-meta">沒有要處理的名字（上一步已經選成本名的，代號在上一步右欄定）。</p>`;
-  return `<p class="rv-meta">第 1 步請 Claude 讀整支逐字稿找出來、名冊上沒有的名字。上一步「學員是誰」已經選成本名的不會列在這裡。家人、朋友、沒登記的人選「換成代號」（會加進名冊、自動補找老師提到的地方）；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
+  return `<p class="rv-meta">第 1 步請 Claude 讀整支逐字稿找出來、名冊上沒有的名字。上一步「學員是誰」已經選成本名的不會列在這裡。其實是上一步某位學員（轉錯字、暱稱）選「是上面的學員」，會直接用他的代號；家人、朋友、沒登記的人選「換成代號」（會加進名冊、自動補找老師提到的地方）；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
     <p class="rv-meta">${un.length} 個，${un.filter((u) => !u["做法"]).length} 個還沒決定。</p>
     <ul class="rv-people">${unRows}${cutBlock}</ul>`;
 }
@@ -991,8 +998,19 @@ function rvBindPrep(root) {
   }));
   root.querySelectorAll(".rv-unhow").forEach((el) => el.addEventListener("change", async () => {
     const sel = root.querySelector(`.rv-uncode[data-name="${CSS.escape(el.dataset.name)}"]`);
-    if (el.value === "換成代號") { if (sel) sel.hidden = false; return; }   // 選了代號才存
+    const same = root.querySelector(`.rv-unsame[data-name="${CSS.escape(el.dataset.name)}"]`);
+    if (sel) sel.hidden = el.value !== "換成代號";
+    if (same) same.hidden = el.value !== "是上面的學員";
+    if (el.value === "換成代號" || el.value === "是上面的學員") return;   // 選了代號／哪一位才存
     await apiPost("/api/people/decide", { "名字": el.dataset.name, "做法": el.value }); await reload();
+  }));
+  root.querySelectorAll(".rv-unsame").forEach((el) => el.addEventListener("change", async () => {
+    if (!el.value) return;
+    try {
+      const res = await apiPost("/api/people/decide", { "名字": el.dataset.name, "做法": "是上面的學員", "同一人": el.value });
+      if (res["補找到的老師名字"]) alert(`補找到 ${res["補找到的老師名字"]} 處老師提到這個名字，已經加進清單。`);
+    } catch (e) { alert(e.message || e); }
+    await reload();
   }));
   root.querySelectorAll(".rv-uncode").forEach((el) => el.addEventListener("change", async () => {
     const code = askCode(el);

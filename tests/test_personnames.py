@@ -125,6 +125,12 @@ def test_unlisted_decide_adds_to_roster_and_rescans():
         assert [u["名字"] for u in personnames.unlisted(w, chosen={"阿強"})] == ["某作者"]
         u = next(x for x in personnames.unlisted(w, cuts=[(sents[i]["start"], sents[i]["end"])]) if x["名字"] == "阿強")
         assert u["都在刪除段落"] and u["刪除段落外次數"] == 0
+        # 其實是上面「學員是誰」選過的某位（轉錯字）：用他的代號，名冊那一列補上這個寫法
+        code = next(r["代號"] for r in names.load_roster(_DATA / "名冊.csv") if r["canonical"] == "小美")
+        res = personnames.decide(w, "某作者", "是上面的學員", same_as="小美")
+        assert any(r["寫法"] == "某作者" and r["canonical"] == "小美" for r in names.load_roster(_DATA / "名冊.csv"))
+        d = next(x for x in personnames.unlisted(w) if x["名字"] == "某作者")
+        assert (d["做法"], d["同一人"], d["代號"]) == ("是上面的學員", "小美", code)
         # 名冊上沒有的名字在右欄選代號：一樣加進名冊
         r = turns_mod.set_name_code(w, "阿華", "Iris")
         assert any(x["寫法"] == "阿華" for x in names.load_roster(_DATA / "名冊.csv")) and "補找到的老師名字" in r
