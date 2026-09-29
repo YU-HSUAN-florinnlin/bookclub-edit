@@ -439,7 +439,7 @@ function rvSuggestText(it) {
 function rvChosen(it) {   // 現在會套用的做法：人改過的，或建議
   const t = it["類型"];
   if (t === "重疊") return it["做法"] || (it["建議"] || {})["做法"];
-  if (rvIsName(t)) return rvNotName(it) ? "不用改（不是名字）" : it["做法"];
+  if (rvIsName(t)) return rvNotName(it) ? "保留原聲（不用改）" : it["做法"];
   if (t === "刪除段落") return it["來源"] === "建議" ? (it["決定"] || "刪除") : (it["狀態"] === "還原" ? "不刪" : "刪除");
   if (t === "局部消音") return it["方式"];
   return null;
@@ -454,7 +454,7 @@ function rvRenderCard() {
   }
   const all = rvItems();
   const idx = all.findIndex((x) => rvKey(x) === rv.cur);
-  const state = it["類型"] === "名字" && rvNotName(it) ? `<span class="rv-state ok">✓ 不是名字，不用改：照原音保留（這個寫法以後不會再被抓成名字）</span>`
+  const state = it["類型"] === "名字" && rvNotName(it) ? `<span class="rv-state ok">✓ 保留原聲（不用改）：抓錯了、這裡沒有人名，照原音保留（這個寫法以後不會再被抓成名字）</span>`
     : rvInCut(it) ? `<span class="rv-state ok">✓ 通過：這段在前面已確認整段刪除（要救回：把那段刪除段落改成不刪／還原）</span>`
     : it["不用處理"] ? `<span class="rv-state skip">不用處理：${esc(it["不用處理"])}</span>`
     : it["已確認"] ? `<span class="rv-state ok">✓ 已通過</span>` : "";
@@ -479,7 +479,7 @@ function rvRenderCard() {
         <button class="primary" id="rv-pass" title="已通過的再按一次會取消">${it["已確認"] || rvInCut(it) ? "已通過" : "通過"}<kbd>Enter</kbd></button>
         <button class="ghost" id="rv-change" aria-expanded="${rv.open}">改做法<kbd>E</kbd></button>
         <button class="ghost" id="rv-retime" title="用「新增修改」面板改這一筆的起點終點">改時間</button>
-        ${it["類型"] === "名字" ? `<button class="ghost" id="rv-notname" title="抓錯了，這裡其實沒有人名：照原音不改，這個寫法以後也不會再抓">${rvNotName(it) ? "取消「不是名字」" : "不是名字，不用改"}</button>` : ""}
+        ${it["類型"] === "名字" ? `<button class="${rvNotName(it) ? "primary" : "ghost"}" id="rv-notname" aria-pressed="${rvNotName(it)}" title="抓錯了，這裡其實沒有人名：照原音不改，這個寫法以後也不會再抓（已選的再按一次取消）">${rvNotName(it) ? "✓ " : ""}保留原聲（不用改）</button>` : ""}
         ${it["類型"] === "學員段落" ? `<button class="ghost" id="rv-isteacher" title="聲音辨識判錯：這一段其實是老師在講話">這段其實是老師</button>` : ""}
         <span class="spacer"></span>
         <button class="ghost" id="rv-prev" aria-label="上一筆">上一筆</button>
