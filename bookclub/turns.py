@@ -452,7 +452,9 @@ def page_data(workdir: str | Path) -> dict:
             or next((t for t in data["段落"] if t["說話者"] == name), None)
         p["試聽網址"] = _audio_url(sample["start"], min(sample["end"], sample["start"] + 12)) if sample else None
     roster = names.load_roster(data_dir() / "名冊.csv")
-    data["代號選項"] = sorted({r["代號"] for r in roster if r["代號"]})
+    from bookclub import epcodes as _ep   # 09-29：名冊拿掉代號欄，選單用常用英文名＋這一集用過的
+
+    data["代號選項"] = _ep.code_options(workdir)
     # 09-29「學員是誰」改兩欄：左邊選本名（最後一個選項是老師），右邊每個本名在這支影片用哪個英文代號
     data["本名選項"] = sorted({r["canonical"] for r in roster if r.get("canonical")})
     data["名冊代號"] = {r["canonical"]: r["代號"] for r in roster if r.get("canonical") and r["代號"]}

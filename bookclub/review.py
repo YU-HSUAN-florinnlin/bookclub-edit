@@ -477,6 +477,8 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "代號選項": tdata.get("代號選項", []),
         "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號", "這一集的名字")},   # 09-29「學員是誰」兩欄
         "代號重複": _dup_codes(workdir, tdata),
+        "這一集代號": epcodes.episode_codes(workdir),   # 09-29：名冊拿掉代號欄，② ③ 顯示用這張
+        "還沒代號": epcodes.missing(workdir),
         "提到的名字": _unlisted_names(workdir, {p["本名"] for p in tdata.get("學員", {}).values() if p.get("本名")},
                                            will_cut),
         "項目": items,

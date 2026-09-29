@@ -896,19 +896,26 @@ function rvPrepPeopleHtml() {
       <div class="ctl">${cutOnly.map(([n]) => `<button class="ghost small rv-sample" data-person="${esc(n)}">試聽 ${esc(n)}</button>`).join("")}</div></details></li>` : "");
   const chosen = [...new Set(people.map(([, p]) => p["本名"]).filter(Boolean))];
   const right = chosen.length ? chosen.map((r) => {
-    const cur = nameCode[r] || rosterCode[r] || "";
+    const cur = (rv.data["這一集代號"] || {})[r] || nameCode[r] || "";
     const who = people.filter(([, p]) => p["本名"] === r).map(([n]) => n).join("、");
     const opts = ['<option value="">（還沒指定）</option>'].concat(codes.map((c) => `<option ${cur === c ? "selected" : ""}>${esc(c)}</option>`))
       .concat(cur && !codes.includes(cur) ? [`<option selected>${esc(cur)}</option>`] : [])
       .concat(['<option value="__new">新的代號…</option>']).join("");
-    const notInRoster = !(r in rosterCode);
+    const notInRoster = !reals.includes(r);
     return `<li class="rv-person"><div class="nm"><b>${esc(r)}</b><span class="rv-meta">${esc(who)}${notInRoster ? "・名冊上沒有，選了代號會加進名冊" : ""}</span></div>
       <div class="ctl"><label>英文代號 <select class="rv-namecode" data-real="${esc(r)}">${opts}</select></label>
 </div></li>`;
   }).join("") : `<li class="rv-meta">左邊選了本名之後，這裡會列出來。</li>`;
-  return `${rvDupHtml()}<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的；只影響這一集，老師講到他的名字、學員稿子裡的名字都會照這裡換）。</p>
+  return `${rvDupHtml()}<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個英文代號（只影響這一集，老師講到他的名字、學員稿子裡的名字都會照這裡換）。</p>${rvAutoHtml()}
     <div class="rv-people2"><div><h4>聲紋分出來的人</h4><ul class="rv-people">${left}</ul></div>
       <div><h4>本名 → 這支影片的英文代號</h4><ul class="rv-people">${right}</ul></div></div>`;
+}
+
+function rvAutoHtml() {
+  // 09-29：名冊拿掉代號欄後，每一集要自己選代號；還沒選的一鍵配常用英文名（之後可以改）
+  const lack = rv.data["還沒代號"] || [];
+  return `<div class="rv-actions">${lack.length ? `<span class="rv-warnline">還有 ${lack.length} 個名字這一集沒有英文代號</span>` : ""}
+    <button class="ghost small" id="rv-autocode">幫還沒代號的自動配</button></div>`;
 }
 
 function rvDupHtml() {
@@ -929,7 +936,7 @@ function rvPrepNamesHtml() {
   const hows = ["換成代號", "是上面的學員", "不是名字", "不用處理"];
   const tp = rv.data["學員資料"] || {};
   const reals = [...new Set(Object.values(rv.data["學員"] || {}).map((p) => p["本名"]).filter(Boolean))];
-  const codeOf = (r) => (tp["本名代號"] || {})[r] || (tp["名冊代號"] || {})[r] || "";
+  const codeOf = (r) => (rv.data["這一集代號"] || {})[r] || "";
   const cntOf = (u) => u["刪除段落外次數"] !== u["次數"] ? `${u["刪除段落外次數"]} 次（另 ${u["次數"] - u["刪除段落外次數"]} 次在刪除段落裡）` : `${u["次數"]} 次`;
   const who = (u) => `${esc(u["是誰"])}${u["名冊本名"] && u["名冊本名"] !== u["名字"] ? `・名冊上是 ${esc(u["名冊本名"])}` : u["名冊本名"] ? "・名冊上有" : "・名冊上沒有"}`;
   const unRows = un.map((u) => {
@@ -954,8 +961,8 @@ function rvPrepNamesHtml() {
   const cutBlock = cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只出現在確認刪除的段落裡（${cutOnly.length} 個：${esc(cutOnly.map((u) => u["名字"]).join("、"))}），不用處理</summary>
       <p class="rv-meta">這些段落會整段刪掉。如果在「① 建議刪除段落」改成不刪，會回到上面。</p></details></li>` : "";
   if (!all.length) return `<p class="rv-meta">這一集沒有找到被提到的人名（第 1 步人名清單還沒跑，或真的沒有）。</p>`;
-  return `${rvDupHtml()}<p class="rv-meta">這一集被提到的所有人名（老師或學員講到的），每個決定被提到時換成什麼：
-    名冊上的人預設用這一集的代號；其實是 ② 某位學員（轉錯字、暱稱）選「是上面的學員」；家人、朋友、沒登記的人選「換成代號」；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
+  return `${rvDupHtml()}${rvAutoHtml()}<p class="rv-meta">這一集被提到的所有人名（老師或學員講到的），每個決定被提到時換成什麼：
+    名冊上的人預設「換成代號」，代號每一集自己選（或按上面自動配）；其實是 ② 某位學員（轉錯字、暱稱）選「是上面的學員」；家人、朋友、沒登記的人選「換成代號」；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
     <p class="rv-meta">${un.length} 個要看，${un.filter((u) => !u["已決定"]).length} 個還沒確認。</p>
     <ul class="rv-people">${unRows}${twoBlock}${cutBlock}</ul>`;
 }
@@ -1025,6 +1032,14 @@ function rvBindPrep(root) {
     if (el.value === "換成代號" || el.value === "是上面的學員") return;   // 選了代號／哪一位才存
     await apiPost("/api/people/decide", { "名字": el.dataset.name, "做法": el.value }); await reload();
   }));
+  const auto = root.querySelector("#rv-autocode");
+  if (auto) auto.addEventListener("click", async () => {
+    try {
+      const r = await apiPost("/api/codes/auto", {});
+      alert(`配好了：② ${r["②"]} 位、③ ${r["③"]} 個。${r["代號不夠"] ? "常用英文名不夠用，剩下的請自己打新代號。" : "不喜歡的直接改。"}`);
+    } catch (e) { alert(e.message || e); }
+    await reload();
+  });
   root.querySelectorAll(".rv-unok").forEach((b) => b.addEventListener("click", async () => {
     try {
       await apiPost("/api/people/decide", { "名字": b.dataset.name, "做法": b.dataset.how, "代號": b.dataset.code || null });

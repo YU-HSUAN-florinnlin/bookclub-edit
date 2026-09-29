@@ -1026,6 +1026,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, _turns.set_person_code(server.workdir, str(body["學員"]), body.get("代號")))
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
+        elif path == "/api/codes/auto":   # 09-29：幫還沒代號的自動配
+            from bookclub import epcodes
+
+            self._send_json(200, epcodes.auto_assign(server.workdir))
         elif path == "/api/people/decide":   # 09-29：名冊上沒有的名字怎麼處理（第 1 步人名清單）
             from bookclub import personnames
 

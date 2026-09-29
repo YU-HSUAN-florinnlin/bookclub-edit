@@ -177,7 +177,8 @@ def decisions_path(workdir: Path) -> Path:
 
 
 def add_to_roster(name: str, alts: list[str], code: str) -> bool:
-    """名冊上沒有的名字加進 `~/讀書會剪輯資料/名冊.csv`（中文名、其他寫法、英文代號）。已經有這個名字就不重寫。"""
+    """名冊上沒有的名字加進 `~/讀書會剪輯資料/名冊.csv`（中文名、其他寫法）。已經有這個名字就不重寫。
+    09-29：名冊拿掉英文代號欄，代號記在這一集（`bookclub/epcodes.py`）；舊名冊還有代號欄才會寫進去。"""
     import csv
 
     from bookclub import names
@@ -190,13 +191,18 @@ def add_to_roster(name: str, alts: list[str], code: str) -> bool:
     if not new_file:
         with open(path, "rb") as f:
             tail = f.read()[-1:]
+    header = ["中文名", "其他寫法", "性別"]
+    if not new_file:
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            header = next(csv.reader(f), None) or header
+    row = {"中文名": name, "其他寫法": "、".join(a for a in alts if a != name), "英文代號": code}
     with open(path, "a", encoding="utf-8", newline="") as f:
         if not new_file and tail not in (b"\n", b""):
             f.write("\n")
         w = csv.writer(f)
         if new_file:
-            w.writerow(["中文名", "其他寫法", "英文代號", "聲線", "性別"])
-        w.writerow([name, "、".join(a for a in alts if a != name), code, "", ""])
+            w.writerow(header)
+        w.writerow([row.get(h, "") for h in header])
     return True
 
 

@@ -80,6 +80,12 @@ def precheck(workdir: str | Path) -> dict:
 
     if not review.video_path(workdir):
         missing.append("找不到原片（分析結果記錄的影片路徑不在了）")
+    from bookclub import epcodes
+
+    lack_codes = epcodes.missing(workdir)
+    if lack_codes:
+        missing.append(f"有 {len(lack_codes)} 個名字這一集還沒選英文代號：第 3 步開始前 ②（學員）或 ③（其他名稱）選好，"
+                       "或按「幫還沒代號的自動配」")
     dec = review.load_decisions(workdir)
     if not any(dec["開始前確認"].values()):
         notes.append("第 3 步還沒覆核：照第 1 步的建議做（名字整句換掉、學員全部重念、建議刪除的段落不刪）")
