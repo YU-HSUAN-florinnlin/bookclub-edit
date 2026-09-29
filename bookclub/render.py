@@ -134,7 +134,11 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Tr
              "生成用文字": r.get("生成用文字") or r["text"], "轉回文字": _chosen_heard(r),
              "生成秒數": _chosen_len(r), "文字來源": r.get("文字來源")}
         if fitted["放回做法"] == "標紅" and fitted["差異比例"] > 0 and fitted.get("來源檔案"):
-            e["停格秒"] = ceil_frames(e["生成秒數"] - (s1 - s0)) if e["生成秒數"] else 0.0
+            # 09-29 宇軒選 C：還是太長就先加快（最多 15%），剩下的才停格
+            e["加快"] = speedup_for(e["生成秒數"] or 0.0, s1 - s0)
+            e["停格秒"] = ceil_frames(e["生成秒數"] / e["加快"] - (s1 - s0)) if e["生成秒數"] else 0.0
+            if e["停格秒"] <= 0:
+                e.pop("停格秒")
         edits.append(e)
 
     plan = wd.read_json(nameplan.plan_path(workdir), default=None) or {}
@@ -182,7 +186,8 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Tr
                             "示範": True})
     for e in edits:
         if e.get("停格秒"):
-            freezes.append({"at": snap(e["end"]), "dur": e["停格秒"], "原因": f"{e['id']} 重念比時間格長 {e['差異比例']:+.0%}，停格補長",
+            freezes.append({"at": snap(e["end"]), "dur": e["停格秒"], "原因": f"{e['id']} 重念比時間格長 {e['差異比例']:+.0%}，"
+                            f"加快 {e.get('加快', 1.0) - 1:.0%} 後還多出來的停格補長",
                             "edit": e["id"]})
 
     # 重疊的動作：長的優先（跟 assemble 一樣）
@@ -234,6 +239,28 @@ def _chosen_len(r: dict) -> float | None:
     return t.get("插入停頓後長度秒") or t.get("長度秒")
 
 
+SPEEDUP_MAX = 1.15   # 09-29 宇軒選 C：學員重念太長時最多再加快 15%
+
+
+def speedup_for(gen_s: float, slot_s: float, max_speedup: float = SPEEDUP_MAX) -> float:
+    """學員重念比時間格長時要加快幾倍（1.0～1.15，純函式）。"""
+    if gen_s <= slot_s or slot_s <= 0:
+        return 1.0
+    return round(min(max_speedup, gen_s / slot_s), 4)
+
+
+def _read_audio_tempo(path: Path, factor: float = 1.0) -> np.ndarray:
+    """讀生成檔（48kHz 單聲道）；factor > 1 時用 ffmpeg atempo 加快（音高不變）。"""
+    from bookclub import assemble
+
+    if factor <= 1.0001:
+        return assemble._read_audio(path)
+    cmd = ["ffmpeg", "-loglevel", "error", "-i", str(path), "-af", f"atempo={factor:.4f}", "-vn", "-ac", "1",
+           "-ar", str(SR), "-f", "f32le", "-"]
+    raw = subprocess.run(cmd, check=True, capture_output=True).stdout
+    return np.frombuffer(raw, dtype=np.float32).copy()
+
+
 def pick_blur(edits: list[dict], cuts: list, a: float, b: float) -> list[float]:
     """模糊示範：挑第一段學員重念開始處的 30 秒（沒有就範圍開頭），避開刪除範圍。"""
     st = next((e["start"] for e in edits if e["類型"] == "學員重念"), a)
@@ -273,8 +300,9 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
             new = assemble.room_tone(x, s, t, t - s, SR, avoid=local)
             assemble.splice(y, s, new, SR)
             continue
-        src = e["來源檔案"] if e.get("停格秒") else e["檔案"]
-        clip = assemble._read_audio(workdir / src)
+        long = e.get("停格秒") or (e.get("加快", 1.0) > 1.0)
+        src = e["來源檔案"] if long else e["檔案"]
+        clip = _read_audio_tempo(workdir / src, e.get("加快", 1.0))
         gain = _gain(clip, x[s:t])
         clip = (clip * gain).astype(np.float32)
         head = assemble.fit_length(clip, t - s)
@@ -611,8 +639,10 @@ def build_marks(d: dict, plist: list[dict], precision: dict | None = None) -> li
             row.update({"餵給模型的文字": e["text"], "送進模型的文字": e["生成用文字"] if e["生成用文字"] != e["text"] else None,
                         "轉回文字": e.get("轉回文字"), "稿子標記": a_, "轉回標記": b_, "不一樣字數": n,
                         "放回做法": e.get("放回做法"), "差異比例": e.get("差異比例")})
+            if e.get("加快", 1.0) > 1.0:
+                row["做了什麼"] += f"；比時間格長，加快 {e['加快'] - 1:.0%}"
             if e.get("停格秒"):
-                row["做了什麼"] += f"；比時間格長，結尾停格 {e['停格秒']:.2f} 秒"
+                row["做了什麼"] += f"；結尾停格 {e['停格秒']:.2f} 秒"
         if precision and e.get("id") in precision:
             row["精準度"] = precision[e["id"]]
         rows.append(row)

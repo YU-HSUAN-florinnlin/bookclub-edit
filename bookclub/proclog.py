@@ -76,9 +76,11 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
             tid = seg.get(e["id"]) or str(e["id"]).rsplit("_", 1)[0]
             rec["覆核項目"] = [f"學員段落:{tid}"]
             rec["做了什麼"] = f"{e.get('學員') or '學員'} 用{e.get('聲線') or ''}聲 AI 重念"
-            rec["檔案"] = e.get("來源檔案") if e.get("停格秒") else e.get("檔案")
+            rec["檔案"] = e.get("來源檔案") if e.get("停格秒") or e.get("加快", 1.0) > 1.0 else e.get("檔案")
+            if e.get("加快", 1.0) > 1.0:
+                rec["做了什麼"] += f"；比時間格長，加快 {e['加快'] - 1:.0%}"
             if e.get("停格秒"):
-                rec["做了什麼"] += f"；比時間格長，結尾停格 {e['停格秒']:.2f} 秒"
+                rec["做了什麼"] += f"；結尾停格 {e['停格秒']:.2f} 秒"
                 if rec["成品"][1] is not None:
                     rec["成品"][1] = _r(rec["成品"][1] + e["停格秒"])
         elif kind == "名字整句換掉":
