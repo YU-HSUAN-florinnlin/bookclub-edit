@@ -141,8 +141,8 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             continue
         texts[sid] = new
         full = "".join(texts[g["id"]] for g in group)
-        lo = min(group[0]["start"], c["start"]) if c.get("改過時間") else group[0]["start"]
-        hi = max(group[-1]["end"], c["end"]) if c.get("改過時間") else group[-1]["end"]
+        lo = min(group[0]["start"], c["start"])   # 名字本身一定包進時間格（句首的字可能比句子早開始）
+        hi = max(group[-1]["end"], c["end"])
         if item:
             item["text"] = full
             item["候選"].append(i)

@@ -301,8 +301,7 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
         items.append({
             "類型": "名字", "id": cid, "start": c["start"], "end": c["end"],
             "sentence_html": _highlight_sentence(sentence, c.get("matched_text", ""), c.get("位置", "")),
-            "整句": {"start": min(group[0]["start"], c["start"]) if c.get("改過時間") else group[0]["start"],
-                     "end": max(group[-1]["end"], c["end"]) if c.get("改過時間") else group[-1]["end"],
+            "整句": {"start": min(group[0]["start"], c["start"]), "end": max(group[-1]["end"], c["end"]),
                      "原文": whole_text, "換成代號": replaced, "改稿": d.get("改稿", "")}
             if group else None,
             "matched_text": c.get("matched_text", ""), "代號": c.get("代號", ""), "位置": c.get("位置", ""),
