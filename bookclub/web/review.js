@@ -200,6 +200,8 @@ function rvRenderMain() {
 
 async function rvReload() {
   rv.data = await apiGet("/api/review");
+  const back = rv.data["開始前自動改回"] || [];
+  if (back.length) { rv.prepOpen = true; rv.prepTab = back[0]; }   // 09-30：冒出新項目、自動改回還沒做的，直接打開給人看
   if (rv.cur && !rvItem(rv.cur)) rv.cur = rvFirstPending();
   rvRenderAll();
   const s = document.getElementById("rv-settings");
@@ -880,8 +882,10 @@ function rvRenderPrepSide() {
   box.innerHTML = `<article class="rv-card rv-prepside">
       <header><span class="rv-chip"><i></i>開始前 4 件事</span></header>
       <p class="rv-meta">先把整體定下來，逐筆看的時候就不用再想：哪些段落整段刪掉、學員換成誰、其他人名怎麼處理、誰不用重念。</p>
+      ${rvRevertedHtml()}
       <ol class="rv-prepsteps">${RV_PREP.map(([k, label]) => `<li class="${p[k] ? "ok" : ""} ${rv.prepTab === k ? "on" : ""}">
-        <button class="linkish" data-tab="${esc(k)}">${esc(label)}</button><span>${p[k] ? "✓ 做完了" : "還沒做"}</span></li>`).join("")}</ol>
+        <button class="linkish" data-tab="${esc(k)}">${esc(label)}</button><span>${p[k] ? "✓ 做完了" : "還沒做"}</span>
+        ${!p[k] && rvPrepLeft(k).length ? `<span class="rv-meta">${esc(rvPrepLeft(k).join("；"))}</span>` : ""}</li>`).join("")}</ol>
       <div class="rv-actions"><button class="primary" id="rv-start" ${rvPrepDone() ? "" : "disabled"}>開始逐筆看</button>
         ${rvPrepDone() ? "" : `<span class="rv-meta">4 件都做完才能開始</span>`}</div>
     </article>`;
@@ -892,6 +896,16 @@ function rvRenderPrepSide() {
     rvRenderMain();
     if (rv.cur) rvSelect(rv.cur);
   });
+}
+
+// 09-30：每一件底下還沒處理的（後端 review.prep_pending）；有的話不能標完成
+function rvPrepLeft(k) { return ((rv.data["開始前待處理"] || {})[k]) || []; }
+
+function rvRevertedHtml() {   // 讀資料時冒出新項目、自動改回還沒做的（只提醒這一次）
+  const back = rv.data["開始前自動改回"] || [];
+  if (!back.length) return "";
+  const labels = back.map((k) => (RV_PREP.find((x) => x[0] === k) || [k, k])[1]);
+  return `<p class="rv-warnline">${esc(labels.join("、"))} 底下冒出新的項目（例如 ① 改成不刪、拆開學員），自動改回「還沒做」，再看一次。</p>`;
 }
 
 function rvRenderPrep() {
@@ -906,10 +920,13 @@ function rvRenderPrep() {
   const label = RV_PREP.find((x) => x[0] === k)[1];
   lower.innerHTML = `<section class="rv-prep">
       <h2>${esc(label)}</h2>${body}
-      <div class="rv-actions"><button class="primary" id="rv-prepdone">${done ? "✓ 這一件做完了（再按一次改回還沒做）" : "這一件做完了"}</button></div>
+      <div class="rv-actions"><button class="primary" id="rv-prepdone" ${!done && rvPrepLeft(k).length ? "disabled" : ""}>${done ? "✓ 這一件做完了（再按一次改回還沒做）" : "這一件做完了"}</button>
+        ${!done && rvPrepLeft(k).length ? `<span class="rv-warnline" id="rv-prepwhy">還不能標完成：${esc(rvPrepLeft(k).join("；"))}</span>` : `<span class="rv-warnline" id="rv-prepwhy"></span>`}</div>
     </section>`;
   document.getElementById("rv-prepdone").addEventListener("click", async () => {
-    const r = await apiPost("/api/review/prep", { "項目": k, "完成": !done });
+    let r;
+    try { r = await apiPost("/api/review/prep", { "項目": k, "完成": !done }, { quiet: true }); }
+    catch (err) { document.getElementById("rv-prepwhy").textContent = err.message; if (!/還不能標完成/.test(err.message)) showSaveError(err.message); return; }
     rv.data["開始前確認"] = r["開始前確認"];
     if (!done) { const i = RV_PREP.findIndex((x) => x[0] === k); const next = RV_PREP.slice(i + 1).concat(RV_PREP).find((x) => !rv.data["開始前確認"][x[0]]); if (next) rv.prepTab = next[0]; }
     rvRenderPrepSide(); rvRenderPrep();

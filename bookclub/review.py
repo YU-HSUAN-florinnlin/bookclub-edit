@@ -215,15 +215,63 @@ def _in_ranges(a: float, b: float, ranges: list[tuple[float, float]], pad: float
 
 
 def set_prep(workdir: str | Path, key: str, done: bool) -> dict:
-    """`POST /api/review/prep`：開始前 4 件事（刪除／學員／名字／保留原聲）哪一件做完了。"""
+    """`POST /api/review/prep`：開始前 4 件事（刪除／學員／名字／保留原聲）哪一件做完了。
+    09-30：底下還有沒處理的項目不能標完成（說明原因）；④ 標完成時把每位學員目前的選擇寫下來，
+    之後冒出新的學員（拆開、① 改成不刪）才認得出來。"""
     if key not in PREP_KEYS:
         raise ValueError(f"只能是：{'、'.join(PREP_KEYS)}")
     workdir = Path(workdir)
+    if done:
+        data = page_data(workdir)
+        left = data["開始前待處理"].get(key) or []
+        if left:
+            raise ValueError(f"還不能標完成：{'；'.join(left)}")
+        people = [n for n, p in data["學員"].items() if not p.get("都會刪掉")]
     with _lock:
         dec = load_decisions(workdir)
         dec["開始前確認"][key] = bool(done)
+        if done and key == "保留原聲":
+            for n in people:
+                dec["學員聲音"].setdefault(n, "重新生成")
         _save_decisions(workdir, dec)
         return {"ok": True, "開始前確認": dec["開始前確認"]}
+
+
+def prep_pending(dec: dict, people: dict, suggestions: list[dict], mentioned: list[dict],
+                 codes: dict[str, str]) -> dict[str, list[str]]:
+    """開始前 4 件事，每一件底下還沒處理的（純函式，09-30）：
+    ① 建議刪除段落還沒選刪不刪 ② 學員還沒選本名、選了本名還沒代號 ③ 被提到的名字還沒決定
+    ④ 學員還沒選保留原聲或重新生成（標完成後才冒出來的，例如拆開、① 改成不刪）。"""
+    out: dict[str, list[str]] = {k: [] for k in PREP_KEYS}
+    n = sum(1 for sg in suggestions if not dec["刪除建議"].get(sg["id"], {}).get("決定"))
+    if n:
+        out["刪除"].append(f"{n} 段建議刪除還沒選刪除或不刪")
+    live = {name: p for name, p in people.items() if not p.get("都會刪掉")}
+    no_real = [name for name, p in live.items() if not p.get("本名") and not p.get("本名未知")]
+    if no_real:
+        out["學員"].append(f"{'、'.join(no_real)} 還沒選本名")
+    no_code = sorted({p["本名"] for p in live.values() if p.get("本名") and not (codes.get(p["本名"]) or p.get("代號"))})
+    if no_code:
+        out["學員"].append(f"{'、'.join(no_code)} 還沒選英文代號")
+    un = [u for u in mentioned if not u.get("已決定") and not u.get("都在刪除段落")]
+    if un:
+        out["名字"].append(f"{len(un)} 個被提到的名字還沒決定")
+    new = [name for name in live if name not in dec["學員聲音"]]
+    if new and dec["開始前確認"].get("保留原聲"):
+        out["保留原聲"].append(f"{'、'.join(new)} 還沒選保留原聲或重新生成")
+    return {k: v for k, v in out.items() if v}
+
+
+def _auto_unprep(workdir: Path, pending: dict[str, list[str]]) -> list[str]:
+    """讀資料時：已經標完成、底下又冒出沒處理的項目 → 那一件自動改回還沒做。回傳改回的項目。"""
+    with _lock:
+        dec = load_decisions(workdir)
+        back = [k for k in PREP_KEYS if dec["開始前確認"].get(k) and pending.get(k)]
+        if back:
+            for k in back:
+                dec["開始前確認"][k] = False
+            _save_decisions(workdir, dec)
+    return back
 
 
 def decide_cut_suggestion(workdir: str | Path, sid: str, choice: str) -> dict:
@@ -562,6 +610,13 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                       "建議": {"做法": m.get("方式", MUTE_WAYS[0]), "原因": "人手動加的"}, "不用處理": None})
     items.sort(key=lambda x: (x["start"], x["類型"]))
 
+    mentioned = _unlisted_names(workdir, {p["本名"] for p in tdata.get("學員", {}).values() if p.get("本名")}, will_cut)
+    ep_codes = epcodes.episode_codes(workdir)
+    pending = prep_pending(dec, people, suggestions, mentioned, ep_codes)
+    reverted = _auto_unprep(workdir, pending)
+    for k in reverted:
+        dec["開始前確認"][k] = False
+
     return {
         "workdir": str(workdir),
         "影片": {"有影片": video_path(workdir, video) is not None, "網址": "/api/video",
@@ -572,14 +627,15 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "代號選項": tdata.get("代號選項", []),
         "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號", "這一集的名字")},   # 09-29「學員是誰」兩欄
         "代號重複": _dup_codes(workdir, tdata),
-        "這一集代號": epcodes.episode_codes(workdir),   # 09-29：名冊拿掉代號欄，② ③ 顯示用這張
+        "這一集代號": ep_codes,   # 09-29：名冊拿掉代號欄，② ③ 顯示用這張
         "還沒代號": epcodes.missing(workdir),
-        "提到的名字": _unlisted_names(workdir, {p["本名"] for p in tdata.get("學員", {}).values() if p.get("本名")},
-                                           will_cut),
+        "提到的名字": mentioned,
         "項目": items,
         "已自動跳過的重疊": skipped,
         "刪除建議": [{**sg, "決定": dec["刪除建議"].get(sg["id"], {}).get("決定")} for sg in suggestions],
         "開始前確認": dec["開始前確認"],
+        "開始前待處理": pending,          # 09-30：每一件底下還沒處理的（有的話不能標完成）
+        "開始前自動改回": reverted,       # 09-30：這次讀資料時因為冒出新項目、自動改回還沒做的
         "選項": {"重疊": OVERLAP_HOWS, "重疊排法": OVERLAP_ARRANGE, "名字": NAME_HOWS, "名字標記": NAME_TAGS,
                  "學員名字": list(studentnames.HOWS),
                  "消音": MUTE_WAYS, "聲音": VOICE_CHOICES},

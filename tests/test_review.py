@@ -223,8 +223,11 @@ def test_prep_and_cut_suggestions_mark_items_not_needed():
     d = review.page_data(w)
     assert d["開始前確認"] == {"刪除": False, "學員": False, "名字": False, "保留原聲": False}
     assert [x["id"] for x in d["刪除建議"]] == ["S1", "S2"]
-    review.set_prep(w, "學員", True)
-    assert review.load_decisions(w)["開始前確認"]["學員"]
+    try:
+        review.set_prep(w, "學員", True)             # 09-30：學員還沒選本名不能標完成
+        raise AssertionError
+    except ValueError as e:
+        assert "還沒選本名" in str(e)
     review.decide_cut_suggestion(w, "S2", "刪除")
     review.decide_cut_suggestion(w, "S1", "不刪")
     dec = review.load_decisions(w)
@@ -347,6 +350,41 @@ def test_not_name_toggle_updates_exclusion_list():
     assert [x["詞"] for x in names.load_exclusion_list(ex)] == ["別的詞"]          # 別人加的不動
     assert review.save_name(w, "1", {"tags": []})["已從排除清單拿掉"] is False     # 本來就沒標：不動清單
     ex.unlink()
+
+
+def test_prep_items_block_and_auto_revert():
+    # 09-30：開始前 4 件事——底下有沒處理的不能標完成；標完成後冒出新項目自動改回還沒做
+    from bookclub import turns
+
+    w = _fresh()
+    d = review.page_data(w)
+    live = [n for n, p in d["學員"].items() if not p.get("都會刪掉")]
+    assert "學員" in d["開始前待處理"] and "刪除" in d["開始前待處理"]
+    # ① 兩筆建議都選了 → 可以標完成
+    review.decide_cut_suggestion(w, "S1", "不刪")
+    review.decide_cut_suggestion(w, "S2", "不刪")
+    review.set_prep(w, "刪除", True)
+    # ② 每位選本名、代號
+    reals = ["小美", "阿明"] + [f"路人{i}" for i in range(len(live))]
+    for n, real in zip(live, reals):
+        turns.set_real_name(w, n, real)
+        turns.set_name_code(w, real, {"小美": "Amy", "阿明": "Tom"}.get(real, f"Code{real[-1]}"))
+    review.set_prep(w, "學員", True)
+    # ④ 標完成時記下每位學員目前的選擇
+    review.set_prep(w, "保留原聲", True)
+    dec = review.load_decisions(w)
+    assert set(dec["學員聲音"]) >= set(live) and dec["開始前確認"]["保留原聲"]
+    # 拆出一位新學員 → ② 沒本名、④ 沒選 → 兩件都自動改回還沒做
+    first = next(x for x in d["項目"] if x["類型"] == "學員段落" and x["說話者"] == live[0])
+    turns.reassign_turns(w, [first["id"]], "新學員")
+    d = review.page_data(w)
+    assert set(d["開始前自動改回"]) == {"學員", "保留原聲"}
+    assert not d["開始前確認"]["學員"] and not d["開始前確認"]["保留原聲"] and d["開始前確認"]["刪除"]
+    assert review.page_data(w)["開始前自動改回"] == []              # 改回一次就好，不會每次都報
+    try:
+        review.set_prep(w, "保留原聲", True)      # ④ 沒有卡：新學員預設重新生成，標完成時寫下來
+    except ValueError:
+        raise AssertionError("④ 不該被擋")
 
 
 if __name__ == "__main__":
