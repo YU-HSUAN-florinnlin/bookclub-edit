@@ -477,7 +477,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "代號選項": tdata.get("代號選項", []),
         "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號", "這一集的名字")},   # 09-29「學員是誰」兩欄
         "代號重複": _dup_codes(workdir, tdata),
-        "名冊上沒有的名字": _unlisted_names(workdir, {p["本名"] for p in tdata.get("學員", {}).values() if p.get("本名")},
+        "提到的名字": _unlisted_names(workdir, {p["本名"] for p in tdata.get("學員", {}).values() if p.get("本名")},
                                            will_cut),
         "項目": items,
         "已自動跳過的重疊": skipped,
@@ -504,7 +504,7 @@ def _unlisted_names(workdir: Path, chosen: set[str] | None = None, cuts: list | 
     from bookclub import personnames
 
     try:
-        return personnames.unlisted(workdir, chosen, cuts)
+        return personnames.mentioned(workdir, chosen, cuts)
     except Exception as exc:  # noqa: BLE001 — 人名清單壞掉不要擋住工作台
         print(f"⚠️ 人名清單讀不到：{exc}")
         return []

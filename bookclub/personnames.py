@@ -166,7 +166,7 @@ def called_names(workdir: str | Path) -> list[dict]:
     return sorted(merged.values(), key=lambda x: -x["次數"])
 
 
-# ---------- 第 3 步：名冊上沒有的名字 ----------
+# ---------- 第 3 步開始前 ③：辨識其他名稱如何替換 ----------
 
 DECISIONS_FILE = "人名決定.json"          # 校對/人名決定.json：{名字: {做法, 代號, 更新時間}}
 HOWS = ("換成代號", "是上面的學員", "不是名字", "不用處理")   # 不用處理：書中人物、公眾人物這類不用去識別化的；是上面的學員：09-29 宇軒（例如逐字稿轉錯字）
@@ -260,41 +260,73 @@ def rescan_names(workdir: Path) -> int:
     return n
 
 
-def unlisted(workdir: str | Path, chosen: set[str] | None = None,
-             cuts: list[tuple[float, float]] | None = None) -> list[dict]:
-    """第 3 步「這一集提到、名冊上沒有的名字」：名冊上沒有、又不是老師本人的每個名字＋人的決定。
-    09-29 宇軒：`chosen`＝「學員是誰」左欄已經選成本名的（代號在右欄定，這裡不再列）；
-    `cuts`＝確認刪除的段落，每次出現都在裡面的標「都在刪除段落」（收起來、不用處理）。"""
+def mentioned(workdir: str | Path, chosen: set[str] | None = None,
+              cuts: list[tuple[float, float]] | None = None) -> list[dict]:
+    """開始前 ③「辨識其他名稱如何替換」：這一集被提到的每個人名（名冊上有沒有都列）＋這一集的代號＋人的決定。
+    09-29 宇軒：`chosen`＝② 已經選成本名的學員（標「② 已決定」，畫面只顯示結果）；
+    `cuts`＝確認刪除的段落，每次出現都在裡面的標「都在刪除段落」（收起來、不用處理）。
+    來源：第 1 步人名清單（Claude 讀逐字稿）＋老師句子裡比對到的名冊名字（名字候選，人名清單漏掉的補上）。"""
+    from bookclub import epcodes, names
+    from bookclub.config import data_dir
+
     workdir = Path(workdir)
     data = wd.read_json(people_path(workdir), default=None) or {}
+    rf = data_dir() / "名冊.csv"
+    roster = names.load_roster(rf) if rf.is_file() else []
+    match_roster(data.get("人名", []), roster)   # 對照最新的名冊
     dec = wd.read_json(decisions_path(workdir), default={}) or {}
+    codes = epcodes.episode_codes(workdir)
     chosen = chosen or set()
     cuts = cuts or []
-    times = {}
-    if cuts:
-        speakers = wd.read_json(wd.speakers_path(workdir), default={}) or {}
-        times = {s["id"]: (s["start"], s["end"]) for s in speakers.get("sentences", [])}
+    speakers = wd.read_json(wd.speakers_path(workdir), default={}) or {}
+    times = {s["id"]: (s["start"], s["end"]) for s in speakers.get("sentences", [])}
 
     def in_cut(sid: str) -> bool:
         t = times.get(sid)
-        return bool(t) and any(a - 0.3 <= t[0] and t[1] <= b + 0.3 for a, b in cuts)
+        return bool(cuts) and bool(t) and any(a - 0.3 <= t[0] and t[1] <= b + 0.3 for a, b in cuts)
 
+    people = [dict(p) for p in data.get("人名", []) if p["是誰"] != "老師本人"]
+    seen = {p.get("名冊本名") or p["名字"] for p in people} | {w for p in people for w in (p["名字"], *p["其他寫法"])}
+    extra: dict[str, dict] = {}   # 名字候選裡有、人名清單沒抓到的名冊名字
+    for c in (wd.read_json(wd.names_path(workdir), default={}) or {}).get("candidates", []):
+        k = c.get("canonical")
+        if not k or c.get("敏感詞") or k in seen:
+            continue
+        e = extra.setdefault(k, {"id": f"R{len(extra) + 1:03d}", "名字": k, "其他寫法": [], "是誰": "名冊上的人", "說明": "",
+                                 "名冊本名": k, "句子": [], "次數": 0, "老師說": 0, "學員說": 0, "第一次": c["start"]})
+        e["次數"] += 1
+        e["老師說"] += 1
+        e["第一次"] = min(e["第一次"], c["start"])
+        if c.get("sentence_id"):
+            e["句子"].append(c["sentence_id"])
     out = []
-    for p in data.get("人名", []):
-        if p.get("名冊本名") or p["是誰"] == "老師本人":
-            continue
-        if {p["名字"], *p["其他寫法"]} & chosen:
-            continue
+    for p in people + list(extra.values()):
+        canon = p.get("名冊本名") or p["名字"]
         d = dec.get(p["名字"], {})
-        default = "不用處理" if p["是誰"] == "書中人物或作者" else None
+        in_two = canon in chosen or bool({p["名字"], *p["其他寫法"]} & chosen)
+        if d.get("做法"):
+            how = d["做法"]
+        elif p["是誰"] == "書中人物或作者":
+            how = "不用處理"
+        elif p.get("名冊本名"):
+            how = "換成代號"   # 名冊上的人：預設用這一集的代號
+        else:
+            how = None
         left = [sid for sid in p.get("句子", []) if not in_cut(sid)]
         out.append({"id": p["id"], "名字": p["名字"], "其他寫法": p["其他寫法"], "是誰": p["是誰"], "說明": p.get("說明", ""),
-                    "次數": p["次數"], "老師說": p["老師說"], "學員說": p["學員說"], "第一次": p["第一次"],
+                    "名冊本名": p.get("名冊本名"), "次數": p["次數"], "老師說": p["老師說"], "學員說": p["學員說"],
+                    "第一次": p["第一次"],
                     "刪除段落外次數": len(left) if p.get("句子") else p["次數"],
                     "都在刪除段落": bool(cuts) and bool(p.get("句子")) and not left,
-                    "做法": d.get("做法") or default, "代號": d.get("代號"), "同一人": d.get("同一人"),
-                    "已決定": bool(d.get("做法"))})
+                    "② 已決定": in_two,
+                    "做法": "換成代號" if in_two else how,
+                    "代號": codes.get(canon) if (in_two or how in ("換成代號", "是上面的學員")) else None,
+                    "同一人": d.get("同一人"),
+                    "已決定": in_two or bool(d.get("做法"))})
     return out
+
+
+unlisted = mentioned   # 舊名字
 
 
 def decide(workdir: str | Path, name: str, how: str, code: str | None = None, same_as: str | None = None) -> dict:
@@ -306,8 +338,13 @@ def decide(workdir: str | Path, name: str, how: str, code: str | None = None, sa
         raise ValueError(f"只能選：{'、'.join(HOWS)}")
     data = wd.read_json(people_path(workdir), default=None) or {}
     p = next((x for x in data.get("人名", []) if x["名字"] == name), None)
-    if p is None:
-        raise KeyError(f"人名清單裡沒有：{name}")
+    if p is None:   # 老師句子裡比對到的名冊名字（人名清單沒抓到）
+        from bookclub import names
+        from bookclub.config import data_dir
+
+        if not any(r["canonical"] == name for r in names.load_roster(data_dir() / "名冊.csv")):
+            raise KeyError(f"人名清單裡沒有：{name}")
+        p = {"名字": name, "其他寫法": []}
     added = rescanned = 0
     if how == "是上面的學員":   # 09-29 宇軒：其實是「學員是誰」選過的某位（轉錯字、暱稱）→ 用那位的代號，不用再選一次
         from bookclub import names

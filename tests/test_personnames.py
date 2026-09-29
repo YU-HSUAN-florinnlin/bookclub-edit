@@ -110,7 +110,9 @@ def test_unlisted_decide_adds_to_roster_and_rescans():
             {"名字": "阿強", "是誰": "學員", "行號": [i]}, {"名字": "某作者", "是誰": "書中人物或作者", "行號": [0]}]},
             ensure_ascii=False), log=lambda m: None)
         un = personnames.unlisted(w)
-        assert [(u["名字"], u["做法"]) for u in un] == [("阿強", None), ("某作者", "不用處理")]
+        assert [(u["名字"], u["做法"]) for u in un if not u["名冊本名"]] == [("阿強", None), ("某作者", "不用處理")]
+        # 09-29：名冊上的人（老師句子裡比對到的）也列，預設用這一集的代號
+        assert all(u["做法"] == "換成代號" and u["代號"] for u in un if u["名冊本名"])
         n0 = len(wd.read_json(wd.names_path(w))["candidates"])
         res = personnames.decide(w, "阿強", "換成代號", "Kevin")
         assert res["加進名冊"] and any(r["寫法"] == "阿強" and r["代號"] == "Kevin" for r in names.load_roster(_DATA / "名冊.csv"))
@@ -132,7 +134,8 @@ def test_unlisted_decide_adds_to_roster_and_rescans():
         assert all(c["代號"] == "Karl" for c in wd.read_json(wd.names_path(w))["candidates"] if c["canonical"] == "阿強")
         assert any(r["寫法"] == "阿強" and r["代號"] == "Karl" for r in epcodes.replace_table(w))
         # 「學員是誰」已經選成本名的不列；每次出現都在刪除段落裡的標起來
-        assert [u["名字"] for u in personnames.unlisted(w, chosen={"阿強"})] == ["某作者"]
+        u = next(x for x in personnames.mentioned(w, chosen={"阿強"}) if x["名字"] == "阿強")
+        assert u["② 已決定"] and u["代號"] == "Karl"
         u = next(x for x in personnames.unlisted(w, cuts=[(sents[i]["start"], sents[i]["end"])]) if x["名字"] == "阿強")
         assert u["都在刪除段落"] and u["刪除段落外次數"] == 0
         # 其實是上面「學員是誰」選過的某位（轉錯字）：用他的代號，名冊那一列補上這個寫法

@@ -35,14 +35,28 @@ def episode_codes(workdir: str | Path) -> dict[str, str]:
     for real, code in (tdata.get("本名代號") or {}).items():
         if code:
             out[canon.get(real, real)] = code
+    for name, d in (wd.read_json(personnames.decisions_path(workdir), default={}) or {}).items():
+        if d.get("做法") == "是上面的學員" and out.get(d.get("同一人")):   # 同一個人：跟著那位的代號走
+            out[canon.get(name, name)] = out[d["同一人"]]
     return out
+
+
+def same_person_names(workdir: str | Path) -> set[str]:
+    """③ 選了「是上面的學員」的本名（跟別人同代號是應該的，不算重複）。"""
+    from bookclub import names, personnames
+    from bookclub.config import data_dir
+
+    canon = {r["寫法"]: r["canonical"] for r in names.load_roster(data_dir() / "名冊.csv")}
+    return {canon.get(n, n) for n, d in (wd.read_json(personnames.decisions_path(Path(workdir)), default={}) or {}).items()
+            if d.get("做法") == "是上面的學員"}
 
 
 def duplicates(workdir: str | Path, only: set[str] | None = None) -> dict[str, list[str]]:
     """同一集裡兩個以上本名用同一個代號：{代號: [本名…]}。`only`＝只看這一集有出現的本名。"""
     by_code: dict[str, list[str]] = {}
+    alias = same_person_names(workdir)
     for real, code in episode_codes(workdir).items():
-        if only is None or real in only:
+        if (only is None or real in only) and real not in alias:
             by_code.setdefault(code, []).append(real)
     return {c: sorted(rs) for c, rs in by_code.items() if len(rs) > 1}
 

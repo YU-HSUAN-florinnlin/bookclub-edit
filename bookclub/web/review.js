@@ -5,7 +5,7 @@
  *   → 上半部左欄：影片、時間列、整支時間軸（老師灰、學員綠、冥想導讀淡藍；名字、重疊、刪除標記）、圖例
  *     上半部右欄：「目前這一筆」卡片（內容、藍底建議＋原因、通過／改做法／上一筆／下一筆）
  *   → 下半部：篩選列＋一行一筆的清單。
- * 一進來先做「開始前 3 件事」（建議刪除段落、學員是誰、誰保留原聲），做完按「開始逐筆看」才進清單。
+ * 一進來先做「開始前 4 件事」（① 建議刪除段落、② 辨識學員聲音是誰、③ 辨識其他名稱如何替換、④ 誰保留原聲），做完按「開始逐筆看」才進清單。
  * 播放完全由人控制；影片播到下一筆的起點時，右欄自動換過去（焦點在文字框時不換）。
  * 「＋新增修改」面板（09-29）：選類型、起點終點（打時間／用目前播放位置／±0.1 秒）、試聽，按新增後後端對齊時間，
  *   畫面顯示「你標的 → 對齊後」；已經有的項目按「改時間」用同一個面板。
@@ -802,7 +802,7 @@ function rvMarkListRow(scroll) {
 // 開始前 3 件事
 // ---------------------------------------------------------------------------
 
-const RV_PREP = [["刪除", "① 建議刪除段落"], ["學員", "② 學員是誰"], ["名字", "③ 名冊上沒有的名字"], ["保留原聲", "④ 誰保留原聲"]];   // 09-29 宇軒：刪除先做，學員是誰才看得出誰只在要刪的段落裡
+const RV_PREP = [["刪除", "① 建議刪除段落"], ["學員", "② 辨識學員聲音是誰"], ["名字", "③ 辨識其他名稱如何替換"], ["保留原聲", "④ 誰保留原聲"]];   // 09-29 宇軒：刪除先做，學員是誰才看得出誰只在要刪的段落裡
 
 function rvRenderPrepSide() {
   const p = rv.data["開始前確認"];
@@ -915,49 +915,63 @@ function rvDupHtml() {
   // 09-29：這一集的代號表（右欄＞③ 換成代號＞名冊預設）裡，兩個人用同一個代號
   const dup = Object.entries(rv.data["代號重複"] || {});
   if (!dup.length) return "";
-  return `<p class="rv-warnline">同一集有人用了同一個代號，成品裡會分不出是誰：${dup.map(([c, rs]) => `${esc(c)}（${esc(rs.join("、"))}）`).join("；")}。如果其實是同一個人（轉錯字、暱稱），不用改，或在「③」選「是上面的學員」合併；不同人的話，學員在「② 學員是誰」右欄改，其他人在「③ 名冊上沒有的名字」改。</p>`;
+  return `<p class="rv-warnline">同一集有人用了同一個代號，成品裡會分不出是誰：${dup.map(([c, rs]) => `${esc(c)}（${esc(rs.join("、"))}）`).join("；")}。如果其實是同一個人（轉錯字、暱稱），不用改，或在「③」選「是上面的學員」合併；不同人的話，學員在「② 辨識學員聲音是誰」右欄改，其他人在「③ 辨識其他名稱如何替換」改。</p>`;
 }
 
 function rvPrepNamesHtml() {
-  // 09-29 宇軒：從「學員是誰」拆出來。上一步已經選成本名的不列（代號在上一步右欄定）；每次出現都在確認刪除段落裡的收起來
+  // 09-29 宇軒：③「辨識其他名稱如何替換」——這一集被提到的每個人名都列（名冊上有沒有都一樣）。
+  // ② 已經選成本名的只顯示結果；每次出現都在確認刪除段落裡的收起來
   const codes = rv.data["代號選項"] || [];
-  const all = rv.data["名冊上沒有的名字"] || [];
-  const un = all.filter((u) => !u["都在刪除段落"]);
+  const all = rv.data["提到的名字"] || [];
+  const fromTwo = all.filter((u) => u["② 已決定"] && !u["都在刪除段落"]);
+  const un = all.filter((u) => !u["② 已決定"] && !u["都在刪除段落"]);
   const cutOnly = all.filter((u) => u["都在刪除段落"]);
   const hows = ["換成代號", "是上面的學員", "不是名字", "不用處理"];
-  // 09-29 宇軒：上一步選過的本名＋代號，給「是上面的學員」選（不用記得上一步選了什麼）
   const tp = rv.data["學員資料"] || {};
   const reals = [...new Set(Object.values(rv.data["學員"] || {}).map((p) => p["本名"]).filter(Boolean))];
   const codeOf = (r) => (tp["本名代號"] || {})[r] || (tp["名冊代號"] || {})[r] || "";
+  const cntOf = (u) => u["刪除段落外次數"] !== u["次數"] ? `${u["刪除段落外次數"]} 次（另 ${u["次數"] - u["刪除段落外次數"]} 次在刪除段落裡）` : `${u["次數"]} 次`;
+  const who = (u) => `${esc(u["是誰"])}${u["名冊本名"] && u["名冊本名"] !== u["名字"] ? `・名冊上是 ${esc(u["名冊本名"])}` : u["名冊本名"] ? "・名冊上有" : "・名冊上沒有"}`;
   const unRows = un.map((u) => {
-    const sameOpts = ['<option value="">選是哪一位</option>'].concat(reals.map((r) =>
-      `<option value="${esc(r)}" ${u["同一人"] === r ? "selected" : ""}>${esc(r)}（${esc(codeOf(r) || "還沒選代號")}）</option>`)).join("");
     const codeOpts = ['<option value="">選代號</option>'].concat(codes.map((c) => `<option ${u["代號"] === c ? "selected" : ""}>${esc(c)}</option>`))
       .concat(u["代號"] && !codes.includes(u["代號"]) ? [`<option selected>${esc(u["代號"])}</option>`] : [])
       .concat(['<option value="__new">新的代號…</option>']).join("");
-    const cnt = u["刪除段落外次數"] !== u["次數"] ? `${u["刪除段落外次數"]} 次（另 ${u["次數"] - u["刪除段落外次數"]} 次在刪除段落裡）` : `${u["次數"]} 次`;
-    return `<li class="rv-person"><div class="nm"><b>${esc(u["名字"])}</b><span class="rv-meta">${esc(u["是誰"])}・${cnt}（老師 ${u["老師說"]}、學員 ${u["學員說"]}）${u["其他寫法"].length ? "・也寫成 " + esc(u["其他寫法"].join("、")) : ""}</span></div>
+    const sameOpts = ['<option value="">選是哪一位</option>'].concat(reals.map((r) =>
+      `<option value="${esc(r)}" ${u["同一人"] === r ? "selected" : ""}>${esc(r)}（${esc(codeOf(r) || "還沒選代號")}）</option>`)).join("");
+    const result = u["做法"] === "換成代號" && u["代號"] ? `→ <b>${esc(u["代號"])}</b>` : u["做法"] === "是上面的學員" && u["同一人"] ? `→ 同 ${esc(u["同一人"])}（<b>${esc(u["代號"] || "還沒選代號")}</b>）` : "";
+    const confirmBtn = !u["已決定"] && u["做法"] && (u["做法"] !== "換成代號" || u["代號"])
+      ? `<button class="ghost small rv-unok" data-name="${esc(u["名字"])}" data-how="${esc(u["做法"])}" data-code="${esc(u["代號"] || "")}">照建議確認</button>` : "";
+    return `<li class="rv-person"><div class="nm"><b>${esc(u["名字"])}</b> ${result}<span class="rv-meta">${who(u)}・${cntOf(u)}（老師 ${u["老師說"]}、學員 ${u["學員說"]}）${u["其他寫法"].length ? "・也寫成 " + esc(u["其他寫法"].join("、")) : ""}</span></div>
       <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
         ${hows.map((h) => `<label class="rv-check"><input type="radio" name="un-${esc(u.id)}" class="rv-unhow" data-name="${esc(u["名字"])}" value="${h}" ${u["做法"] === h ? "checked" : ""}> ${h}</label>`).join("")}
         <select class="rv-uncode" data-name="${esc(u["名字"])}" ${u["做法"] === "換成代號" ? "" : "hidden"}>${codeOpts}</select>
         <select class="rv-unsame" data-name="${esc(u["名字"])}" ${u["做法"] === "是上面的學員" ? "" : "hidden"}>${sameOpts}</select>
-        ${u["已決定"] ? "" : u["做法"] ? '<span class="rv-meta">（建議，還沒確認）</span>' : '<span class="rv-warnline">還沒決定</span>'}</div>
+        ${u["已決定"] ? "" : u["做法"] ? `<span class="rv-meta">（建議，還沒確認）</span>${confirmBtn}` : '<span class="rv-warnline">還沒決定</span>'}</div>
       ${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
   }).join("");
+  const twoBlock = fromTwo.length ? `<li class="rv-person"><details><summary class="rv-meta">② 已經定好的學員（${fromTwo.length} 個）：${fromTwo.map((u) => `${esc(u["名字"])} → ${esc(u["代號"] || "還沒選代號")}`).join("、")}</summary>
+      <p class="rv-meta">被提到時一樣換成這個代號；要改代號回「② 辨識學員聲音是誰」右欄。</p></details></li>` : "";
   const cutBlock = cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只出現在確認刪除的段落裡（${cutOnly.length} 個：${esc(cutOnly.map((u) => u["名字"]).join("、"))}），不用處理</summary>
       <p class="rv-meta">這些段落會整段刪掉。如果在「① 建議刪除段落」改成不刪，會回到上面。</p></details></li>` : "";
-  if (!un.length && !cutOnly.length) return `<p class="rv-meta">沒有要處理的名字（上一步已經選成本名的，代號在上一步右欄定）。</p>`;
-  return `${rvDupHtml()}<p class="rv-meta">第 1 步請 Claude 讀整支逐字稿找出來、名冊上沒有的名字。上一步「學員是誰」已經選成本名的不會列在這裡。其實是上一步某位學員（轉錯字、暱稱）選「是上面的學員」，會直接用他的代號；家人、朋友、沒登記的人選「換成代號」（會加進名冊、自動補找老師提到的地方）；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
-    <p class="rv-meta">${un.length} 個，${un.filter((u) => !u["做法"]).length} 個還沒決定。</p>
-    <ul class="rv-people">${unRows}${cutBlock}</ul>`;
+  if (!all.length) return `<p class="rv-meta">這一集沒有找到被提到的人名（第 1 步人名清單還沒跑，或真的沒有）。</p>`;
+  return `${rvDupHtml()}<p class="rv-meta">這一集被提到的所有人名（老師或學員講到的），每個決定被提到時換成什麼：
+    名冊上的人預設用這一集的代號；其實是 ② 某位學員（轉錯字、暱稱）選「是上面的學員」；家人、朋友、沒登記的人選「換成代號」；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
+    <p class="rv-meta">${un.length} 個要看，${un.filter((u) => !u["已決定"]).length} 個還沒確認。</p>
+    <ul class="rv-people">${unRows}${twoBlock}${cutBlock}</ul>`;
 }
 
 function rvPrepVoiceHtml() {
-  const people = Object.entries(rv.data["學員"] || {});
-  if (!people.length) return `<p class="rv-meta">這支影片沒有學員。</p>`;
-  const rows = people.map(([n, p]) => `<li class="rv-person"><div class="nm"><i class="dot" style="background:${rvStuColor(n)}"></i><b>${esc(rvWho(n))}</b></div>
+  // 09-29 宇軒：逐一列 ② 辨識好的學員（本名 → 代號）＋處理方式；只在刪除段落裡講話的不列
+  const people = Object.entries(rv.data["學員"] || {}).filter(([, p]) => !p["都會刪掉"]);
+  if (!people.length) return `<p class="rv-meta">這支影片沒有要處理的學員。</p>`;
+  const rows = people.map(([n, p]) => {
+    const name = p["本名"] ? `${esc(p["本名"])} → <b>${esc(p["代號"] || "還沒選代號")}</b>` : p["本名未知"] ? "不知道是誰" : '<span class="rv-warnline">② 還沒選本名</span>';
+    const what = p["聲音"] === "保留原聲" ? "保留原聲：原本的聲音不動，講到的名字照 ③ 換" : `重新生成：用匿名聲音重念${p["代號"] ? `，稱呼換成 ${esc(p["代號"])}` : ""}`;
+    return `<li class="rv-person"><div class="nm"><i class="dot" style="background:${rvStuColor(n)}"></i><b>${esc(n)}</b>　${name}<span class="rv-meta">${esc(rvFmt(p["秒數"]))}，${p["段數"]} 段</span></div>
       <div class="ctl"><button class="ghost small rv-sample" data-person="${esc(n)}">試聽</button>
-      ${rvRadios(`voice-${n}`, rv.data["選項"]["聲音"], p["聲音"], "rv-voice").replaceAll('class="rv-voice"', `class="rv-voice" data-person="${esc(n)}"`)}</div></li>`).join("");
+      ${rvRadios(`voice-${n}`, rv.data["選項"]["聲音"], p["聲音"], "rv-voice").replaceAll('class="rv-voice"', `class="rv-voice" data-person="${esc(n)}"`)}
+      <span class="rv-meta">${what}</span></div></li>`;
+  }).join("");
   return `<p class="rv-warnline">只有同意的學員才保留原聲。保留原聲的學員，段落不用校對逐字稿（不重念），清單會自動標「不用處理」。</p>
     <ul class="rv-people">${rows}</ul>`;
 }
@@ -1010,6 +1024,12 @@ function rvBindPrep(root) {
     if (same) same.hidden = el.value !== "是上面的學員";
     if (el.value === "換成代號" || el.value === "是上面的學員") return;   // 選了代號／哪一位才存
     await apiPost("/api/people/decide", { "名字": el.dataset.name, "做法": el.value }); await reload();
+  }));
+  root.querySelectorAll(".rv-unok").forEach((b) => b.addEventListener("click", async () => {
+    try {
+      await apiPost("/api/people/decide", { "名字": b.dataset.name, "做法": b.dataset.how, "代號": b.dataset.code || null });
+    } catch (e) { alert(e.message || e); }
+    await reload();
   }));
   root.querySelectorAll(".rv-unsame").forEach((el) => el.addEventListener("change", async () => {
     if (!el.value) return;
