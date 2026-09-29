@@ -73,6 +73,56 @@ def build_edl(plan: dict, teacher_log: dict | None) -> tuple[list[dict], list[st
     return kept, warnings
 
 
+MUTE_KINDS = ("消音", "名字消音", "局部消音")   # 墊環境底噪的動作（其他是換聲音）
+SWAP_KINDS = ("換聲音", "學員重念", "名字整句換掉")
+
+
+def subtract(a: float, b: float, blockers: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """[a, b] 扣掉 blockers 蓋到的部分，回傳剩下的小段（純函式）。"""
+    parts = [(a, b)]
+    for x, y in sorted(blockers):
+        nxt = []
+        for s, e in parts:
+            if y <= s or x >= e:
+                nxt.append((s, e))
+                continue
+            if s < x:
+                nxt.append((s, x))
+            if y < e:
+                nxt.append((y, e))
+        parts = nxt
+    return [(s, e) for s, e in parts if e - s >= 0.01]
+
+
+def local_mutes(dec: dict) -> list[dict]:
+    """第 3 步標的局部消音（`覆核決定.json` 的 `局部消音[]`，狀態不是「還原」的）。"""
+    return [m for m in dec.get("局部消音", []) if m.get("狀態") != "還原" and m.get("end", 0) > m.get("start", 0)]
+
+
+def add_local_mutes(edits: list[dict], mutes: list[dict], cuts: list[tuple[float, float]] = ()) -> tuple[list[dict], list[str]]:
+    """把局部消音加進剪輯決策（純函式，09-29 宇軒：局部消音保留，標了就要真的消）。
+
+    - 跟刪除段落重疊的部分不用消（已經剪掉）
+    - 跟既有的動作（換聲音、名字消音）重疊的部分以既有那筆為準，列在警告裡
+    - 霧化還沒做，先一樣墊底噪（`霧化` 欄位記下來，處理紀錄註明）
+    回傳（加好、依時間排序的剪輯決策、警告）。"""
+    out, warnings = list(edits), []
+    taken = [(e["start"], e["end"]) for e in edits]
+    for m in mutes:
+        free = subtract(m["start"], m["end"], list(cuts))
+        if not free:
+            warnings.append(f"局部消音 {m['id']} 整段落在刪除段落裡，不用消")
+            continue
+        parts = [p for s, e in free for p in subtract(s, e, taken)]
+        if len(parts) != len(free) or sum(e - s for s, e in parts) < sum(e - s for s, e in free) - 0.01:
+            warnings.append(f"局部消音 {m['id']} 跟換聲音或名字的處理重疊，重疊的地方以那一筆為準")
+        for s, e in parts:
+            out.append({"類型": "局部消音", "start": s, "end": e, "id": m["id"], "方式": m.get("方式", "墊底噪"),
+                        "霧化": m.get("方式") == "霧化", "候選": []})
+    out.sort(key=lambda e: e["start"])
+    return out, warnings
+
+
 # ---------- 聲音處理（純函式） ----------
 
 def _frame_rms(x: np.ndarray, frame: int) -> np.ndarray:
@@ -147,7 +197,7 @@ def render_edit(window: np.ndarray, w0: int, edit: dict, clip: np.ndarray | None
     y = window.astype(np.float32).copy()
     if t <= s:
         return y[s:t]
-    if edit["類型"] == "換聲音":
+    if edit["類型"] not in MUTE_KINDS:
         new = match_loudness(fit_length(clip, t - s), window[s:t], sr)
     else:
         local = [(a - w0, b - w0) for a, b in spans if (a - w0, b - w0) != (s, t)]
@@ -208,6 +258,10 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
         raise FileNotFoundError(f"找不到 {nameplan.plan_path(workdir)}，先跑 `bookclub gen names`。")
     teacher_log = wd.read_json(tts.teacher_log_path(workdir))
     edits, warnings = build_edl(plan, teacher_log)
+    from bookclub import review
+
+    edits, w2 = add_local_mutes(edits, local_mutes(review.load_decisions(workdir)))   # 聲音軌跟原片等長，刪除段落不套用
+    warnings += w2
     for w in warnings:
         print(f"⚠️ {w}")
 
@@ -245,7 +299,7 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
             copy_until(s0)
             w0 = max(0, s0 - pad)
             window = _read_range(orig_path, w0, t0 + pad)
-            clip = _read_audio(workdir / e["檔案"]) if e["類型"] == "換聲音" else None
+            clip = _read_audio(workdir / e["檔案"]) if e["類型"] not in MUTE_KINDS else None
             seg = render_edit(window, w0, e, clip, spans)
             dst.write(np.clip(seg, -1, 1))
             pos = s0 + len(seg)
@@ -265,6 +319,7 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
         "原片": str(video), "長度秒": round(total / SR, 2),
         "換聲音": sum(1 for e in edits if e["類型"] == "換聲音"),
         "消音": sum(1 for e in edits if e["類型"] == "消音"),
+        "局部消音": sum(1 for e in edits if e["類型"] == "局部消音"),
         "要人聽": sum(1 for e in edits if e.get("要人聽")),
         "要人處理": len(plan.get("要人處理", [])),
         "警告": warnings,
@@ -273,7 +328,7 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
     wd.write_json(edl_path(workdir), summary)
     from bookclub import proclog   # 09-29：AI 處理紀錄＋沒登記的變動檢查（生成/處理紀錄.json，第 5 步讀）
     proclog.write_audio_log(workdir, edits, orig_path, new_path)
-    print(f"[組裝] 完成：換聲音 {summary['換聲音']} 段、消音 {summary['消音']} 段；"
+    print(f"[組裝] 完成：換聲音 {summary['換聲音']} 段、消音 {summary['消音']} 段、局部消音 {summary['局部消音']} 段；"
           f"新聲音軌 {summary['長度秒'] / 60:.1f} 分鐘 → {new_path}")
     return summary
 
@@ -281,7 +336,9 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
 def _ab_page(rows: list[dict]) -> str:
     items = []
     for r in rows:
-        what = f"換成老師 AI 聲音：{html.escape(r['文字'])}" if r["類型"] == "換聲音" else "名字消音（墊環境底噪）"
+        what = (f"換成老師 AI 聲音：{html.escape(r['文字'])}" if r["類型"] == "換聲音"
+                else f"局部消音 {r['id']}（墊環境底噪{'；霧化還沒做' if r.get('霧化') else ''}）" if r["類型"] == "局部消音"
+                else "名字消音（墊環境底噪）")
         flag = '<span class="flag">要人聽</span>' if r.get("要人聽") else ""
         items.append(
             f'<section><b>#{r["編號"]}　{wd.fmt_time(r["start"])}–{wd.fmt_time(r["end"])}</b>　'

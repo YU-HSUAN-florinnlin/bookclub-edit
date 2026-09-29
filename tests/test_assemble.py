@@ -153,6 +153,50 @@ def test_render_audio_end_to_end():
         assert "Amy" in page and "要人聽" in page
 
 
+def test_subtract_and_add_local_mutes():
+    assert assemble.subtract(0, 10, [(2, 3), (5, 6)]) == [(0, 2), (3, 5), (6, 10)]
+    assert assemble.subtract(0, 10, [(0, 10)]) == []
+    edits = [{"類型": "換聲音", "start": 4.0, "end": 6.0, "候選": [1]}]
+    mutes = [{"id": "M001", "start": 3.0, "end": 8.0, "方式": "墊底噪"},      # 中間被換聲音蓋到
+             {"id": "M002", "start": 20.0, "end": 22.0, "方式": "霧化"},       # 整段在刪除段落裡
+             {"id": "M003", "start": 29.0, "end": 31.0, "方式": "霧化"}]       # 一半在刪除段落裡
+    out, warns = assemble.add_local_mutes(edits, mutes, cuts=[(19.0, 30.0)])
+    got = [(e["id"] if "id" in e else e["類型"], e["start"], e["end"]) for e in out]
+    assert got == [("M001", 3.0, 4.0), ("換聲音", 4.0, 6.0), ("M001", 6.0, 8.0), ("M003", 30.0, 31.0)], got
+    assert any("M001" in w for w in warns) and any("M002" in w for w in warns)
+    assert [e["霧化"] for e in out if e.get("id") == "M003"] == [True]
+
+
+def test_render_audio_applies_local_mute():
+    """09-29：第 3 步標的局部消音，組裝時真的消掉；長度不變；處理紀錄有這一筆。"""
+    if not shutil.which("ffmpeg"):
+        return
+    from bookclub import proclog
+
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        video = w / "原片.wav"
+        sf.write(str(video), np.concatenate([_tone(10.0), _tone(1.0, amp=0.001), _tone(10.0)]), SR)
+        (w / "生成").mkdir(parents=True)
+        (w / "生成" / "名字處理計畫.json").write_text(json.dumps({"生成": [], "消音": [], "要人處理": []}), encoding="utf-8")
+        (w / "覆核").mkdir()
+        (w / "覆核" / "覆核決定.json").write_text(json.dumps({"局部消音": [
+            {"id": "M001", "start": 15.0, "end": 17.0, "方式": "墊底噪", "狀態": "消音"},
+            {"id": "M002", "start": 3.0, "end": 4.0, "方式": "墊底噪", "狀態": "還原"}]}, ensure_ascii=False), encoding="utf-8")
+        s = assemble.render_audio(w, video=video)
+        new, _ = sf.read(str(w / "輸出" / "新聲音軌.wav"))
+        orig, _ = sf.read(str(w / "輸出" / "原聲音軌.wav"))
+        assert abs(len(new) - len(orig)) == 0
+        rms = lambda x: float(np.sqrt(np.mean(x ** 2)))  # noqa: E731
+        assert rms(new[int(15.2 * SR):int(16.8 * SR)]) < rms(orig[int(15.2 * SR):int(16.8 * SR)]) * 0.1
+        assert rms(new[int(3.2 * SR):int(3.8 * SR)]) > rms(orig[int(3.2 * SR):int(3.8 * SR)]) * 0.9   # 還原的不動
+        assert s["局部消音"] == 1
+        recs = proclog.load(w)["紀錄"]
+        mute = [r for r in recs if r["類型"] == "局部消音"]
+        assert len(mute) == 1 and mute[0]["覆核項目"] == ["局部消音:M001"]
+        assert not proclog.load(w)["未登記的變動"]
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0

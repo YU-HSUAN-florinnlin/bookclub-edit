@@ -40,6 +40,8 @@ FONT_CANDIDATES = ["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/
 DEMO_FREEZE_S = 1.0
 BLUR_S = 30.0
 JOIN_FADE_S = 0.01
+from bookclub.assemble import MUTE_KINDS  # noqa: E402  墊底噪的動作（名字消音、局部消音…）
+
 ROOM_UNDER = True   # 生成的聲音底下墊附近原片的環境底噪（生成檔的停頓是數位全靜音，接在原片中間會像突然真空）
 
 
@@ -193,6 +195,11 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Tr
     kept = [e for e in kept if not any(x <= e["start"] and e["end"] <= y for x, y in cuts)]
     for e in kept:
         e["start"], e["end"] = clip_to_cuts(e["start"], e["end"], cuts)
+    # 第 3 步標的局部消音（09-29：標了就要真的消）：刪除段落裡的不用消，跟換聲音重疊時以換聲音為準
+    mutes = [m for m in assemble.local_mutes(dec) if _in(m["start"], m["end"], a, b)]
+    mutes = [{**m, "start": max(m["start"], a), "end": min(m["end"], b)} for m in mutes]
+    kept, w = assemble.add_local_mutes(kept, mutes, cuts)
+    warnings += w
     blur = pick_blur(kept, cuts, a, b)
     return {"範圍": [a, b], "刪除": cuts, "動作": kept, "停格": sorted(freezes, key=lambda f: f["at"]),
             "模糊": blur, "標記": marks, "警告": warnings, "學員聲線": voices}
@@ -253,7 +260,7 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
     spans = [(int((e["start"] - a) * SR), int((e["end"] - a) * SR)) for e in d["動作"]]
     for e, (s, t) in zip(d["動作"], spans):
         s, t = max(0, s), min(len(x), t)
-        if e["類型"] == "名字消音":
+        if e["類型"] in MUTE_KINDS:
             local = [sp for sp in spans if sp != (s, t)]
             new = assemble.room_tone(x, s, t, t - s, SR, avoid=local)
             assemble.splice(y, s, new, SR)
@@ -544,6 +551,8 @@ def label_text(e: dict) -> str:
         return f"AI：{e['學員']} 重念（{e['聲線']}聲）"
     if e["類型"] == "名字整句換掉":
         return "AI：名字整句換掉"
+    if e["類型"] == "局部消音":
+        return "局部消音" + ("（霧化還沒做，先墊底噪）" if e.get("霧化") else "")
     return "AI：名字消音"
 
 
@@ -585,7 +594,7 @@ def build_marks(d: dict, plist: list[dict], precision: dict | None = None) -> li
         row = {"類型": e["類型"], "原片": [e["start"], e["end"]], "成品": [ot(e["start"]), ot(e["end"])],
                "做了什麼": label_text(e).replace("AI：", ""), "id": e.get("id"), "要人聽": bool(e.get("要人聽")),
                "生成秒數": e.get("生成秒數")}
-        if e["類型"] != "名字消音":
+        if e["類型"] not in MUTE_KINDS:
             a_, b_, n = diff_marks(e["text"], e.get("轉回文字"))
             row.update({"餵給模型的文字": e["text"], "送進模型的文字": e["生成用文字"] if e["生成用文字"] != e["text"] else None,
                         "轉回文字": e.get("轉回文字"), "稿子標記": a_, "轉回標記": b_, "不一樣字數": n,
@@ -837,7 +846,7 @@ def measure(d: dict, orig: np.ndarray, placed: np.ndarray) -> dict:
     a = d["範圍"][0]
     res = {}
     for e in d["動作"]:
-        if e["類型"] == "名字消音":
+        if e["類型"] in MUTE_KINDS:
             continue
         s, t = int((e["start"] - a) * SR), int((e["end"] - a) * SR)
         o1, o2 = onset(orig[s:t]), onset(placed[s:t])
@@ -973,7 +982,7 @@ def _placed_track(workdir: Path, d: dict, orig: np.ndarray) -> np.ndarray:
     a = d["範圍"][0]
     y = orig.copy()
     for e in d["動作"]:
-        if e["類型"] == "名字消音":
+        if e["類型"] in MUTE_KINDS:
             continue
         s, t = int((e["start"] - a) * SR), int((e["end"] - a) * SR)
         s, t = max(0, s), min(len(y), t)

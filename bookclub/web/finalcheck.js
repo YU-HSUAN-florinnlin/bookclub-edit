@@ -9,7 +9,7 @@
  * 資料：GET /api/final；存檔：/api/final/*（bookclub/finalcheck.py）。依賴 app.js 的 apiGet／apiPost／esc／contentEl。 */
 
 const FC_TYPE = {
-  "學員重念": "stu", "名字整句換掉": "name", "名字消音": "name", "換聲音": "name", "消音": "name",
+  "學員重念": "stu", "名字整句換掉": "name", "名字消音": "name", "換聲音": "name", "消音": "name", "局部消音": "cut",
   "刪除": "cut", "停格": "frz", "模糊示範": "blur", "重疊": "ov", "名字要人處理": "name",
 };
 
