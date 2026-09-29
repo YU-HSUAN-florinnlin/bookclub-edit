@@ -541,7 +541,7 @@ def merge_turn(workdir: str | Path, tid: str) -> dict:
 
 
 def split_turn(workdir: str | Path, tid: str, at_char: int) -> dict:
-    """`POST /api/turns/split`：在校對稿第 at_char 個字切成兩段（時間照句子邊界分；後段先沿用原本的說話者，換人在 ① 改）。"""
+    """`POST /api/turns/split`：在校對稿第 at_char 個字切成兩段（時間照句子邊界分；後段先沿用原本的說話者，換人在 ② 改）。"""
     workdir = Path(workdir)
     with _lock:
         data = wd.read_json(turns_path(workdir))

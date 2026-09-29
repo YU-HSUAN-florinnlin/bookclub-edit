@@ -5,7 +5,7 @@
  *   → 上半部左欄：影片、時間列、整支時間軸（老師灰、學員綠、冥想導讀淡藍；名字、重疊、刪除標記）、圖例
  *     上半部右欄：「目前這一筆」卡片（內容、藍底建議＋原因、通過／改做法／上一筆／下一筆）
  *   → 下半部：篩選列＋一行一筆的清單。
- * 一進來先做「開始前 3 件事」（學員是誰、誰保留原聲、建議刪除段落），做完按「開始逐筆看」才進清單。
+ * 一進來先做「開始前 3 件事」（建議刪除段落、學員是誰、誰保留原聲），做完按「開始逐筆看」才進清單。
  * 播放完全由人控制；影片播到下一筆的起點時，右欄自動換過去（焦點在文字框時不換）。
  * 「＋新增修改」面板（09-29）：選類型、起點終點（打時間／用目前播放位置／±0.1 秒）、試聽，按新增後後端對齊時間，
  *   畫面顯示「你標的 → 對齊後」；已經有的項目按「改時間」用同一個面板。
@@ -27,7 +27,7 @@ const rvIsName = (t) => t === "名字" || t === "學員名字";
 const RV_STU_SHADES = ["#3f8f5a", "#6aae7f", "#2d6b43", "#8cc49d", "#4f9d6b", "#1f5434"];
 
 const rv = {
-  data: null, video: null, cur: null, filter: "全部", open: false, prepOpen: false, prepTab: "學員",
+  data: null, video: null, cur: null, filter: "全部", open: false, prepOpen: false, prepTab: "刪除",
   lastT: 0, hold: null, lastActivity: Date.now(), timeTimer: null, splitOpen: null, stopAt: null,
   ed: { open: false, kind: "刪除段落", id: null, a: null, b: null, busy: false, result: null },
 };
@@ -802,7 +802,7 @@ function rvMarkListRow(scroll) {
 // 開始前 3 件事
 // ---------------------------------------------------------------------------
 
-const RV_PREP = [["學員", "① 學員是誰"], ["保留原聲", "② 誰保留原聲"], ["刪除", "③ 建議刪除段落"]];
+const RV_PREP = [["刪除", "① 建議刪除段落"], ["學員", "② 學員是誰"], ["保留原聲", "③ 誰保留原聲"]];   // 09-29 宇軒：刪除先做，學員是誰才看得出誰只在要刪的段落裡
 
 function rvRenderPrepSide() {
   const p = rv.data["開始前確認"];
@@ -891,7 +891,7 @@ function rvPrepPeopleHtml() {
         <button class="ghost small rv-splitopen" data-person="${esc(n)}" title="一位其實是兩個人、或有幾段其實是老師">拆開／有幾段其實是老師</button>
       </div></details>${split}</li>`;
   }).join("") + (cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只在要刪的段落裡講話（${cutOnly.length} 位：${esc(cutOnly.map(([n]) => n).join("、"))}），不用判斷</summary>
-      <p class="rv-meta">例如結尾跟老師說再見。這幾段會整段刪掉；如果在「③ 建議刪除段落」改成不刪，他們會回到上面。</p>
+      <p class="rv-meta">例如結尾跟老師說再見。這幾段會整段刪掉；如果在「① 建議刪除段落」改成不刪，他們會回到上面。</p>
       <div class="ctl">${cutOnly.map(([n]) => `<button class="ghost small rv-sample" data-person="${esc(n)}">試聽 ${esc(n)}</button>`).join("")}</div></details></li>` : "");
   const chosen = [...new Set(people.map(([, p]) => p["本名"]).filter(Boolean))];
   const right = chosen.length ? chosen.map((r) => {

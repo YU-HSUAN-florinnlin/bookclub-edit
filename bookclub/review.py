@@ -376,9 +376,9 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     def skip_reason(a: float, b: float) -> str | None:
         return "落在確認刪除的段落裡" if _in_ranges(a, b, cut_ranges) else None
 
-    # 09-29 宇軒：只在結尾道別這類要刪的段落裡講話的學員，不用判斷是誰（建議刪除還沒選「不刪」的也算）
+    # 09-29 宇軒：只在確認刪除的段落（結尾道別等）裡講話的學員，不用判斷是誰（① 建議刪除段落選了「刪除」才算）
     will_cut = cut_ranges + [(sg["start"], sg["end"]) for sg in suggestions
-                             if dec["刪除建議"].get(sg["id"], {}).get("決定") != "不刪"]
+                             if dec["刪除建議"].get(sg["id"], {}).get("決定") == "刪除"]
     for name, p in people.items():
         segs = [t for t in turns if t["說話者"] == name]
         p["都會刪掉"] = bool(segs) and all(_in_ranges(t["start"], t["end"], will_cut) for t in segs)
