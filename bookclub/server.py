@@ -1026,6 +1026,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, _turns.set_person_code(server.workdir, str(body["學員"]), body.get("代號")))
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
+        elif path == "/api/people/decide":   # 09-29：名冊上沒有的名字怎麼處理（第 1 步人名清單）
+            from bookclub import personnames
+
+            self._send_json(200, personnames.decide(server.workdir, str(body["名字"]), str(body["做法"]), body.get("代號")))
         elif path.startswith("/api/review/"):
             from bookclub import review as rv
 

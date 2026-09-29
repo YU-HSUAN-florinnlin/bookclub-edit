@@ -67,7 +67,11 @@ def find(workdir: str | Path, force: bool = False) -> dict:
     kept = kept_students(review.load_decisions(workdir))
     tdata = turns_mod.page_data(workdir)
     owner0 = sentence_owner(tdata.get("段落", []), kept) if not tdata.get("尚未準備") else {}
-    sig = hashlib.sha1(repr(sorted(owner0.items())).encode()).hexdigest()[:12]   # 段落改了（例如改成老師）也要重算
+    from bookclub.config import data_dir
+
+    rf = data_dir() / "名冊.csv"
+    roster_mtime = rf.stat().st_mtime if rf.is_file() else 0   # 名冊加了名字（第 3 步人名清單）也要重算
+    sig = hashlib.sha1(repr((sorted(owner0.items()), roster_mtime)).encode()).hexdigest()[:12]   # 段落改了（例如改成老師）也要重算
     cached = wd.read_json(cands_path(workdir), default=None)
     if cached is not None and cached.get("保留原聲學員") == kept and cached.get("段落指紋") == sig and not force:
         return cached

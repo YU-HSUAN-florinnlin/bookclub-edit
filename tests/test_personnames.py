@@ -79,6 +79,53 @@ def test_find_people_with_fake_claude_and_called_names():
     assert personnames.find_people(w, call=lambda p, m: 1 / 0, log=lambda m: None)["統計"]["名字數"] == 3
 
 
+def test_unlisted_decide_adds_to_roster_and_rescans():
+    import shutil
+
+    from bookclub import names
+    from bookclub import turns as turns_mod
+    from bookclub import workdir as wd
+
+    root = Path(tempfile.mkdtemp()) / "base"
+    fake_workdir.make(root)
+    w = root / "工作區"
+    sents = json.loads((w / "說話者判斷.json").read_text(encoding="utf-8"))["sentences"]
+    # 名冊只有小美、阿明；逐字稿裡老師提到的「Tom」對到阿明。這裡假裝 Claude 找到一個名冊上沒有的「阿強」（出現在老師的句子）
+    i = next(k for k, s in enumerate(sents) if s.get("label") == "老師")
+    sents[i]["text"] = "阿強你要不要說說看"
+    words = json.loads((w / "transcript" / "merged.json").read_text(encoding="utf-8"))
+    for x in words["words"]:
+        if sents[i]["start"] - 0.05 <= x["start"] and x["end"] <= sents[i]["end"] + 0.05:
+            x["word"] = ""
+    ws = [x for x in words["words"] if sents[i]["start"] - 0.05 <= x["start"] and x["end"] <= sents[i]["end"] + 0.05]
+    if ws:
+        ws[0]["word"] = "阿強你要不要說說看"
+    (w / "transcript" / "merged.json").write_text(json.dumps(words, ensure_ascii=False), encoding="utf-8")
+    sp = json.loads((w / "說話者判斷.json").read_text(encoding="utf-8"))
+    sp["sentences"] = sents
+    (w / "說話者判斷.json").write_text(json.dumps(sp, ensure_ascii=False), encoding="utf-8")
+    roster_backup = (_DATA / "名冊.csv").read_text(encoding="utf-8")
+    try:
+        personnames.find_people(w, call=lambda p, m: json.dumps({"人名": [
+            {"名字": "阿強", "是誰": "學員", "行號": [i]}, {"名字": "某作者", "是誰": "書中人物或作者", "行號": [0]}]},
+            ensure_ascii=False), log=lambda m: None)
+        un = personnames.unlisted(w)
+        assert [(u["名字"], u["做法"]) for u in un] == [("阿強", None), ("某作者", "不用處理")]
+        n0 = len(wd.read_json(wd.names_path(w))["candidates"])
+        res = personnames.decide(w, "阿強", "換成代號", "Kevin")
+        assert res["加進名冊"] and any(r["寫法"] == "阿強" and r["代號"] == "Kevin" for r in names.load_roster(_DATA / "名冊.csv"))
+        # 老師那句「阿強你要不要說說看」補找到了（假資料的名字候選是手寫的，其他名冊名字也可能一起補到）
+        new = wd.read_json(wd.names_path(w))["candidates"][n0:]
+        assert res["補找到的老師名字"] == len(new) and any(c["代號"] == "Kevin" and c["補找"] for c in new), res
+        assert personnames.unlisted(w)[0]["做法"] == "換成代號" and personnames.unlisted(w)[0]["已決定"]
+        # 名冊上沒有的名字在右欄選代號：一樣加進名冊
+        r = turns_mod.set_name_code(w, "阿華", "Iris")
+        assert any(x["寫法"] == "阿華" for x in names.load_roster(_DATA / "名冊.csv")) and "補找到的老師名字" in r
+    finally:
+        (_DATA / "名冊.csv").write_text(roster_backup, encoding="utf-8")
+        shutil.rmtree(root.parent, ignore_errors=True)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

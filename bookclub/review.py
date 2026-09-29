@@ -464,7 +464,8 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "色帶": bands,
         "學員": people,
         "代號選項": tdata.get("代號選項", []),
-        "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號")},   # 09-29「學員是誰」兩欄
+        "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號", "這一集的名字")},   # 09-29「學員是誰」兩欄
+        "名冊上沒有的名字": _unlisted_names(workdir),
         "項目": items,
         "已自動跳過的重疊": skipped,
         "刪除建議": [{**sg, "決定": dec["刪除建議"].get(sg["id"], {}).get("決定")} for sg in suggestions],
@@ -474,6 +475,16 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                  "消音": MUTE_WAYS, "聲音": VOICE_CHOICES},
         "進度": progress(items, dec, duration),
     }
+
+
+def _unlisted_names(workdir: Path) -> list[dict]:
+    from bookclub import personnames
+
+    try:
+        return personnames.unlisted(workdir)
+    except Exception as exc:  # noqa: BLE001 — 人名清單壞掉不要擋住工作台
+        print(f"⚠️ 人名清單讀不到：{exc}")
+        return []
 
 
 def nameplan_whole() -> str:

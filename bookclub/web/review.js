@@ -860,8 +860,13 @@ function rvPrepPeopleHtml() {
   const nameCode = tp["本名代號"] || {};
   const left = people.map(([n, p]) => {
     const others = people.filter(([m]) => m !== n).map(([m]) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    // 09-29：這一集被叫到的名字（第 1 步人名清單，依次數）排最前面；名冊上其他人放後面；最後是老師
+    const called = tp["這一集的名字"] || [];
+    const calledSet = new Set(called.map((c) => c["名字"]));
+    const opt = (r, label) => `<option value="${esc(r)}" ${p["本名"] === r ? "selected" : ""}>${esc(label || r)}</option>`;
     const realOpts = ['<option value="">（還沒指定）</option>']
-      .concat(reals.map((r) => `<option value="${esc(r)}" ${p["本名"] === r ? "selected" : ""}>${esc(r)}</option>`))
+      .concat(called.length ? [`<optgroup label="這一集被叫到的名字">${called.map((c) => opt(c["名字"], `${c["名字"]}（${c["次數"]} 次${c["名冊上有"] ? "" : "・名冊上沒有"}）`)).join("")}</optgroup>`] : [])
+      .concat([`<optgroup label="${called.length ? "名冊上其他人" : "名冊"}">${reals.filter((r) => !calledSet.has(r)).map((r) => opt(r)).join("")}</optgroup>`])
       .concat([`<option value="${esc(teacher)}">${esc(teacher)}（這位其實是老師）</option>`]).join("");
     const segs = rvSegsOf(n);
     const split = rv.splitOpen === n ? `<div class="rv-splitbox">
@@ -887,14 +892,33 @@ function rvPrepPeopleHtml() {
   const right = chosen.length ? chosen.map((r) => {
     const cur = nameCode[r] || rosterCode[r] || "";
     const who = people.filter(([, p]) => p["本名"] === r).map(([n]) => n).join("、");
-    const opts = ['<option value="">（還沒指定）</option>'].concat(codes.map((c) => `<option ${cur === c ? "selected" : ""}>${esc(c)}</option>`)).join("");
-    return `<li class="rv-person"><div class="nm"><b>${esc(r)}</b><span class="rv-meta">${esc(who)}</span></div>
+    const opts = ['<option value="">（還沒指定）</option>'].concat(codes.map((c) => `<option ${cur === c ? "selected" : ""}>${esc(c)}</option>`))
+      .concat(cur && !codes.includes(cur) ? [`<option selected>${esc(cur)}</option>`] : [])
+      .concat(['<option value="__new">新的代號…</option>']).join("");
+    const notInRoster = !(r in rosterCode);
+    return `<li class="rv-person"><div class="nm"><b>${esc(r)}</b><span class="rv-meta">${esc(who)}${notInRoster ? "・名冊上沒有，選了代號會加進名冊" : ""}</span></div>
       <div class="ctl"><label>英文代號 <select class="rv-namecode" data-real="${esc(r)}">${opts}</select></label>
       ${rosterCode[r] && cur !== rosterCode[r] ? `<span class="rv-meta">名冊上是 ${esc(rosterCode[r])}</span>` : ""}</div></li>`;
   }).join("") : `<li class="rv-meta">左邊選了本名之後，這裡會列出來。</li>`;
-  return `<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名；聲音其實是老師的，選「${esc(teacher)}」。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的）。</p>
+  // 09-29：這一集提到、名冊上沒有的名字（家人、朋友、沒登記的學員⋯⋯）也要決定怎麼處理
+  const un = rv.data["名冊上沒有的名字"] || [];
+  const hows = ["換成代號", "不是名字", "不用處理"];
+  const unRows = un.map((u) => {
+    const codeOpts = ['<option value="">選代號</option>'].concat(codes.map((c) => `<option ${u["代號"] === c ? "selected" : ""}>${esc(c)}</option>`))
+      .concat(['<option value="__new">新的代號…</option>']).join("");
+    return `<li class="rv-person"><div class="nm"><b>${esc(u["名字"])}</b><span class="rv-meta">${esc(u["是誰"])}・${u["次數"]} 次（老師 ${u["老師說"]}、學員 ${u["學員說"]}）${u["其他寫法"].length ? "・也寫成 " + esc(u["其他寫法"].join("、")) : ""}</span></div>
+      <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
+        ${hows.map((h) => `<label class="rv-check"><input type="radio" name="un-${esc(u.id)}" class="rv-unhow" data-name="${esc(u["名字"])}" value="${h}" ${u["做法"] === h ? "checked" : ""}> ${h}</label>`).join("")}
+        <select class="rv-uncode" data-name="${esc(u["名字"])}" ${u["做法"] === "換成代號" ? "" : "hidden"}>${codeOpts}</select>
+        ${u["已決定"] ? "" : u["做法"] ? '<span class="rv-meta">（建議，還沒確認）</span>' : '<span class="rv-warnline">還沒決定</span>'}</div>
+      ${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
+  }).join("");
+  const unBlock = un.length ? `<h4 class="rv-unhead">這一集提到、名冊上沒有的名字（${un.length} 個，${un.filter((u) => !u["做法"]).length} 個還沒決定）</h4>
+    <p class="rv-meta">第 1 步請 Claude 讀整支逐字稿找出來的。學員本人的名字，在上面左欄選本名就好；家人、朋友、沒登記的人選「換成代號」（會加進名冊、自動補找老師提到的地方）；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
+    <ul class="rv-people">${unRows}</ul>` : "";
+  return `<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的）。</p>
     <div class="rv-people2"><div><h4>聲紋分出來的人</h4><ul class="rv-people">${left}</ul></div>
-      <div><h4>本名 → 這支影片的英文代號</h4><ul class="rv-people">${right}</ul></div></div>`;
+      <div><h4>本名 → 這支影片的英文代號</h4><ul class="rv-people">${right}</ul></div></div>${unBlock}`;
 }
 
 function rvPrepVoiceHtml() {
@@ -934,8 +958,30 @@ function rvBindPrep(root) {
     if (res["補找到的老師名字"]) alert(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
     await reload();
   }));
+  const askCode = (el) => {   // 「新的代號…」：自己打一個英文代號
+    if (el.value !== "__new") return el.value || null;
+    const v = (prompt("輸入新的英文代號（例如 Grace）") || "").trim();
+    if (!v) { el.value = ""; return undefined; }
+    return v;
+  };
   root.querySelectorAll(".rv-namecode").forEach((el) => el.addEventListener("change", async () => {
-    await apiPost("/api/turns/namecode", { "本名": el.dataset.real, "代號": el.value || null }); await reload();
+    const code = askCode(el);
+    if (code === undefined) return;
+    const res = await apiPost("/api/turns/namecode", { "本名": el.dataset.real, "代號": code });
+    if (res["補找到的老師名字"]) alert(`加進名冊了，補找到 ${res["補找到的老師名字"]} 處老師提到這個名字，已經加進清單。`);
+    await reload();
+  }));
+  root.querySelectorAll(".rv-unhow").forEach((el) => el.addEventListener("change", async () => {
+    const sel = root.querySelector(`.rv-uncode[data-name="${CSS.escape(el.dataset.name)}"]`);
+    if (el.value === "換成代號") { if (sel) sel.hidden = false; return; }   // 選了代號才存
+    await apiPost("/api/people/decide", { "名字": el.dataset.name, "做法": el.value }); await reload();
+  }));
+  root.querySelectorAll(".rv-uncode").forEach((el) => el.addEventListener("change", async () => {
+    const code = askCode(el);
+    if (!code) return;
+    const res = await apiPost("/api/people/decide", { "名字": el.dataset.name, "做法": "換成代號", "代號": code });
+    if (res["補找到的老師名字"]) alert(`加進名冊了，補找到 ${res["補找到的老師名字"]} 處老師提到這個名字，已經加進清單。`);
+    await reload();
   }));
   root.querySelectorAll(".rv-code").forEach((el) => el.addEventListener("change", async () => {
     await apiPost("/api/turns/person", { "學員": el.dataset.person, "代號": el.value || null }); await reload();

@@ -541,6 +541,7 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .rv-people2 h4 { margin: 8px 0 0; font-size: 15px; color: var(--rv-muted, #666); font-weight: 600; }
 .rv-people2 > div + div { border-left: 1px solid var(--rv-line); padding-left: 24px; }
 .rv-more-ctl { margin-top: 6px; font-size: 14px; }
+.rv-unhead { margin: 22px 0 4px; font-size: 15px; }
 .rv-more-ctl summary { cursor: pointer; color: var(--rv-muted, #666); }
 .rv-more-ctl .ctl { margin-top: 6px; }
 @media (max-width: 760px) { .rv-people2 { grid-template-columns: 1fr; } .rv-people2 > div + div { border-left: 0; padding-left: 0; } }

@@ -150,7 +150,12 @@ def find_people(workdir: str | Path, *, model: str | None = None, log=print, for
 def called_names(workdir: str | Path) -> list[dict]:
     """第 3 步「學員是誰」本名選單用：這一集被叫到的名字（學員、不確定、其他人），依次數排序。
     名冊上有的用名冊本名（同一人合併次數）。"""
+    from bookclub import names
+    from bookclub.config import data_dir
+
     data = wd.read_json(people_path(Path(workdir)), default=None) or {}
+    rf = data_dir() / "名冊.csv"
+    match_roster(data.get("人名", []), names.load_roster(rf) if rf.is_file() else [])   # 對照最新的名冊（第 3 步可能剛加過）
     merged: dict[str, dict] = {}
     for p in data.get("人名", []):
         if p["是誰"] in ("老師本人", "書中人物或作者"):
@@ -159,3 +164,95 @@ def called_names(workdir: str | Path) -> list[dict]:
         m = merged.setdefault(key, {"名字": key, "次數": 0, "名冊上有": bool(p.get("名冊本名")), "id": p["id"]})
         m["次數"] += p["次數"]
     return sorted(merged.values(), key=lambda x: -x["次數"])
+
+
+# ---------- 第 3 步：名冊上沒有的名字 ----------
+
+DECISIONS_FILE = "人名決定.json"          # 校對/人名決定.json：{名字: {做法, 代號, 更新時間}}
+HOWS = ("換成代號", "不是名字", "不用處理")   # 不用處理：書中人物、公眾人物這類不用去識別化的
+
+
+def decisions_path(workdir: Path) -> Path:
+    return Path(workdir) / "校對" / DECISIONS_FILE
+
+
+def add_to_roster(name: str, alts: list[str], code: str) -> bool:
+    """名冊上沒有的名字加進 `~/讀書會剪輯資料/名冊.csv`（中文名、其他寫法、英文代號）。已經有這個名字就不重寫。"""
+    import csv
+
+    from bookclub import names
+    from bookclub.config import data_dir
+
+    path = data_dir() / "名冊.csv"
+    if any(r["寫法"] == name for r in names.load_roster(path)):
+        return False
+    new_file = not path.exists()
+    if not new_file:
+        with open(path, "rb") as f:
+            tail = f.read()[-1:]
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        if not new_file and tail not in (b"\n", b""):
+            f.write("\n")
+        w = csv.writer(f)
+        if new_file:
+            w.writerow(["中文名", "其他寫法", "英文代號", "聲線", "性別"])
+        w.writerow([name, "、".join(a for a in alts if a != name), code, "", ""])
+    return True
+
+
+def rescan_names(workdir: Path) -> int:
+    """名冊加了新名字之後，在老師說的句子裡補找（加在名字候選最後，舊編號不變）；保留原聲學員那邊下次打開自動重算。"""
+    from bookclub import names
+    from bookclub import turns as turns_mod
+
+    speakers = wd.read_json(wd.speakers_path(workdir), default={}) or {}
+    tdata = turns_mod.page_data(workdir)
+    teacher_ids = {sid for t in tdata.get("段落", []) if t.get("說話者") == "老師" for sid in t.get("句子", [])}
+    teacher_ids |= {s["id"] for s in speakers.get("sentences", []) if s.get("label") == "老師"}
+    return names.append_candidates(workdir, sorted(teacher_ids))
+
+
+def unlisted(workdir: str | Path) -> list[dict]:
+    """第 3 步「這一集提到、名冊上沒有的名字」：名冊上沒有、又不是老師本人的每個名字＋人的決定。"""
+    workdir = Path(workdir)
+    data = wd.read_json(people_path(workdir), default=None) or {}
+    dec = wd.read_json(decisions_path(workdir), default={}) or {}
+    out = []
+    for p in data.get("人名", []):
+        if p.get("名冊本名") or p["是誰"] == "老師本人":
+            continue
+        d = dec.get(p["名字"], {})
+        default = "不用處理" if p["是誰"] == "書中人物或作者" else None
+        out.append({"id": p["id"], "名字": p["名字"], "其他寫法": p["其他寫法"], "是誰": p["是誰"], "說明": p.get("說明", ""),
+                    "次數": p["次數"], "老師說": p["老師說"], "學員說": p["學員說"], "第一次": p["第一次"],
+                    "做法": d.get("做法") or default, "代號": d.get("代號"), "已決定": bool(d.get("做法"))})
+    return out
+
+
+def decide(workdir: str | Path, name: str, how: str, code: str | None = None) -> dict:
+    """`POST /api/people/decide`：名冊上沒有的名字怎麼處理。換成代號＝加進名冊＋補找老師提到的地方。"""
+    from datetime import datetime
+
+    workdir = Path(workdir)
+    if how not in HOWS:
+        raise ValueError(f"只能選：{'、'.join(HOWS)}")
+    data = wd.read_json(people_path(workdir), default=None) or {}
+    p = next((x for x in data.get("人名", []) if x["名字"] == name), None)
+    if p is None:
+        raise KeyError(f"人名清單裡沒有：{name}")
+    added = rescanned = 0
+    if how == "換成代號":
+        code = (code or "").strip()
+        if not code:
+            raise ValueError("換成代號要選一個英文代號")
+        added = int(add_to_roster(name, p["其他寫法"], code))
+        rescanned = rescan_names(workdir)
+    elif how == "不是名字":
+        from bookclub.server import _append_exclusion
+
+        for w in [name, *p["其他寫法"]]:
+            _append_exclusion(w, "人名清單：宇軒判斷不是名字")
+    dec = wd.read_json(decisions_path(workdir), default={}) or {}
+    dec[name] = {"做法": how, "代號": code if how == "換成代號" else None, "更新時間": datetime.now().isoformat(timespec="seconds")}
+    wd.write_json(decisions_path(workdir), dec)
+    return {"ok": True, "名字": name, "做法": how, "加進名冊": bool(added), "補找到的老師名字": rescanned}

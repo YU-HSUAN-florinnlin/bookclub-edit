@@ -460,6 +460,9 @@ def page_data(workdir: str | Path) -> dict:
 
     data["老師名稱"] = load_settings().teacher.name
     data.setdefault("本名代號", {})
+    from bookclub import personnames   # 09-29：這一集被叫到的名字（第 1 步人名清單），本名選單排最前面
+
+    data["這一集的名字"] = personnames.called_names(workdir)
     data["進度"] = turns_progress(data)
     return data
 
@@ -594,6 +597,12 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
             raise KeyError(f"{person} 沒有段落")
         return {**reassign_turns(workdir, ids, "老師"), "改成老師": True}
     roster = {r["canonical"]: r["代號"] for r in names.load_roster(data_dir() / "名冊.csv") if r.get("canonical")}
+    # 人名清單裡的寫法對到名冊本名（例如選了逐字稿裡的暱稱）
+    from bookclub import personnames
+
+    for p0 in (wd.read_json(personnames.people_path(workdir), default=None) or {}).get("人名", []):
+        if real and p0.get("名冊本名") and real in (p0["名字"], *p0["其他寫法"]):
+            real = p0["名冊本名"]
     with _lock:
         data = wd.read_json(turns_path(workdir))
         p = data["學員"].setdefault(person, {"秒數": 0.0, "段數": 0, "點名線索": {}})
@@ -605,8 +614,18 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
 
 
 def set_name_code(workdir: str | Path, real: str, code: str | None) -> dict:
-    """`POST /api/turns/namecode`：這個本名在這支影片用哪個英文代號（右欄）；同一個本名的學員 N 一起改。"""
+    """`POST /api/turns/namecode`：這個本名在這支影片用哪個英文代號（右欄）；同一個本名的學員 N 一起改。
+    本名不在名冊上（第 1 步人名清單抓到的）：加進名冊，並補找老師提到這個名字的地方。"""
+    from bookclub import names, personnames
+    from bookclub.config import data_dir
+
     workdir = Path(workdir)
+    added = 0
+    if code and not any(r["canonical"] == real for r in names.load_roster(data_dir() / "名冊.csv")):
+        alts = next((p["其他寫法"] for p in (wd.read_json(personnames.people_path(workdir), default=None) or {}).get("人名", [])
+                     if p["名字"] == real), [])
+        if personnames.add_to_roster(real, alts, code):
+            added = personnames.rescan_names(workdir)
     with _lock:
         data = wd.read_json(turns_path(workdir))
         data.setdefault("本名代號", {})[real] = code or None
@@ -616,7 +635,7 @@ def set_name_code(workdir: str | Path, real: str, code: str | None) -> dict:
                 p["代號"] = code or None
                 n += 1
         wd.write_json(turns_path(workdir), data)
-        return {"ok": True, "本名": real, "代號": code, "改了幾位": n}
+        return {"ok": True, "本名": real, "代號": code, "改了幾位": n, "補找到的老師名字": added}
 
 
 # ---------- 09-26：開始前確認「學員是誰」、漏抓的學員發言 ----------
