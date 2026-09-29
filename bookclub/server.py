@@ -93,8 +93,9 @@ def safe_join(base: Path, relative: str) -> Path:
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi")
 
 
-GROQ_KEY_MISSING = ("這個網頁伺服器讀不到 Groq 金鑰，沒辦法轉文字。金鑰設在 ~/.zshrc 時，要從會讀 ~/.zshrc 的地方啟動："
-                    "雙擊「啟動.command」，或在終端機（zsh）執行 .venv/bin/bookclub serve")
+GROQ_KEY_MISSING = ("這個網頁伺服器讀不到 Groq 金鑰，沒辦法轉文字。macOS：金鑰設在 ~/.zshrc，要雙擊「啟動.command」"
+                    "或在終端機（zsh）執行 .venv/bin/bookclub serve；WSL2：金鑰要寫在 ~/.profile（寫在 ~/.bashrc 讀不到），"
+                    "開新的終端機再啟動")
 
 
 def groq_key_ready() -> bool:

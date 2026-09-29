@@ -37,7 +37,8 @@ description: 啟動讀書會影片隱私處理工具的網頁。觸發時機：�
 2. **確認環境沒問題**：跑 `.venv/bin/bookclub doctor`，必要項目全過才繼續。常見還沒
    處理的項目（這是預期的，不代表壞掉）：
    - Hugging Face 還沒登入 → 照畫面上的三步驟說明處理
-   - GROQ_API_KEY 還沒設定 → 到 `~/.zshrc` 加一行，開新終端機視窗
+   - GROQ_API_KEY 還沒設定 → macOS 加到 `~/.zshrc`；WSL2 加到 `~/.profile`（不是 `~/.bashrc`，工具讀不到），開新終端機視窗
+   - claude 指令找不到（WSL2 常見）→ WSL2 裡另外裝 Claude Code 並登入一次，不然段落分析會失敗
 3. **確認影片路徑**：如果訊息裡沒有明確路徑，詢問影片在哪裡。
 4. **跑分析，再開網頁**：
    ```bash

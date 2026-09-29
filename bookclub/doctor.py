@@ -216,26 +216,38 @@ def check_transformers_version() -> Check:
 # ── 帳號與登入 ───────────────────────────────────────────
 
 
+def key_file() -> str:
+    """Groq 金鑰要寫在哪個檔案（09-29 夥伴 WSL2 實測）：macOS 的 zsh 用 ~/.zshrc；
+    Linux／WSL2 要用 ~/.profile——Ubuntu 的 ~/.bashrc 開頭遇到非互動模式就直接 return，寫在裡面的讀不到。"""
+    return "~/.zshrc" if platform.system() == "Darwin" else "~/.profile"
+
+
+def _mentions_key(name: str) -> bool:
+    p = Path.home() / name
+    try:
+        return p.is_file() and "GROQ_API_KEY" in p.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+
+
 def check_groq_key() -> Check:
     if os.environ.get("GROQ_API_KEY"):
         return Check("GROQ_API_KEY", True, "目前終端機工作階段已載入", required=False)
 
-    zshrc = Path.home() / ".zshrc"
-    mentioned = False
-    if zshrc.is_file():
-        try:
-            mentioned = "GROQ_API_KEY" in zshrc.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            mentioned = False
-
-    if mentioned:
+    target = key_file()
+    if _mentions_key(target.removeprefix("~/")):
         return Check(
-            "GROQ_API_KEY", False, "~/.zshrc 裡有設定，但這個終端機工作階段還沒載入",
-            "開一個新的終端機視窗，或執行「source ~/.zshrc」後再試", required=False,
+            "GROQ_API_KEY", False, f"{target} 裡有設定，但這個終端機工作階段還沒載入",
+            f"開一個新的終端機視窗，或執行「source {target}」後再試", required=False,
+        )
+    if platform.system() != "Darwin" and _mentions_key(".bashrc"):
+        return Check(
+            "GROQ_API_KEY", False, "寫在 ~/.bashrc 裡，工具讀不到（Ubuntu 的 .bashrc 在非互動模式會提早結束）",
+            "把 export GROQ_API_KEY=… 那一行搬到 ~/.profile，開新終端機視窗", required=False,
         )
     return Check(
         "GROQ_API_KEY", False, "還沒設定",
-        "到 ~/.zshrc 加一行 export GROQ_API_KEY=你的金鑰（到 https://console.groq.com 申請）",
+        f"到 {target} 加一行 export GROQ_API_KEY=你的金鑰（到 https://console.groq.com 申請），開新終端機視窗",
         required=False,
     )
 
@@ -263,7 +275,12 @@ def check_claude_cli() -> Check:
     found = shutil.which("claude") or (str(local_bin) if local_bin.exists() else None)
     if found:
         return Check("claude 指令", True, found, required=False)
-    return Check("claude 指令", False, "找不到", "確認 Claude Code 已安裝、且 ~/.local/bin 有在 PATH 裡", required=False)
+    fix = "確認 Claude Code 已安裝、且 ~/.local/bin 有在 PATH 裡"
+    if platform.system() == "Linux":
+        fix = ("WSL2 裡要另外裝一份 Claude Code（Windows 那份在 WSL2 用不到）："
+               "curl -fsSL https://claude.ai/install.sh | bash，裝完執行 claude 登入一次")
+    return Check("claude 指令", False, "找不到（段落分析、建議刪除段落、人名清單會失敗，第 3 步沒有學員段落）",
+                 fix, required=False)
 
 
 def check_claude_responds(timeout_s: int = 30) -> Check:

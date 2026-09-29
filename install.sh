@@ -269,7 +269,33 @@ PYBIN="$VENV_DIR/bin/python"
 # ── [4/11] 安裝 Python 套件 ───────────────────────────────────
 step "安裝 Python 套件（第一次安裝耗時較久，請耐心等候）"
 
+# Linux 沒有 NVIDIA 顯示卡（例如 WSL2＋AMD 顯示卡）：先從 PyTorch 的 CPU 專用來源裝 torch，
+# 不然預設會裝 CUDA 版，多下載約 2.8GB 用不到的 nvidia-* 套件（09-29 夥伴 WSL2 實測）
+CPU_TORCH=0
+if [ "$OS_KIND" = "Linux" ] && ! command -v nvidia-smi >/dev/null 2>&1; then
+  CPU_TORCH=1
+  TORCH_NOW="$("$PYBIN" -c 'import torch; print(torch.__version__)' 2>/dev/null || true)"
+  case "$TORCH_NOW" in
+    *+cpu) echo "torch 已經是只用處理器的版本（$TORCH_NOW），沿用" ;;
+    *)
+      echo "沒有偵測到 NVIDIA 顯示卡，torch 裝只用處理器的版本（比 CUDA 版少下載約 2.8GB）"
+      uv pip install --python "$PYBIN" --reinstall --index-url https://download.pytorch.org/whl/cpu \
+        "torch==2.2.2" "torchaudio==2.2.2"
+      ;;
+  esac
+fi
+
 uv pip install --python "$PYBIN" -r requirements.txt -c constraints.txt --build-constraint build-constraints.txt
+
+if [ "$CPU_TORCH" = "1" ]; then
+  # 之前裝過 CUDA 版留下的 nvidia-* 套件：只用處理器時用不到，移除省空間
+  NV_PKGS="$(uv pip list --python "$PYBIN" 2>/dev/null | awk '/^nvidia-/ {print $1}' | tr '\n' ' ')"
+  if [ -n "$NV_PKGS" ]; then
+    echo "移除用不到的 NVIDIA 套件：$NV_PKGS"
+    # shellcheck disable=SC2086
+    uv pip uninstall --python "$PYBIN" $NV_PKGS
+  fi
+fi
 
 # ── [5/11] 逐字對位工具（不裝用不到的相依）───────────────────
 step "安裝逐字對位工具（qwen-asr）"

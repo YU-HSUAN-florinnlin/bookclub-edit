@@ -268,6 +268,11 @@ def _detect_conda() -> DetectedItem:
             Path.home() / "miniforge3" / "bin" / "conda",
             Path.home() / "miniconda3" / "bin" / "conda",
             Path.home() / "anaconda3" / "bin" / "conda",
+            # Linux 常把 conda 裝在 /opt 給多個使用者共用（09-29 夥伴 WSL2 實測：/opt/miniforge3 沒被認出來）
+            Path("/opt/miniforge3/bin/conda"),
+            Path("/opt/miniconda3/bin/conda"),
+            Path("/opt/anaconda3/bin/conda"),
+            Path("/opt/conda/bin/conda"),
         ):
             if cand.is_file():
                 conda_exe = str(cand)
