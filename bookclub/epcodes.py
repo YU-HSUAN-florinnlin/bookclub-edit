@@ -33,9 +33,14 @@ def episode_codes(workdir: str | Path) -> dict[str, str]:
         if d.get("做法") == "換成代號" and d.get("代號"):
             out[canon.get(name, name)] = d["代號"]
     tdata = wd.read_json(turns_mod.turns_path(workdir), default={}) or {}
+    # 人名清單裡寫成同一個人的（例如「宜君」其他寫法「怡君」）：② 右欄選了其中一個，整組跟著換
+    groups = [{p["名字"], *p["其他寫法"], *([p["名冊本名"]] if p.get("名冊本名") else [])}
+              for p in (wd.read_json(personnames.people_path(workdir), default={}) or {}).get("人名", [])]
     for real, code in (tdata.get("本名代號") or {}).items():
         if code:
-            out[canon.get(real, real)] = code
+            for g in [g for g in groups if real in g] or [{real}]:
+                for n in g | {real}:
+                    out[canon.get(n, n)] = code
     for name, d in (wd.read_json(personnames.decisions_path(workdir), default={}) or {}).items():
         if d.get("做法") == "是上面的學員" and out.get(d.get("同一人")):   # 同一個人：跟著那位的代號走
             out[canon.get(name, name)] = out[d["同一人"]]

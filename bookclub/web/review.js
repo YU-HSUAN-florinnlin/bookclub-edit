@@ -904,7 +904,7 @@ function rvPrepPeopleHtml() {
     const notInRoster = !(r in rosterCode);
     return `<li class="rv-person"><div class="nm"><b>${esc(r)}</b><span class="rv-meta">${esc(who)}${notInRoster ? "・名冊上沒有，選了代號會加進名冊" : ""}</span></div>
       <div class="ctl"><label>英文代號 <select class="rv-namecode" data-real="${esc(r)}">${opts}</select></label>
-      ${rosterCode[r] && cur !== rosterCode[r] ? `<span class="rv-meta">名冊上是 ${esc(rosterCode[r])}</span>` : ""}</div></li>`;
+</div></li>`;
   }).join("") : `<li class="rv-meta">左邊選了本名之後，這裡會列出來。</li>`;
   return `${rvDupHtml()}<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的；只影響這一集，老師講到他的名字、學員稿子裡的名字都會照這裡換）。</p>
     <div class="rv-people2"><div><h4>聲紋分出來的人</h4><ul class="rv-people">${left}</ul></div>
