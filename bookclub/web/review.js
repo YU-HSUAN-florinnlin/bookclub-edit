@@ -1407,6 +1407,13 @@ function rvRenderSettings() {
     await apiPost("/api/review/overlap", { id: b.dataset.id, "救回": true }); await rvReload();
   }));
   el.querySelectorAll(".rv-voice-all").forEach((b) => b.addEventListener("click", async () => {
+    // 09-30：一鍵生效太危險（保留原聲＝學員原本的聲音留在成品），先確認；取消不變
+    const n = Object.values(rv.data["學員"] || {}).filter((p) => !p["都會刪掉"] && p["聲音"] !== b.dataset.v).length;
+    if (!n) { alert(`每位學員都已經是「${b.dataset.v}」了。`); return; }
+    const msg = b.dataset.v === "保留原聲"
+      ? `會讓 ${n} 位學員保留原聲、不換聲音。\n只有同意保留原聲的學員才可以這樣做。確定嗎？`
+      : `會讓 ${n} 位學員改成重新生成（用匿名聲音重念）。確定嗎？`;
+    if (!confirm(msg)) return;
     await apiPost("/api/review/voice", { "學員": "全部", "聲音": b.dataset.v }); await rvReload();
   }));
   rvApplyReadonly();

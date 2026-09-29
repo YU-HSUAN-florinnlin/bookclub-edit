@@ -114,6 +114,15 @@ def test_no_promises_of_unbuilt_redo():
     assert "0.1.1" not in skill and "總覽選影片" in skill
 
 
+def test_keep_all_voices_needs_confirm():
+    # 09-30：「全部保留原聲」先跳確認視窗（會讓 N 位學員保留原聲、不換聲音），取消不變
+    js = (WEB / "review.js").read_text(encoding="utf-8")
+    block = js[js.index('querySelectorAll(".rv-voice-all")'):]
+    block = block[:block.index("}));")]
+    assert "confirm(" in block and "位學員保留原聲、不換聲音" in block
+    assert block.index("confirm(") < block.index('apiPost("/api/review/voice"')
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
