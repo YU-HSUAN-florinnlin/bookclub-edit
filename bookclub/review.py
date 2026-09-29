@@ -36,7 +36,7 @@ VOICE_CHOICES = ("重新生成", "保留原聲")
 CALM_KINDS = ("冥想引導", "導讀")
 MAX_TIME_STEP_S = 300.0      # 單次累加的覆核時間上限（離開座位不會灌水）
 SNAP_SEARCH_S = 0.5          # 剪點往前後各找多遠的安靜處
-PREP_KEYS = ("學員", "保留原聲", "刪除")   # 開始前 3 件事（09-26 宇軒選 A：先做完才進逐筆清單）
+PREP_KEYS = ("刪除", "學員", "名字", "保留原聲")   # 開始前 4 件事（09-26 宇軒選 A：先做完才進逐筆清單；09-29 加「名字」、刪除移到第一件）
 HANDOVER_S = 1.5             # 重疊離「老師↔學員換人」的地方這麼近，算一來一往的交接
 CUT_SUGGEST_FILE = "刪除建議.json"
 MANUAL_KINDS = ("刪除段落", "局部消音", "學員發言", "名字", "重疊")   # 「新增修改」面板的五種類型
@@ -182,7 +182,7 @@ def _in_ranges(a: float, b: float, ranges: list[tuple[float, float]], pad: float
 
 
 def set_prep(workdir: str | Path, key: str, done: bool) -> dict:
-    """`POST /api/review/prep`：開始前 3 件事（學員／保留原聲／刪除）哪一件做完了。"""
+    """`POST /api/review/prep`：開始前 4 件事（刪除／學員／名字／保留原聲）哪一件做完了。"""
     if key not in PREP_KEYS:
         raise ValueError(f"只能是：{'、'.join(PREP_KEYS)}")
     workdir = Path(workdir)
@@ -473,7 +473,8 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "學員": people,
         "代號選項": tdata.get("代號選項", []),
         "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號", "這一集的名字")},   # 09-29「學員是誰」兩欄
-        "名冊上沒有的名字": _unlisted_names(workdir),
+        "名冊上沒有的名字": _unlisted_names(workdir, {p["本名"] for p in tdata.get("學員", {}).values() if p.get("本名")},
+                                           will_cut),
         "項目": items,
         "已自動跳過的重疊": skipped,
         "刪除建議": [{**sg, "決定": dec["刪除建議"].get(sg["id"], {}).get("決定")} for sg in suggestions],
@@ -485,11 +486,11 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     }
 
 
-def _unlisted_names(workdir: Path) -> list[dict]:
+def _unlisted_names(workdir: Path, chosen: set[str] | None = None, cuts: list | None = None) -> list[dict]:
     from bookclub import personnames
 
     try:
-        return personnames.unlisted(workdir)
+        return personnames.unlisted(workdir, chosen, cuts)
     except Exception as exc:  # noqa: BLE001 — 人名清單壞掉不要擋住工作台
         print(f"⚠️ 人名清單讀不到：{exc}")
         return []

@@ -118,6 +118,13 @@ def test_unlisted_decide_adds_to_roster_and_rescans():
         new = wd.read_json(wd.names_path(w))["candidates"][n0:]
         assert res["補找到的老師名字"] == len(new) and any(c["代號"] == "Kevin" and c["補找"] for c in new), res
         assert personnames.unlisted(w)[0]["做法"] == "換成代號" and personnames.unlisted(w)[0]["已決定"]
+        # 已經在名冊上、再選一個新代號：名冊跟著改（09-29 宇軒：之前這樣按沒反應）
+        res = personnames.decide(w, "阿強", "換成代號", "Kyle")
+        assert not res["加進名冊"] and any(r["寫法"] == "阿強" and r["代號"] == "Kyle" for r in names.load_roster(_DATA / "名冊.csv"))
+        # 「學員是誰」已經選成本名的不列；每次出現都在刪除段落裡的標起來
+        assert [u["名字"] for u in personnames.unlisted(w, chosen={"阿強"})] == ["某作者"]
+        u = next(x for x in personnames.unlisted(w, cuts=[(sents[i]["start"], sents[i]["end"])]) if x["名字"] == "阿強")
+        assert u["都在刪除段落"] and u["刪除段落外次數"] == 0
         # 名冊上沒有的名字在右欄選代號：一樣加進名冊
         r = turns_mod.set_name_code(w, "阿華", "Iris")
         assert any(x["寫法"] == "阿華" for x in names.load_roster(_DATA / "名冊.csv")) and "補找到的老師名字" in r

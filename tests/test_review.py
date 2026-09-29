@@ -221,7 +221,7 @@ def test_replace_real_names():
 def test_prep_and_cut_suggestions_mark_items_not_needed():
     w = _fresh()
     d = review.page_data(w)
-    assert d["開始前確認"] == {"學員": False, "保留原聲": False, "刪除": False}
+    assert d["開始前確認"] == {"刪除": False, "學員": False, "名字": False, "保留原聲": False}
     assert [x["id"] for x in d["刪除建議"]] == ["S1", "S2"]
     review.set_prep(w, "學員", True)
     assert review.load_decisions(w)["開始前確認"]["學員"]

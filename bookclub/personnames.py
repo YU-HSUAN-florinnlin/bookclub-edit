@@ -200,6 +200,36 @@ def add_to_roster(name: str, alts: list[str], code: str) -> bool:
     return True
 
 
+def set_roster_code(name: str, code: str) -> bool:
+    """名冊上這個中文名的英文代號改成 `code`（其他欄位、順序、BOM 照舊）。"""
+    import csv
+    import io
+
+    from bookclub.config import data_dir
+
+    path = data_dir() / "名冊.csv"
+    if not path.is_file():
+        return False
+    raw = path.read_bytes()
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline="")))
+    if not rows:
+        return False
+    fields = list(rows[0].keys())
+    hit = False
+    for r in rows:
+        if (r.get("中文名") or "").strip() == name:
+            r["英文代號"], hit = code, True
+    if not hit:
+        return False
+    buf = io.StringIO(newline="")
+    w = csv.DictWriter(buf, fieldnames=fields, lineterminator="\n")
+    w.writeheader()
+    w.writerows(rows)
+    path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + buf.getvalue().encode("utf-8"))
+    return True
+
+
 def rescan_names(workdir: Path) -> int:
     """名冊加了新名字之後，在老師說的句子裡補找（加在名字候選最後，舊編號不變）；保留原聲學員那邊下次打開自動重算。"""
     from bookclub import names
@@ -212,19 +242,38 @@ def rescan_names(workdir: Path) -> int:
     return names.append_candidates(workdir, sorted(teacher_ids))
 
 
-def unlisted(workdir: str | Path) -> list[dict]:
-    """第 3 步「這一集提到、名冊上沒有的名字」：名冊上沒有、又不是老師本人的每個名字＋人的決定。"""
+def unlisted(workdir: str | Path, chosen: set[str] | None = None,
+             cuts: list[tuple[float, float]] | None = None) -> list[dict]:
+    """第 3 步「這一集提到、名冊上沒有的名字」：名冊上沒有、又不是老師本人的每個名字＋人的決定。
+    09-29 宇軒：`chosen`＝「學員是誰」左欄已經選成本名的（代號在右欄定，這裡不再列）；
+    `cuts`＝確認刪除的段落，每次出現都在裡面的標「都在刪除段落」（收起來、不用處理）。"""
     workdir = Path(workdir)
     data = wd.read_json(people_path(workdir), default=None) or {}
     dec = wd.read_json(decisions_path(workdir), default={}) or {}
+    chosen = chosen or set()
+    cuts = cuts or []
+    times = {}
+    if cuts:
+        speakers = wd.read_json(wd.speakers_path(workdir), default={}) or {}
+        times = {s["id"]: (s["start"], s["end"]) for s in speakers.get("sentences", [])}
+
+    def in_cut(sid: str) -> bool:
+        t = times.get(sid)
+        return bool(t) and any(a - 0.3 <= t[0] and t[1] <= b + 0.3 for a, b in cuts)
+
     out = []
     for p in data.get("人名", []):
         if p.get("名冊本名") or p["是誰"] == "老師本人":
             continue
+        if {p["名字"], *p["其他寫法"]} & chosen:
+            continue
         d = dec.get(p["名字"], {})
         default = "不用處理" if p["是誰"] == "書中人物或作者" else None
+        left = [sid for sid in p.get("句子", []) if not in_cut(sid)]
         out.append({"id": p["id"], "名字": p["名字"], "其他寫法": p["其他寫法"], "是誰": p["是誰"], "說明": p.get("說明", ""),
                     "次數": p["次數"], "老師說": p["老師說"], "學員說": p["學員說"], "第一次": p["第一次"],
+                    "刪除段落外次數": len(left) if p.get("句子") else p["次數"],
+                    "都在刪除段落": bool(cuts) and bool(p.get("句子")) and not left,
                     "做法": d.get("做法") or default, "代號": d.get("代號"), "已決定": bool(d.get("做法"))})
     return out
 
@@ -246,6 +295,8 @@ def decide(workdir: str | Path, name: str, how: str, code: str | None = None) ->
         if not code:
             raise ValueError("換成代號要選一個英文代號")
         added = int(add_to_roster(name, p["其他寫法"], code))
+        if not added:   # 09-29：名冊上已經有（之前選過代號）→ 改成這次選的代號，不然畫面上選不到、看起來沒反應
+            set_roster_code(name, code)
         rescanned = rescan_names(workdir)
     elif how == "不是名字":
         from bookclub.server import _append_exclusion

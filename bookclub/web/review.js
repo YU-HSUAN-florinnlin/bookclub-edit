@@ -85,7 +85,7 @@ function rvWho(name) {
 
 function rvPrepDone() {
   const p = rv.data["開始前確認"] || {};
-  return !!(p["學員"] && p["保留原聲"] && p["刪除"]);
+  return RV_PREP.every(([k]) => p[k]);
 }
 
 // ---------------------------------------------------------------------------
@@ -802,18 +802,18 @@ function rvMarkListRow(scroll) {
 // 開始前 3 件事
 // ---------------------------------------------------------------------------
 
-const RV_PREP = [["刪除", "① 建議刪除段落"], ["學員", "② 學員是誰"], ["保留原聲", "③ 誰保留原聲"]];   // 09-29 宇軒：刪除先做，學員是誰才看得出誰只在要刪的段落裡
+const RV_PREP = [["刪除", "① 建議刪除段落"], ["學員", "② 學員是誰"], ["名字", "③ 名冊上沒有的名字"], ["保留原聲", "④ 誰保留原聲"]];   // 09-29 宇軒：刪除先做，學員是誰才看得出誰只在要刪的段落裡
 
 function rvRenderPrepSide() {
   const p = rv.data["開始前確認"];
   const box = document.getElementById("rv-right");
   box.innerHTML = `<article class="rv-card rv-prepside">
-      <header><span class="rv-chip"><i></i>開始前 3 件事</span></header>
-      <p class="rv-meta">先把整體定下來，逐筆看的時候就不用再想：學員換成誰、誰不用重念、哪些段落整段刪掉。</p>
+      <header><span class="rv-chip"><i></i>開始前 4 件事</span></header>
+      <p class="rv-meta">先把整體定下來，逐筆看的時候就不用再想：哪些段落整段刪掉、學員換成誰、其他人名怎麼處理、誰不用重念。</p>
       <ol class="rv-prepsteps">${RV_PREP.map(([k, label]) => `<li class="${p[k] ? "ok" : ""} ${rv.prepTab === k ? "on" : ""}">
         <button class="linkish" data-tab="${esc(k)}">${esc(label)}</button><span>${p[k] ? "✓ 做完了" : "還沒做"}</span></li>`).join("")}</ol>
       <div class="rv-actions"><button class="primary" id="rv-start" ${rvPrepDone() ? "" : "disabled"}>開始逐筆看</button>
-        ${rvPrepDone() ? "" : `<span class="rv-meta">3 件都做完才能開始</span>`}</div>
+        ${rvPrepDone() ? "" : `<span class="rv-meta">4 件都做完才能開始</span>`}</div>
     </article>`;
   box.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { rv.prepTab = b.dataset.tab; rvRenderPrepSide(); rvRenderPrep(); }));
   document.getElementById("rv-start").addEventListener("click", () => {
@@ -830,6 +830,7 @@ function rvRenderPrep() {
   const done = rv.data["開始前確認"][k];
   let body = "";
   if (k === "學員") body = rvPrepPeopleHtml();
+  else if (k === "名字") body = rvPrepNamesHtml();
   else if (k === "保留原聲") body = rvPrepVoiceHtml();
   else body = rvPrepCutHtml();
   const label = RV_PREP.find((x) => x[0] === k)[1];
@@ -905,25 +906,36 @@ function rvPrepPeopleHtml() {
       <div class="ctl"><label>英文代號 <select class="rv-namecode" data-real="${esc(r)}">${opts}</select></label>
       ${rosterCode[r] && cur !== rosterCode[r] ? `<span class="rv-meta">名冊上是 ${esc(rosterCode[r])}</span>` : ""}</div></li>`;
   }).join("") : `<li class="rv-meta">左邊選了本名之後，這裡會列出來。</li>`;
-  // 09-29：這一集提到、名冊上沒有的名字（家人、朋友、沒登記的學員⋯⋯）也要決定怎麼處理
-  const un = rv.data["名冊上沒有的名字"] || [];
+  return `<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的）。</p>
+    <div class="rv-people2"><div><h4>聲紋分出來的人</h4><ul class="rv-people">${left}</ul></div>
+      <div><h4>本名 → 這支影片的英文代號</h4><ul class="rv-people">${right}</ul></div></div>`;
+}
+
+function rvPrepNamesHtml() {
+  // 09-29 宇軒：從「學員是誰」拆出來。上一步已經選成本名的不列（代號在上一步右欄定）；每次出現都在確認刪除段落裡的收起來
+  const codes = rv.data["代號選項"] || [];
+  const all = rv.data["名冊上沒有的名字"] || [];
+  const un = all.filter((u) => !u["都在刪除段落"]);
+  const cutOnly = all.filter((u) => u["都在刪除段落"]);
   const hows = ["換成代號", "不是名字", "不用處理"];
   const unRows = un.map((u) => {
     const codeOpts = ['<option value="">選代號</option>'].concat(codes.map((c) => `<option ${u["代號"] === c ? "selected" : ""}>${esc(c)}</option>`))
+      .concat(u["代號"] && !codes.includes(u["代號"]) ? [`<option selected>${esc(u["代號"])}</option>`] : [])
       .concat(['<option value="__new">新的代號…</option>']).join("");
-    return `<li class="rv-person"><div class="nm"><b>${esc(u["名字"])}</b><span class="rv-meta">${esc(u["是誰"])}・${u["次數"]} 次（老師 ${u["老師說"]}、學員 ${u["學員說"]}）${u["其他寫法"].length ? "・也寫成 " + esc(u["其他寫法"].join("、")) : ""}</span></div>
+    const cnt = u["刪除段落外次數"] !== u["次數"] ? `${u["刪除段落外次數"]} 次（另 ${u["次數"] - u["刪除段落外次數"]} 次在刪除段落裡）` : `${u["次數"]} 次`;
+    return `<li class="rv-person"><div class="nm"><b>${esc(u["名字"])}</b><span class="rv-meta">${esc(u["是誰"])}・${cnt}（老師 ${u["老師說"]}、學員 ${u["學員說"]}）${u["其他寫法"].length ? "・也寫成 " + esc(u["其他寫法"].join("、")) : ""}</span></div>
       <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
         ${hows.map((h) => `<label class="rv-check"><input type="radio" name="un-${esc(u.id)}" class="rv-unhow" data-name="${esc(u["名字"])}" value="${h}" ${u["做法"] === h ? "checked" : ""}> ${h}</label>`).join("")}
         <select class="rv-uncode" data-name="${esc(u["名字"])}" ${u["做法"] === "換成代號" ? "" : "hidden"}>${codeOpts}</select>
         ${u["已決定"] ? "" : u["做法"] ? '<span class="rv-meta">（建議，還沒確認）</span>' : '<span class="rv-warnline">還沒決定</span>'}</div>
       ${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
   }).join("");
-  const unBlock = un.length ? `<h4 class="rv-unhead">這一集提到、名冊上沒有的名字（${un.length} 個，${un.filter((u) => !u["做法"]).length} 個還沒決定）</h4>
-    <p class="rv-meta">第 1 步請 Claude 讀整支逐字稿找出來的。學員本人的名字，在上面左欄選本名就好；家人、朋友、沒登記的人選「換成代號」（會加進名冊、自動補找老師提到的地方）；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
-    <ul class="rv-people">${unRows}</ul>` : "";
-  return `<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的）。</p>
-    <div class="rv-people2"><div><h4>聲紋分出來的人</h4><ul class="rv-people">${left}</ul></div>
-      <div><h4>本名 → 這支影片的英文代號</h4><ul class="rv-people">${right}</ul></div></div>${unBlock}`;
+  const cutBlock = cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只出現在確認刪除的段落裡（${cutOnly.length} 個：${esc(cutOnly.map((u) => u["名字"]).join("、"))}），不用處理</summary>
+      <p class="rv-meta">這些段落會整段刪掉。如果在「① 建議刪除段落」改成不刪，會回到上面。</p></details></li>` : "";
+  if (!un.length && !cutOnly.length) return `<p class="rv-meta">沒有要處理的名字（上一步已經選成本名的，代號在上一步右欄定）。</p>`;
+  return `<p class="rv-meta">第 1 步請 Claude 讀整支逐字稿找出來、名冊上沒有的名字。上一步「學員是誰」已經選成本名的不會列在這裡。家人、朋友、沒登記的人選「換成代號」（會加進名冊、自動補找老師提到的地方）；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
+    <p class="rv-meta">${un.length} 個，${un.filter((u) => !u["做法"]).length} 個還沒決定。</p>
+    <ul class="rv-people">${unRows}${cutBlock}</ul>`;
 }
 
 function rvPrepVoiceHtml() {
