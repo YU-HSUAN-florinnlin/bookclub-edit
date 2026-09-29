@@ -107,7 +107,8 @@ def _chosen_heard(r: dict) -> str | None:
     return tries[k].get("轉回文字") if 0 <= k < len(tries) else None
 
 
-def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = True, include_kept: bool = False) -> dict:
+def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = False, demo_blur: bool = False,
+                    include_kept: bool = False) -> dict:
     """讀工作區，排出範圍內的所有動作（原片時間）。第 3 步設成保留原聲的學員不換聲音（include_kept=True 才照樣換，測試用）。"""
     from bookclub import assemble, nameplan, overlap as overlap_mod, review, students, tts
     from bookclub import turns as turns_mod
@@ -211,6 +212,8 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Tr
     # 第 3 步標的局部消音（09-29：標了就要真的消）：刪除段落裡的不用消，跟換聲音重疊時以換聲音為準
     mutes = [m for m in assemble.local_mutes(dec) if _in(m["start"], m["end"], a, b)]
     mutes = [{**m, "start": max(m["start"], a), "end": min(m["end"], b)} for m in mutes]
+    # 校對稿刪光、不生成的學員時間格也要消音（09-29），不然會留學員原聲
+    mutes += [m for m in students.empty_chunks(workdir, a, b) if m["學員"] not in kept_now]
     kept, w = assemble.add_local_mutes(kept, mutes, cuts)
     warnings += w
     # 保留原聲的學員自己講到名字（09-29）：直接消音、或用他自己的聲音生成代號短句
@@ -218,7 +221,7 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Tr
     warnings += w
     for e in kept:
         e["start"], e["end"] = clip_to_cuts(e["start"], e["end"], cuts)
-    blur = pick_blur(kept, cuts, a, b)
+    blur = pick_blur(kept, cuts, a, b) if demo_blur else None   # 09-29：模糊只有測試示範才做，正式成品不模糊
     return {"範圍": [a, b], "刪除": cuts, "動作": kept, "停格": sorted(freezes, key=lambda f: f["at"]),
             "模糊": blur, "標記": marks, "警告": warnings, "學員聲線": voices}
 
@@ -279,8 +282,11 @@ def pick_blur(edits: list[dict], cuts: list, a: float, b: float) -> list[float]:
 # ---------- 聲音 ----------
 
 def _extract(video: Path, a: float, b: float, dst: Path) -> None:
+    # 先抽到暫存檔再換上（09-29）：中斷時不會留下截短的聲音檔被下次沿用
+    tmp = dst.with_name(f"_抽取中_{dst.name}")
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", str(video),
-                    "-vn", "-ac", "1", "-ar", str(SR), "-c:a", "pcm_s16le", str(dst)], check=True)
+                    "-vn", "-ac", "1", "-ar", str(SR), "-c:a", "pcm_s16le", str(tmp)], check=True)
+    tmp.replace(dst)
 
 
 def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dict:
@@ -929,7 +935,8 @@ def join_jumps(new: np.ndarray, joins: list[float]) -> list[dict]:
 
 def render_video(workdir: str | Path, start: float, end: float, *, video: str | Path | None = None,
                  label: bool = False, methods: list[str] = ("sw",), tag: str | None = None,
-                 demo_freeze: bool = True, min_free_gb: float = 5.0, include_kept: bool = False) -> dict:
+                 demo_freeze: bool = False, demo_blur: bool = False, min_free_gb: float = 5.0,
+                 include_kept: bool = False) -> dict:
     import shutil
 
     import soundfile as sf
@@ -944,7 +951,7 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     tag = tag or f"{int(a // 60)}-{int(b // 60)}"
     out = workdir / "輸出"
     out.mkdir(parents=True, exist_ok=True)
-    d = build_decisions(workdir, a, b, demo_freeze=demo_freeze, include_kept=include_kept)
+    d = build_decisions(workdir, a, b, demo_freeze=demo_freeze, demo_blur=demo_blur, include_kept=include_kept)
     t = time.time()
     au = build_audio(workdir, video, d, out, tag)
     audio_s = time.time() - t
@@ -975,8 +982,11 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
 
     rng = f"{wd.fmt_time(a)}–{wd.fmt_time(b)}"
     rows = build_marks(d, plist, prec)
-    extra = [f"成品長度 {wd.fmt_time(expected)}（原片 {b - a:.1f} 秒，刪除 {summary['刪除秒']:.1f} 秒，停格 {summary['停格秒']:.2f} 秒）",
-             "這輪測試：宇軒在工作台設了學員 1、2、3「保留原聲」，測試照樣全部重念；學員段落都還沒校對，用建議稿（名冊本名已換代號的初稿）。"]
+    extra = [f"成品長度 {wd.fmt_time(expected)}（原片 {b - a:.1f} 秒，刪除 {summary['刪除秒']:.1f} 秒，停格 {summary['停格秒']:.2f} 秒）"]
+    if include_kept:
+        extra.append("測試：第 3 步設成保留原聲的學員也照樣重念（--include-kept）。")
+    if demo_freeze or demo_blur:
+        extra.append("測試：含停格／模糊示範，不是正式成品。")
     (out / f"處理標記_{tag}.md").write_text(marks_md(rows, rng, extra), encoding="utf-8")
     (out / f"處理標記_{tag}.html").write_text(marks_html(rows, rng, extra), encoding="utf-8")
     wd.write_json(out / f"剪輯決策_{tag}.json", {**d, "片段": plist, "精準度": prec, "摘要": summary})
@@ -989,14 +999,22 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
             summary["輸出"][m] = {"略過": f"硬碟只剩 {free:.1f} GB"}
             continue
         dst = out / f"成品_{tag}_{m}.mp4"
+        # 09-29：先輸出到暫存檔名，驗證通過才換成正式檔名；中斷的殘檔、驗證沒過的檔不會被當成做好了
+        tmp = out / f"_輸出中_成品_{tag}_{m}.mp4"
         if m == "smart":
-            spent, stat = render_smart(video, d, plist, au["新聲音"], dst, out / f"_片段_{tag}")
+            spent, stat = render_smart(video, d, plist, au["新聲音"], tmp, out / f"_片段_{tag}")
         else:
-            spent, stat = render_full(video, d, plist, au["新聲音"], dst, m), {}
-        ver = verify(dst, expected, joins, full_decode=True)
-        summary["輸出"][m] = {"耗時秒": round(spent, 1), "大小MB": round(dst.stat().st_size / 1e6, 1),
+            spent, stat = render_full(video, d, plist, au["新聲音"], tmp, m), {}
+        ver = verify(tmp, expected, joins, full_decode=True)
+        if ver["通過"]:
+            tmp.replace(dst)
+            final = dst
+        else:
+            final = out / f"成品_{tag}_{m}_驗證沒過.mp4"
+            tmp.replace(final)
+        summary["輸出"][m] = {"耗時秒": round(spent, 1), "大小MB": round(final.stat().st_size / 1e6, 1),
                             "倍速": round((b - a) / spent, 2), "推估整支98分鐘秒": round(spent * 5864 / (b - a)),
-                            **stat, "驗證": ver, "檔案": dst.name}
+                            **stat, "驗證": ver, "檔案": final.name}
         wd.write_json(out / f"輸出摘要_{tag}.json", summary)
 
     if label:

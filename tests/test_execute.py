@@ -152,6 +152,13 @@ def test_done_checks_on_fake_workdir():
     out.mkdir(exist_ok=True)
     time.sleep(0.02)
     (out / f"成品_{tag}_sw.mp4").write_bytes(b"x")
+    assert not execute.render_done(w, tag, ["sw"])[0]    # 09-29：摘要裡沒有驗證通過的紀錄，不算做好
+    wd.write_json(out / f"輸出摘要_{tag}.json", {"輸出": {"sw": {"驗證": {"通過": False}}}})
+    (out / f"成品_{tag}_sw.mp4").touch()
+    assert "驗證" in execute.render_done(w, tag, ["sw"])[1]
+    wd.write_json(out / f"輸出摘要_{tag}.json", {"輸出": {"sw": {"驗證": {"通過": True}}}})
+    time.sleep(0.02)
+    (out / f"成品_{tag}_sw.mp4").touch()
     assert execute.render_done(w, tag, ["sw"])[0]
     time.sleep(0.02)
     wd.write_json(students.log_path(w), {"句子": []})   # 生成結果比成品新 → 要重新組裝

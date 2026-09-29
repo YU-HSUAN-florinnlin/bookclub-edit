@@ -83,6 +83,20 @@ def test_in_window_filters_by_midpoint():
     assert len(students.in_window(sents, None, None)) == 4
 
 
+def test_split_edited_follows_proofread_text():
+    # 09-29：重念照校對稿念；改過的字分回原本那一句，刪光的句子變空字串
+    sents = [S(1, 0, 2, "我叫小美，"), S(2, 2, 4, "我在台北上班。"), S(3, 4, 6, "今天很開心。")]
+    t = {"原文": "".join(s["text"] for s in sents), "校對稿": "我叫Amy，我在某公司上班。今天很開心！"}
+    assert students.split_edited(t, sents) == {"s1": "我叫Amy，", "s2": "我在某公司上班。", "s3": "今天很開心！"}
+    t["校對稿"] = "我叫小美，今天很開心。"
+    assert students.split_edited(t, sents)["s2"] == ""
+
+
+def test_split_edited_gives_up_when_text_not_found():
+    sents = [S(1, 0, 2, "甲乙丙")]
+    assert students.split_edited({"原文": "完全不同", "校對稿": "改過"}, sents) is None
+
+
 def test_median_f0_male_female():
     sr = 16000
     t = np.arange(sr * 3) / sr

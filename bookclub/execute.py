@@ -154,6 +154,10 @@ def render_done(workdir: Path, tag: str, methods: list[str]) -> tuple[bool, str]
     newest_in = max((p.stat().st_mtime for p in render_inputs(workdir)), default=0.0)
     if min(p.stat().st_mtime for p in outs) < newest_in:
         return False, "覆核或生成結果比成品新，要重新組裝"
+    summ = wd.read_json(workdir / "輸出" / f"輸出摘要_{tag}.json", default=None) or {}
+    bad = [m for m in methods if not ((summ.get("輸出") or {}).get(m, {}).get("驗證") or {}).get("通過")]
+    if bad:
+        return False, f"成品沒有通過驗證（{'、'.join(bad)}），要重新組裝"
     return True, "成品比覆核、生成結果都新"
 
 

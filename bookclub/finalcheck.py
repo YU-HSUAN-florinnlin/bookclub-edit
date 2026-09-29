@@ -214,8 +214,11 @@ def products(workdir: Path) -> list[str]:
     out = Path(workdir) / "輸出"
     if not out.is_dir():
         return []
-    files = [p for p in out.iterdir() if p.name.startswith("成品_") and p.suffix.lower() in VIDEO_EXTS]
-    return [str(p.relative_to(workdir)) for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)]
+    files = [p for p in out.iterdir() if p.name.startswith("成品_") and p.suffix.lower() in VIDEO_EXTS
+             and "_驗證沒過" not in p.stem]   # 09-29：驗證沒過的成品不拿來檢查
+    # 標字版是給人看 AI 改了哪裡的輔助版，排在正式成品後面，免得被預設選去檢查
+    files.sort(key=lambda p: ("標字版" in p.stem, -p.stat().st_mtime))
+    return [str(p.relative_to(workdir)) for p in files]
 
 
 def probe_duration(path: Path) -> float:

@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 import re
 import shutil
 import subprocess
@@ -551,6 +552,17 @@ def _free_memory() -> None:
     gc.collect()
 
 
+def ref_fingerprint(path: str | Path) -> str | None:
+    """參考音檔內容的指紋（09-29）：重挑參考音常寫到同一個檔名，只比路徑會沿用舊聲音生成的結果。"""
+    p = Path(path)
+    return hashlib.sha1(p.read_bytes()).hexdigest()[:12] if p.is_file() else None
+
+
+def same_ref_file(rec: dict, ref_wav: str | Path) -> bool:
+    """紀錄裡的參考音跟現在的是不是同一個（路徑相同、內容也相同；舊紀錄沒有指紋就只比路徑）。"""
+    return rec.get("參考音") == str(ref_wav) and rec.get("參考音指紋") in (None, ref_fingerprint(ref_wav))
+
+
 def run_generation(
     workdir: Path, todo: list[dict], out_dir: Path, ref_wav: Path, ref_text: str, tolerance: float, *,
     save: Callable[[], object], done: dict, role: str = "老師", tag: str = "老師聲音",
@@ -584,10 +596,11 @@ def run_generation(
     ctxs: dict[str, dict] = {}
     cache_path = out_dir / ATTEMPT_CACHE
     cache = wd.read_json(cache_path, default=None) or {}
+    ref_fp = ref_fingerprint(ref_wav)
 
     def attempt(it: dict, n: int, seed: int, speed: float) -> Attempt:
         """生成一次；同一句同一種子語速文字已經生成過（上次中斷），直接沿用檔案與檢查結果。"""
-        key = f"{it['id']}|{n}|{seed}|{speed}|{it.get('生成用文字') or it['text']}|{ref_wav}"
+        key = f"{it['id']}|{n}|{seed}|{speed}|{it.get('生成用文字') or it['text']}|{ref_wav}#{ref_fp}"
         hit = cache.get(key)
         if hit and (out_dir / f"{it['id']}_第{n}次.wav").is_file():
             log(f"  第 {n} 次：沿用上次生成的檔案")
@@ -718,7 +731,7 @@ def generate_teacher(
     log_path = teacher_log_path(workdir)
     record = wd.read_json(log_path, default=None) or {}
     done = {} if redo else {r["id"]: r for r in record.get("句子", [])}
-    same_ref = record.get("參考音") == str(ref_wav) and record.get("參考音逐字稿") == ref_text
+    same_ref = same_ref_file(record, ref_wav) and record.get("參考音逐字稿") == ref_text
     if done and not same_ref:
         log("參考音跟上次不同，全部重新生成。")
         done = {}
@@ -752,6 +765,7 @@ def _write_log(log_path: Path, ref_wav: Path, ref_text: str, items: list[dict], 
     spent = sum(a["耗時秒"] for a in attempts)
     data = {
         "參考音": str(ref_wav),
+        "參考音指紋": ref_fingerprint(ref_wav),
         "參考音逐字稿": ref_text,
         "句子": sentences,
         "統計": {

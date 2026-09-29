@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 REF_DIR_NAME = "參考音"          # 跟 bookclub/refpick.py 的 REF_DIR_NAME 保持一致
@@ -112,4 +113,7 @@ def read_json(path: Path, default=None):
 def write_json(path: Path, data) -> None:
     """統一存檔格式：不轉義中文、縮排 1 格，跟 refpick.py 的存檔方式一致。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    # 先寫暫存檔再換上（09-29）：寫到一半被中斷時，原本的檔案還是完整的，不會留下半個 JSON
+    tmp = path.with_name(f".{path.name}.寫入中")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, path)

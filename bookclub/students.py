@@ -186,9 +186,11 @@ def cut_ranges(workdir: Path) -> list[tuple[float, float]]:
 
 
 def build_items(workdir: Path, start: float | None = None, end: float | None = None,
-                only: list[str] | None = None, include_kept: bool = False) -> tuple[list[dict], dict]:
+                only: list[str] | None = None, include_kept: bool = False,
+                keep_empty: bool = False) -> tuple[list[dict], dict]:
     """學員段落 → 生成項目（每段 id＝`<段落id>_<序號>`）。回傳（項目、各學員說話片段）。
-    第 3 步設成「保留原聲」的學員不重念（include_kept=True 才照樣重念，測試聽生成效果用）。"""
+    第 3 步設成「保留原聲」的學員不重念（include_kept=True 才照樣重念，測試聽生成效果用）。
+    keep_empty=True 時反過來，只回傳校對稿刪光、不生成的時間格（`empty_chunks` 用）。"""
     from bookclub import review
     from bookclub import turns as turns_mod
 
@@ -213,18 +215,82 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
         spans.setdefault(who, []).append((max(t["start"], lo), min(t["end"], hi)))   # 估男女聲只用範圍內的原音
         if only and t["id"] not in only:
             continue
-        sents = in_window([by_id[i] for i in t.get("句子", []) if i in by_id], lo, hi)
-        edited = t.get("已確認") and t.get("校對稿") and t["校對稿"] != t.get("原文")
+        all_sents = [by_id[i] for i in t.get("句子", []) if i in by_id]
+        sents = in_window(all_sents, lo, hi)
+        edited = bool(t.get("校對稿")) and t["校對稿"] != t.get("原文")
+        if not all_sents:
+            if keep_empty:
+                continue
+            # 手動標的學員段落裡沒有逐字稿句子（09-29）：照段落起訖，用校對稿整段一次生成，不能留學員原聲
+            a, b = clip_slot(max(t["start"], lo), min(t["end"], hi), cuts)
+            if b - a > 0.3 and not in_ranges(a, b, list(cuts)) and (t.get("校對稿") or "").strip():
+                text, changes = review.replace_real_names(t["校對稿"].strip(), table)
+                items.append({
+                    "id": f"{t['id']}_01", "段落": t["id"], "學員": who, "text": text, "原文": t.get("原文", ""),
+                    "slot": [a, b], "slot_s": b - a, "句子": [], "換成代號": len(changes),
+                    "文字來源": "手動標記段落（沒有逐字稿句子，照校對稿整段生成）",
+                })
+            continue
+        pieces = split_edited(t, all_sents) if edited else None
         for k, group in enumerate(plan_chunks(sents, cuts), start=1):
             raw = "".join(s["text"] for s in group)
-            text, changes = review.replace_real_names(raw, table)
+            src = "".join(pieces[s["id"]] for s in group) if pieces else raw
+            text, changes = review.replace_real_names(src, table)
             a, b = clip_slot(group[0]["start"], group[-1]["end"], cuts)
+            if not text.strip():
+                # 校對時這幾句的字全刪了：不生成，組裝時整格消音（見 empty_chunks）
+                if keep_empty:
+                    items.append({"id": f"{t['id']}_{k:02d}", "段落": t["id"], "學員": who, "text": "",
+                                  "slot": [a, b], "slot_s": b - a, "文字來源": "校對稿（這幾句刪光了）"})
+                continue
+            if keep_empty:
+                continue
             items.append({
                 "id": f"{t['id']}_{k:02d}", "段落": t["id"], "學員": who,
                 "text": text, "原文": raw, "slot": [a, b], "slot_s": b - a, "句子": [s["id"] for s in group],
-                "換成代號": len(changes), "文字來源": "校對稿（整段改過，照句子原文切）" if edited else "建議稿",
+                "換成代號": len(changes), "文字來源": "校對稿" if pieces else "建議稿",
             })
     return items, spans
+
+
+def split_edited(turn: dict, sents: list[dict]) -> dict[str, str] | None:
+    """人在第 3 步改過的校對稿 → 分回每一句（09-29：重念要照校對稿念，不是照原始轉文字）。
+
+    用 difflib 把原文和校對稿對齊：沒改的字照原位置，改過的字照比例分給那幾句。
+    句子文字在原文裡找不到（段落被合併、切開過，原文跟句子對不上）就回傳 None，由呼叫端退回整段照原文。"""
+    import difflib
+
+    raw, edited = turn.get("原文") or "", (turn.get("校對稿") or "").strip()
+    offs, pos = [], 0
+    for s in sents:
+        i = raw.find(s["text"], pos)
+        if i < 0:
+            return None
+        offs.append((s["id"], i, i + len(s["text"])))
+        pos = i + len(s["text"])
+    ops = difflib.SequenceMatcher(None, raw, edited, autojunk=False).get_opcodes()
+
+    def to_edited(i: int) -> int:
+        for tag, i1, i2, j1, j2 in ops:
+            if i1 <= i < i2:
+                return j1 + (i - i1 if tag == "equal" else round((i - i1) * (j2 - j1) / (i2 - i1)))
+            if i1 == i2 == i:          # 插入的字：放到後面那一句
+                return j1
+        return len(edited)
+
+    out = {}
+    for k, (sid, a, b) in enumerate(offs):
+        ea = 0 if k == 0 else to_edited(a)
+        eb = len(edited) if k == len(offs) - 1 else to_edited(offs[k + 1][1])
+        out[sid] = edited[ea:eb]
+    return out
+
+
+def empty_chunks(workdir: Path, start: float | None = None, end: float | None = None) -> list[dict]:
+    """校對稿刪光、不生成的學員時間格（組裝時當局部消音，不能留學員原聲）。"""
+    items, _ = build_items(workdir, start, end, keep_empty=True)
+    return [{"id": it["id"], "start": it["slot"][0], "end": it["slot"][1], "原因": f"{it['id']} 校對稿刪光了", "學員": it["學員"]}
+            for it in items]
 
 
 def assign_voices(workdir: Path, students: list[str], spans: dict, codes: dict | None = None,
@@ -308,7 +374,7 @@ def generate_students(
                 raise FileNotFoundError(f"找不到{sex}聲參考音：{p}")
         ref_text = ref_txt.read_text(encoding="utf-8").strip()
         todo = [it for it in group if not (
-            it["id"] in done and done[it["id"]].get("參考音") == str(ref_wav)
+            it["id"] in done and tts.same_ref_file(done[it["id"]], ref_wav)
             and done[it["id"]]["text"] == it["text"] and done[it["id"]].get("生成用文字") == it["生成用文字"])]
         log(f"[學員聲音] {sex}聲：{len(group)} 段（{sum(it['slot_s'] for it in group):.0f} 秒），要生成 {len(todo)} 段")
         if not todo:
@@ -318,7 +384,7 @@ def generate_students(
         def save_group() -> None:
             for sid, ex in extra.items():
                 if sid in done:
-                    done[sid].update(ex, 參考音=str(ref_wav), 角色="學員")
+                    done[sid].update(ex, 參考音=str(ref_wav), 參考音指紋=tts.ref_fingerprint(ref_wav), 角色="學員")
             save()
 
         synth = synth_factory(ref_wav, ref_text) if synth_factory else None

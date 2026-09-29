@@ -192,7 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--methods", default="sw", help="輸出做法（逗號分隔，預設 sw）：sw 整段軟體編碼、hw 硬體編碼（Mac）、smart 只重做有動到的片段")
     rv.add_argument("--include-kept", action="store_true", help="設成保留原聲的學員也照樣換聲音（測試用）")
     rv.add_argument("--tag", help="輸出檔名標記（預設「開始分-結束分」）")
-    rv.add_argument("--no-demo-freeze", action="store_true", help="範圍內沒有需要停格的重疊時，不做停格示範")
+    rv.add_argument("--no-demo-freeze", action="store_true", help="不做停格示範與模糊示範（正式成品 run execute 本來就不做）")
 
     return parser
 
@@ -434,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
             methods = [m.strip() for m in args.methods.split(",") if m.strip()]
             s = render_video(args.workdir, parse_time(args.start), parse_time(args.end), video=args.video,
                              label=args.label, methods=methods, tag=args.tag, demo_freeze=not args.no_demo_freeze,
+                             demo_blur=not args.no_demo_freeze,
                              include_kept=args.include_kept)
             print(_json.dumps({k: v for k, v in s.items() if k != "警告"}, ensure_ascii=False, indent=1))
             return 0

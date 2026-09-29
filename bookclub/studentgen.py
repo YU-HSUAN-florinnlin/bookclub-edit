@@ -175,12 +175,13 @@ def generate(workdir: str | Path, *, synth_factory=None, hear=None, align=None, 
         for it in group:
             it["slot_s"] = it["slot"][1] - it["slot"][0]
             it["生成用文字"], it["發音對照"] = tts.apply_pron(it["text"], table)
-        todo = [it for it in group if not (it["id"] in done and done[it["id"]].get("參考音") == str(ref["wav"])
+        todo = [it for it in group if not (it["id"] in done and tts.same_ref_file(done[it["id"]], ref["wav"])
                                            and done[it["id"]]["text"] == it["text"])]
         log(f"[{TAG}] {who}：{len(group)} 句，要生成 {len(todo)} 句（參考音 {ref.get('長度秒', '沿用')} 秒）")
         if not todo:
             continue
-        extra = {it["id"]: {"學員": who, "候選": it["候選"], "參考音": str(ref["wav"]), "角色": "學員"} for it in todo}
+        extra = {it["id"]: {"學員": who, "候選": it["候選"], "參考音": str(ref["wav"]),
+                            "參考音指紋": tts.ref_fingerprint(ref["wav"]), "角色": "學員"} for it in todo}
 
         def save_group() -> None:
             for sid, ex in extra.items():
