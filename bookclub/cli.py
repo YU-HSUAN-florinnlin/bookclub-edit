@@ -1,10 +1,9 @@
 """指令列入口：`bookclub`。
 
-`doctor`、`models download`、`run analyze`、`run turns`、`serve`、`ref`、`gen teacher`、`gen names`、`render audio`、
-`review export`／`review import`、`proofread prepare` 是真的會動的指令；
-`bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
-功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列
-第 1、2、3 步是真的（影片分析、挑選老師參考聲音片段、覆核工作台），其餘步驟頁面只顯示「還沒做」。
+`doctor`、`models download`、`run analyze`、`run turns`、`run execute`、`serve`、`ref`、`gen teacher`、`gen names`、
+`gen students`、`render audio`、`render video`、`redo list`、`review export`／`review import`、`proofread prepare`
+是真的會動的指令；`bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
+功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列第 0～5 步都有頁面。
 """
 
 from __future__ import annotations
@@ -66,6 +65,14 @@ def build_parser() -> argparse.ArgumentParser:
     cuts_parser.add_argument("workdir", help="工作區路徑（要先轉好文字）")
     cuts_parser.add_argument("--video", help="原片路徑（檢查畫面靜止用；預設讀分析結果記錄的影片）")
     cuts_parser.add_argument("--force", action="store_true", help="已經有結果也重跑")
+
+    ex_parser = run_sub.add_parser("execute", help="流程第 4 步一次跑完：老師名字 → 學員重念 → 組裝（做過的跳過，可以中斷續跑）")
+    ex_parser.add_argument("workdir", help="工作區路徑（要先跑過第 1 步轉文字、選定老師參考音）")
+    ex_parser.add_argument("--start", help="從幾分幾秒（預設 0:00）")
+    ex_parser.add_argument("--end", help="到幾分幾秒（預設影片結尾）")
+    ex_parser.add_argument("--methods", help="組裝的輸出做法（逗號分隔：hw、sw、smart；預設 Mac 用 hw、其他用 sw）")
+    ex_parser.add_argument("--only", help="只跑這幾步（逗號分隔：老師名字,學員重念,組裝）")
+    ex_parser.add_argument("--redo", action="store_true", help="做過的也重跑（生成本身還是會沿用快取，見 README）")
 
     sub.add_parser("export", help="匯出成品（Phase 5 才會做）")
 
@@ -156,6 +163,11 @@ def build_parser() -> argparse.ArgumentParser:
     pimp = prof_sub.add_parser("import", help="匯入設定包：第一欄當鑰匙，新的加進去、已經有的不動，內容不同列出衝突")
     pimp.add_argument("zip", help="設定包 zip")
 
+    redo_parser = sub.add_parser("redo", help="第 5 步成品檢查退回的項目（第 4 步只重做這幾筆）")
+    redo_sub = redo_parser.add_subparsers(dest="redo_command")
+    redo_list = redo_sub.add_parser("list", help="列出要重做的項目（成品檢查按了「送回 AI 重做」的那一份）")
+    redo_list.add_argument("workdir", help="工作區路徑")
+
     render_parser = sub.add_parser("render", help="組裝：把生成的聲音、消音放回原本的時間")
     render_sub = render_parser.add_subparsers(dest="render_command")
     render_audio_parser = render_sub.add_parser("audio", help="組出跟原片等長的新聲音軌＋處理前後試聽")
@@ -216,6 +228,20 @@ def main(argv: list[str] | None = None) -> int:
             from bookclub.cutsuggest import suggest_cuts
 
             suggest_cuts(args.workdir, video=args.video, force=args.force)
+            return 0
+        if args.run_command == "execute":
+            from bookclub.execute import run_execute
+            from bookclub.review import parse_time
+
+            try:
+                run_execute(args.workdir, start=parse_time(args.start) if args.start else None,
+                            end=parse_time(args.end) if args.end else None,
+                            methods=[m.strip() for m in args.methods.split(",") if m.strip()] if args.methods else None,
+                            only_steps=[x.strip() for x in args.only.split(",") if x.strip()] if args.only else None,
+                            redo=args.redo)
+            except (FileNotFoundError, ValueError) as e:   # 前置檢查沒過：印清楚缺什麼就好，不印程式追蹤
+                print(f"⚠️ {e}")
+                return 1
             return 0
         if args.run_command == "turns":
             from bookclub.turns import build_turns
@@ -346,6 +372,26 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print("用法：bookclub profile export [--out 檔案.zip]")
         print("     bookclub profile import <設定包.zip>")
+        return 2
+
+    if args.command == "redo":
+        if args.redo_command == "list":
+            from bookclub.finalcheck import redo_list
+            from bookclub.workdir import fmt_time
+
+            r = redo_list(args.workdir)
+            if not r["項目"]:
+                print("沒有要重做的項目（第 5 步成品檢查沒有退回的）。")
+                return 0
+            print(("已送回 AI 重做（" + r["時間"] + "）" if r["已送回"] else "還沒按「送回 AI 重做」，先列出目前退回的")
+                  + f"：{len(r['項目'])} 筆")
+            for i, it in enumerate(r["項目"], 1):
+                t = fmt_time(it["原片"][0]) if it.get("原片") else "—"
+                print(f"{i}. 原片 {t}　{it['類型']}　{('、'.join(it['覆核項目']) or '—')}　原因：{it['原因']}")
+                print(f"   → {it['建議指令']}")
+            print("（TODO：一鍵只重做這幾筆還沒串；照上面的指令重做後，再跑一次 render video 同一個範圍）")
+            return 0
+        print("用法：bookclub redo list <工作區>")
         return 2
 
     if args.command == "render":

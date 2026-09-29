@@ -94,6 +94,28 @@ html, body {
 .step-badge.done { background: var(--accent); color: #fff; }
 .step-badge.notyet { background: #eee; color: #aaa; }
 
+/* AI／人工 標籤：AI 藍、人工橘，顏色之外也有字，不靠顏色分辨 */
+.step-label { flex: 1; }
+.step-num { display: none; }
+.step-who { font-size: 11px; padding: 0 6px; border-radius: 8px; white-space: nowrap; font-weight: normal; }
+.step-who.ai { background: #e6effb; color: #1d4f91; }
+.step-who.human { background: #fdf0df; color: #8a5200; }
+
+.brand { display: flex; align-items: center; gap: 6px; }
+.brand-text { flex: 1; }
+.nav-toggle { padding: 2px 8px; font-size: 14px; line-height: 1.2; background: transparent; color: var(--muted); border: 1px solid var(--border); }
+.nav-toggle:hover { background: var(--bg-soft); color: var(--fg); }
+
+/* 收合：只留編號（完成打勾）＋AI／人工，主畫面變寬 */
+.app.nav-collapsed .sidebar { width: 64px; flex-basis: 64px; padding: 16px 6px; }
+.app.nav-collapsed .brand { padding: 4px 0 12px; justify-content: center; }
+.app.nav-collapsed .brand-text, .app.nav-collapsed .videoinfo,
+.app.nav-collapsed .step-label, .app.nav-collapsed .step-badge { display: none; }
+.app.nav-collapsed .step-num { display: inline; font-weight: 600; }
+.app.nav-collapsed .step-num.done { color: var(--accent); }
+.app.nav-collapsed .steps li a { flex-direction: column; gap: 2px; padding: 7px 2px; }
+.app.nav-collapsed .step-who { padding: 0 4px; font-size: 10px; }
+
 /* ---------- 內容區 ---------- */
 
 .content {
@@ -252,6 +274,10 @@ button.linkish:hover { text-decoration: underline; background: none; }
   .steps li { flex: 0 0 auto; }
   .videoinfo { display: none; }
   .content { padding: 16px 16px 60px; max-width: none; }
+  .nav-toggle { display: none; }
+  .app.nav-collapsed .sidebar { width: 100%; flex-basis: auto; }
+  .app.nav-collapsed .brand-text, .app.nav-collapsed .step-label { display: inline; }
+  .app.nav-collapsed .step-num { display: none; }
   .namecard .players { flex-direction: column; }
 }
 
@@ -273,6 +299,9 @@ button.linkish:hover { text-decoration: underline; background: none; }
   button { background: #6fcf6f; color: #111; border-color: #6fcf6f; }
   button:hover { background: #57b357; }
   button.secondary { background: #232323; color: #eee; border-color: var(--border); }
+  .step-who.ai { background: #15263b; color: #a9cbf6; }
+  .step-who.human { background: #3a2a10; color: #f0c27a; }
+  .nav-toggle { background: transparent; color: var(--muted); border-color: var(--border); }
 }
 
 /* 第 3 步：學員逐字稿校對 */
@@ -386,6 +415,17 @@ tr.t-hide { display:none; }
 .rv-io { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; font-size: 14px; }
 .rv-t { width: 96px; font-variant-numeric: tabular-nums; }
 .rv-stu-mark { display: inline-flex; gap: 4px; align-items: center; }
+/* 「＋新增修改」面板（09-29） */
+.rv-editor { width: 100%; background: var(--rv-card); border-radius: 12px; padding: 12px 16px; display: grid; gap: 8px; }
+.rv-edrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.rv-edrow .spacer { flex: 1; }
+.rv-edlab { min-width: 2.5em; font-weight: 600; }
+.rv-editor .rv-meta { margin: 0; }
+.rv-edres { margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--rv-sug-bg); color: var(--rv-sug-fg); font-variant-numeric: tabular-nums; }
+.rv-warn { color: var(--warn); }
+.rv-tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 0 7px; margin: 0 6px 0 0; border-radius: 8px;
+  background: #fdf0df; color: #8a5200; vertical-align: 1px; }
+@media (prefers-color-scheme: dark) { .rv-tag { background: #3a2a10; color: #f0c27a; } }
 
 /* 右欄：目前這一筆 */
 .rv-card { background: var(--rv-card); border-radius: 14px; padding: 18px 22px 16px; }
@@ -481,3 +521,41 @@ tr.t-hide { display:none; }
   .rv-list .ty { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+
+/* ---------- 第 5 步：成品檢查（09-29，版面沿用第 3 步的 .rv2） ---------- */
+.fc { --fc-frz: #e0a800; --fc-blur: #5b8fd6; --fc-bad: #d62828; --fc-seen: #7cc58f; }
+.fc-pin { position: sticky; top: 0; z-index: 5; background: var(--warn-bg); border: 1px solid #e8d9a8; border-radius: 8px;
+  padding: 8px 14px; margin-bottom: 12px; font-weight: 600; }
+.fc-prod { display: block; margin-bottom: 8px; font-size: 14px; }
+.fc video { width: 100%; aspect-ratio: 16 / 9; max-height: 52vh; background: #000; border-radius: 10px; display: block; }
+.fc-tl { height: 40px; }
+.fc-tl .fm { position: absolute; top: 10px; height: 14px; min-width: 3px; opacity: .9; }
+.fc-tl .fm.pt { width: 3px; top: 4px; height: 26px; }
+.fc-tl .fm.stu { background: var(--rv-stu); } .fc-tl .fm.name { background: var(--rv-name); }
+.fc-tl .fm.cut { background: var(--rv-cut); } .fc-tl .fm.frz { background: var(--fc-frz); }
+.fc-tl .fm.blur { background: var(--fc-blur); opacity: .35; } .fc-tl .fm.ov { background: var(--rv-ov); opacity: .6; }
+.fc-tl .fm.bad { background: var(--fc-bad); } .fc-tl .fm.redo { outline: 2px solid var(--fc-bad); }
+.fc-tl .fm.ok { opacity: .45; }
+.fc-tl .seenbar { position: absolute; left: 0; right: 0; top: 32px; height: 5px; border-radius: 3px; background: var(--rv-line); overflow: hidden; }
+.fc-tl .seenbar .seen, .fc-seen i { position: absolute; top: 0; bottom: 0; background: var(--fc-seen); }
+.sw.frz { background: var(--fc-frz); } .sw.blur { background: var(--fc-blur); } .sw.bad { background: var(--fc-bad); } .sw.seen { background: var(--fc-seen); }
+.rv-chip.fc-stu i { background: var(--rv-stu); } .rv-chip.fc-name i { background: var(--rv-name); } .rv-chip.fc-cut i { background: var(--rv-cut); }
+.rv-chip.fc-frz i { background: var(--fc-frz); } .rv-chip.fc-blur i { background: var(--fc-blur); } .rv-chip.fc-ov i { background: var(--rv-ov); }
+.fc-ab { margin: 10px 0; }
+.fc-ab button.on { background: var(--fg); color: var(--bg); }
+.fc-big { font-size: 20px; margin: 4px 0 8px; } .fc-big b { font-size: 30px; font-variant-numeric: tabular-nums; }
+.fc-seen { position: relative; height: 10px; border-radius: 5px; background: var(--rv-line); overflow: hidden; margin: 8px 0; }
+.fc-flags { list-style: none; padding: 0; margin: 12px 0 0; font-size: 15px; }
+.fc-flags li { padding: 6px 0; border-top: 1px solid var(--rv-line); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fc-unlogged { background: var(--danger-bg); border-radius: 12px; padding: 12px 18px; margin-bottom: 18px; }
+.fc-unlogged h2 { margin: 0 0 4px; font-size: 17px; color: var(--danger); }
+.fc-unlogged ul { list-style: none; padding: 0; margin: 8px 0 0; }
+.fc-unlogged li { display: grid; grid-template-columns: 170px 170px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 6px 0;
+  border-top: 1px solid rgba(0,0,0,.08); font-size: 15px; }
+.fc-h2 { font-size: 17px; margin: 8px 0; }
+@media (max-width: 760px) { .fc-unlogged li { grid-template-columns: 1fr; } }
+
+/* ---------- 第 4 步：AI 執行（09-29） ---------- */
+.exec-opts { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 12px; font-size: 14px; }
+.exec-opts input.short { width: 90px; }
+table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg); }

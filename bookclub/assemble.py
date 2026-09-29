@@ -12,7 +12,7 @@
 
 產出（工作區 `輸出/`）：
 - `新聲音軌.wav`：跟原片等長，可以直接交給剪輯軟體換掉原本的聲音
-- `處理前後/`：每一筆前後各 2 秒的「處理前」「處理後」試聽檔，給第 6 步逐筆覆核
+- `處理前後/`：每一筆前後各 2 秒的「處理前」「處理後」試聽檔，給第 5 步成品檢查
 - `處理前後.html`：試聽頁（只放代號後的文字，不放本名）
 - `生成/剪輯決策.json`：這次套用了哪些動作
 """
@@ -271,6 +271,8 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
         "剪輯決策": edits,
     }
     wd.write_json(edl_path(workdir), summary)
+    from bookclub import proclog   # 09-29：AI 處理紀錄＋沒登記的變動檢查（生成/處理紀錄.json，第 5 步讀）
+    proclog.write_audio_log(workdir, edits, orig_path, new_path)
     print(f"[組裝] 完成：換聲音 {summary['換聲音']} 段、消音 {summary['消音']} 段；"
           f"新聲音軌 {summary['長度秒'] / 60:.1f} 分鐘 → {new_path}")
     return summary

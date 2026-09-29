@@ -8,6 +8,8 @@
 - 學員段落、學員換成誰：沿用 `校對/段落.json`（`bookclub/turns.py` 的存檔函式）
 - 老師提到名字：沿用 `名字覆核決定.json`，加 `做法`、`已確認` 欄位（`bookclub/nameplan.py` 讀）
 - 重疊、刪除段落、局部消音、學員保留原聲、覆核花的時間：`覆核/覆核決定.json`（這支模組管）
+- 「新增修改」面板（09-29）人工補的名字、重疊：`覆核/覆核決定.json` 的 `人工名字`、`人工重疊`；
+  時間照類型對齊（規則在 `bookclub/align.py`）；自動抓到的名字、重疊改時間記成 `改過的起訖`
 
 純函式為主（不碰 socket），`bookclub/server.py` 只負責轉手。
 """
@@ -19,6 +21,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from bookclub import align
 from bookclub import workdir as wd
 
 REVIEW_DIR_NAME = "覆核"
@@ -36,6 +39,7 @@ SNAP_SEARCH_S = 0.5          # 剪點往前後各找多遠的安靜處
 PREP_KEYS = ("學員", "保留原聲", "刪除")   # 開始前 3 件事（09-26 宇軒選 A：先做完才進逐筆清單）
 HANDOVER_S = 1.5             # 重疊離「老師↔學員換人」的地方這麼近，算一來一往的交接
 CUT_SUGGEST_FILE = "刪除建議.json"
+MANUAL_KINDS = ("刪除段落", "局部消音", "學員發言", "名字", "重疊")   # 「新增修改」面板的五種類型
 
 _lock = threading.Lock()
 
@@ -56,7 +60,7 @@ def load_decisions(workdir: Path) -> dict:
     data = wd.read_json(review_path(workdir), default=None) or {}
     data.setdefault("版本", 1)
     for k, v in (("重疊", {}), ("刪除段落", []), ("局部消音", []), ("學員聲音", {}), ("覆核秒數", 0.0),
-                 ("刪除建議", {})):
+                 ("刪除建議", {}), ("人工重疊", []), ("人工名字", [])):
         data.setdefault(k, v)
     data.setdefault("開始前確認", {})
     for k in PREP_KEYS:
@@ -69,8 +73,9 @@ def _save_decisions(workdir: Path, data: dict) -> None:
 
 
 def overlap_id(o: dict) -> str:
-    """重疊的 id 用起點時間（重跑找重疊、筆數變了也對得上同一處）。"""
-    return f"O{o['start']:.2f}"
+    """重疊的 id 用起點時間（重跑找重疊、筆數變了也對得上同一處）。人工補的、改過時間的重疊自己帶 id
+    （改了起點也要對得上原本那一筆的決定）。"""
+    return str(o["id"]) if o.get("id") else f"O{o['start']:.2f}"
 
 
 def parse_time(text: str) -> float:
@@ -237,6 +242,35 @@ def _overlap_defaults(o: dict, sents: list[dict], turns: list[dict]) -> dict:
     return {"老師文字": teacher, "學員文字": student, "學員說話者": who, "附近逐字稿": context}
 
 
+ALIGN_KEYS = ("標的起訖", "對齊", "對齊到")
+
+
+def _align_info(d: dict) -> dict:
+    """畫面「你標的 → 對齊後」要的欄位（有才帶）。"""
+    return {k: d[k] for k in ALIGN_KEYS if k in d}
+
+
+def effective_name_candidates(workdir: Path, candidates: list[dict], decisions: dict) -> list[dict]:
+    """名字候選＋人工補的名字（`人工名字`），改過時間的套上 `改過的起訖`。
+
+    自動抓到的照舊用順位當 id（不帶 `id` 欄位，`nameplan.build_plan` 照舊編號）；人工補的帶 `id`（NM001…），
+    這樣重跑找名字、候選變多也不會跟人工補的撞號。對齊過的時間已經留過停頓，建議緩衝歸零。
+    `nameplan.compute_plan` 與覆核工作台共用，兩邊看到的名字一樣。"""
+    out = []
+    for i, c in enumerate(candidates, start=1):
+        d = decisions.get(str(i), {}) or {}
+        if d.get("改過的起訖"):
+            c = {**c, "start": d["改過的起訖"][0], "end": d["改過的起訖"][1], "建議緩衝秒數": 0.0, "改過時間": True}
+        out.append(c)
+    for m in load_decisions(Path(workdir))["人工名字"]:
+        out.append({"id": m["id"], "start": m["start"], "end": m["end"], "sentence_id": m.get("sentence_id"),
+                    "sentence": m.get("sentence", ""), "matched_text": m.get("matched_text", ""),
+                    "name": m.get("matched_text", ""), "canonical": "", "代號": m.get("代號", ""), "敏感詞": False,
+                    "位置": "", "比對層級": "人工", "信心": "", "建議做法": "", "切點信心": "", "建議緩衝秒數": 0.0,
+                    "人工新增": True, **_align_info(m)})
+    return out
+
+
 def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     from bookclub import nameplan
     from bookclub.namespage import _highlight_sentence
@@ -246,8 +280,9 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     ordered = sorted(sents, key=lambda s: s["start"])
     pos = {s["id"]: k for k, s in enumerate(ordered)}
     items = []
-    for i, c in enumerate(result.get("candidates", []), start=1):
-        cid = str(i)
+    cands = effective_name_candidates(workdir, result.get("candidates", []), decisions)
+    for i, c in enumerate(cands, start=1):
+        cid = str(c.get("id") or i)
         d = decisions.get(cid, {}) or {}
         group = nameplan.expand_sentence(ordered, pos[c["sentence_id"]]) if c.get("sentence_id") in pos else []
         whole_text = "".join(g["text"] for g in group)
@@ -258,18 +293,37 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
             if new is not None:
                 texts[c["sentence_id"]] = new
                 replaced = "".join(texts[g["id"]] for g in group)
+        sentence = c.get("sentence") or (ordered[pos[c["sentence_id"]]]["text"] if c.get("sentence_id") in pos else "")
         items.append({
             "類型": "名字", "id": cid, "start": c["start"], "end": c["end"],
-            "sentence_html": _highlight_sentence(c.get("sentence", ""), c.get("matched_text", ""), c.get("位置", "")),
+            "sentence_html": _highlight_sentence(sentence, c.get("matched_text", ""), c.get("位置", "")),
             "整句": {"start": group[0]["start"], "end": group[-1]["end"], "原文": whole_text, "換成代號": replaced}
             if group else None,
             "matched_text": c.get("matched_text", ""), "代號": c.get("代號", ""), "位置": c.get("位置", ""),
             "信心": c.get("信心", ""), "比對層級": c.get("比對層級", ""), "切點信心": c.get("切點信心", ""),
             "建議做法": c.get("建議做法", ""), "敏感詞": bool(c.get("敏感詞")),
             "做法": d.get("做法") or nameplan.WHOLE, "tags": d.get("tags", []), "note": d.get("note", ""),
-            "已確認": bool(d.get("已確認")),
+            "已確認": bool(d.get("已確認")), "人工新增": bool(c.get("人工新增")), **_align_info(c), **_align_info(d),
         })
     return items
+
+
+def effective_overlaps(workdir: Path, overlaps: list[dict], dec: dict | None = None) -> list[dict]:
+    """重疊清單＋人工補的重疊（`人工重疊`），改過時間的套上 `改過的起訖`（帶原本的 id，決定才對得上）。
+    覆核工作台與組裝（`render.build_decisions`）共用。"""
+    dec = dec if dec is not None else load_decisions(Path(workdir))
+    out = []
+    for o in overlaps:
+        oid = overlap_id(o)
+        d = dec["重疊"].get(oid, {})
+        if d.get("改過的起訖"):
+            a, b = d["改過的起訖"]
+            o = {**o, "id": oid, "start": a, "end": b, "length": round(b - a, 3), "改過時間": True, **_align_info(d)}
+        out.append(o)
+    for m in dec["人工重疊"]:
+        out.append({"id": m["id"], "start": m["start"], "end": m["end"], "length": round(m["end"] - m["start"], 3),
+                    "speakers": [], "已自動跳過": False, "原因": None, "人工新增": True, **_align_info(m)})
+    return sorted(out, key=lambda o: o["start"])
 
 
 def roster_words() -> list[str]:
@@ -340,6 +394,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                       "問老師": bool(t.get("問老師")), "問老師備註": t.get("問老師備註", ""),
                       "內容類型": t.get("內容類型"), "換人依據": t.get("換人依據"), "手動標記": bool(t.get("手動標記")),
                       "學員是猜的": bool(t.get("學員是猜的")), "含本名": has_real_name(draft, words),
+                      "人工新增": bool(t.get("人工新增")), **_align_info(t),
                       "建議": {"做法": "通過", "原因": why},
                       "不用處理": "保留原聲，不用校對逐字稿" if keep else skip_reason(t["start"], t["end"])})
     for it in _names_items(workdir, sents):
@@ -349,10 +404,12 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         items.append(it)
 
     ov = wd.read_json(wd.overlap_path(workdir), default=None)
+    if ov is None and dec["人工重疊"]:
+        ov = {"overlaps": []}
     skipped = []
     if ov is not None:
         overlap_mod.apply_simple_filters(ov)   # 只在記憶體裡套，不改檔
-        for o in ov.get("overlaps", []):
+        for o in effective_overlaps(workdir, ov.get("overlaps", []), dec):
             oid = overlap_id(o)
             d = dec["重疊"].get(oid, {})
             base = {"id": oid, "start": o["start"], "end": o["end"], "length": o["length"],
@@ -368,11 +425,15 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                           "學員說話者": who,
                           "做法": d.get("做法"), "排法": d.get("排法", OVERLAP_ARRANGE[0]),
                           "備註": d.get("備註", ""), "已確認": bool(d.get("已確認")), "救回": bool(d.get("救回")),
+                          "人工新增": bool(o.get("人工新增")), **_align_info(o),
                           "建議": suggest_overlap(o, turns, who, voices),
                           "不用處理": skip_reason(o["start"], o["end"])})
+    linked = {c["建議id"]: c for c in dec["刪除段落"] if c.get("建議id")}
     for sg in suggestions:
         d = dec["刪除建議"].get(sg["id"], {})
-        items.append({"類型": "刪除段落", "id": sg["id"], "start": sg["start"], "end": sg["end"], "來源": "建議",
+        c = linked.get(sg["id"], {})     # 確認刪除後改過時間的，照改過的
+        items.append({"類型": "刪除段落", "id": sg["id"], "start": c.get("start", sg["start"]),
+                      "end": c.get("end", sg["end"]), "來源": "建議", **_align_info(c),
                       "建議類型": sg.get("類型"), "決定": d.get("決定"), "已確認": bool(d.get("決定")),
                       "狀態": "還原" if d.get("決定") == "不刪" else "刪除",
                       "建議": {"做法": "刪除", "原因": f"{sg.get('類型', '')}：{sg.get('原因', '')}".strip("：")},
@@ -380,11 +441,11 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     for c in dec["刪除段落"]:
         if c.get("建議id"):
             continue
-        items.append({"類型": "刪除段落", **c, "來源": "手動", "已確認": True,
+        items.append({"類型": "刪除段落", **c, "來源": "手動", "已確認": True, "人工新增": True,
                       "建議": {"做法": "刪除" if c.get("狀態") != "還原" else "還原", "原因": "人手動加的"},
                       "不用處理": None})
     for m in dec["局部消音"]:
-        items.append({"類型": "局部消音", **m, "已確認": True,
+        items.append({"類型": "局部消音", **m, "已確認": True, "人工新增": True,
                       "建議": {"做法": m.get("方式", MUTE_WAYS[0]), "原因": "人手動加的"}, "不用處理": None})
     items.sort(key=lambda x: (x["start"], x["類型"]))
 
@@ -458,7 +519,7 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
         from bookclub.server import _append_exclusion
 
         cands = (wd.read_json(wd.names_path(workdir), default={}) or {}).get("candidates", [])
-        idx = int(cid) - 1
+        idx = int(cid) - 1 if cid.isdigit() else -1     # 人工補的名字（NM001…）不在候選清單裡
         if 0 <= idx < len(cands) and cands[idx].get("matched_text"):
             added = _append_exclusion(cands[idx]["matched_text"],
                                       "、".join(t for t in d["tags"] if t in ("是地名", "不是名字")))
@@ -563,6 +624,231 @@ def save_mute(workdir: str | Path, fields: dict) -> dict:
     if not fields.get("id"):
         f = {"方式": MUTE_WAYS[0], "狀態": "消音", **f}
     return _upsert_range(Path(workdir), "局部消音", "M", f, snap=False)
+
+
+# ---------------------------------------------------------------------------
+# 「新增修改」面板（09-29）：人標起訖 → 照類型對齊 → 新增或改時間
+# ---------------------------------------------------------------------------
+
+def _as_time(v) -> float:
+    """面板送來的時間：數字（秒）或「43:15.2」這種文字（沿用 parse_time）。"""
+    return float(v) if isinstance(v, (int, float)) else parse_time(str(v))
+
+
+def align_range(workdir: Path, kind: str, a: float, b: float) -> dict:
+    """照類型對齊（規則見 `bookclub/align.py`）。讀檔在這裡，對齊本身是純函式。"""
+    rule = align.RULES[kind]
+    if rule == align.QUIET:
+        return align.align_quiet(a, b, lambda t: snap_to_quiet(workdir, t))
+    merged = wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}
+    if rule == align.WORDS:
+        return align.align_words(a, b, merged.get("words") or [])
+    sents = merged.get("sentences") or (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
+    return align.align_sentences(a, b, sents)
+
+
+def manual_edit(workdir: str | Path, fields: dict) -> dict:
+    """`POST /api/review/manual`：新增一筆（沒帶 id）或改已經有的那一筆的時間（帶 id）。
+
+    fields：`類型`（MANUAL_KINDS）、`start`、`end`（秒數或「43:15.2」）、`id`（改時間時）；
+    學員發言另有 `說話者`，名字另有 `代號`（新增必填）、`名字`（逐字稿裡寫成什麼，不給就用對齊到的字），
+    局部消音另有 `方式`。回傳對齊結果（你標的 → 對齊後、兩端各有沒有對到）。"""
+    workdir = Path(workdir)
+    kind = str(fields.get("類型", ""))
+    if kind not in MANUAL_KINDS:
+        raise ValueError(f"類型只能是：{'、'.join(MANUAL_KINDS)}")
+    a, b = _as_time(fields["start"]), _as_time(fields["end"])
+    if b <= a:
+        raise ValueError("終點要晚於起點")
+    iid = str(fields["id"]) if fields.get("id") else None
+    al = align_range(workdir, kind, a, b)
+    info = {"標的起訖": al["標的起訖"], "對齊": al["對齊"], "對齊到": al["對齊到"]}
+    if kind == "刪除段落":
+        new_id = _manual_cut(workdir, iid, al, info)
+    elif kind == "局部消音":
+        new_id = _manual_mute(workdir, iid, al, info, fields)
+    elif kind == "重疊":
+        new_id = _manual_overlap(workdir, iid, al, info)
+    elif kind == "名字":
+        new_id = _manual_name(workdir, iid, al, info, fields)
+    else:
+        new_id = _manual_student(workdir, iid, al, info, fields)
+    return {"ok": True, "類型": "學員段落" if kind == "學員發言" else kind, "id": new_id, "新增": iid is None,
+            "對齊結果": {k: al[k] for k in ("start", "end", "標的起訖", "對齊", "對齊到")}}
+
+
+def _manual_cut(workdir: Path, iid: str | None, al: dict, info: dict) -> str:
+    info = {**info, "剪點對齊安靜處": al["對齊"]}      # 舊欄位名，組裝與匯出照舊讀得到
+    if iid and not iid.startswith("D"):
+        # 影片分析建議的（S1…）：改時間＝確認刪除、用新的起訖
+        sug = next((x for x in load_cut_suggestions(workdir) if x["id"] == iid), None)
+        if sug is None:
+            raise KeyError(f"找不到這筆建議：{iid}")
+        with _lock:
+            dec = load_decisions(workdir)
+            dec["刪除建議"][iid] = {"決定": "刪除", "更新時間": _now()}
+            _save_decisions(workdir, dec)
+            existing = next((x for x in dec["刪除段落"] if x.get("建議id") == iid), None)
+        base = {"id": existing["id"]} if existing else {"建議id": iid, "備註": sug.get("原因", "")}
+        _upsert_range(workdir, "刪除段落", "D", {**base, "start": al["start"], "end": al["end"], "狀態": "刪除", **info},
+                      snap=False)
+        return iid
+    f = {"start": al["start"], "end": al["end"], **info}
+    f.update({"id": iid} if iid else {"狀態": "刪除", "來源": "人工新增"})
+    return _upsert_range(workdir, "刪除段落", "D", f, snap=False)["項目"]["id"]
+
+
+def _manual_mute(workdir: Path, iid: str | None, al: dict, info: dict, fields: dict) -> str:
+    f = {"start": al["start"], "end": al["end"], **info}
+    if iid:
+        f["id"] = iid
+    else:
+        way = fields.get("方式") or MUTE_WAYS[0]
+        if way not in MUTE_WAYS:
+            raise ValueError(f"消音方式只能是：{'、'.join(MUTE_WAYS)}")
+        f.update({"方式": way, "狀態": "消音", "來源": "人工新增"})
+    return _upsert_range(workdir, "局部消音", "M", f, snap=False)["項目"]["id"]
+
+
+def _next_id(lst: list[dict], prefix: str) -> str:
+    n = 1 + max([int(x["id"][len(prefix):]) for x in lst if x["id"][len(prefix):].isdigit()] or [0])
+    return f"{prefix}{n:03d}"
+
+
+def _manual_overlap(workdir: Path, iid: str | None, al: dict, info: dict) -> str:
+    with _lock:
+        dec = load_decisions(workdir)
+        mine = next((x for x in dec["人工重疊"] if x["id"] == iid), None) if iid else None
+        if mine is not None:
+            mine.update({"start": al["start"], "end": al["end"], **info, "更新時間": _now()})
+        elif iid:     # 自動抓到的重疊改時間：記在決定裡，原本的 重疊.json 不動
+            d = dec["重疊"].setdefault(iid, {})
+            d.update({"改過的起訖": [al["start"], al["end"]], **info, "更新時間": _now()})
+        else:
+            iid = _next_id(dec["人工重疊"], "OM")
+            dec["人工重疊"].append({"id": iid, "start": al["start"], "end": al["end"], "來源": "人工新增", **info,
+                                  "建立時間": _now(), "更新時間": _now()})
+            dec["人工重疊"].sort(key=lambda x: x["start"])
+        _save_decisions(workdir, dec)
+    return iid
+
+
+def _manual_name(workdir: Path, iid: str | None, al: dict, info: dict, fields: dict) -> str:
+    sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
+    sent = align.sentence_at((al["start"] + al["end"]) / 2, sents)
+    word = str(fields.get("名字") or "").strip() or al["文字"]
+    with _lock:
+        dec = load_decisions(workdir)
+        mine = next((x for x in dec["人工名字"] if x["id"] == iid), None) if iid else None
+        if iid and mine is None:   # 自動抓到的名字改時間：記在名字覆核決定裡
+            decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
+            d = decisions.setdefault(iid, {"tags": [], "note": ""})
+            d.update({"改過的起訖": [al["start"], al["end"]], **info, "更新時間": _now()})
+            wd.write_json(name_decisions_path(workdir), decisions)
+            return iid
+        if mine is None:
+            code = str(fields.get("代號") or "").strip()
+            if not code:
+                raise ValueError("選這個名字要換成哪個代號")
+            iid = _next_id(dec["人工名字"], "NM")
+            mine = {"id": iid, "代號": code, "來源": "人工新增", "建立時間": _now()}
+            dec["人工名字"].append(mine)
+        elif fields.get("代號"):
+            mine["代號"] = str(fields["代號"]).strip()
+        mine.update({"start": al["start"], "end": al["end"], "matched_text": word,
+                     "sentence_id": sent["id"] if sent else None, "sentence": sent["text"] if sent else "",
+                     **info, "更新時間": _now()})
+        dec["人工名字"].sort(key=lambda x: x["start"])
+        _save_decisions(workdir, dec)
+    return iid
+
+
+def _manual_student(workdir: Path, iid: str | None, al: dict, info: dict, fields: dict) -> str:
+    from bookclub import turns as turns_mod
+
+    if iid:
+        retime_turn(workdir, iid, al["start"], al["end"])
+        ids = [iid]
+    else:
+        ids = turns_mod.mark_student(workdir, al["start"], al["end"], str(fields.get("說話者") or "新學員"))["段落"]
+    with turns_mod._lock:
+        data = wd.read_json(turns_mod.turns_path(workdir))
+        for t in data["段落"]:
+            if t["id"] in ids:
+                t.update(info)
+                if not iid:
+                    t["人工新增"] = True
+        wd.write_json(turns_mod.turns_path(workdir), data)
+    return ids[0] if ids else ""
+
+
+def retime_turn(workdir: str | Path, tid: str, start: float, end: float) -> dict:
+    """段落改起訖（純邏輯在 `retime_turns`）。"""
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    with turns_mod._lock:
+        data = wd.read_json(turns_mod.turns_path(workdir))
+        speakers = wd.read_json(wd.speakers_path(workdir)) or {}
+        sent = {s["id"]: s for s in speakers.get("sentences", [])}
+        data["段落"] = retime_turns(data["段落"], tid, start, end, sent)
+        turns_mod._recount_people(data)
+        wd.write_json(turns_mod.turns_path(workdir), data)
+    return {"ok": True}
+
+
+def retime_turns(turns: list[dict], tid: str, start: float, end: float, sent: dict[str, dict]) -> list[dict]:
+    """一段改起訖（純函式）：中點落在新範圍裡的句子歸這一段（從別段拿過來，別段拿空了就刪掉）；
+    這一段原本的句子落到範圍外的，還給時間上相鄰的那一段（前面的給前一段、後面的給後一段；沒有相鄰的
+    就自己成一段老師段落）。句子變了的段落重算原文；校對稿沒改過就跟著換，改過的保留、標成還沒確認。"""
+    import copy
+
+    ts = sorted(copy.deepcopy(turns), key=lambda t: t["start"])
+    k = next((i for i, t in enumerate(ts) if t["id"] == tid), None)
+    if k is None:
+        raise KeyError(f"找不到這一段：{tid}")
+    me = ts[k]
+    inside = {sid for sid, s in sent.items() if start <= (s["start"] + s["end"]) / 2 <= end}
+    old = [i for i in me["句子"] if i in sent]
+    before = [i for i in old if i not in inside and sent[i]["start"] < start]
+    after = [i for i in old if i not in inside and sent[i]["start"] >= start]
+    changed = {id(me)}
+    for t in ts:
+        if t is not me and any(i in inside for i in t["句子"]):
+            t["句子"] = [i for i in t["句子"] if i not in inside]
+            changed.add(id(t))
+    me["句子"] = sorted(inside, key=lambda i: sent[i]["start"])
+    prev = ts[k - 1] if k > 0 else None
+    nxt = ts[k + 1] if k + 1 < len(ts) else None
+    for give, to, at_end in ((before, prev, True), (after, nxt, False)):
+        if not give:
+            continue
+        if to is None or not to["句子"]:
+            to = {"id": f"{me['id']}r{len(ts)}", "start": 0.0, "end": 0.0, "句子": [], "說話者": "老師",
+                  "文字判斷": "老師", "聲音判斷": "老師", "換人依據": "人工改時間後剩下的句子", "老師點名": None,
+                  "信心": None, "內容類型": "其他", "文字學員編號": None, "原文": "", "校對稿": "",
+                  "已確認": False, "校對秒數": None}
+            ts.append(to)
+        to["句子"] = (to["句子"] + give) if at_end else (give + to["句子"])
+        changed.add(id(to))
+    out = []
+    for t in ts:
+        if id(t) in changed:
+            ids = [i for i in t["句子"] if i in sent]
+            if not ids and t is not me:
+                continue          # 句子全被拿走的段落刪掉
+            text = "".join(sent[i]["text"] for i in ids)
+            if text != t.get("原文", ""):
+                if t.get("校對稿", "") == t.get("原文", ""):
+                    t["校對稿"] = text
+                t["已確認"] = False
+            t["原文"] = text
+            if t is me:
+                t["start"], t["end"] = round(start, 3), round(end, 3)
+            elif ids:
+                t["start"], t["end"] = sent[ids[0]]["start"], sent[ids[-1]]["end"]
+        out.append(t)
+    return sorted(out, key=lambda t: t["start"])
 
 
 def set_voice(workdir: str | Path, person: str | None, choice: str) -> dict:
