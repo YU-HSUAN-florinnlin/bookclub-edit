@@ -117,3 +117,10 @@ def write_json(path: Path, data) -> None:
     tmp = path.with_name(f".{path.name}.寫入中")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def fingerprint(data) -> str:
+    """任何可以轉成 JSON 的東西 → 短指紋（09-29 檢查 #7：衍生檔記下自己是從哪一份輸入算出來的）。"""
+    import hashlib
+
+    return hashlib.sha1(json.dumps(data, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]

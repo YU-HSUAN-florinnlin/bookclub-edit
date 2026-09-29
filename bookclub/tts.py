@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import difflib
+import functools
 import hashlib
 import re
 import shutil
@@ -555,12 +556,41 @@ def _free_memory() -> None:
 def ref_fingerprint(path: str | Path) -> str | None:
     """參考音檔內容的指紋（09-29）：重挑參考音常寫到同一個檔名，只比路徑會沿用舊聲音生成的結果。"""
     p = Path(path)
-    return hashlib.sha1(p.read_bytes()).hexdigest()[:12] if p.is_file() else None
+    if not p.is_file():
+        return None
+    st = p.stat()
+    return _fingerprint(str(p), st.st_mtime_ns, st.st_size)   # 第 4 步網頁每幾秒問一次，檔案沒變就不重算
+
+
+@functools.lru_cache(maxsize=64)
+def _fingerprint(path: str, _mtime_ns: int, _size: int) -> str:
+    return hashlib.sha1(Path(path).read_bytes()).hexdigest()[:12]
 
 
 def same_ref_file(rec: dict, ref_wav: str | Path) -> bool:
     """紀錄裡的參考音跟現在的是不是同一個（路徑相同、內容也相同；舊紀錄沒有指紋就只比路徑）。"""
     return rec.get("參考音") == str(ref_wav) and rec.get("參考音指紋") in (None, ref_fingerprint(ref_wav))
+
+
+SLOT_TOLERANCE_S = 0.05
+
+
+def record_stale(rec: dict | None, it: dict, ref_wav: str | Path | None = None) -> bool:
+    """這一句上次的生成結果還能不能沿用（09-29 檢查 #7）。生成程式和第 4 步「做過沒有」共用這一個判斷，
+    兩邊才不會一個說做過了、一個說要重做。
+
+    要重做：沒有紀錄、要念的文字改了、發音對照表改了（生成用文字不同）、時間格改了（改起訖、加了刪除段落）、
+    給了 ref_wav 而參考音換了（學員那邊每一句各記參考音；老師那邊整份紀錄記一個，另外比）。"""
+    if not rec:
+        return True
+    if rec.get("text") != it.get("text"):
+        return True
+    if "生成用文字" in it and rec.get("生成用文字", rec.get("text")) != it["生成用文字"]:
+        return True
+    old, new = rec.get("slot"), it.get("slot")
+    if old and new and (abs(old[0] - new[0]) > SLOT_TOLERANCE_S or abs(old[1] - new[1]) > SLOT_TOLERANCE_S):
+        return True
+    return ref_wav is not None and not same_ref_file(rec, ref_wav)
 
 
 def run_generation(
@@ -736,8 +766,7 @@ def generate_teacher(
         log("參考音跟上次不同，全部重新生成。")
         done = {}
 
-    todo = [it for it in items if it["id"] not in done or done[it["id"]]["text"] != it["text"]
-            or done[it["id"]].get("生成用文字", it["text"]) != it["生成用文字"]]
+    todo = [it for it in items if record_stale(done.get(it["id"]), it)]
     log(f"[老師聲音] 共 {len(items)} 句，要生成 {len(todo)} 句（其他 {len(items) - len(todo)} 句沿用上次結果）")
     out_dir = teacher_out_dir(workdir)
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -106,8 +106,14 @@ def names_done(workdir: Path) -> tuple[bool, str]:
         return True, "沒有要生成的名字句子（都是消音或略過）"
     tlog = wd.read_json(tts.teacher_log_path(workdir), default=None) or {}
     recs = {r["id"]: r for r in tlog.get("句子", [])}
+    # 09-29 檢查 #7：跟生成程式用同一個判斷（文字、發音對照表、時間格、參考音）
+    ref_wav, ref_txt = wd.ref_dir(workdir) / "ref.wav", wd.ref_dir(workdir) / "ref.txt"
+    if recs and tlog.get("參考音") and ref_wav.is_file() and ref_txt.is_file() and not (
+            tts.same_ref_file(tlog, ref_wav) and tlog.get("參考音逐字稿") == ref_txt.read_text(encoding="utf-8").strip()):
+        return False, f"老師參考音換過了，{len(gen)} 句都要重新生成"
+    table = tts.load_pron_table(workdir / tts.PRON_TABLE_NAME if (workdir / tts.PRON_TABLE_NAME).is_file() else None)
     left = [g["id"] for g in gen if not (recs.get(g["id"]) or {}).get("放回時間格")
-            or recs[g["id"]].get("text") not in (None, g["text"])]
+            or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]})]
     return (not left), (f"{len(gen)} 句都生成好了" if not left else f"還有 {len(left)}／{len(gen)} 句要生成")
 
 
@@ -117,10 +123,15 @@ def students_done(workdir: Path, a: float | None, b: float | None) -> tuple[bool
     items, _ = students.build_items(workdir, a, b)
     if not items:
         return True, "範圍內沒有學員段落"
+    from bookclub import tts
+
     log = wd.read_json(students.log_path(workdir), default=None) or {}
     recs = {r["id"]: r for r in log.get("句子", [])}
-    left = [it["id"] for it in items if it["id"] not in recs or recs[it["id"]].get("text") != it["text"]
-            or not recs[it["id"]].get("放回時間格")]
+    table = tts.load_pron_table()
+    # 09-29 檢查 #7：跟生成程式用同一個判斷（文字、發音對照表、時間格、參考音內容）
+    left = [it["id"] for it in items if not (recs.get(it["id"]) or {}).get("放回時間格")
+            or tts.record_stale(recs[it["id"]], {**it, "生成用文字": tts.apply_pron(it["text"], table)[0]},
+                                recs[it["id"]].get("參考音"))]
     return (not left), (f"{len(items)} 段都生成好了" if not left else f"還有 {len(left)}／{len(items)} 段要生成")
 
 
@@ -133,8 +144,13 @@ def stunames_done(workdir: Path) -> tuple[bool, str]:
     rec = wd.read_json(studentgen.log_path(workdir), default=None) or {}
     recs = {r["id"]: r for r in rec.get("句子", [])}
     back = rec.get("退回直接消音") or {}
+    from bookclub import tts
+
+    table = tts.load_pron_table()
     left = [g["id"] for g in sp["生成"] if g["id"] not in back
-            and not ((recs.get(g["id"]) or {}).get("放回時間格") and recs[g["id"]].get("text") == g["text"])]
+            and (not (recs.get(g["id"]) or {}).get("放回時間格")
+                 or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]},
+                                     recs[g["id"]].get("參考音")))]
     return (not left), (f"{len(sp['生成'])} 句都處理好了" if not left else f"還有 {len(left)}／{len(sp['生成'])} 句要生成")
 
 

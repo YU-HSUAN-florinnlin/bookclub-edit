@@ -27,7 +27,7 @@ import soundfile as sf
 
 from bookclub.config import load_settings
 from bookclub.refpick import SIM_TEACHER, _classify, _l2norm, _merge_intervals, cosine, fmt_time
-from bookclub.workdir import overlap_path, read_json, write_json
+from bookclub.workdir import fingerprint, overlap_path, read_json, write_json
 
 SR = 16000
 MIN_SEG_S = 1.0        # 說話者聲紋只用 >= 這個長度的區間（跟 diarize_test.py 一致）
@@ -182,12 +182,22 @@ def find_overlaps(
     workdir = Path(workdir)
     cache_path = overlap_path(workdir)
     cached = read_json(cache_path, default=None)
+    in_fp = fingerprint([[round(s, 1), round(e, 1)] for s, e in _merge_intervals([(s, e) for s, e in scan_regions])])
     if cached is not None:
         print("[3/找重疊] 已有 重疊.json，略過")
         before = cached.get("已自動跳過數")
         apply_simple_filters(cached)
-        if cached["已自動跳過數"] != before:
+        # 09-29 檢查 #7：記下掃描範圍；之後說話者判斷改了、範圍不同，大聲提醒（不自動重算：重疊已經接了人工覆核決定）
+        fp_missing = cached.get("輸入指紋") is None
+        if fp_missing:
+            cached["輸入指紋"] = in_fp
+        if cached["已自動跳過數"] != before or fp_missing:
             write_json(cache_path, cached)
+        if cached["輸入指紋"] != in_fp:
+            msg = ("重疊是用舊的掃描範圍找的，這次說話者判斷不一樣：新的學員區域裡的重疊可能沒找。"
+                   "要重找就把 重疊.json 改名後重跑（每個區域有快取，只補新的區域）")
+            print(f"⚠️ [3/找重疊] {msg}")
+            cached = {**cached, "輸入改過": msg}
         return cached
 
     audio_path = Path(audio_path)
@@ -260,6 +270,7 @@ def find_overlaps(
 
     result = {
         "overlaps": all_overlaps,
+        "輸入指紋": in_fp,
         "用到快取的區域數": n_cached,
         "重疊數": len(all_overlaps),
         "已自動跳過數": n_skipped,

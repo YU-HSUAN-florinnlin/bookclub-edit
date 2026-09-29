@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from bookclub.workdir import name_candidates_dir, names_path, read_json, write_json
+from bookclub.workdir import fingerprint, name_candidates_dir, names_path, read_json, write_json
 
 # ---------- 讀音放寬（照 spikes/nametest/name_test_ab.py 驗證過的做法） ----------
 
@@ -312,8 +312,20 @@ def find_names(
     audio_path = Path(audio_path)
     cache_path = Path(cache_path) if cache_path else names_path(workdir)
     cached = read_json(cache_path, default=None) if use_cache else None
+    select = select or (lambda s: s.get("label") == "老師")
+    in_fp = fingerprint([[s["id"], s["text"]] for s in sentences if select(s)])
     if cached is not None:
         print("[4/找名字] 已有 名字候選.json，略過")
+        # 09-29 檢查 #7：記下是從哪些老師句子找的；之後說話者判斷或逐字稿改了，大聲提醒（不自動重算：
+        # 名字候選已經接了人工覆核決定、補找的名字，自動重算會丟東西）
+        if cached.get("輸入指紋") is None:
+            cached["輸入指紋"] = in_fp
+            write_json(cache_path, cached)
+        elif cached["輸入指紋"] != in_fp:
+            msg = ("名字候選是用舊的說話者判斷／逐字稿找的，這次的不一樣：可能漏掉新判成老師的句子裡的名字。"
+                   "要重找就把 名字候選.json 改名後重跑（覆核決定會照候選內容對回去）")
+            print(f"⚠️ [4/找名字] {msg}")
+            cached = {**cached, "輸入改過": msg}
         return cached
 
     t0 = time.time()
@@ -349,7 +361,6 @@ def find_names(
     action_counts: dict[str, int] = {}
     confidence_counts = {"雙邊乾淨": 0, "單邊乾淨": 0, "都不乾淨": 0}
 
-    select = select or (lambda s: s.get("label") == "老師")
     teacher_sentences = [s for s in sentences if select(s)]
     audio_full = None  # 延遲載入，名冊是空的、或這句的命中全部被排除清單擋掉時完全不用碰音檔
 
@@ -446,6 +457,7 @@ def find_names(
     elapsed = time.time() - t0
     result = {
         "candidates": candidates,
+        "輸入指紋": in_fp,
         "已自動排除": excluded,
         "排除清單": exclusions,
         "統計": {

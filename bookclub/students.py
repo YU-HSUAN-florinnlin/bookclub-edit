@@ -373,9 +373,7 @@ def generate_students(
             if not p.is_file():
                 raise FileNotFoundError(f"找不到{sex}聲參考音：{p}")
         ref_text = ref_txt.read_text(encoding="utf-8").strip()
-        todo = [it for it in group if not (
-            it["id"] in done and tts.same_ref_file(done[it["id"]], ref_wav)
-            and done[it["id"]]["text"] == it["text"] and done[it["id"]].get("生成用文字") == it["生成用文字"])]
+        todo = [it for it in group if tts.record_stale(done.get(it["id"]), it, ref_wav)]
         log(f"[學員聲音] {sex}聲：{len(group)} 段（{sum(it['slot_s'] for it in group):.0f} 秒），要生成 {len(todo)} 段")
         if not todo:
             continue

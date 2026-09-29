@@ -331,7 +331,10 @@ def _step3_speaker_classify(
     cache_path = workdir / "說話者判斷.json"
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        return cached["sentences"], cached["cluster_info"], 0.0
+        # 09-29 檢查 #7：逐字稿重轉過（句子 id 或文字不同），舊的判斷對不上，重算（只是聲紋，約 2 分鐘，沒有人工決定）
+        if [(s["id"], s["text"]) for s in cached["sentences"]] == [(s["id"], s["text"]) for s in sentences]:
+            return cached["sentences"], cached["cluster_info"], 0.0
+        print("⚠️ [3/找老師] 逐字稿跟上次判斷說話者時不一樣（重轉過文字），重新判斷說話者")
 
     from pyannote.core import Segment
     from pyannote.audio.core.io import Audio as PyannoteAudio

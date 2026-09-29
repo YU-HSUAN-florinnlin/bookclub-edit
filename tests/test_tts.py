@@ -389,5 +389,25 @@ def _run_all() -> int:
     return 1 if failed else 0
 
 
+def test_record_stale_checks_text_pron_slot_and_ref():
+    # 09-29 檢查 #7：生成程式和第 4 步「做過沒有」共用同一個判斷
+    import tempfile
+
+    from bookclub import tts as t
+
+    ref = Path(tempfile.mkdtemp()) / "ref.wav"
+    ref.write_bytes(b"A")
+    rec = {"text": "你好", "生成用文字": "你好", "slot": [1.0, 2.0], "參考音": str(ref), "參考音指紋": t.ref_fingerprint(ref)}
+    it = {"text": "你好", "生成用文字": "你好", "slot": [1.0, 2.0]}
+    assert not t.record_stale(rec, it, ref)
+    assert t.record_stale(None, it)
+    assert t.record_stale(rec, {**it, "text": "您好"})
+    assert t.record_stale(rec, {**it, "生成用文字": "妳好"})          # 發音對照表改了
+    assert t.record_stale(rec, {**it, "slot": [1.0, 2.3]})           # 時間格改了
+    assert not t.record_stale(rec, {**it, "slot": [1.01, 2.02]})     # 差一點點不算
+    ref.write_bytes(b"B")                                            # 同一個檔名、內容換了
+    assert t.record_stale(rec, it, ref)
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

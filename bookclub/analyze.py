@@ -214,6 +214,12 @@ def run_analyze(
         print("[分析一條龍] 7/7 跳過段落分析（--skip-turns）")
     elif turns_mod.turns_path(workdir).exists():
         print("[分析一條龍] 7/7 段落分析已經有結果，沿用（不覆蓋已經確認過的段落）")
+        # 09-29 檢查 #7：逐字稿重轉過的話，段落裡的句子 id 會對不上，不能默默沿用
+        have = {s["id"] for s in sentences}
+        used = {i for t in (read_json(turns_mod.turns_path(workdir), default={}) or {}).get("段落", []) for i in t.get("句子", [])}
+        if used - have:
+            print(f"⚠️ [分析一條龍] 段落分析裡有 {len(used - have)} 句在新的逐字稿找不到（逐字稿重轉過）："
+                  "第 3 步的段落是舊的，要重做就把 校對/段落.json 改名後重跑")
     elif text_data is None:
         print("[分析一條龍] 7/7 沒有段落分析的文字結果（Claude 失敗），跳過學員認人")
     else:
@@ -267,6 +273,7 @@ def run_analyze(
         "重疊掃描區域數": len(scan_regions),
         "重疊掃描總秒數": round(sum(e - s for s, e in scan_regions), 1),
         "重疊數": overlap_result.get("重疊數", 0),
+        "要注意": [m for m in (overlap_result.get("輸入改過"), names_result.get("輸入改過")) if m],   # 09-29 檢查 #7
         "重疊已自動跳過數": overlap_result.get("已自動跳過數", 0),
         "參考音候選數": ref_record.get("候選數", 0),
         "名字候選數": names_result["統計"].get("總筆數", 0),
@@ -292,6 +299,10 @@ def _build_report(result: dict) -> str:
     lines.append(f"- 句數：{result['句數']}　字數：{result['字數']}")
     lines.append("")
 
+    if result.get("要注意"):
+        lines.append("## ⚠️ 要注意")
+        lines += [f"- {m}" for m in result["要注意"]]
+        lines.append("")
     lines.append("## 各步驟耗時")
     lines.append("| 步驟 | 耗時（秒） |")
     lines.append("| --- | --- |")

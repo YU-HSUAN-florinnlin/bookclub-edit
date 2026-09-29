@@ -175,8 +175,7 @@ def generate(workdir: str | Path, *, synth_factory=None, hear=None, align=None, 
         for it in group:
             it["slot_s"] = it["slot"][1] - it["slot"][0]
             it["生成用文字"], it["發音對照"] = tts.apply_pron(it["text"], table)
-        todo = [it for it in group if not (it["id"] in done and tts.same_ref_file(done[it["id"]], ref["wav"])
-                                           and done[it["id"]]["text"] == it["text"])]
+        todo = [it for it in group if tts.record_stale(done.get(it["id"]), it, ref["wav"])]
         log(f"[{TAG}] {who}：{len(group)} 句，要生成 {len(todo)} 句（參考音 {ref.get('長度秒', '沿用')} 秒）")
         if not todo:
             continue
