@@ -849,19 +849,26 @@ function rvRenderPrep() {
 function rvSegsOf(who) { return rvItems().filter((x) => x["類型"] === "學員段落" && x["說話者"] === who); }
 
 function rvPrepPeopleHtml() {
+  // 09-29 宇軒：改成左右兩欄。左：聲紋分出來的每一位，試聽＋選本名（最後一個選項是老師）；右：每個本名在這支影片用哪個英文代號
   const people = Object.entries(rv.data["學員"] || {});
   if (!people.length) return `<p class="rv-meta">${rv.data["有段落"] ? "這支影片沒有學員段落。" : "還沒有段落分析結果：先跑完第 1 步影片分析。"}</p>`;
+  const tp = rv.data["學員資料"] || {};
   const codes = rv.data["代號選項"] || [];
-  const rows = people.map(([n, p]) => {
-    const opts = ['<option value="">（還沒指定）</option>'].concat(codes.map((c) => `<option ${p["代號"] === c ? "selected" : ""}>${esc(c)}</option>`)).join("");
-    const others = people.filter(([m]) => m !== n).map(([m]) => `<option value="${esc(m)}">${esc(rvWho(m))}</option>`).join("");
-    const sug = p["建議代號"];
+  const reals = tp["本名選項"] || [];
+  const teacher = tp["老師名稱"] || "老師";
+  const rosterCode = tp["名冊代號"] || {};
+  const nameCode = tp["本名代號"] || {};
+  const left = people.map(([n, p]) => {
+    const others = people.filter(([m]) => m !== n).map(([m]) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    const realOpts = ['<option value="">（還沒指定）</option>']
+      .concat(reals.map((r) => `<option value="${esc(r)}" ${p["本名"] === r ? "selected" : ""}>${esc(r)}</option>`))
+      .concat([`<option value="${esc(teacher)}">${esc(teacher)}（這位其實是老師）</option>`]).join("");
     const segs = rvSegsOf(n);
     const split = rv.splitOpen === n ? `<div class="rv-splitbox">
         <p class="rv-meta">勾選其實是另一個人的段落，按「改成新的一位學員」；其實是老師在講話的，按「勾的改成老師」（全部勾＝這一位整個都是老師）。</p>
-        <ul>${segs.map((s) => `<li><label class="rv-check"><input type="checkbox" class="rv-splitck" value="${esc(s.id)}">
-          <span class="tm">${esc(rvFmt(s.start))}</span> ${esc((s["建議稿"] || "").slice(0, 36))}</label>
-          <button class="ghost small rv-segplay" data-t="${s.start}">試聽</button></li>`).join("")}</ul>
+        <ul>${segs.map((sg) => `<li><label class="rv-check"><input type="checkbox" class="rv-splitck" value="${esc(sg.id)}">
+          <span class="tm">${esc(rvFmt(sg.start))}</span> ${esc((sg["建議稿"] || "").slice(0, 36))}</label>
+          <button class="ghost small rv-segplay" data-t="${sg.start}">試聽</button></li>`).join("")}</ul>
         <button class="primary small" id="rv-splitgo" data-person="${esc(n)}">改成新的一位學員</button>
         <button class="ghost small" id="rv-toteacher" data-person="${esc(n)}">勾的改成老師</button>
         <button class="ghost small" id="rv-splitcancel">取消</button></div>` : "";
@@ -869,14 +876,25 @@ function rvPrepPeopleHtml() {
       <div class="nm"><i class="dot" style="background:${rvStuColor(n)}"></i><b>${esc(n)}</b><span class="rv-meta">${esc(rvFmt(p["秒數"]))}，${p["段數"]} 段</span></div>
       <div class="ctl">
         <button class="ghost small rv-sample" data-person="${esc(n)}">試聽</button>
-        <label>是名冊上的 <select class="rv-code" data-person="${esc(n)}">${opts}</select></label>
-        ${sug && !p["代號"] ? `<button class="ghost small rv-sug" data-person="${esc(n)}" data-code="${esc(sug)}">用老師點名的建議：${esc(sug)}</button>` : ""}
+        <label>本名 <select class="rv-real" data-person="${esc(n)}">${realOpts}</select></label>
+      </div>
+      <details class="rv-more-ctl"><summary>其他（合併、拆開）</summary><div class="ctl">
         ${others ? `<label>跟誰是同一人 <select class="rv-mergeto" data-person="${esc(n)}"><option value="">—</option>${others}</select></label>` : ""}
         <button class="ghost small rv-splitopen" data-person="${esc(n)}" title="一位其實是兩個人、或有幾段其實是老師">拆開／有幾段其實是老師</button>
-      </div>${split}</li>`;
+      </div></details>${split}</li>`;
   }).join("");
-  return `<p class="rv-meta">「學員 1、2⋯⋯」是聲紋分出來的。試聽之後選他是名冊上的誰（顯示英文代號）；兩位其實是同一人就合併，一位其實是兩個人就拆開。</p>
-    <ul class="rv-people">${rows}</ul>`;
+  const chosen = [...new Set(people.map(([, p]) => p["本名"]).filter(Boolean))];
+  const right = chosen.length ? chosen.map((r) => {
+    const cur = nameCode[r] || rosterCode[r] || "";
+    const who = people.filter(([, p]) => p["本名"] === r).map(([n]) => n).join("、");
+    const opts = ['<option value="">（還沒指定）</option>'].concat(codes.map((c) => `<option ${cur === c ? "selected" : ""}>${esc(c)}</option>`)).join("");
+    return `<li class="rv-person"><div class="nm"><b>${esc(r)}</b><span class="rv-meta">${esc(who)}</span></div>
+      <div class="ctl"><label>英文代號 <select class="rv-namecode" data-real="${esc(r)}">${opts}</select></label>
+      ${rosterCode[r] && cur !== rosterCode[r] ? `<span class="rv-meta">名冊上是 ${esc(rosterCode[r])}</span>` : ""}</div></li>`;
+  }).join("") : `<li class="rv-meta">左邊選了本名之後，這裡會列出來。</li>`;
+  return `<p class="rv-meta">左邊是聲紋分出來的「學員 1、2⋯⋯」：試聽後選他的本名；聲音其實是老師的，選「${esc(teacher)}」。右邊是每個本名在這支影片換成哪個英文代號（預設是名冊上的）。</p>
+    <div class="rv-people2"><div><h4>聲紋分出來的人</h4><ul class="rv-people">${left}</ul></div>
+      <div><h4>本名 → 這支影片的英文代號</h4><ul class="rv-people">${right}</ul></div></div>`;
 }
 
 function rvPrepVoiceHtml() {
@@ -909,6 +927,16 @@ function rvBindPrep(root) {
     if (seg) play(seg.start);
   }));
   const reload = async () => { await rvReload(); };
+  root.querySelectorAll(".rv-real").forEach((el) => el.addEventListener("change", async () => {
+    const tname = (rv.data["學員資料"] || {})["老師名稱"] || "老師";
+    if (el.value === tname && !confirm(`${el.dataset.person} 其實是${tname}？\n這一位的段落會全部改成老師（不重念），並補找裡面老師提到的名字。\n只有幾段是老師的話，改用下面「其他」→「拆開／有幾段其實是老師」。`)) { el.value = ""; return; }
+    const res = await apiPost("/api/turns/realname", { "學員": el.dataset.person, "本名": el.value || null });
+    if (res["補找到的老師名字"]) alert(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
+    await reload();
+  }));
+  root.querySelectorAll(".rv-namecode").forEach((el) => el.addEventListener("change", async () => {
+    await apiPost("/api/turns/namecode", { "本名": el.dataset.real, "代號": el.value || null }); await reload();
+  }));
   root.querySelectorAll(".rv-code").forEach((el) => el.addEventListener("change", async () => {
     await apiPost("/api/turns/person", { "學員": el.dataset.person, "代號": el.value || null }); await reload();
   }));

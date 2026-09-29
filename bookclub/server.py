@@ -1006,6 +1006,10 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/turns/merge_person":
                 self._send_json(200, _turns.merge_person(server.workdir, str(body["從"]), str(body["併進"])))
+            elif path == "/api/turns/realname":
+                self._send_json(200, _turns.set_real_name(server.workdir, str(body["學員"]), body.get("本名")))
+            elif path == "/api/turns/namecode":
+                self._send_json(200, _turns.set_name_code(server.workdir, str(body["本名"]), body.get("代號")))
             elif path == "/api/turns/reassign":
                 self._send_json(200, _turns.reassign_turns(server.workdir, [str(x) for x in body["ids"]],
                                                            str(body["說話者"])))

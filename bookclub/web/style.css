@@ -536,6 +536,14 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .rv-person .nm { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
 .rv-person .nm .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .rv-person .ctl { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 15px; }
+/* 09-29「學員是誰」左右兩欄：左邊聲紋分出來的人→本名，右邊本名→英文代號；窄螢幕上下排 */
+.rv-people2 { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 0 28px; }
+.rv-people2 h4 { margin: 8px 0 0; font-size: 15px; color: var(--rv-muted, #666); font-weight: 600; }
+.rv-people2 > div + div { border-left: 1px solid var(--rv-line); padding-left: 24px; }
+.rv-more-ctl { margin-top: 6px; font-size: 14px; }
+.rv-more-ctl summary { cursor: pointer; color: var(--rv-muted, #666); }
+.rv-more-ctl .ctl { margin-top: 6px; }
+@media (max-width: 760px) { .rv-people2 { grid-template-columns: 1fr; } .rv-people2 > div + div { border-left: 0; padding-left: 0; } }
 .rv-splitbox { margin-top: 10px; padding: 10px 14px; background: var(--bg-soft); border-radius: 10px; }
 .rv-splitbox ul { list-style: none; padding: 0; margin: 6px 0 10px; }
 .rv-splitbox li { display: flex; gap: 10px; align-items: center; padding: 3px 0; font-size: 15px; }

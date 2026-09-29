@@ -464,6 +464,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "色帶": bands,
         "學員": people,
         "代號選項": tdata.get("代號選項", []),
+        "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號")},   # 09-29「學員是誰」兩欄
         "項目": items,
         "已自動跳過的重疊": skipped,
         "刪除建議": [{**sg, "決定": dec["刪除建議"].get(sg["id"], {}).get("決定")} for sg in suggestions],

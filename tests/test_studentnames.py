@@ -180,6 +180,21 @@ def test_reassign_turns_to_teacher_from_people_section():
     assert len(wd.read_json(wd.names_path(w))["candidates"]) == n0 + 1
 
 
+def test_real_name_and_code_columns():
+    """「學員是誰」兩欄：左邊選本名（預設帶名冊代號）、右邊改這支影片的代號；選老師＝整位改成老師。"""
+    from bookclub import turns as turns_mod
+
+    w = _fresh()
+    d = turns_mod.page_data(w)
+    assert "小美" in d["本名選項"] and d["名冊代號"]["小美"] == "Amy" and d["老師名稱"]
+    r = turns_mod.set_real_name(w, "學員1", "小美")
+    assert r["代號"] == "Amy"
+    turns_mod.set_name_code(w, "小美", "Tom")
+    assert turns_mod.page_data(w)["學員"]["學員1"]["代號"] == "Tom"
+    r = turns_mod.set_real_name(w, "學員2", d["老師名稱"])
+    assert r["改成老師"] and "學員2" not in turns_mod.page_data(w)["學員"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

@@ -451,7 +451,15 @@ def page_data(workdir: str | Path) -> dict:
         sample = next((t for t in data["段落"] if t["說話者"] == name and t["end"] - t["start"] >= 3), None) \
             or next((t for t in data["段落"] if t["說話者"] == name), None)
         p["試聽網址"] = _audio_url(sample["start"], min(sample["end"], sample["start"] + 12)) if sample else None
-    data["代號選項"] = sorted({r["代號"] for r in names.load_roster(data_dir() / "名冊.csv") if r["代號"]})
+    roster = names.load_roster(data_dir() / "名冊.csv")
+    data["代號選項"] = sorted({r["代號"] for r in roster if r["代號"]})
+    # 09-29「學員是誰」改兩欄：左邊選本名（最後一個選項是老師），右邊每個本名在這支影片用哪個英文代號
+    data["本名選項"] = sorted({r["canonical"] for r in roster if r.get("canonical")})
+    data["名冊代號"] = {r["canonical"]: r["代號"] for r in roster if r.get("canonical") and r["代號"]}
+    from bookclub.config import load_settings
+
+    data["老師名稱"] = load_settings().teacher.name
+    data.setdefault("本名代號", {})
     data["進度"] = turns_progress(data)
     return data
 
@@ -569,6 +577,46 @@ def set_person_code(workdir: str | Path, person: str, code: str | None) -> dict:
         data["學員"].setdefault(person, {"秒數": 0.0, "段數": 0, "點名線索": {}})["代號"] = code or None
         wd.write_json(turns_path(workdir), data)
         return {"ok": True}
+
+
+def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
+    """`POST /api/turns/realname`：學員 N 的本名（09-29 宇軒：「學員是誰」左欄）。
+    選老師（`settings.toml` 的 `[teacher] name`，預設「老師」）＝這一位的段落全部改成老師，並補找老師提到的名字。
+    其他本名：記下本名，英文代號用這支影片右欄設過的；沒設過就用名冊上的代號。"""
+    from bookclub import names
+    from bookclub.config import data_dir, load_settings
+
+    workdir = Path(workdir)
+    teacher = load_settings().teacher.name
+    if real and real in (teacher, "老師"):
+        ids = [t["id"] for t in wd.read_json(turns_path(workdir))["段落"] if t["說話者"] == person]
+        if not ids:
+            raise KeyError(f"{person} 沒有段落")
+        return {**reassign_turns(workdir, ids, "老師"), "改成老師": True}
+    roster = {r["canonical"]: r["代號"] for r in names.load_roster(data_dir() / "名冊.csv") if r.get("canonical")}
+    with _lock:
+        data = wd.read_json(turns_path(workdir))
+        p = data["學員"].setdefault(person, {"秒數": 0.0, "段數": 0, "點名線索": {}})
+        p["本名"] = real or None
+        if real:
+            p["代號"] = (data.get("本名代號") or {}).get(real) or roster.get(real) or p.get("代號")
+        wd.write_json(turns_path(workdir), data)
+        return {"ok": True, "學員": person, "本名": p["本名"], "代號": p.get("代號")}
+
+
+def set_name_code(workdir: str | Path, real: str, code: str | None) -> dict:
+    """`POST /api/turns/namecode`：這個本名在這支影片用哪個英文代號（右欄）；同一個本名的學員 N 一起改。"""
+    workdir = Path(workdir)
+    with _lock:
+        data = wd.read_json(turns_path(workdir))
+        data.setdefault("本名代號", {})[real] = code or None
+        n = 0
+        for p in data["學員"].values():
+            if p.get("本名") == real:
+                p["代號"] = code or None
+                n += 1
+        wd.write_json(turns_path(workdir), data)
+        return {"ok": True, "本名": real, "代號": code, "改了幾位": n}
 
 
 # ---------- 09-26：開始前確認「學員是誰」、漏抓的學員發言 ----------

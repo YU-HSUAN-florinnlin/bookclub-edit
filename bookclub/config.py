@@ -73,12 +73,20 @@ class Overlap:
 
 
 @dataclass
+class Teacher:
+    """老師在介面上顯示的名字（第 3 步「學員是誰」的本名選單最後一個選項；選了就把那位的段落改成老師）。"""
+
+    name: str = "老師"
+
+
+@dataclass
 class Settings:
     server_port: int = DEFAULT_SERVER_PORT
     claude_models: ClaudeModels = field(default_factory=ClaudeModels)
     thresholds: Thresholds = field(default_factory=Thresholds)
     paths: Paths = field(default_factory=Paths)
     overlap: Overlap = field(default_factory=Overlap)
+    teacher: Teacher = field(default_factory=Teacher)
 
 
 def settings_path() -> Path:
@@ -107,6 +115,7 @@ def load_settings() -> Settings:
     thresholds_raw = raw.get("thresholds", {})
     paths_raw = raw.get("paths", {})
     overlap_raw = raw.get("overlap", {})
+    teacher_raw = raw.get("teacher", {})
 
     return Settings(
         server_port=int(server_raw.get("port", DEFAULT_SERVER_PORT)),
@@ -127,6 +136,7 @@ def load_settings() -> Settings:
         overlap=Overlap(
             scan_pad_s=float(overlap_raw.get("scan_pad_s", 3.0)),
         ),
+        teacher=Teacher(name=str(teacher_raw.get("name", "老師")).strip() or "老師"),
     )
 
 
