@@ -191,10 +191,12 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     names = names if names is not None else (wd.read_json(wd.names_path(workdir)) or {})
     speakers = wd.read_json(wd.speakers_path(workdir)) or {}
     sentences = {s["id"]: s for s in speakers.get("sentences", [])}
-    decisions = wd.read_json(workdir / DECISIONS_FILE_NAME, default={}) or {}
-    candidates = names.get("candidates", [])
     from bookclub import review
 
+    if wd.names_path(workdir).is_file():
+        review.anchor_name_decisions(workdir)   # 09-29：候選重算過，決定跟著內容走
+    decisions = wd.read_json(workdir / DECISIONS_FILE_NAME, default={}) or {}
+    candidates = names.get("candidates", [])
     candidates = review.effective_name_candidates(workdir, candidates, decisions)   # 人工補的、改過時間的
     if only:
         candidates = [c for c in candidates if "id" not in c]     # 測試只處理幾筆時，人工補的先不做

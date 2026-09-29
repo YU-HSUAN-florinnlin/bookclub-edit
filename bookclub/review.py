@@ -283,6 +283,58 @@ def _align_info(d: dict) -> dict:
     return {k: d[k] for k in ALIGN_KEYS if k in d}
 
 
+def name_fingerprint(c: dict) -> str:
+    """名字候選的內容指紋：哪一句、幾秒、抓到哪幾個字。候選清單重算、順序變了，靠這個找回同一筆。"""
+    return f"{c.get('sentence_id')}|{round(float(c.get('start', 0)), 1)}|{c.get('matched_text', '')}"
+
+
+def anchor_name_decisions(workdir: str | Path) -> dict:
+    """老師名字的覆核決定照「第幾筆」存（09-29 檢查 #6）：`名字候選.json` 整份重算、順序變了，決定會套到別筆。
+
+    每筆決定記下候選的內容指紋；讀的時候指紋對不上，就搬到指紋相同的那一筆；找不到的收進 `_找不到的候選`，
+    不套用、也不丟掉。舊的決定沒有指紋：用現在同一個編號的候選補上（還沒重算過，編號是對的）。
+    回傳 {"搬動": n, "找不到": n}；沒變就不寫檔。"""
+    workdir = Path(workdir)
+    cands = (wd.read_json(wd.names_path(workdir), default=None) or {}).get("candidates", [])
+    path = name_decisions_path(workdir)
+    with _lock:
+        decisions = wd.read_json(path, default=None)
+        if not decisions or not cands:
+            return {"搬動": 0, "找不到": 0}
+        fps = {str(i): name_fingerprint(c) for i, c in enumerate(cands, start=1)}
+        where = {fp: k for k, fp in fps.items()}
+        out, lost, moved, changed = {}, dict(decisions.get("_找不到的候選") or {}), 0, False
+        for k, d in decisions.items():
+            if k == "_找不到的候選" or not k.isdigit() or not isinstance(d, dict):
+                if k != "_找不到的候選":
+                    out[k] = d            # 人工補的名字（NM001…）自己有穩定 id，不動
+                continue
+            fp = d.get("候選指紋")
+            if fp is None:
+                if k in fps:
+                    d = {**d, "候選指紋": fps[k]}
+                    changed = True
+                out[k] = d
+                continue
+            if fps.get(k) == fp:
+                out[k] = d
+            elif fp in where:
+                out[where[fp]] = d
+                moved += 1
+            else:
+                lost[fp] = d
+        # 之前找不到的，重算後又出現了：搬回來（那一筆還沒有新決定才搬）
+        for fp in list(lost):
+            if fp in where and where[fp] not in out:
+                out[where[fp]] = lost.pop(fp)
+                moved += 1
+        if lost:
+            out["_找不到的候選"] = lost
+        if changed or moved or out != decisions:
+            wd.write_json(path, out)
+    return {"搬動": moved, "找不到": len(lost)}
+
+
 def effective_name_candidates(workdir: Path, candidates: list[dict], decisions: dict) -> list[dict]:
     """名字候選＋人工補的名字（`人工名字`），改過時間的套上 `改過的起訖`。
 
@@ -393,6 +445,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     from bookclub import epcodes
 
     epcodes.sync(workdir)   # 09-29：名字候選的代號跟這一集的代號表對齊（沒變就不寫檔）
+    anchor_name_decisions(workdir)   # 09-29：名字候選重算過，決定跟著內容走，不照編號錯位
     tdata = turns_mod.page_data(workdir)
     has_turns = not tdata.get("尚未準備")
     turns = tdata.get("段落", []) if has_turns else []
@@ -586,9 +639,13 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
     標「不是名字」「是地名」時，跟舊的名字覆核頁一樣把抓到的字加進排除清單。"""
     workdir = Path(workdir)
     cid = str(cid)
+    anchor_name_decisions(workdir)
+    cands = (wd.read_json(wd.names_path(workdir), default=None) or {}).get("candidates", [])
     with _lock:
         decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
         d = decisions.setdefault(cid, {"tags": [], "note": ""})
+        if cid.isdigit() and 1 <= int(cid) <= len(cands):
+            d["候選指紋"] = name_fingerprint(cands[int(cid) - 1])
         if "做法" in fields:
             if fields["做法"] not in NAME_HOWS:
                 raise ValueError(f"名字的做法只能是：{'、'.join(NAME_HOWS)}")
@@ -836,6 +893,9 @@ def _manual_name(workdir: Path, iid: str | None, al: dict, info: dict, fields: d
         if iid and mine is None:   # 自動抓到的名字改時間：記在名字覆核決定裡
             decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
             d = decisions.setdefault(iid, {"tags": [], "note": ""})
+            cands = (wd.read_json(wd.names_path(workdir), default=None) or {}).get("candidates", [])
+            if str(iid).isdigit() and 1 <= int(iid) <= len(cands):
+                d["候選指紋"] = name_fingerprint(cands[int(iid) - 1])
             d.update({"改過的起訖": [al["start"], al["end"]], **info, "更新時間": _now()})
             wd.write_json(name_decisions_path(workdir), decisions)
             return iid

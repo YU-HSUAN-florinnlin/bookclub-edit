@@ -307,5 +307,28 @@ def test_minor_student_and_filler_overlap_rules():
     assert s["做法"] == "兩邊都重生成"
 
 
+def test_name_decisions_follow_candidate_content():
+    # 09-29 檢查 #6：名字候選整份重算、順序變了，覆核決定跟著內容走，不照編號錯位
+    from bookclub import workdir as wd
+
+    w = _fresh()
+    data = wd.read_json(wd.names_path(w))
+    assert len(data["candidates"]) >= 2
+    review.save_name(w, "1", {"tags": ["不是名字"]})
+    dp = review.name_decisions_path(w)
+    fp1 = wd.read_json(dp)["1"]["候選指紋"]
+    data["candidates"] = list(reversed(data["candidates"]))      # 重算後順序變了
+    wd.write_json(wd.names_path(w), data)
+    assert review.anchor_name_decisions(w)["搬動"] == 1
+    dec = wd.read_json(dp)
+    k = str(len(data["candidates"]))
+    assert dec[k]["候選指紋"] == fp1 and "不是名字" in dec[k]["tags"] and "1" not in dec
+    data["candidates"] = data["candidates"][:-1]                  # 那一筆重算後不見了：收起來、不套到別筆
+    wd.write_json(wd.names_path(w), data)
+    assert review.anchor_name_decisions(w)["找不到"] == 1
+    dec = wd.read_json(dp)
+    assert fp1 in dec["_找不到的候選"] and k not in dec
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())
