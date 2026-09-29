@@ -285,6 +285,10 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
         cid = str(c.get("id") or i)
         d = decisions.get(cid, {}) or {}
         group = nameplan.expand_sentence(ordered, pos[c["sentence_id"]]) if c.get("sentence_id") in pos else []
+        if group and c.get("改過時間"):   # 跟 nameplan.build_plan 一樣：改時間納進來的句子一起重念
+            group = [g for g in ordered if g["end"] > min(c["start"], group[0]["start"]) + 0.05
+                     and g["start"] < max(c["end"], group[-1]["end"]) - 0.05
+                     and (g in group or nameplan.ok_teacher(g))] or group
         whole_text = "".join(g["text"] for g in group)
         replaced = None
         if group:
@@ -297,7 +301,9 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
         items.append({
             "類型": "名字", "id": cid, "start": c["start"], "end": c["end"],
             "sentence_html": _highlight_sentence(sentence, c.get("matched_text", ""), c.get("位置", "")),
-            "整句": {"start": group[0]["start"], "end": group[-1]["end"], "原文": whole_text, "換成代號": replaced}
+            "整句": {"start": min(group[0]["start"], c["start"]) if c.get("改過時間") else group[0]["start"],
+                     "end": max(group[-1]["end"], c["end"]) if c.get("改過時間") else group[-1]["end"],
+                     "原文": whole_text, "換成代號": replaced, "改稿": d.get("改稿", "")}
             if group else None,
             "matched_text": c.get("matched_text", ""), "代號": c.get("代號", ""), "位置": c.get("位置", ""),
             "信心": c.get("信心", ""), "比對層級": c.get("比對層級", ""), "切點信心": c.get("切點信心", ""),
@@ -557,6 +563,12 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
             d["note"] = str(fields["note"])
         if "已確認" in fields:
             d["已確認"] = bool(fields["已確認"])
+        if "改稿" in fields:   # 09-29：要重念的句子人直接改（空白＝回到自動換好的）
+            txt = str(fields["改稿"] or "").strip()
+            if txt:
+                d["改稿"] = txt
+            else:
+                d.pop("改稿", None)
         d["更新時間"] = _now()
         wd.write_json(name_decisions_path(workdir), decisions)
     added = False

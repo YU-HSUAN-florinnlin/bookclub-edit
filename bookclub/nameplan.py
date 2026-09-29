@@ -85,6 +85,10 @@ def expand_sentence(ordered: list[dict], idx: int, same=None) -> list[dict]:
     return group
 
 
+def ok_teacher(s: dict) -> bool:
+    return s.get("label", "老師") in ("老師", "太短", "不確定")
+
+
 def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dict],
                default_how: str = WHOLE) -> dict:
     """純函式：候選＋覆核決定＋句子（id → {start, end, text}）→ 處理計畫。
@@ -124,6 +128,9 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             manual.append({"候選": i, "原因": f"找不到所在的句子（{sid}）"})
             continue
         group = expand_sentence(ordered, pos[sid])
+        if c.get("改過時間"):   # 09-29 宇軒：改時間把後面幾秒也納進來（逐字稿漏了第二次叫名字）→ 範圍內的句子一起重念
+            group = [g for g in ordered if g["end"] > min(c["start"], group[0]["start"]) + 0.05
+                     and g["start"] < max(c["end"], group[-1]["end"]) - 0.05 and (g in group or ok_teacher(g))] or group
         key = group[0]["id"]
         item = whole.get(key)
         # 名字只在原本那一段裡換（避免換到前後段同音的字），再接成整句
@@ -134,15 +141,22 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             continue
         texts[sid] = new
         full = "".join(texts[g["id"]] for g in group)
+        lo = min(group[0]["start"], c["start"]) if c.get("改過時間") else group[0]["start"]
+        hi = max(group[-1]["end"], c["end"]) if c.get("改過時間") else group[-1]["end"]
         if item:
             item["text"] = full
             item["候選"].append(i)
+            item["slot"] = [min(item["slot"][0], lo), max(item["slot"][1], hi)]
         else:
-            whole[key] = {"id": f"S{_num(i)}", "text": full, "slot": [group[0]["start"], group[-1]["end"]],
-                          "候選": [i], "句子": [g["id"] for g in group], "_texts": texts}
+            item = whole[key] = {"id": f"S{_num(i)}", "text": full, "slot": [lo, hi],
+                                 "候選": [i], "句子": [g["id"] for g in group], "_texts": texts}
+        if (d.get("改稿") or "").strip():   # 09-29 宇軒：人直接改要重念的句子（逐字稿漏字、名字不只一次）
+            item["text"] = d["改稿"].strip()
+            item["改稿"] = True
 
     for item in whole.values():
         item.pop("_texts", None)
+        item["slot"] = [round(item["slot"][0], 3), round(item["slot"][1], 3)]
     gen.extend(whole.values())
     gen.sort(key=lambda g: g["slot"][0])
     return {"生成": gen, "消音": mutes, "略過": skipped, "要人處理": manual}

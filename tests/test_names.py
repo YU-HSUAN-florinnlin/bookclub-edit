@@ -367,6 +367,17 @@ def test_build_review_page_creates_html_with_highlight_and_exclusion_summary():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def test_assign_words_takes_early_first_char():
+    """09-29：句子開頭的字時間比句子早半秒，也要算進這一句（以前會丟掉，名字漏抓）。"""
+    sents = [{"id": "a", "start": 0.0, "end": 2.4}, {"id": "b", "start": 3.8, "end": 5.8}]
+    words = [{"word": "聊", "start": 1.0, "end": 1.5}, {"word": "淑", "start": 3.3, "end": 4.1},
+             {"word": "芳", "start": 4.1, "end": 4.3}, {"word": "遠", "start": 9.0, "end": 9.2}]
+    got = nm.assign_words(sents, words)
+    assert [w["word"] for w in got["a"]] == ["聊"]
+    assert [w["word"] for w in got["b"]] == ["淑", "芳"]
+    assert sum(len(v) for v in got.values()) == 3   # 離句子太遠的不分
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

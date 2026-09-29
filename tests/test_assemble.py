@@ -64,6 +64,25 @@ def test_plan_decision_overrides_and_manual():
     assert plan["消音"] and not plan["生成"]
 
 
+def test_plan_retime_extends_and_manual_text():
+    """09-29 宇軒：逐字稿漏了第二次叫名字 → 改時間把後面納進來、人直接改要重念的句子。"""
+    sents = {
+        "a": {"id": "a", "start": 0.0, "end": 2.0, "text": "我待會兒想請那一個", "label": "老師"},
+        "b": {"id": "b", "start": 2.0, "end": 4.0, "text": "小美分享一下", "label": "老師"},
+        "c": {"id": "c", "start": 4.0, "end": 6.0, "text": "很開心", "label": "老師"},
+    }
+    c = _cand(0.5, 5.0, "整句換掉", sid="b", 改過時間=True)
+    plan = nameplan.build_plan([c], {}, sents)
+    g = plan["生成"][0]
+    assert g["slot"] == [0.0, 6.0] and g["句子"] == ["a", "b", "c"] and g["text"] == "我待會兒想請那一個Amy分享一下很開心"
+    plan = nameplan.build_plan([c], {"1": {"改稿": "我待會兒想請Amy，Amy分享一下，很開心"}}, sents)
+    g = plan["生成"][0]
+    assert g["text"] == "我待會兒想請Amy，Amy分享一下，很開心" and g["改稿"] and g["slot"] == [0.0, 6.0]
+    # 沒改時間：照原本整句
+    plan = nameplan.build_plan([_cand(2.2, 2.6, "整句換掉", sid="b")], {}, sents)
+    assert plan["生成"][0]["slot"] == [2.0, 4.0]
+
+
 def test_plan_defaults_to_whole_sentence_and_expands_half_sentences():
     sents = {
         "a": {"id": "a", "start": 0.0, "end": 2.0, "text": "上次我們講到，", "label": "老師"},

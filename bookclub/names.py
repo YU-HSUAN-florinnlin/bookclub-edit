@@ -353,8 +353,9 @@ def find_names(
     teacher_sentences = [s for s in sentences if select(s)]
     audio_full = None  # 延遲載入，名冊是空的、或這句的命中全部被排除清單擋掉時完全不用碰音檔
 
+    owned = assign_words(sentences, words)
     for sent in teacher_sentences:
-        sent_words = [w for w in words if w["start"] >= sent["start"] - 0.05 and w["end"] <= sent["end"] + 0.05]
+        sent_words = owned.get(sent.get("id"), [])
         if not sent_words:
             continue
         chars = _char_timeline(sent_words)
@@ -465,6 +466,30 @@ def find_names(
     print(f"[4/找名字] 建議做法分布：{action_counts}")
     print(f"[4/找名字] 切點信心分布：{confidence_counts}")
     return result
+
+
+def assign_words(sentences: list[dict], words: list[dict], max_gap_s: float = 0.6) -> dict[str, list[dict]]:
+    """每個字分給重疊最多的句子（純函式）；落在句子之間空白的，分給 max_gap_s 內最近的一句。
+    09-29 宇軒：以前只收「完全落在句子時間內」的字，句子開頭的字時間早了半秒就被丟掉（「淑芳很輕輕的說」只剩「芳很⋯」，名字漏抓）。"""
+    import bisect
+
+    ss = sorted((s for s in sentences if s.get("id") is not None), key=lambda s: s["start"])
+    starts = [s["start"] for s in ss]
+    out: dict[str, list[dict]] = {}
+    for w in words:
+        k = bisect.bisect_right(starts, w["end"])
+        best, best_ov, best_gap = None, 0.0, None
+        for s in ss[max(0, k - 4):k + 1]:
+            ov = min(w["end"], s["end"]) - max(w["start"], s["start"])
+            if ov > best_ov:
+                best, best_ov = s, ov
+            elif best_ov <= 0:
+                gap = max(s["start"] - w["end"], w["start"] - s["end"], 0.0)
+                if gap <= max_gap_s and (best_gap is None or gap < best_gap):
+                    best, best_gap = s, gap
+        if best is not None:
+            out.setdefault(best["id"], []).append(w)
+    return out
 
 
 def append_candidates(workdir: str | Path, sentence_ids: list[str]) -> int:

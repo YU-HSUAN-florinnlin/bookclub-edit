@@ -523,7 +523,10 @@ function rvBodyHtml(it) {
   if (t === "名字") {
     const w = it["整句"];
     return `<p class="rv-quote">${it.sentence_html}</p>
-      ${w ? `<p class="rv-note">整句換掉後：${esc(w["換成代號"] || w["原文"])}${w["換成代號"] ? "" : "（句子裡找不到比對到的字，要人處理）"}</p>` : ""}
+      ${w ? `<p class="rv-note">整句換掉（${esc(rvFmt(w.start, 1))}–${esc(rvFmt(w.end, 1))}）的原文：${esc(w["原文"])}</p>
+        <div class="rv-field"><label>老師 AI 聲音要重念的句子（逐字稿漏了名字、名字講了兩次，直接在這裡改；改過時間的話，範圍內講的話都要寫進來）
+          <textarea id="rv-namesay" rows="2" data-auto="${esc(w["換成代號"] || "")}">${esc(w["改稿"] || w["換成代號"] || w["原文"])}</textarea></label>
+          <span class="rv-meta" id="rv-namesay-st">${w["改稿"] ? "人改過" : w["換成代號"] ? "自動換好的" : "句子裡找不到比對到的字，要人改"}</span></div>` : ""}
       <p class="rv-meta">代號 ${esc(it["代號"] || "（沒有）")}${it["信心"] === "低" ? "　低信心，先聽清楚是不是名字" : ""}</p>`;
   }
   if (t === "重疊") {
@@ -541,6 +544,16 @@ function rvBodyHtml(it) {
 function rvBindBody(it) {
   const ta = document.getElementById("rv-text");
   if (ta) ta.addEventListener("blur", () => rvSaveTurnText(it));
+  const say = document.getElementById("rv-namesay");   // 09-29：名字整句的重念稿
+  if (say) say.addEventListener("blur", async () => {
+    const v = say.value.trim();
+    const txt = v === (say.dataset.auto || "").trim() ? "" : v;
+    if (txt === ((it["整句"] || {})["改稿"] || "")) return;
+    await apiPost("/api/review/name", { id: it.id, "改稿": txt });
+    if (it["整句"]) it["整句"]["改稿"] = txt;
+    const st = document.getElementById("rv-namesay-st");
+    if (st) st.textContent = txt ? "人改過（已存）" : "自動換好的";
+  });
 }
 
 function rvRadios(name, options, current, cls) {
