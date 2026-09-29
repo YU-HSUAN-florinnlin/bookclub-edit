@@ -42,6 +42,12 @@ def test_clip_to_cuts_after_frame_snap():
     assert render.to_output_time(a, pl) is not None
 
 
+def test_speedup_for_choice_c():
+    assert render.speedup_for(9.0, 10.0) == 1.0              # 沒超過不用加快
+    assert render.speedup_for(11.0, 10.0) == 1.1              # 超過 10%：加快 10% 剛好放得進去
+    assert render.speedup_for(14.0, 10.0) == 1.15             # 超過很多：最多加快 15%，剩下停格
+
+
 def test_snap_and_ceil_frames():
     assert render.snap(2328.93) == 2328.92
     assert render.ceil_frames(0.25) == 0.28

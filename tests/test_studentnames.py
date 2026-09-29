@@ -143,6 +143,26 @@ def test_no_ref_falls_back_to_mute():
     assert wd.read_json(studentgen.log_path(w))
 
 
+def test_mark_turn_as_teacher_rescans_teacher_names():
+    """09-29：學員段落其實是老師 → 改成老師：這段不再重念、補找這段裡老師提到的名字（加在最後，舊編號不變）。"""
+    from bookclub import students
+    from bookclub import turns as turns_mod
+    from bookclub import workdir as wd
+
+    w = _fresh()
+    before = wd.read_json(wd.names_path(w))["candidates"]
+    turn = next(t for t in turns_mod.page_data(w)["段落"] if t["說話者"] == "學員2" and t["start"] <= 92.5 < t["end"])
+    res = turns_mod.save_turn(w, turn["id"], {"說話者": "老師"})
+    assert res["補找到的老師名字"] == 1
+    after = wd.read_json(wd.names_path(w))["candidates"]
+    assert after[:len(before)] == before and after[-1]["代號"] == "Amy" and after[-1]["補找"]
+    items, _ = students.build_items(w)
+    assert all(it["段落"] != turn["id"] for it in items)
+    # 再改一次不會重複補
+    turns_mod.save_turn(w, turn["id"], {"說話者": "老師"})
+    assert len(wd.read_json(wd.names_path(w))["candidates"]) == len(after)
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

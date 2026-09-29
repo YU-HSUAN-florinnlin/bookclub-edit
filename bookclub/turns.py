@@ -496,7 +496,16 @@ def save_turn(workdir: str | Path, tid: str, fields: dict) -> dict:
         if fields.get("加秒數"):
             t["校對秒數"] = round((t["校對秒數"] or 0.0) + min(float(fields["加秒數"]), MAX_COUNT_S), 1)
         wd.write_json(turns_path(workdir), data)
-        return {"ok": True, "段落": t, "進度": turns_progress(data)}
+    added = 0
+    if fields.get("說話者") == "老師":
+        # 那段其實是老師在講話：補找這段裡老師提到的名字（第 1 步只掃判成老師的句子，會漏掉）
+        from bookclub import names
+
+        try:
+            added = names.append_candidates(workdir, t.get("句子", []))
+        except Exception as exc:   # 補找失敗不要擋住改說話者
+            print(f"⚠️ 改成老師後補找名字失敗：{exc}")
+    return {"ok": True, "段落": t, "進度": turns_progress(data), "補找到的老師名字": added}
 
 
 def merge_turn(workdir: str | Path, tid: str) -> dict:

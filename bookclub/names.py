@@ -465,3 +465,35 @@ def find_names(
     print(f"[4/找名字] 建議做法分布：{action_counts}")
     print(f"[4/找名字] 切點信心分布：{confidence_counts}")
     return result
+
+
+def append_candidates(workdir: str | Path, sentence_ids: list[str]) -> int:
+    """第 3 步把一段學員段落改成老師（09-29 宇軒：那段其實是老師在講話）之後，補找這幾句裡老師提到的名字，
+    加在 `名字候選.json` 最後面（原本的候選編號不變，覆核決定照舊對得上）。回傳補了幾筆；還沒跑過找名字回傳 0。"""
+    import tempfile
+
+    from bookclub.config import data_dir
+    from bookclub.workdir import audio_path, merged_transcript_path, speakers_path
+
+    workdir = Path(workdir)
+    cur = read_json(names_path(workdir), default=None)
+    roster = data_dir() / "名冊.csv"
+    if cur is None or not roster.is_file() or not audio_path(workdir).is_file():
+        return 0
+    ids = set(sentence_ids)
+    sents = (read_json(speakers_path(workdir), default={}) or {}).get("sentences", [])
+    words = (read_json(merged_transcript_path(workdir), default={}) or {}).get("words", [])
+    sensitive = data_dir() / "敏感詞.csv"
+    with tempfile.TemporaryDirectory() as tmp:
+        res = find_names(audio_path(workdir), workdir, sents, words, roster, sensitive if sensitive.is_file() else None,
+                         select=lambda s: s.get("id") in ids, cache_path=Path(tmp) / "補找.json", use_cache=False)
+    old = cur.get("candidates", [])
+    new = [c for c in res["candidates"]
+           if not any(o.get("sentence_id") == c.get("sentence_id") and abs(o["start"] - c["start"]) < 0.05 for o in old)]
+    if new:
+        for c in new:
+            c["補找"] = "段落改成老師後補找"
+        cur["candidates"] = old + new
+        cur.setdefault("統計", {})["總筆數"] = len(cur["candidates"])
+        write_json(names_path(workdir), cur)
+    return len(new)

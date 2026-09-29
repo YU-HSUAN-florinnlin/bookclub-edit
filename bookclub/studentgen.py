@@ -101,7 +101,7 @@ def pick_ref(workdir: Path, who: str, turns: list[dict], sentences: dict, blocke
 
     wins = [g for g in ref_windows(sents, blocked) if cps(g) >= REF_MIN_CPS]
     if not wins:
-        return {"ok": False, "原因": f"參考音挑不到：{who} 找不到 {REF_MIN_S:.0f} 秒以上、沒有重疊也沒有名字的連續段落"}
+        return {"ok": False, "原因": f"參考音挑不到：{who} 找不到 {REF_MIN_S:.0f} 秒以上、每秒至少 {REF_MIN_CPS:.0f} 字、沒有重疊也沒有名字的連續段落"}
     best, best_score, best_x, sr = None, -1.0, None, 16000
     with sf.SoundFile(str(wd.audio_path(workdir))) as f:
         sr = f.samplerate
