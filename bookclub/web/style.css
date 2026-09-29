@@ -383,6 +383,38 @@ tr.t-hide { display:none; }
 .rv-keylist dd { margin: 0; color: var(--muted); }
 .rv-skips { list-style: none; padding: 0; margin: 0; font-size: 14px; }
 .rv-skips li { padding: 4px 0; }
+/* 全部通過 → 開始 AI 修改的確認視窗（09-29） */
+dialog.rv-confirm { max-width: min(480px, calc(100vw - 32px)); border: none; border-radius: 14px; padding: 22px 24px 18px;
+  background: var(--bg); color: var(--fg); box-shadow: 0 12px 40px rgba(0,0,0,.25); }
+dialog.rv-confirm::backdrop { background: rgba(0,0,0,.45); }
+dialog.rv-confirm h2 { margin: 0 0 10px; font-size: 19px; }
+dialog.rv-confirm p { margin: 0 0 10px; line-height: 1.6; font-size: 15px; }
+.rv-confirm-err { color: var(--danger); min-height: 0; }
+.rv-confirm-err:empty { display: none; }
+.rv-confirm-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+dialog.rv-confirm button.primary { background: var(--fg); color: var(--bg); border: 1px solid var(--fg); font-weight: 600; }
+dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--muted); }
+
+/* 第 5 步還沒有成品：霧化的版面預覽＋說明卡 */
+.fc-preview-wrap { position: relative; min-height: 520px; }
+.fc-preview { filter: blur(4px) grayscale(.3); opacity: .7; pointer-events: none; user-select: none; }
+.fc-preview-video { aspect-ratio: 16 / 9; background: var(--bg-soft); border-radius: 8px; }
+.fc-preview-tl { position: relative; height: 28px; }
+.fc-preview-tl i { position: absolute; top: 4px; bottom: 4px; border-radius: 2px; }
+.fc-preview-card { background: var(--rv-card); border-radius: 12px; padding: 14px 18px; }
+.fc-preview-note { position: absolute; top: 120px; left: 50%; transform: translateX(-50%); width: min(460px, calc(100% - 32px));
+  background: var(--bg); color: var(--fg); border-radius: 14px; padding: 20px 24px; box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+.fc-preview-note h2 { margin: 0 0 8px; font-size: 19px; }
+.fc-preview-note p { margin: 0 0 10px; line-height: 1.6; font-size: 15px; }
+.fc-preview-note a.btn { display: inline-block; background: var(--fg); color: var(--bg); padding: 8px 16px; border-radius: 8px; text-decoration: none; font-weight: 600; }
+
+/* 第 4 步逐類統計 */
+.exec-stats td.num { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
+.exec-stats .bar { display: inline-block; vertical-align: middle; width: 120px; height: 6px; border-radius: 3px; background: var(--bg-soft); overflow: hidden; margin-left: 8px; }
+.exec-stats .bar i { display: block; height: 100%; background: var(--accent); }
+.exec-stats tr.zero td { color: var(--muted); }
+.exec-total { font-size: 15px; margin: 0 0 8px; }
+
 .rv-export-msg { font-size: 14px; margin-bottom: 8px; word-break: break-all; }
 
 /* 上半部 */

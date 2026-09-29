@@ -699,7 +699,14 @@ class BookclubServer(ThreadingHTTPServer):
         with self.run_lock:
             state = {k: v for k, v in self.exec_state.items() if k != "messages"}
             state["messages"] = list(self.exec_state["messages"][-80:])
-        return {**state, **status(self.workdir)}
+        st = status(self.workdir)
+        from bookclub import execcounts   # 09-29：逐類要改幾筆、做完幾筆（網頁第 4 步）
+
+        prog = st.get("進度") or {}
+        rng = prog.get("範圍") or [None, None]
+        done = ((prog.get("步驟") or {}).get("組裝") or {}).get("狀態") in ("做完", "跳過")
+        st["統計"] = execcounts.counts(self.workdir, rng[0], rng[1], render_done=done)
+        return {**state, **st}
 
     def start_analyze(self, opts: dict) -> dict:
         with self.run_lock:

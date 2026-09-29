@@ -61,6 +61,22 @@ def test_nav_toggle_exists():
     assert 'id="navToggle"' in html
 
 
+
+def test_step3_go4_button_and_confirm():
+    # 09-29 宇軒：第 3 步全部通過才能按；確認視窗兩個按鈕「開始修改」「回去檢查」，預設焦點在回去檢查
+    js = (WEB / "review.js").read_text(encoding="utf-8")
+    assert 'id="rv-go4" disabled' in js
+    assert "開始修改" in js and "回去檢查" in js
+    assert '#rv-confirm-back").focus()' in js
+    assert 'location.hash = "#step4"' in js
+
+
+def test_step5_blurred_preview_when_no_product():
+    # 09-29 宇軒：還沒有成品時照正式版面擺霧化預覽，按不下去（inert）
+    js = (WEB / "finalcheck.js").read_text(encoding="utf-8")
+    assert "fcPreviewHtml" in js and "inert" in js
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

@@ -108,6 +108,7 @@ async function renderReview() {
           <button class="ghost" id="rv-set-btn" aria-expanded="false">設定</button>
           <button class="ghost" id="rv-key-btn" aria-expanded="false">快捷鍵</button>
           <button class="ghost" id="rv-export">匯出覆核結果</button>
+          <button class="primary" id="rv-go4" disabled>全部通過，開始 AI 修改</button>
         </div>
       </header>
       <div class="rv-drawer" id="rv-keys" hidden>
@@ -155,6 +156,7 @@ async function renderReview() {
   document.getElementById("rv-set-btn").addEventListener("click", (e) => rvToggleDrawer("rv-settings", e.currentTarget));
   document.getElementById("rv-key-btn").addEventListener("click", (e) => rvToggleDrawer("rv-keys", e.currentTarget));
   document.getElementById("rv-export").addEventListener("click", rvExport);
+  document.getElementById("rv-go4").addEventListener("click", rvConfirmGo4);
   rvBindTimeline(document.getElementById("rv-tl"));
   window.addEventListener("resize", rvRenderTimeline);
 
@@ -337,6 +339,60 @@ function rvRenderProgress() {
   document.getElementById("rv-progress").innerHTML = `
     <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
     <span><b>${p["已確認"]}</b>／${p["總數"]} 筆</span><span>花了 ${rvHm(p["已花秒數"])}</span><span>推算整支 ${est}</span>`;
+  rvUpdateGo4();
+}
+
+// ---------------------------------------------------------------------------
+// 全部通過 → 確認 → 跳第 4 步開始 AI 修改（09-29 宇軒）
+// ---------------------------------------------------------------------------
+
+function rvLeft() { return rvItems().filter((x) => !rvDone(x)).length; }
+
+function rvUpdateGo4() {
+  const btn = document.getElementById("rv-go4");
+  if (!btn) return;
+  const left = rvLeft();
+  btn.disabled = left > 0;
+  btn.title = left ? `還有 ${left} 筆沒通過，全部通過後才能開始` : "全部通過了，可以開始 AI 修改";
+}
+
+function rvConfirmGo4() {
+  if (rvLeft()) return;
+  if (rv.video && !rv.video.paused) rv.video.pause();
+  const dlg = document.createElement("dialog");
+  dlg.className = "rv-confirm";
+  dlg.setAttribute("aria-labelledby", "rv-confirm-title");
+  dlg.innerHTML = `
+    <h2 id="rv-confirm-title">全部都檢查好了嗎？</h2>
+    <p>開始之後，AI 會依序生成老師的名字句子、學員重念，最後組裝成品影片。<b>整支影片會花比較多時間</b>，
+      跑的時候電腦不要睡眠；第 4 步看得到每一類做到幾筆。</p>
+    <p class="muted">跑完之後到第 5 步「成品檢查」看結果；中途有問題可以停下來，已經做好的不會重做。</p>
+    <p class="rv-confirm-err" id="rv-confirm-err" role="alert"></p>
+    <div class="rv-confirm-btns">
+      <button class="ghost" id="rv-confirm-back">回去檢查</button>
+      <button class="primary" id="rv-confirm-go">開始修改</button>
+    </div>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });   // Esc＝回去檢查
+  dlg.querySelector("#rv-confirm-back").addEventListener("click", close);
+  dlg.querySelector("#rv-confirm-go").addEventListener("click", async (e) => {
+    const go = e.currentTarget;
+    go.disabled = true; go.textContent = "開始中…";
+    try {
+      await apiPost("/api/execute/start", { start: null, end: null, methods: null });
+    } catch (err) {
+      if (!/已經有.*在跑/.test(err.message)) {       // 已經在跑就直接去第 4 步看進度
+        dlg.querySelector("#rv-confirm-err").textContent = `還不能開始：${err.message}`;
+        go.disabled = false; go.textContent = "開始修改";
+        return;
+      }
+    }
+    close();
+    location.hash = "#step4";
+  });
+  dlg.showModal();
+  dlg.querySelector("#rv-confirm-back").focus();   // 預設焦點放在「回去檢查」，按 Enter 不會誤觸開始
 }
 
 function rvRecount() {
@@ -1089,6 +1145,7 @@ function rvStartTimeTracking() {
 
 document.addEventListener("keydown", (e) => {
   if (currentRouteId() !== "step3" || !rv.data) return;
+  if (document.querySelector("dialog[open]")) return;   // 確認視窗開著時，快捷鍵不作用
   rv.lastActivity = Date.now();
   const tag = e.target.tagName;
   const inField = ["TEXTAREA", "INPUT", "SELECT"].includes(tag);

@@ -205,15 +205,7 @@ async function renderExecuteBody() {
   const d = await apiGet("/api/execute");
   const pre = d["前置檢查"];
   const prog = d["進度"] || {};
-  const steps = prog["步驟"] || {};
-  const names = [["老師名字", "老師提到名字：用老師 AI 聲音整句重念"], ["學員重念", "學員段落：匿名聲線重念"],
-    ["保留原聲學員名字", "保留原聲的學員講到名字：選了換成代號的，用他自己的聲音生成"], ["組裝", "換聲音＋刪除＋停格，輸出成品影片"]];
-  const badge = (st) => ({ "做完": "done", "跳過": "done", "進行中": "running", "失敗": "error" }[st] || "");
-  const rows = names.map(([k, desc]) => {
-    const st = (steps[k] || {})["狀態"] || "還沒跑";
-    return `<tr><td><b>${esc(k)}</b><div class="muted">${esc(desc)}</div></td>
-      <td><span class="badge ${badge(st)}">${esc(st)}</span></td><td class="muted">${esc((steps[k] || {})["訊息"] || "")}</td></tr>`;
-  }).join("");
+  const rows = execStepRows(d);
   const running = d.running;
   const redo = d["退回清單"] || [];
   contentEl.innerHTML = `
@@ -223,9 +215,12 @@ async function renderExecuteBody() {
       能省掉的是第 2、3 步的人工。第 3 步沒覆核的話，照第 1 步的建議做（名字整句換掉、學員全部重念、建議刪除的段落不刪）。</div>
     ${pre["缺"].length ? `<div class="card"><b>還不能開始：</b><ul>${pre["缺"].map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
     ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
+    <h2>要修改的項目</h2>
+    <div class="card" id="execStats">${execStatsHtml(d)}</div>
+    <h2>執行步驟</h2>
     <div class="card"><table class="kv exec">
       <thead><tr><th style="text-align:left">步驟</th><th style="text-align:left">狀態</th><th style="text-align:left">說明</th></tr></thead>
-      <tbody>${rows}</tbody></table>
+      <tbody id="execSteps">${rows}</tbody></table>
       ${prog["開始時間"] ? `<p class="muted">上次：${esc(prog["開始時間"])} 開始${prog["結束時間"] ? `，${esc(prog["結束時間"])} 結束` : ""}；範圍 ${esc(fmtRange(prog["範圍"]))}</p>` : ""}
     </div>
     <div class="card">
@@ -251,6 +246,37 @@ async function renderExecuteBody() {
   if (running) startExecPoll();
 }
 
+function execStepRows(d) {
+  const steps = (d["進度"] || {})["步驟"] || {};
+  const names = [["老師名字", "老師提到名字：用老師 AI 聲音整句重念"], ["學員重念", "學員段落：匿名聲線重念"],
+    ["保留原聲學員名字", "保留原聲的學員講到名字：選了換成代號的，用他自己的聲音生成"], ["組裝", "換聲音＋刪除＋停格，輸出成品影片"]];
+  const badge = (st) => ({ "做完": "done", "跳過": "done", "進行中": "running", "失敗": "error" }[st] || "");
+  return names.map(([k, desc]) => {
+    const st = (steps[k] || {})["狀態"] || "還沒跑";
+    return `<tr><td><b>${esc(k)}</b><div class="muted">${esc(desc)}</div></td>
+      <td><span class="badge ${badge(st)}">${esc(st)}</span></td><td class="muted">${esc((steps[k] || {})["訊息"] || "")}</td></tr>`;
+  }).join("");
+}
+
+// 逐類統計：每一類要改幾筆、做完幾筆（09-29 宇軒）。生成類邊跑邊跳；消音、刪除在組裝做完才算完成
+function execStatsHtml(d) {
+  const rows = d["統計"] || [];
+  if (!rows.length) return `<p class="muted">還算不出來（第 1 步影片分析要先跑完）</p>`;
+  const ok = rows.filter((r) => r["總數"] != null);
+  const total = ok.reduce((n, r) => n + r["總數"], 0), done = ok.reduce((n, r) => n + r["完成"], 0);
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : 100);
+  const body = rows.map((r) => {
+    if (r["總數"] == null) return `<tr><td><b>${esc(r["類型"])}</b><div class="muted">${esc(r["做法"])}</div></td><td class="num muted" colspan="2">讀不到</td></tr>`;
+    const p = pct(r["完成"], r["總數"]);
+    return `<tr class="${r["總數"] ? "" : "zero"}"><td><b>${esc(r["類型"])}</b><div class="muted">${esc(r["做法"])}${r["階段"] === "組裝" ? "（組裝時處理）" : ""}</div></td>
+      <td class="num"><b>${r["完成"]}</b>／${r["總數"]}</td>
+      <td>${r["總數"] ? `<span class="bar" role="progressbar" aria-valuenow="${p}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(r["類型"])} ${esc(r["做法"])}"><i style="width:${p}%"></i></span>` : `<span class="muted">沒有</span>`}</td></tr>`;
+  }).join("");
+  return `<p class="exec-total">全部 <b>${done}</b>／${total} 筆完成（${pct(done, total)}%）</p>
+    <table class="kv exec-stats"><thead><tr><th style="text-align:left">類型</th><th style="text-align:right">完成／總數</th><th></th></tr></thead>
+    <tbody>${body}</tbody></table>`;
+}
+
 function fmtRange(r) {
   if (!r) return "—";
   const f = (t) => { t = Math.round(t); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
@@ -266,6 +292,10 @@ function startExecPoll() {
       const d = await apiGet("/api/execute");
       const el = document.getElementById("execLog");
       if (el) { el.textContent = (d.messages || []).join("\n") || "（還沒有訊息）"; el.scrollTop = el.scrollHeight; }
+      const st = document.getElementById("execStats");
+      if (st) st.innerHTML = execStatsHtml(d);
+      const sp = document.getElementById("execSteps");
+      if (sp) sp.innerHTML = execStepRows(d);
       if (!d.running) { clearInterval(execPollTimer); execPollTimer = null; await renderExecuteBody(); }
     } catch (e) { /* 輪詢失敗，下一次再試 */ }
   }, 2000);

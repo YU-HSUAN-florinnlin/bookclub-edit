@@ -29,9 +29,7 @@ async function renderFinal() {
   contentEl.classList.add("wide");
   const d = fc.data;
   if (!d["有處理紀錄"] || !d["成品影片"]) {
-    contentEl.innerHTML = `<h1>5　成品檢查</h1>
-      <div class="notyet-card">${d["有處理紀錄"] ? "有處理紀錄，但找不到成品影片（工作區 輸出/成品_*）。" : "還沒有處理紀錄。"}
-      先在第 4 步組裝：<code>bookclub render video &lt;工作區&gt; --start 0:00 --end &lt;結尾&gt;</code>（會寫 生成/處理紀錄.json 與 輸出/成品_*.mp4）。</div>`;
+    contentEl.innerHTML = fcPreviewHtml(d["有處理紀錄"] ? "有處理紀錄，但找不到成品影片（工作區 輸出/成品_*）。" : "還沒有成品。");
     return;
   }
   const prodSel = d["成品影片清單"].length > 1 ? `<label class="fc-prod">檢查哪一支 <select id="fc-prod">${d["成品影片清單"].map((p) =>
@@ -84,6 +82,45 @@ async function renderFinal() {
   window.addEventListener("resize", fcRenderTimeline);
   fcRenderAll();
   fcStartWatchTracking();
+}
+
+// 還沒有成品時：照正式版面擺一份霧化的樣子（假資料、按不下去），讓人先知道之後要做什麼（09-29 宇軒）
+function fcPreviewHtml(why) {
+  const rows = [["0:42", "學員重念", "學員 A 的段落"], ["3:15", "名字", "老師提到名字，整句重念"], ["7:08", "刪除點", "開頭空白"],
+    ["12:30", "停格", "重念比原本長，補長"], ["18:02", "名字", "直接消音"], ["25:47", "學員重念", "學員 B 的段落"]];
+  const blocks = [[3, 5, "stu"], [9, 1, "name"], [16, 0.6, "cut"], [27, 3, "frz"], [38, 1, "name"], [51, 6, "stu"], [70, 1, "name"], [83, 4, "stu"]];
+  return `
+    <div class="fc-preview-wrap">
+      <div class="rv2 fc fc-preview" inert aria-hidden="true">
+        <div class="fc-pin">沒列在時間軸上的地方＝原片沒動</div>
+        <header class="rv-bar">
+          <h1>5　成品檢查</h1>
+          <div class="rv-progress"><div class="bar"><i style="width:35%"></i></div><span>逐筆 <b>7</b>／20 通過</span><span>看過 35%</span></div>
+          <div class="rv-bar-btns"><button class="ghost on">逐筆看</button><button class="ghost">整片看</button>
+            <button class="ghost">送回 AI 重做（1 筆）</button><button class="primary">輸出成品</button></div>
+        </header>
+        <section class="rv-upper">
+          <div class="rv-left">
+            <div class="fc-preview-video"></div>
+            <div class="rv-timebar"><span class="rv-clock"><b>3:15</b> ／ 1:38:00（成品時間）</span></div>
+            <div class="rv-tl fc-tl fc-preview-tl">${blocks.map(([l, w, c]) => `<i class="sw ${c}" style="left:${l}%;width:${w}%"></i>`).join("")}</div>
+            <div class="rv-legend"><span><i class="sw stu"></i>學員重念</span><span><i class="sw name"></i>名字</span><span><i class="sw cut"></i>刪除點</span>
+              <span><i class="sw frz"></i>停格</span><span class="gap"><i class="sw seen"></i>看過的地方</span></div>
+          </div>
+          <div class="rv-right"><div class="fc-preview-card">
+            <p><b>3:15　名字</b>　老師提到名字，整句重念</p>
+            <p class="muted">處理前 ▶　處理後 ▶</p>
+            <p><button class="primary">通過</button> <button class="ghost">退回重做</button></p></div></div>
+        </section>
+        <section class="rv-lower"><table class="kv">${rows.map(([t, k, x]) => `<tr><td>${t}</td><td>${k}</td><td>${x}</td><td>—</td></tr>`).join("")}</table></section>
+      </div>
+      <div class="fc-preview-note" role="status">
+        <h2>${esc(why)}</h2>
+        <p>第 4 步 AI 修改跑完之後，這一頁會變成<b>成品檢查</b>：逐筆聽處理前後、按通過或退回重做，再把整片看完（看過 100%）才能輸出成品。</p>
+        <p class="muted">後面霧霧的是之後的樣子，現在還不能按。</p>
+        <p><a class="btn" href="#step4">到第 4 步 AI 執行</a></p>
+      </div>
+    </div>`;
 }
 
 async function fcReload() {
