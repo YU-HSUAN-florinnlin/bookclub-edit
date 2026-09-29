@@ -44,6 +44,37 @@ def test_no_roster_codes_then_auto_assign():
     assert "Grace" in epcodes.code_options(w)
 
 
+def test_code_change_updates_written_texts():
+    # 09-29：② 改代號後，已經寫進校對稿、老師名字改稿裡的舊代號跟著換；共用的舊代號不自動換、改回還沒確認
+    root = Path(tempfile.mkdtemp()) / "base"
+    fake_workdir.make(root)
+    w = root / "工作區"
+    tp = w / "校對" / "段落.json"
+    data = wd.read_json(tp)
+    data["本名代號"] = {"小美": "Grace"}
+    t0, t1 = data["段落"][0], data["段落"][1]
+    t0.update({"校對稿": "我是Grace，不是Gracey。", "已確認": True})
+    t1.update({"校對稿": "Grace說得對。", "已確認": True})
+    wd.write_json(tp, data)
+    wd.write_json(w / "名字覆核決定.json", {"1": {"改稿": "謝謝Grace的分享"}})
+    epcodes.sync(w)                                    # 第一次：記下代號表
+    data = wd.read_json(tp)
+    data["本名代號"]["小美"] = "Amy"
+    wd.write_json(tp, data)
+    epcodes.sync(w)
+    data = wd.read_json(tp)
+    assert data["段落"][0]["校對稿"] == "我是Amy，不是Gracey。" and data["段落"][0]["已確認"]
+    assert data["段落"][1]["校對稿"] == "Amy說得對。"
+    assert wd.read_json(w / "名字覆核決定.json")["1"]["改稿"] == "謝謝Amy的分享"
+    # 舊代號還有別人在用 → 不換，改回還沒確認
+    data["本名代號"] = {"小美": "Zoe", "阿明": "Amy"}
+    data["段落"][1]["已確認"] = True
+    wd.write_json(tp, data)
+    epcodes.sync(w)
+    data = wd.read_json(tp)
+    assert data["段落"][1]["校對稿"] == "Amy說得對。" and not data["段落"][1]["已確認"]
+
+
 def test_add_to_roster_without_code_column():
     assert personnames.add_to_roster("阿強", ["強強"], "Kevin")
     with open(_DATA / "名冊.csv", encoding="utf-8-sig", newline="") as f:

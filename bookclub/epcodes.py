@@ -105,12 +105,100 @@ def replace_table(workdir: str | Path | None = None) -> list[dict]:
     return rows + names.load_sensitive_words(data_dir() / "敏感詞.csv")
 
 
+SNAPSHOT_NAME = "代號表紀錄.json"   # 放在 校對/：上一次對齊時的代號表，拿來看哪個本名的代號改了
+
+
+def snapshot_path(workdir: str | Path) -> Path:
+    return Path(workdir) / "校對" / SNAPSHOT_NAME
+
+
+def _code_pattern(code: str):
+    """英文代號前後不能接英文字母（Ann 不會比對到 Anna 裡）。"""
+    import re
+
+    pat = re.escape(code)
+    return re.compile(rf"(?<![A-Za-z]){pat}(?![A-Za-z])" if code.isascii() else pat)
+
+
+def has_code(text: str, code: str) -> bool:
+    return bool(text and code and _code_pattern(code).search(text))
+
+
+def replace_code(text: str, old: str, new: str) -> str:
+    """文字裡的舊代號換成新代號。"""
+    if not text or not old:
+        return text
+    return _code_pattern(old).sub(lambda _m: new, text)
+
+
+def propagate(workdir: str | Path, codes: dict[str, str] | None = None) -> dict:
+    """代號改了（09-29）：已經寫進文字的舊代號跟著換——學員段落的校對稿（通過時存的是換好代號的稿子）、
+    老師名字那一句人改過的「改稿」。
+
+    舊代號如果還有別人在用（同一集不同人共用一個代號），分不出文字裡的是誰，不自動換：
+    含舊代號的學員段落改回「還沒確認」，讓人再看一次。第一次呼叫只記下代號表。"""
+    from bookclub import review
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    now = codes if codes is not None else episode_codes(workdir)
+    before = wd.read_json(snapshot_path(workdir), default=None)
+    result = {"換": {}, "要再看": []}
+    if before is None or before == now:
+        if before is None and snapshot_path(workdir).parent.is_dir():
+            wd.write_json(snapshot_path(workdir), now)
+        return result
+    moves = [(old, now[real]) for real, old in before.items() if old and now.get(real) and now[real] != old]
+    olds = [o for o, _ in moves]
+    still = set(now.values())
+    swap = {o: n for o, n in moves if o not in still and olds.count(o) == 1}
+    unsure = {o for o in olds if o not in swap}
+    result["換"] = swap
+
+    if swap or unsure:
+        tp = turns_mod.turns_path(workdir)
+        with turns_mod._lock:
+            data = wd.read_json(tp, default=None)
+            if data:
+                for t in data.get("段落", []):
+                    txt = t.get("校對稿") or ""
+                    for o, n in swap.items():
+                        txt = replace_code(txt, o, n)
+                    if txt != (t.get("校對稿") or ""):
+                        t["校對稿"] = txt
+                    if t.get("已確認") and any(has_code(txt, o) for o in unsure):
+                        t["已確認"] = False
+                        t["代號改過"] = "、".join(sorted(unsure))
+                        result["要再看"].append(t["id"])
+                wd.write_json(tp, data)
+        if swap:
+            dp = review.name_decisions_path(workdir)
+            with review._lock:
+                dec = wd.read_json(dp, default=None)
+                if dec:
+                    n_changed = 0
+                    for d in dec.values():
+                        if isinstance(d, dict) and d.get("改稿"):
+                            txt = d["改稿"]
+                            for o, n in swap.items():
+                                txt = replace_code(txt, o, n)
+                            if txt != d["改稿"]:
+                                d["改稿"] = txt
+                                n_changed += 1
+                    if n_changed:
+                        wd.write_json(dp, dec)
+    wd.write_json(snapshot_path(workdir), now)
+    return result
+
+
 def sync(workdir: str | Path) -> int:
-    """名字候選檔的 `代號` 跟這一集的代號表對齊（敏感詞不動）。回傳改了幾筆；沒變就不寫檔。"""
+    """名字候選檔的 `代號` 跟這一集的代號表對齊（敏感詞不動）。回傳改了幾筆；沒變就不寫檔。
+    09-29：同時把已經寫進校對稿、改稿裡的舊代號換成新的（`propagate`）。"""
     from bookclub import studentnames
 
     workdir = Path(workdir)
     codes = episode_codes(workdir)
+    propagate(workdir, codes)
     changed = 0
     for path in (wd.names_path(workdir), studentnames.cands_path(workdir)):
         data = wd.read_json(path, default=None)
