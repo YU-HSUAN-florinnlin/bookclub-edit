@@ -162,6 +162,71 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
     return {"生成": gen, "消音": mutes, "略過": skipped, "要人處理": manual}
 
 
+def teacher_by_turns(turns: list[dict]):
+    """「這一句是不是老師說的」照段落判斷（純函式，回傳判斷用的函式）。重疊的地方兩個聲音混在一起，
+    逐句的聲紋標籤常常判成「不是老師」，段落（整段誰在講）比較可靠：句子中點落在老師的段落裡就算老師的、
+    落在學員的段落裡就不算；兩邊都沒蓋到才看逐句的標籤。"""
+    teacher = [(t["start"], t["end"]) for t in turns if t.get("說話者") == "老師"]
+    others = [(t["start"], t["end"]) for t in turns if t.get("說話者") != "老師"]
+
+    def same(s: dict) -> bool:
+        mid = (s["start"] + s["end"]) / 2
+        if any(a <= mid <= b for a, b in teacher):
+            return True
+        if any(a <= mid <= b for a, b in others):
+            return False
+        return s.get("label", "老師") == "老師"
+
+    return same
+
+
+def overlap_sentence(o: dict, ordered: list[dict], is_teacher=None) -> list[dict] | None:
+    """重疊選「生成老師聲音」時要重念的老師整句（純函式）：蓋到重疊最多的那一句老師的話，照標點擴成完整句子。
+    `ordered` 是照時間排的全部句子；`is_teacher` 見 `teacher_by_turns`（沒給就看逐句標籤）。找不到老師的句子回傳 None。"""
+    is_teacher = is_teacher or (lambda s: s.get("label", "老師") == "老師")
+    best, best_k = 0.0, None
+    for k, s in enumerate(ordered):
+        if s["start"] > o["end"] + 0.3:
+            break
+        if not is_teacher(s):
+            continue
+        cover = min(s["end"], o["end"] + 0.3) - max(s["start"], o["start"] - 0.3)
+        if cover > best:
+            best, best_k = cover, k
+    return expand_sentence(ordered, best_k, same=is_teacher) if best_k is not None else None
+
+
+def add_overlap_items(plan: dict, picks: list[dict], sentences: dict[str, dict], is_teacher=None) -> dict:
+    """重疊選了「生成老師聲音」（做法＝只留老師）的，加進老師的生成清單（純函式，改 plan 本身）：
+    老師那一整句用 AI 聲音重念，學員疊在上面的聲音跟著拿掉。
+
+    - 這一句已經因為名字要重念 → 併在同一筆（加 `重疊項目`），文字用名字那一筆的
+    - 找不到老師的句子 → 記在 `重疊沒句子`，組裝時那一小段照消音處理
+    `picks`：[{id, start, end, 老師整句改稿}]。"""
+    ordered = sorted(sentences.values(), key=lambda x: x["start"])
+    for o in picks:
+        group = overlap_sentence(o, ordered, is_teacher)
+        if not group:
+            plan.setdefault("重疊沒句子", []).append(o["id"])
+            continue
+        lo, hi = round(min(group[0]["start"], o["start"]), 3), round(max(group[-1]["end"], o["end"]), 3)
+        item = next((g for g in plan["生成"] if (g.get("句子") or [None])[0] == group[0]["id"]), None)
+        edited = (o.get("老師整句改稿") or "").strip()
+        if item:
+            item.setdefault("重疊項目", []).append(o["id"])
+            item["slot"] = [min(item["slot"][0], lo), max(item["slot"][1], hi)]
+            if edited and not item.get("候選"):
+                item["text"], item["改稿"] = edited, True
+            continue
+        item = {"id": f"V{int(round(o['start'] * 100)):07d}", "text": edited or "".join(g["text"] for g in group),
+                "slot": [lo, hi], "候選": [], "句子": [g["id"] for g in group], "重疊項目": [o["id"]]}
+        if edited:
+            item["改稿"] = True
+        plan["生成"].append(item)
+    plan["生成"].sort(key=lambda g: g["slot"][0])
+    return plan
+
+
 def _num(i) -> str:
     return f"{i:03d}" if isinstance(i, int) else str(i)
 
@@ -206,6 +271,14 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
             if i not in keep:
                 decisions[str(i)] = {"tags": ["不是名字"]}  # 只在計算時略過，不寫回覆核決定
     plan = build_plan(candidates, decisions, sentences)
+    if not only:   # 09-30：重疊選「生成老師聲音」的，老師整句一起排進生成清單
+        picks = [o for o in review.overlap_choices(workdir) if o["做法"] == "只留老師"]
+        if picks:
+            from bookclub import turns as turns_mod
+
+            tdata = turns_mod.page_data(workdir)
+            turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
+            add_overlap_items(plan, picks, sentences, teacher_by_turns(turns))
     if only:
         plan["略過"] = [s for s in plan["略過"] if s["候選"] in set(only)]
         plan["只處理"] = sorted(set(only))

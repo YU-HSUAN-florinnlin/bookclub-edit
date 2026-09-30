@@ -112,7 +112,7 @@ def _chosen_heard(r: dict) -> str | None:
 def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = False, demo_blur: bool = False,
                     include_kept: bool = False) -> dict:
     """讀工作區，排出範圍內的所有動作（原片時間）。第 3 步設成保留原聲的學員不換聲音（include_kept=True 才照樣換，測試用）。"""
-    from bookclub import assemble, nameplan, overlap as overlap_mod, review, students, tts
+    from bookclub import assemble, nameplan, review, students, tts
     from bookclub import turns as turns_mod
 
     workdir = Path(workdir)
@@ -160,7 +160,7 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
         r = recs.get(n.get("生成編號"), {})
         if n["類型"] == "換聲音":
             edits.append({"類型": "名字整句換掉", "start": n["start"], "end": n["end"], "id": n["生成編號"],
-                          "檔案": n["檔案"], "候選": n["候選"], "要人聽": n.get("要人聽", False), "text": r.get("text", n["文字"]),
+                          "檔案": n["檔案"], "候選": n["候選"], "重疊項目": n.get("重疊項目") or [], "要人聽": n.get("要人聽", False), "text": r.get("text", n["文字"]),
                           "生成用文字": r.get("生成用文字") or n["文字"], "轉回文字": _chosen_heard(r),
                           "生成秒數": _chosen_len(r), "放回做法": (r.get("放回時間格") or {}).get("放回做法")})
         else:
@@ -170,21 +170,11 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
 
     # 重疊（09-30）：做法照覆核工作台那一套算（人選的優先、沒選照建議；保留原聲的學員「不用改」）。
     # 除了「不用改」，重疊那一小段一律消音（下面跟局部消音一起加）；「兩邊都重生成、前後排開」還沒做，不再停格
-    ov = wd.read_json(wd.overlap_path(workdir), default=None) or {}
-    overlap_mod.apply_simple_filters(ov)
-    ov["overlaps"] = review.effective_overlaps(workdir, ov.get("overlaps", []), dec)   # 覆核時人工補的、改過時間的
-    tdata = turns_mod.page_data(workdir)
-    turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
-    sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
-    ov_voices = {} if include_kept else dec["學員聲音"]
     freezes = []
-    for o in ov.get("overlaps", []):
-        oid = review.overlap_id(o)
-        d = dec["重疊"].get(oid, {})
-        if (o.get("已自動跳過") and not d.get("救回")) or not _in(o["start"], o["end"], a, b):
+    for o in review.overlap_choices(workdir, voices={} if include_kept else None):
+        if not _in(o["start"], o["end"], a, b):
             continue
-        how = review.overlap_choice(o, d, sents, turns, ov_voices)["做法"]
-        marks.append({"類型": "重疊", "id": oid, "start": max(o["start"], a), "end": min(o["end"], b), "做法": how})
+        marks.append({"類型": "重疊", "id": o["id"], "start": max(o["start"], a), "end": min(o["end"], b), "做法": o["做法"]})
     if demo_freeze and not freezes and marks:
         o = next((m for m in marks if m["類型"] == "重疊"), None)
         if o:
@@ -619,7 +609,7 @@ def label_text(e: dict) -> str:
     if e["類型"] == "學員重念":
         return f"AI：{e['學員']} 重念（{e['聲線']}聲）"
     if e["類型"] == "名字整句換掉":
-        return "AI：名字整句換掉"
+        return "AI：名字整句換掉" if e.get("候選") else "AI：老師整句重念（聲音重疊）"
     if e["類型"] == "局部消音" and e.get("重疊"):
         return "重疊處消音"
     if e["類型"] == "局部消音":

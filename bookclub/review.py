@@ -29,6 +29,9 @@ NAME_DECISIONS_FILE = "名字覆核決定.json"     # 跟 server.py、nameplan.p
 
 OVERLAP_HOWS = ("不用改", "兩邊都重生成", "只留老師", "只留老師原聲學員消音", "只留學員", "兩邊都不留")
 OVERLAP_ARRANGE = ("前後排開", "照原位置疊著")
+# 第 3 步顯示的選項（09-30 宇軒）：重疊幾乎都是零點幾秒的短回應，學員那邊本來就會跟著整段重念，
+# 「兩邊都重生成」「兩邊都不留」不顯示（舊的決定選過的照樣認得）。畫面上的名稱見 review.js 的 RV_HOW_LABEL
+OVERLAP_SHOWN = ("不用改", "只留老師", "只留學員", "只留老師原聲學員消音")
 NAME_HOWS = ("整句換掉", "只換名字", "直接消音")
 NAME_TAGS = ("不是名字", "是地名", "切點削到旁邊的字")
 MUTE_WAYS = ("墊底噪", "霧化")
@@ -142,11 +145,12 @@ def is_minor_student(text: str, seconds: float) -> str | None:
 def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict, stu_text: str | None = None) -> dict:
     """重疊的預設建議（純函式，規則照 02 規格第三節的定案，減少人的決策）：
     1. 學員是「保留原聲」的人 → 不用改
-    2. 一來一往交接（老師收尾、學員開口，或反過來；重疊離換人的地方 1.5 秒內）→ 兩邊都重生成、前後排開
+    2. 一來一往交接（老師收尾、學員開口，或反過來；重疊離換人的地方 1.5 秒內）→ 不用改
+       （09-30 宇軒：預設不消音，人確認時聽了覺得學員原聲明顯再選「生成老師聲音」；學員那邊本來就跟著整段重念）
     3. 學員在老師連續講話中間附和（整個重疊落在老師的段落裡）→ 不用改
        （09-30 宇軒聽過成品：消音會讓老師的話斷掉、干擾理解；要消的話在第 3 步逐筆改「只留老師原聲、學員消音」）
     4. 老師在學員說話中間短短回應（整個重疊落在學員的段落裡）→ 只留學員（09-26 加，待宇軒確認）
-    5. 判斷不出來 → 兩邊都重生成、前後排開（最保險）"""
+    5. 判斷不出來 → 不用改（09-30：預設不消音，請人聽過再決定）"""
     if who and voices.get(who) == "保留原聲":
         return {"做法": "不用改", "排法": None, "原因": f"{who} 保留原聲，重疊照原樣"}
     if stu_text is not None:   # 09-29 宇軒：學員只是附和（3 個字以內或聽不出字）→ 不用生成；09-30 改成也不消音
@@ -161,7 +165,9 @@ def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict, s
         edge = (a["end"] + b["start"]) / 2
         if o["start"] - HANDOVER_S <= edge <= o["end"] + HANDOVER_S:
             how = "老師收尾、學員開口" if a["說話者"] == "老師" else "學員收尾、老師開口"
-            return {"做法": "兩邊都重生成", "排法": "前後排開", "原因": f"一來一往交接的地方（{how}），兩邊都重念、前後排開"}
+            return {"做法": "不用改", "排法": None,
+                    "原因": f"一來一往交接的地方（{how}）：學員那邊會跟著整段重念，老師這一小段照原樣。"
+                            "聽得到學員原聲又覺得明顯，改選「生成老師聲音」"}
     inside = any(t["說話者"] == "老師" and t["start"] <= o["start"] and o["end"] <= t["end"] for t in ordered)
     if inside:
         return {"做法": "不用改", "排法": None,
@@ -170,7 +176,7 @@ def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict, s
     if in_student:   # 09-26 加（待宇軒確認）：第一堂 9 筆都是學員分享中間老師短短回應
         return {"做法": "只留學員", "排法": None,
                 "原因": "老師在學員說話中間短短回應（嗯、對），拿掉老師那一小段、學員照常重念"}
-    return {"做法": "兩邊都重生成", "排法": "前後排開", "原因": "判斷不出是附和還是交接，先用最保險的做法"}
+    return {"做法": "不用改", "排法": None, "原因": "判斷不出是附和還是交接，先照原樣留著：請聽一下再決定"}
 
 
 def replace_real_names(text: str, table: list[dict]) -> tuple[str, list[dict]]:
@@ -331,6 +337,33 @@ def overlap_choice(o: dict, d: dict, sents: list[dict], turns: list[dict], voice
     who = d.get("學員說話者", defaults["學員說話者"])
     sug = suggest_overlap(o, turns, who, voices, d.get("學員文字", defaults["學員文字"]))
     return {"做法": d.get("做法") or sug["做法"], "排法": d.get("排法") or sug.get("排法"), "學員": who}
+
+
+def overlap_choices(workdir: str | Path, voices: dict | None = None) -> list[dict]:
+    """每一處要處理的重疊（自動跳過、沒救回的不算）最後照哪個做法：[{id, start, end, 做法, 學員, 老師整句改稿}]。
+    組裝（`render.build_decisions`）與排老師生成計畫（`nameplan.compute_plan`）共用，兩邊看到的一定一樣。
+    `voices`：學員聲音設定，沒給就讀覆核決定（測試「保留原聲的也照樣換」時傳 {}）。"""
+    from bookclub import overlap as overlap_mod
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    dec = load_decisions(workdir)
+    ov = wd.read_json(wd.overlap_path(workdir), default=None) or {}
+    overlap_mod.apply_simple_filters(ov)
+    tdata = turns_mod.page_data(workdir)
+    turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
+    sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
+    voices = dec["學員聲音"] if voices is None else voices
+    out = []
+    for o in effective_overlaps(workdir, ov.get("overlaps", []), dec):   # 含覆核時人工補的、改過時間的
+        oid = overlap_id(o)
+        d = dec["重疊"].get(oid, {})
+        if o.get("已自動跳過") and not d.get("救回"):
+            continue
+        ch = overlap_choice(o, d, sents, turns, voices)
+        out.append({"id": oid, "start": o["start"], "end": o["end"], "做法": ch["做法"], "學員": ch["學員"],
+                    "老師整句改稿": d.get("老師整句改稿", "")})
+    return out
 
 
 ALIGN_KEYS = ("標的起訖", "對齊", "對齊到")
@@ -580,6 +613,10 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         ov = {"overlaps": []}
     skipped = []
     if ov is not None:
+        from bookclub import nameplan
+
+        ordered_sents = sorted(sents, key=lambda s: s["start"])
+        is_teacher = nameplan.teacher_by_turns(turns)
         overlap_mod.apply_simple_filters(ov)   # 只在記憶體裡套，不改檔
         for o in effective_overlaps(workdir, ov.get("overlaps", []), dec):
             oid = overlap_id(o)
@@ -591,7 +628,10 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                 continue
             defaults = _overlap_defaults(o, sents, turns)
             who = d.get("學員說話者", defaults["學員說話者"])
+            grp = nameplan.overlap_sentence(o, ordered_sents, is_teacher)   # 選「生成老師聲音」時要重念的老師整句
             items.append({"類型": "重疊", **base, **defaults,
+                          "老師整句": {"start": grp[0]["start"], "end": grp[-1]["end"], "原文": "".join(g["text"] for g in grp),
+                                   "改稿": d.get("老師整句改稿", "")} if grp else None,
                           "老師文字": d.get("老師文字", defaults["老師文字"]),
                           "學員文字": d.get("學員文字", defaults["學員文字"]),
                           "學員說話者": who,
@@ -662,7 +702,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "開始前確認": dec["開始前確認"],
         "開始前待處理": pending,          # 09-30：每一件底下還沒處理的（有的話不能標完成）
         "開始前自動改回": reverted,       # 09-30：這次讀資料時因為冒出新項目、自動改回還沒做的
-        "選項": {"重疊": OVERLAP_HOWS, "重疊排法": OVERLAP_ARRANGE, "名字": NAME_HOWS, "名字標記": NAME_TAGS,
+        "選項": {"重疊": OVERLAP_SHOWN, "重疊排法": OVERLAP_ARRANGE, "名字": NAME_HOWS, "名字標記": NAME_TAGS,
                  "學員名字": list(studentnames.HOWS),
                  "消音": MUTE_WAYS, "聲音": VOICE_CHOICES},
         "進度": progress(items, dec, duration),
@@ -771,7 +811,7 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
 
 
 def save_overlap(workdir: str | Path, oid: str, fields: dict) -> dict:
-    """`POST /api/review/overlap`：做法、排法（兩邊都重生成時）、兩邊文字、學員是誰、備註、已確認、救回。"""
+    """`POST /api/review/overlap`：做法、排法（兩邊都重生成時）、兩邊文字、老師整句改稿、學員是誰、備註、已確認、救回。"""
     workdir = Path(workdir)
     with _lock:
         dec = load_decisions(workdir)
@@ -787,6 +827,12 @@ def save_overlap(workdir: str | Path, oid: str, fields: dict) -> dict:
         for k in ("老師文字", "學員文字", "學員說話者", "備註"):
             if k in fields:
                 d[k] = str(fields[k]) if fields[k] is not None else None
+        if "老師整句改稿" in fields:   # 09-30：選「生成老師聲音」時要重念的句子人直接改（空白＝照逐字稿）
+            txt = str(fields["老師整句改稿"] or "").strip()
+            if txt:
+                d["老師整句改稿"] = txt
+            else:
+                d.pop("老師整句改稿", None)
         for k in ("已確認", "救回"):
             if k in fields:
                 d[k] = bool(fields[k])

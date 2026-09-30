@@ -429,6 +429,9 @@ def build_refs(workdir: Path, ref_dir_name: str = "參考音") -> dict:
         txt_path = rd / f"候選{rank}.txt"
         wav_path = rd / f"候選{rank}.wav"
         transcript = txt_path.read_text(encoding="utf-8") if txt_path.exists() else a.get("transcript", "")
+        if rank == record.get("選定名次") and (rd / "ref.txt").exists():
+            # 09-30：已經選定的那一個顯示人校對過的逐字稿（ref.txt），不然再按一次存檔會把校對蓋回初稿
+            transcript = (rd / "ref.txt").read_text(encoding="utf-8")
         audio_url = None
         if wav_path.exists():
             rel = str(wav_path.relative_to(workdir))

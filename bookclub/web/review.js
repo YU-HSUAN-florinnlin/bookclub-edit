@@ -152,7 +152,7 @@ async function renderReview() {
   rv.video = document.getElementById("rv-video");
   if (rv.video) rvBindVideo();
   document.getElementById("rv-goto").addEventListener("keydown", (e) => {
-    if (e.key !== "Enter") return;
+    if (e.key !== "Enter" || e.isComposing) return;
     e.preventDefault();
     const t = rvParseTime(e.target.value);
     e.target.classList.toggle("bad", t == null);
@@ -458,7 +458,9 @@ function rvVisible() {
 }
 
 // 09-29 宇軒：做法的顯示名稱（存檔的值不變）
-const RV_HOW_LABEL = { "整句換掉": "老師整句生成" };
+const RV_HOW_LABEL = { "整句換掉": "老師整句生成",
+  // 重疊（09-30 宇軒）：畫面上用這幾個名稱，存檔的值不變
+  "只留老師": "生成老師聲音", "只留學員": "生成學員聲音", "只留老師原聲學員消音": "消音" };
 const rvHowLabel = (h) => RV_HOW_LABEL[h] || h;
 
 function rvChip(it) {
@@ -468,7 +470,6 @@ function rvChip(it) {
 
 function rvSuggestText(it) {
   const s = it["建議"] || {};
-  if (it["類型"] === "重疊" && s["做法"] === "兩邊都重生成" && s["排法"]) return `${s["做法"]}、${s["排法"]}`;
   if (it["類型"] === "學員段落") return s["做法"] === "刪除這段" ? "刪除這段" : "學員整句生成（逐字稿沒問題就通過）";
   return rvHowLabel(s["做法"]) || "—";
 }
@@ -660,9 +661,16 @@ function rvMoreHtml(it) {
     const how = rvChosen(it);
     const whoOpts = ['<option value="">（不知道是誰）</option>', ...rvStudents().map((n) => `<option value="${esc(n)}" ${n === it["學員說話者"] ? "selected" : ""}>${esc(rvWho(n))}</option>`)].join("");
     const ctx = (it["附近逐字稿"] || []).map((s) => `<p><b>${esc(s["說話者"])}</b> ${esc(s.text)}</p>`).join("");
-    return `<div class="rv-field rv-choices">${rvRadios("rv-ovhow", opts["重疊"], how, "rv-ovhow")}</div>
+    const hows = opts["重疊"].includes(how) ? opts["重疊"] : [...opts["重疊"], how];   // 舊的決定選過、現在不顯示的做法照樣列出來
+    const w = it["老師整句"];
+    return `<div class="rv-field rv-choices">${rvRadios("rv-ovhow", hows, how, "rv-ovhow")}</div>
       <p class="rv-warnline" id="rv-keepwarn" ${how === "不用改" ? "" : "hidden"}>「不用改」會把這一小段的學員原聲留在成品：學員只是短短附和（嗯、對），或這位學員同意保留原聲才選這個。</p>
-      <p class="rv-meta">目前成品的做法：「不用改」照原樣留著；其他做法重疊的這一小段一律消音（老師的聲音跟著靜音零點幾秒），學員整段重念時會一起換掉。「兩邊都重生成」「只留老師」「兩邊都不留」還沒做，先照消音處理。</p>
+      <p class="rv-meta">不用改＝照原樣。生成老師聲音＝老師這一整句用 AI 聲音重念，學員疊在上面的聲音跟著拿掉。生成學員聲音＝學員整段用匿名聲線重念時一起換掉（重疊落在老師的話裡時，照消音處理）。消音＝這一小段靜音，老師的聲音跟著斷零點幾秒。</p>
+      <div class="rv-field" id="rv-tsay-box" ${how === "只留老師" ? "" : "hidden"}>${w
+        ? `<label>老師整句（${esc(rvFmt(w.start, 1))}–${esc(rvFmt(w.end, 1))}），會用老師的 AI 聲音重念這一句。重疊的地方逐字稿常常混到學員的話，請對照聲音改好：
+            <textarea id="rv-tsay" rows="2">${esc(w["改稿"] || w["原文"])}</textarea></label>
+            <span class="rv-meta" id="rv-tsay-st">${w["改稿"] ? "人改過" : "照逐字稿"}</span>`
+        : `<p class="rv-warnline">找不到這一處老師的句子，沒辦法重念；選了會照消音處理。</p>`}</div>
       <div class="rv-field rv-choices" id="rv-arr" ${how === "兩邊都重生成" ? "" : "hidden"}>兩邊都重生成時：${rvRadios("rv-ar", opts["重疊排法"], it["排法"] || (it["建議"] || {})["排法"] || "前後排開", "rv-ar")}</div>
       <div class="rv-field rv-two"><label>老師說的<textarea id="rv-tt" rows="2">${esc(it["老師文字"])}</textarea></label>
         <label>學員說的（<select id="rv-ovwho">${whoOpts}</select>）<textarea id="rv-st" rows="2">${esc(it["學員文字"])}</textarea></label></div>
@@ -737,8 +745,16 @@ function rvBindMore(it) {
     document.querySelectorAll(".rv-ovhow").forEach((el) => el.addEventListener("change", async () => {
       q("rv-keepwarn").hidden = el.value !== "不用改";
       q("rv-arr").hidden = el.value !== "兩邊都重生成";
+      q("rv-tsay-box").hidden = el.value !== "只留老師";
       await rvSaveOverlap(it, { "做法": el.value });
     }));
+    const tsay = q("rv-tsay");   // 09-30：選「生成老師聲音」時要重念的老師整句
+    if (tsay) tsay.addEventListener("change", async () => {
+      const txt = tsay.value.trim() === it["老師整句"]["原文"] ? "" : tsay.value.trim();
+      await rvSaveOverlap(it, { "老師整句改稿": txt });
+      it["老師整句"]["改稿"] = txt;
+      q("rv-tsay-st").textContent = txt ? "人改過" : "照逐字稿";
+    });
     document.querySelectorAll(".rv-ar").forEach((el) => el.addEventListener("change", () => rvSaveOverlap(it, { "排法": el.value })));
     q("rv-tt").addEventListener("change", (e) => rvSaveOverlap(it, { "老師文字": e.target.value }));
     q("rv-st").addEventListener("change", (e) => rvSaveOverlap(it, { "學員文字": e.target.value }));
@@ -796,7 +812,7 @@ function rvRefreshSug() {   // 改了做法：只更新建議框下面的「改�
   let mine = box.querySelector(".mine");
   if (chosen && sug && chosen !== sug) {
     if (!mine) { mine = document.createElement("p"); mine.className = "mine"; box.appendChild(mine); }
-    mine.textContent = `改成：${chosen}`;
+    mine.textContent = `改成：${rvHowLabel(chosen)}`;
   } else if (mine) mine.remove();
   rvRenderList();
 }
@@ -1336,7 +1352,7 @@ function rvRenderIO() {
       if (t != null) rvEdSet(w, t, false);
     };
     box.addEventListener("change", take);
-    box.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); take(); } });
+    box.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); e.stopPropagation(); take(); } });
   }
   el.querySelectorAll("[data-now]").forEach((b) => b.addEventListener("click", () => rvEdSet(b.dataset.now, rv.video ? rv.video.currentTime : null)));
   el.querySelectorAll("[data-nudge]").forEach((b) => b.addEventListener("click", () => {
@@ -1473,6 +1489,8 @@ function rvStartTimeTracking() {
 
 document.addEventListener("keydown", (e) => {
   if (currentRouteId() !== "step3" || !rv.data) return;
+  // 09-30 宇軒：中文輸入法選字按的 Enter 不算快捷鍵（以前會被當成「通過」，卡片重畫後游標跑掉，再按 ↓ 就跳到下一筆）
+  if (e.isComposing || e.keyCode === 229) return;
   if (document.querySelector("dialog[open]")) return;   // 確認視窗開著時，快捷鍵不作用
   rv.lastActivity = Date.now();
   const tag = e.target.tagName;

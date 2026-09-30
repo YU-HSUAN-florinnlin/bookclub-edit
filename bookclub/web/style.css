@@ -617,3 +617,10 @@ table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg)
 .rv-busy[hidden] { display: none; }
 .rv2.readonly textarea, .rv2.readonly select, .rv2.readonly input { background: var(--bg-soft); }
 .rv-tag.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--lowconf-border); }
+
+/* 第 2 步：參考音候選切換（09-30） */
+.ref-chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
+.ref-chip { background: #fff; color: #333; border: 1px solid #c9c9c9; border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 14px; }
+.ref-chip.on { border-color: #2b6cb0; background: #ebf4ff; color: #1a4f8a; font-weight: 600; }
+.ref-chip.chosen { border-color: #2f855a; }
+.ref-chip.chosen.on { background: #e6f6ec; color: #22643f; }

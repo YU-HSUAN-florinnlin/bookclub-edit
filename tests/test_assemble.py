@@ -186,6 +186,49 @@ def test_subtract_and_add_local_mutes():
     assert [e["霧化"] for e in out if e.get("id") == "M003"] == [True]
 
 
+def test_overlap_teacher_items_in_plan():
+    """09-30：重疊選「生成老師聲音」→ 老師那一整句排進生成清單；同一句已經因為名字要重念就併在一起；找不到句子的記下來。"""
+    sents = {
+        "s1": {"id": "s1", "start": 10.0, "end": 14.0, "text": "小美，妳剛剛說的阿明也有提到。", "label": "老師"},
+        "s2": {"id": "s2", "start": 20.0, "end": 22.0, "text": "今天我們先從呼吸開始，", "label": "老師"},
+        "s3": {"id": "s3", "start": 22.2, "end": 25.0, "text": "慢慢把注意力放回來。", "label": "老師"},
+        "s4": {"id": "s4", "start": 40.0, "end": 43.0, "text": "我這週練習的時候很常分心。", "label": "學員"},
+    }
+    ordered = sorted(sents.values(), key=lambda x: x["start"])
+    grp = nameplan.overlap_sentence({"start": 23.0, "end": 23.5}, ordered)
+    assert [g["id"] for g in grp] == ["s2", "s3"]                       # 半句照標點擴成整句
+    assert nameplan.overlap_sentence({"start": 41.0, "end": 41.4}, ordered) is None   # 這裡只有學員的話
+    # 重疊的地方逐句標籤常常判成「不是老師」：照段落判斷（整段是老師在講）就找得到
+    mixed = [dict(s, label="不是老師") if s["id"] == "s3" else s for s in ordered]
+    assert nameplan.overlap_sentence({"start": 23.0, "end": 23.5}, mixed) is None   # 只看逐句標籤會找不到
+    by_turn = nameplan.teacher_by_turns([{"start": 0.0, "end": 30.0, "說話者": "老師"}, {"start": 39.0, "end": 45.0, "說話者": "學員1"}])
+    assert [g["id"] for g in nameplan.overlap_sentence({"start": 23.0, "end": 23.5}, mixed, by_turn)] == ["s2", "s3"]
+    assert nameplan.overlap_sentence({"start": 41.0, "end": 41.4}, mixed, by_turn) is None
+    plan = nameplan.build_plan([_cand(10.0, 10.5, "整句換掉")], {}, sents)
+    picks = [{"id": "O12.00", "start": 12.0, "end": 12.4, "老師整句改稿": ""},          # 跟名字同一句 → 併在一起
+             {"id": "O23.00", "start": 23.0, "end": 23.5, "老師整句改稿": "今天先從呼吸開始，慢慢把注意力放回來。"},
+             {"id": "O41.00", "start": 41.0, "end": 41.4, "老師整句改稿": ""}]          # 找不到老師的句子
+    nameplan.add_overlap_items(plan, picks, sents)
+    gen = {g["id"]: g for g in plan["生成"]}
+    assert len(gen) == 2 and plan["重疊沒句子"] == ["O41.00"]
+    assert gen["S001"]["重疊項目"] == ["O12.00"] and gen["S001"]["text"].startswith("Amy")   # 文字用名字那一筆的
+    v = gen["V0002300"]
+    assert v["slot"] == [20.0, 25.0] and v["候選"] == [] and v["重疊項目"] == ["O23.00"]
+    assert v["text"] == "今天先從呼吸開始，慢慢把注意力放回來。" and v["改稿"] is True
+    # 生成好之後：剪輯決策帶著重疊項目；重疊消音讓給這一筆，算成處理好了
+    tlog = {"句子": [{"id": "V0002300", "放回時間格": {"檔案": "生成/老師/V0002300.wav"}}]}
+    edl, _ = assemble.build_edl(plan, tlog)
+    assert [e.get("重疊項目") for e in edl] == [["O23.00"]]
+    o = {"id": "O23.00", "start": 23.0, "end": 23.5, "做法": "只留老師"}
+    out, _ = assemble.add_local_mutes(edl, assemble.overlap_mutes([o]), [])
+    assert not [e for e in out if e.get("重疊")]
+    res = assemble.overlap_outcome(o, out, [])
+    assert res["沒處理秒"] == 0 and "換聲音時一起換掉" in res["處理"]
+    # 還沒生成：照消音處理，而且說清楚為什麼
+    out, _ = assemble.add_local_mutes([], assemble.overlap_mutes([o]), [])
+    assert "還沒生成" in assemble.overlap_outcome(o, out, [])["處理"]
+
+
 def test_overlap_mutes_and_outcome():
     """09-30：重疊處除了「不用改」一律消音；被換聲音蓋到的讓給那一筆；還留著原聲的算得出來。"""
     ovs = [{"id": "O10.00", "start": 10.0, "end": 10.5, "做法": "只留老師原聲學員消音"},   # 老師段落裡的附和 → 消音

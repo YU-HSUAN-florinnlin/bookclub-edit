@@ -57,6 +57,7 @@ def build_edl(plan: dict, teacher_log: dict | None) -> tuple[list[dict], list[st
         edits.append({
             "類型": "換聲音", "start": g["slot"][0], "end": g["slot"][1], "檔案": r["放回時間格"]["檔案"],
             "文字": g["text"], "候選": g["候選"], "要人聽": r.get("要人聽", False), "生成編號": g["id"],
+            **({"重疊項目": g["重疊項目"]} if g.get("重疊項目") else {}),
         })
     for m in plan.get("消音", []):
         edits.append({"類型": "消音", "start": m["start"], "end": m["end"], "候選": [m["候選"]]})
@@ -127,7 +128,7 @@ def add_local_mutes(edits: list[dict], mutes: list[dict], cuts: list[tuple[float
 
 
 OVERLAP_KEEP = "不用改"            # 重疊的做法裡，只有這個會把原聲留在成品
-OVERLAP_NOT_BUILT = ("兩邊都重生成", "只留老師", "兩邊都不留")   # 還沒做的做法，先消音
+OVERLAP_NOT_BUILT = ("兩邊都重生成", "兩邊都不留")   # 還沒做的做法，先消音（第 3 步也不顯示了）
 OVERLAP_LEFT_TOL_S = 0.05          # 重疊處沒蓋到的原聲在這個秒數以內不算漏（剪點對齊畫面格的誤差）
 
 
@@ -164,6 +165,8 @@ def overlap_outcome(o: dict, edits: list[dict], cuts: list[tuple[float, float]] 
         text += f"，其餘在 {by} 換聲音時一起換掉"
     if o["做法"] in OVERLAP_NOT_BUILT:
         text += f"；「{o['做法']}」還沒做，先消音"
+    elif o["做法"] == "只留老師":
+        text += "；選的是生成老師聲音，但老師這一句還沒生成或找不到句子，先消音"
     return {"處理": text, "沒處理秒": 0.0}
 
 

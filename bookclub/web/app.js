@@ -605,20 +605,35 @@ function startStatusPoll() {
 }
 
 // ---------------------------------------------------------------------------
-// 第 2 步：挑選老師參考聲音片段（只顯示第一名，換一段往下走）
+// 第 2 步：挑選老師參考聲音片段
+// 09-30 宇軒：要能來回切換著聽、互相比對 → 上一個／下一個（切過去自動播放）、每一個候選一顆按鈕直接跳、
+// 隨時看得到目前選定的是第幾個；打開時停在已經選定的那一個；改到一半的逐字稿切走再回來還在
 // ---------------------------------------------------------------------------
 
 let refsCache = null;
 let refsPointer = 0;
+let refsDrafts = {};   // 名次 → 改到一半、還沒按「用這段」的逐字稿
 
 async function renderStep2() {
   contentEl.innerHTML = "<p>載入中…</p>";
   refsCache = await apiGet("/api/refs");
-  refsPointer = 0;
+  refsDrafts = {};
+  const list = (refsCache && refsCache.candidates) || [];
+  const chosen = list.findIndex((c) => c.rank === refsCache["已選定名次"]);
+  refsPointer = chosen >= 0 ? chosen : 0;
   renderStep2Body();
 }
 
-function renderStep2Body() {
+function refsGo(k, play) {
+  const list = (refsCache && refsCache.candidates) || [];
+  if (k < 0 || k >= list.length || k === refsPointer) return;
+  const ta = document.getElementById("refText");
+  if (ta) refsDrafts[list[refsPointer].rank] = ta.value;
+  refsPointer = k;
+  renderStep2Body(play);
+}
+
+function renderStep2Body(play = false) {
   const list = (refsCache && refsCache.candidates) || [];
   if (list.length === 0) {
     contentEl.innerHTML = `
@@ -629,39 +644,60 @@ function renderStep2Body() {
   }
   if (refsPointer >= list.length) refsPointer = list.length - 1;
   const c = list[refsPointer];
+  const chosenRank = refsCache["已選定名次"];
+  const chosenAt = list.findIndex((x) => x.rank === chosenRank);
+  const isChosen = c.rank === chosenRank;
+  const text = refsDrafts[c.rank] !== undefined ? refsDrafts[c.rank] : c.transcript;
+  const chips = list.map((x, k) => `<button class="ref-chip${k === refsPointer ? " on" : ""}${x.rank === chosenRank ? " chosen" : ""}" data-k="${k}"
+      title="${esc(x["原片時間"])}">${x.rank === chosenRank ? "✓ " : ""}第 ${k + 1} 個</button>`).join("");
 
   contentEl.innerHTML = `
     <h1>2　挑選老師參考聲音片段</h1>
-    <div class="hint">參考音裡如果有雜音、笑聲、咳嗽，或別人的回應（例如「嗯」「對」），都不適合，請按「換一段」。</div>
+    <div class="hint">參考音裡如果有雜音、笑聲、咳嗽，或別人的回應（例如「嗯」「對」），都不適合。可以來回切換著聽，比較哪一個最像老師；鍵盤 ← → 也可以切換。</div>
     <div class="card">
-      <p>第 ${refsPointer + 1} 段／共 ${list.length} 段　｜　原片時間：${esc(c["原片時間"])}　｜　長度：${esc(c["長度秒"])} 秒</p>
-      ${c["音檔網址"] ? `<audio controls preload="none" src="${esc(c["音檔網址"])}"></audio>` : `<div class="namecard missing">（音檔缺失）</div>`}
-      <p style="margin-top:12px;">逐字稿（可以直接修改）：</p>
-      <textarea id="refText" rows="4">${esc(c.transcript)}</textarea>
+      <p><b>目前選定：${chosenAt >= 0 ? `第 ${chosenAt + 1} 個` : "還沒選"}</b></p>
+      <div class="ref-chips">${chips}</div>
+      <p>正在聽：第 ${refsPointer + 1} 個／共 ${list.length} 個${isChosen ? `　<span class="badge done">目前選定的</span>` : ""}　｜　原片時間：${esc(c["原片時間"])}　｜　長度：${esc(c["長度秒"])} 秒</p>
+      ${c["音檔網址"] ? `<audio id="refAudio" controls preload="auto" src="${esc(c["音檔網址"])}"></audio>` : `<div class="namecard missing">（音檔缺失）</div>`}
+      <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
+        <button id="btnPrev" class="secondary" ${refsPointer <= 0 ? "disabled" : ""}>◀ 聽上一個</button>
+        <button id="btnNext" class="secondary" ${refsPointer >= list.length - 1 ? "disabled" : ""}>聽下一個 ▶</button>
+      </div>
+      <p style="margin-top:12px;">逐字稿（可以直接修改；要跟聲音一字不差）：</p>
+      <textarea id="refText" rows="4">${esc(text)}</textarea>
       <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <button id="btnNext" class="secondary" ${refsPointer >= list.length - 1 ? "disabled" : ""}>這段有雜音、笑聲或別人的聲音，換一段</button>
-        <button id="btnUse">用這段</button>
+        <button id="btnUse">${isChosen ? "存逐字稿（繼續用這一個）" : "改用這一個"}</button>
       </div>
       <p id="refMsg"></p>
     </div>
   `;
 
-  document.getElementById("btnNext").addEventListener("click", () => {
-    if (refsPointer < list.length - 1) {
-      refsPointer += 1;
-      renderStep2Body();
-    }
-  });
+  document.getElementById("btnPrev").addEventListener("click", () => refsGo(refsPointer - 1, true));
+  document.getElementById("btnNext").addEventListener("click", () => refsGo(refsPointer + 1, true));
+  contentEl.querySelectorAll(".ref-chip").forEach((el) => el.addEventListener("click", () => refsGo(Number(el.dataset.k), true)));
+  const audio = document.getElementById("refAudio");
+  if (play && audio) audio.play().catch(() => {});   // 切換過來的直接播，方便比對
 
   document.getElementById("btnUse").addEventListener("click", async () => {
     const msgEl = document.getElementById("refMsg");
     const text = document.getElementById("refText").value;
     try {
       await apiPost("/api/refs/use", { rank: c.rank, transcript: text });
-      msgEl.innerHTML = `<span class="badge done">已存檔</span> 已存成 ref.wav／ref.txt（第 ${c.rank} 名）`;
+      refsCache["已選定名次"] = c.rank;
+      c.transcript = text;
+      delete refsDrafts[c.rank];
+      renderStep2Body();
+      document.getElementById("refMsg").innerHTML = `<span class="badge done">已存檔</span> 目前選定第 ${refsPointer + 1} 個（已存成 ref.wav／ref.txt）`;
       await renderSidebar();
     } catch (e) {
       msgEl.innerHTML = `<span class="badge error">失敗</span> ${esc(e.message)}`;
     }
   });
 }
+
+document.addEventListener("keydown", (e) => {   // 第 2 步：← → 切換候選（在打字時不搶）
+  if (!document.getElementById("refText") || !document.querySelector(".ref-chips")) return;
+  if (e.target && ["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName)) return;
+  if (e.key === "ArrowLeft") { e.preventDefault(); refsGo(refsPointer - 1, true); }
+  if (e.key === "ArrowRight") { e.preventDefault(); refsGo(refsPointer + 1, true); }
+});

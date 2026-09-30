@@ -84,8 +84,9 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
                 if rec["成品"][1] is not None:
                     rec["成品"][1] = _r(rec["成品"][1] + e["停格秒"])
         elif kind == "名字整句換掉":
-            rec["覆核項目"] = [f"名字:{c}" for c in e.get("候選", [])]
-            rec["做了什麼"] = "老師提到名字：整句用老師 AI 聲音重念、名字換成代號"
+            rec["覆核項目"] = [f"名字:{c}" for c in e.get("候選", [])] + [f"重疊:{x}" for x in e.get("重疊項目") or []]
+            rec["做了什麼"] = "老師提到名字：整句用老師 AI 聲音重念、名字換成代號" if e.get("候選") \
+                else "聲音重疊：老師整句用 AI 聲音重念，學員疊在上面的聲音跟著拿掉"
             rec["檔案"] = e.get("檔案")
         elif kind == "名字消音":
             rec["覆核項目"] = [f"名字:{c}" for c in e.get("候選", [])]

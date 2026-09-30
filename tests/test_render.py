@@ -151,6 +151,28 @@ def test_build_decisions_mutes_overlaps():
             d = render.build_decisions(w, 0.0, 180.0)
             assert "O150.20" in [e.get("重疊") for e in d["動作"]] and d["重疊沒處理"] == []
 
+            # 選「生成老師聲音」：老師整句排進生成清單（跟名字同一句就併在一起）；找不到老師句子的記下來；
+            # 還沒生成時照消音處理，不會留著原聲
+            import json
+            from bookclub import nameplan
+            from bookclub import workdir as wdmod
+            ovf = wdmod.overlap_path(w)
+            data = json.loads(ovf.read_text(encoding="utf-8"))
+            data["overlaps"].append({"start": 78.0, "end": 78.4, "length": 0.4, "已自動跳過": False, "原因": None, "區域": "區域0009",
+                                     "speakers": [{"label": "A", "role": "不是老師", "sim": 0.1}, {"label": "B", "role": "老師", "sim": 0.8}]})
+            ovf.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            review.save_overlap(w, "O78.00", {"做法": "只留老師"})
+            review.save_overlap(w, "O69.60", {"做法": "只留老師"})      # 這一處在學員的話裡，找不到老師的句子
+            plan = nameplan.compute_plan(w)
+            assert [(g["id"], g["重疊項目"]) for g in plan["生成"] if g.get("重疊項目")] == [("S001", ["O78.00"])], plan["生成"]
+            assert plan["重疊沒句子"] == ["O69.60"]
+            d = render.build_decisions(w, 0.0, 180.0)
+            assert {"O69.60", "O78.00"} <= {e.get("重疊") for e in d["動作"]} and d["重疊沒處理"] == []
+            page = review.page_data(w)
+            its = {i["id"]: i for i in page["項目"] if i["類型"] == "重疊"}
+            assert its["O78.00"]["老師整句"]["原文"] and its["O69.60"]["老師整句"] is None
+            assert "兩邊都重生成" not in page["選項"]["重疊"]
+
             # 人選「不用改」→ 原樣保留、不消音
             review.save_overlap(w, "O69.60", {"做法": "不用改"})
             d = render.build_decisions(w, 0.0, 180.0)

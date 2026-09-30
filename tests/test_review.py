@@ -203,11 +203,12 @@ def test_suggest_overlap_rules():
     f = review.suggest_overlap
     assert f({"start": 10, "end": 10.4}, turns, None, {})["做法"] == "不用改"        # 老師講話中間附和（09-30：不消音）
     r = f({"start": 29.5, "end": 30.3}, turns, "學員2", {})
-    assert r["做法"] == "兩邊都重生成" and r["排法"] == "前後排開" and "老師收尾" in r["原因"]      # 交接
+    assert r["做法"] == "不用改" and "老師收尾" in r["原因"]      # 交接（09-30：預設不消音，人聽了再決定）
     assert "學員收尾" in f({"start": 49.8, "end": 50.5}, turns, "學員2", {})["原因"]
     assert f({"start": 29.5, "end": 30.3}, turns, "學員2", {"學員2": "保留原聲"})["做法"] == "不用改"
     assert f({"start": 40, "end": 40.5}, turns, "學員2", {})["做法"] == "只留學員"                  # 學員說話中老師回應
-    assert f({"start": 95, "end": 95.5}, turns, None, {})["做法"] == "兩邊都重生成"                  # 判斷不出來
+    assert f({"start": 95, "end": 95.5}, turns, None, {})["做法"] == "不用改"                        # 判斷不出來
+    assert set(review.OVERLAP_SHOWN) <= set(review.OVERLAP_HOWS) and "兩邊都重生成" not in review.OVERLAP_SHOWN
 
 
 def test_replace_real_names():
@@ -307,7 +308,7 @@ def test_minor_student_and_filler_overlap_rules():
     s = review.suggest_overlap({"start": 1.0, "end": 1.3}, [], None, {}, "嗯")
     assert s["做法"] == "不用改"
     s = review.suggest_overlap({"start": 1.0, "end": 1.3}, [], None, {}, "我想問一下這個練習")
-    assert s["做法"] == "兩邊都重生成"
+    assert s["做法"] == "不用改" and "聽" in s["原因"]
 
 
 def test_name_decisions_follow_candidate_content():
