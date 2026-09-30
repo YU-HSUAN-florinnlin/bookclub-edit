@@ -518,9 +518,15 @@ def save_turn(workdir: str | Path, tid: str, fields: dict) -> dict:
             t["短句保留"] = bool(fields["短句保留"])
         if fields.get("加秒數"):
             t["校對秒數"] = round((t["校對秒數"] or 0.0) + min(float(fields["加秒數"]), MAX_COUNT_S), 1)
+        loose = fields.get("說話者") == "老師" and _no_sentences(t)
+        if loose:   # 沒有逐字稿句子的段落（手動標的、切在一句話裡面剩下的半句）改成老師：見下面
+            data["段落"] = [x for x in data["段落"] if x is not t]
+            _recount_people(data)
         wd.write_json(turns_path(workdir), data)
-    added = 0
-    if fields.get("說話者") == "老師":
+    added, teacher_item = 0, None
+    if loose:
+        teacher_item = _to_teacher_items(workdir, [t])[0]
+    elif fields.get("說話者") == "老師":
         # 那段其實是老師在講話：補找這段裡老師提到的名字（第 1 步只掃判成老師的句子，會漏掉）
         from bookclub import names
 
@@ -528,7 +534,21 @@ def save_turn(workdir: str | Path, tid: str, fields: dict) -> dict:
             added = names.append_candidates(workdir, t.get("句子", []))
         except Exception as exc:   # 補找失敗不要擋住改說話者
             print(f"⚠️ 改成老師後補找名字失敗：{exc}")
-    return {"ok": True, "段落": t, "進度": turns_progress(data), "補找到的老師名字": added}
+    return {"ok": True, "段落": t, "進度": turns_progress(data), "補找到的老師名字": added, "改成老師重念": teacher_item}
+
+
+def _no_sentences(t: dict) -> bool:
+    return not t.get("句子")
+
+
+def _to_teacher_items(workdir: Path, loose: list[dict]) -> list[str]:
+    """沒有逐字稿句子的段落改成老師（09-30 宇軒）：這種段落沒辦法自動找名字，放著就是老師原聲、名字照念，
+    而且老師的段落不列在第 3 步清單上，人看不到。所以改成一筆「老師這一段用 AI 聲音重念」的項目，
+    列在清單上給人確認要念的字（不用重念的按「不用改」）。呼叫前段落要先從段落檔拿掉。"""
+    from bookclub import review
+
+    return [review.add_teacher_item(workdir, t["start"], t["end"], text=(t.get("校對稿") or t.get("原文") or ""))
+            for t in loose]
 
 
 def merge_turn(workdir: str | Path, tid: str) -> dict:
@@ -541,6 +561,10 @@ def merge_turn(workdir: str | Path, tid: str) -> dict:
         if i == 0:
             raise ValueError("第一段沒有上一段可以合併")
         a, b = ts[i - 1], ts[i]
+        if a.get("句尾切點") and not b["句子"] and b.get("手動標記"):
+            a.pop("句尾切點")     # 切在一句話裡面、剩下的那半句併回來：那一句又整句是這一段的
+        elif b.get("句尾切點"):
+            a["句尾切點"] = {**(a.get("句尾切點") or {}), **b["句尾切點"]}
         a["end"] = b["end"]
         a["句子"] += b["句子"]
         a["原文"] += b["原文"]
@@ -552,8 +576,77 @@ def merge_turn(workdir: str | Path, tid: str) -> dict:
         return {"ok": True}
 
 
+def turn_sentences(t: dict, by_id: dict[str, dict]) -> list[dict]:
+    """這一段的句子（複製一份），時間與文字照這一段實際的範圍（純函式，09-30）：
+
+    - 人改過段落起訖（提早結束、晚一點開始）時，頭尾的句子會比段落長 → 起訖夾在段落的起訖裡面
+      （不然學員重念的時間格會蓋到段落外面別人講的話）
+    - 切在句子裡面時（`句尾切點`：{句子 id: 只到第幾個字}），那一句只有前面幾個字是這一段的"""
+    out = []
+    cut_at = t.get("句尾切點") or {}
+    for i in t.get("句子", []):
+        if i not in by_id:
+            continue
+        s = dict(by_id[i])
+        if i in cut_at:
+            s["text"] = s["text"][:cut_at[i]]
+        s["start"], s["end"] = max(s["start"], t["start"]), min(s["end"], t["end"])
+        if s["end"] - s["start"] > 0.01:
+            out.append(s)
+    return out
+
+
+def map_pos(a: str, b: str, at: int) -> int:
+    """b 的第 at 個字的位置，對到 a 的第幾個字（純函式）。校對稿改過字、名字換成代號後長度跟原文不同，
+    游標位置要這樣換算；落在改過的那一小塊裡就照比例。"""
+    import difflib
+
+    if a == b:
+        return max(0, min(at, len(a)))
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if j1 <= at <= j2:
+            if tag == "equal":
+                return i1 + (at - j1)
+            if at == j1:
+                return i1
+            if at == j2:
+                return i2
+            return i1 + round((at - j1) * (i2 - i1) / max(1, j2 - j1))
+    return len(a)
+
+
+_NOT_SPOKEN = set(" 　，。、；：？！,.;:?!「」『』（）()…—－-﹐﹑﹖﹗\n")
+
+
+def _spoken(text: str) -> int:
+    return sum(1 for ch in text if ch not in _NOT_SPOKEN)
+
+
+def cut_time_in_sentence(s: dict, off: int, words: list[dict]) -> tuple[float, bool]:
+    """句子 s 的第 off 個字後面是幾秒（純函式）。用逐字稿每個字的時間找；沒有逐字時間就照字數比例估。
+    回傳（時間，是不是用逐字時間對到的）。"""
+    n, total = _spoken(s["text"][:off]), max(1, _spoken(s["text"]))
+    ws = [w for w in words if s["start"] - 0.05 <= (w["start"] + w["end"]) / 2 <= s["end"] + 0.05]
+    wtotal = sum(_spoken(w.get("word", "")) for w in ws)
+    if ws and wtotal:
+        want = n * wtotal / total      # 逐字稿的字數跟句子文字可能差一點，照比例換算
+        acc = 0
+        for k, w in enumerate(ws):
+            acc += _spoken(w.get("word", ""))
+            if acc >= want - 0.5:
+                nxt = ws[k + 1]["start"] if k + 1 < len(ws) else w["end"]
+                return round(min(max((w["end"] + nxt) / 2, s["start"]), s["end"]), 3), True
+    return round(s["start"] + (s["end"] - s["start"]) * n / total, 3), False
+
+
 def split_turn(workdir: str | Path, tid: str, at_char: int) -> dict:
-    """`POST /api/turns/split`：在校對稿第 at_char 個字切成兩段（時間照句子邊界分；後段先沿用原本的說話者，換人在 ② 改）。"""
+    """`POST /api/turns/split`：在校對稿第 at_char 個字切開（後段先沿用原本的說話者，換人在卡片或 ② 改）。
+
+    - 游標剛好在兩句之間：照句子邊界切成兩段
+    - 游標在一句話裡面（09-30 宇軒：學員的最後一句跟老師的話被轉成同一句）：用逐字稿每個字的時間找出切點，
+      前段到切點為止（那一句只留前面的字，記在 `句尾切點`）；那一句剩下的字自己成一段「手動標記」的段落
+      （沒有句子，照起訖與校對稿處理）；後面還有句子的話再成一段
+    游標位置是校對稿的位置，先換算回原文（校對稿改過字、換過代號，字數不一樣）。"""
     workdir = Path(workdir)
     with _lock:
         data = wd.read_json(turns_path(workdir))
@@ -562,26 +655,65 @@ def split_turn(workdir: str | Path, tid: str, at_char: int) -> dict:
         ts = data["段落"]
         i = next(k for k, x in enumerate(ts) if x["id"] == tid)
         t = ts[i]
-        # 找 at_char 落在哪一句：照原文逐句累計字數
-        acc, cut = 0, None
-        for k, sid in enumerate(t["句子"]):
-            acc += len(sent[sid]["text"])
-            if acc >= at_char:
-                cut = k + 1
+        ss = turn_sentences(t, sent)
+        raw = "".join(x["text"] for x in ss)
+        edited = t.get("校對稿") or ""
+        at_char = max(0, min(int(at_char), len(edited)))
+        pos = map_pos(raw, edited, at_char) if raw else 0
+        if not ss or pos <= 0 or pos >= len(raw) or not edited[:at_char].strip() or not edited[at_char:].strip():
+            raise ValueError("游標要放在這一段文字的中間（前後都要有字）才能切開")
+        acc, k, off = 0, 0, 0
+        for k, x in enumerate(ss):
+            if pos <= acc + len(x["text"]):
+                off = pos - acc
                 break
-        if not cut or cut >= len(t["句子"]):
-            raise ValueError("切點要落在兩句之間（這一段只有一句，或切在最後一句）")
-        first, second = t["句子"][:cut], t["句子"][cut:]
-        new = {**t, "id": t["id"] + "b", "句子": second, "start": sent[second[0]]["start"],
-               "原文": "".join(sent[s]["text"] for s in second), "已確認": False, "校對秒數": None,
-               "說話者是人改的": True, "換人依據": "人工切開"}
-        new["校對稿"] = t["校對稿"][at_char:].strip() or new["原文"]
-        t.update({"句子": first, "end": sent[first[-1]]["end"], "原文": "".join(sent[s]["text"] for s in first),
-                  "校對稿": t["校對稿"][:at_char].strip(), "已確認": False})
-        ts.insert(i + 1, new)
+            acc += len(x["text"])
+        ids = [x["id"] for x in ss]
+        old_end, old_cuts = t["end"], dict(t.get("句尾切點") or {})
+        base = {**t, "已確認": False, "校對秒數": None, "說話者是人改的": True}
+        base.pop("句尾切點", None)
+        made = []
+        if off == len(ss[k]["text"]):          # 剛好在兩句之間
+            first, rest = ids[:k + 1], ids[k + 1:]
+            t.update({"句子": first, "end": ss[k]["end"], "原文": raw[:pos], "校對稿": edited[:at_char].strip(), "已確認": False})
+            t["句尾切點"] = {x: n for x, n in old_cuts.items() if x in first}
+            new = {**base, "id": _unique_id(data, t["id"]), "句子": rest, "start": ss[k + 1]["start"], "end": old_end,
+                   "原文": raw[pos:], "校對稿": edited[at_char:].strip() or raw[pos:], "換人依據": "人工切開",
+                   "句尾切點": {x: n for x, n in old_cuts.items() if x in rest}}
+            made.append(new)
+            where = "句子之間"
+        else:                                   # 在一句話裡面
+            merged = wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}
+            cut, exact = cut_time_in_sentence(ss[k], off, merged.get("words") or [])
+            cut = min(max(cut, ss[k]["start"] + 0.05), ss[k]["end"] - 0.05)
+            sent_end_raw = acc + len(ss[k]["text"])          # 這一句在原文的結尾位置
+            e_end = map_pos(edited, raw, sent_end_raw)       # 對回校對稿
+            e_end = max(at_char, min(e_end, len(edited)))
+            first, rest = ids[:k + 1], ids[k + 1:]
+            t.update({"句子": first, "end": cut, "原文": raw[:pos], "校對稿": edited[:at_char].strip(), "已確認": False})
+            t["句尾切點"] = {**{x: n for x, n in old_cuts.items() if x in first}, ids[k]: off}
+            tail_raw = raw[pos:sent_end_raw]
+            tail = {**base, "id": _unique_id(data, t["id"]), "句子": [], "start": cut, "end": ss[k]["end"],
+                    "原文": tail_raw, "校對稿": edited[at_char:e_end].strip() or tail_raw, "手動標記": True,
+                    "換人依據": "人工切開（切在一句話裡面）", "切點是估的": not exact}
+            made.append(tail)
+            if rest:
+                data["段落"] = ts      # _unique_id 要看得到剛做的那一段
+                ts.insert(i + 1, tail)
+                new = {**base, "id": _unique_id(data, t["id"]), "句子": rest, "start": ss[k + 1]["start"], "end": old_end,
+                       "原文": raw[sent_end_raw:], "校對稿": edited[e_end:].strip() or raw[sent_end_raw:],
+                       "換人依據": "人工切開", "句尾切點": {x: n for x, n in old_cuts.items() if x in rest}}
+                ts.remove(tail)
+                made.append(new)
+            where = "一句話裡面" + ("" if exact else "（沒有逐字時間，切點是照字數估的，請聽一下再改時間）")
+        for t2 in (t, *made):
+            if not t2.get("句尾切點"):
+                t2.pop("句尾切點", None)
+        for n, m in enumerate(made, start=1):
+            ts.insert(i + n, m)
         _recount_people(data)
         wd.write_json(turns_path(workdir), data)
-        return {"ok": True}
+        return {"ok": True, "切在": where, "新段落": [m["id"] for m in made], "切點": t["end"]}
 
 
 def set_person_code(workdir: str | Path, person: str, code: str | None) -> dict:
@@ -719,17 +851,21 @@ def reassign_turns(workdir: str | Path, ids: list[str], who: str) -> dict:
             raise KeyError("找不到要改的段落")
         for t in hit:
             t["說話者"], t["說話者是人改的"] = who, True
+        loose = [t for t in hit if who == "老師" and _no_sentences(t)]
+        if loose:
+            data["段落"] = [x for x in data["段落"] if not any(x is t for t in loose)]
         _recount_people(data)
         wd.write_json(turns_path(workdir), data)
-    added = 0
+    added, teacher_items = 0, []
     if who == "老師":
         from bookclub import names
 
+        teacher_items = _to_teacher_items(workdir, loose)
         try:
             added = names.append_candidates(workdir, [sid for t in hit for sid in t.get("句子", [])])
         except Exception as exc:   # 補找失敗不要擋住改說話者
             print(f"⚠️ 改成老師後補找名字失敗：{exc}")
-    return {"ok": True, "說話者": who, "改了幾段": len(hit), "補找到的老師名字": added}
+    return {"ok": True, "說話者": who, "改了幾段": len(hit), "補找到的老師名字": added, "改成老師重念": teacher_items}
 
 
 def mark_student(workdir: str | Path, start: float, end: float, who: str) -> dict:

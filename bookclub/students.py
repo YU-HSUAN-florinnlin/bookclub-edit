@@ -246,7 +246,8 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
         spans.setdefault(who, []).append((max(t["start"], lo), min(t["end"], hi)))   # 估男女聲只用範圍內的原音
         if only and t["id"] not in only:
             continue
-        all_sents = [by_id[i] for i in t.get("句子", []) if i in by_id]
+        # 09-30：句子的時間、文字照段落實際的範圍（人改過段落起訖、切在句子裡面時，句子會比段落長）
+        all_sents = turns_mod.turn_sentences(t, by_id)
         sents = in_window(all_sents, lo, hi)
         edited = bool(t.get("校對稿")) and t["校對稿"] != t.get("原文")
         if not all_sents:

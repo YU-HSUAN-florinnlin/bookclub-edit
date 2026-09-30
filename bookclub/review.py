@@ -443,7 +443,9 @@ def effective_name_candidates(workdir: Path, candidates: list[dict], decisions: 
                     "sentence": m.get("sentence", ""), "matched_text": m.get("matched_text", ""),
                     "name": m.get("matched_text", ""), "canonical": "", "代號": m.get("代號", ""), "敏感詞": False,
                     "位置": "", "比對層級": "人工", "信心": "", "建議做法": "", "切點信心": "", "建議緩衝秒數": 0.0,
-                    "人工新增": True, **_align_info(m)})
+                    "人工新增": True, **_align_info(m),
+                    # 09-30：人工標的一段老師的話（不是一個名字）：整段照 `整段文字`（或卡片上改的字）用老師 AI 聲音重念
+                    **({"老師整段": True, "整段文字": m.get("整段文字", "")} if m.get("老師整段") else {})})
     return out
 
 
@@ -474,12 +476,15 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
                 texts[c["sentence_id"]] = new
                 replaced = "".join(texts[g["id"]] for g in group)
         sentence = c.get("sentence") or (ordered[pos[c["sentence_id"]]]["text"] if c.get("sentence_id") in pos else "")
+        whole = {"start": min(group[0]["start"], c["start"]), "end": max(group[-1]["end"], c["end"]),
+                 "原文": whole_text, "換成代號": replaced, "改稿": d.get("改稿", "")} if group else None
+        if c.get("老師整段"):
+            sentence = c.get("整段文字", "")
+            whole = {"start": c["start"], "end": c["end"], "原文": sentence, "換成代號": sentence, "改稿": d.get("改稿", "")}
         items.append({
             "類型": "名字", "id": cid, "start": c["start"], "end": c["end"],
             "sentence_html": _highlight_sentence(sentence, c.get("matched_text", ""), c.get("位置", "")),
-            "整句": {"start": min(group[0]["start"], c["start"]), "end": max(group[-1]["end"], c["end"]),
-                     "原文": whole_text, "換成代號": replaced, "改稿": d.get("改稿", "")}
-            if group else None,
+            "整句": whole, "老師整段": bool(c.get("老師整段")),
             "matched_text": c.get("matched_text", ""), "代號": c.get("代號", ""), "位置": c.get("位置", ""),
             "信心": c.get("信心", ""), "比對層級": c.get("比對層級", ""), "切點信心": c.get("切點信心", ""),
             "建議做法": c.get("建議做法", ""), "敏感詞": bool(c.get("敏感詞")),
@@ -598,6 +603,8 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     for it in _names_items(workdir, sents):
         cut_hint = f"；第 1 步切點分析建議：{it['建議做法']}" if it.get("建議做法") and it["建議做法"] != nameplan_whole() else ""
         it["建議"] = {"做法": nameplan_whole(), "原因": "預設整句用老師 AI 聲音重念、名字換成代號（09-25 定案）" + cut_hint}
+        if it.get("老師整段"):
+            it["建議"]["原因"] = "人工標的老師的話：這一段照上面的字，用老師 AI 聲音重念"
         it["不用處理"] = skip_reason(it["start"], it["end"])
         items.append(it)
     # 09-29：保留原聲的學員自己講到名字（設成保留原聲才會列；改回重新生成就不列）
@@ -961,6 +968,17 @@ def manual_edit(workdir: str | Path, fields: dict) -> dict:
         new_id = _manual_overlap(workdir, iid, al, info)
     elif kind == "名字":
         new_id = _manual_name(workdir, iid, al, info, fields)
+    elif not iid and str(fields.get("說話者") or "") == "老師":
+        # 09-30 宇軒：這一段其實是老師在講（例如學員講完，老師接一句「謝謝〔名字〕」）→ 用老師的 AI 聲音重念
+        from bookclub import turns as turns_mod
+
+        tdata = wd.read_json(turns_mod.turns_path(workdir), default={}) or {}
+        hit = next((t for t in tdata.get("段落", []) if t.get("說話者") != "老師"
+                    and min(t["end"], al["end"]) - max(t["start"], al["start"]) > 0.2), None)
+        if hit:   # 跟學員段落疊在一起的話，組裝時學員重念會蓋掉這一筆，先擋下來
+            raise ValueError(f"這段時間跟 {hit['說話者']} 的段落（{wd.fmt_time(hit['start'])}–{wd.fmt_time(hit['end'])}）疊在一起。"
+                             "先把那一段的結尾改早（改時間），或在那一段用「從游標處切開」把老師的話切出來，再按「這段其實是老師」。")
+        new_id, kind = add_teacher_item(workdir, al["start"], al["end"], info=info), "名字"
     else:
         new_id = _manual_student(workdir, iid, al, info, fields)
     return {"ok": True, "類型": "學員段落" if kind == "學員發言" else kind, "id": new_id, "新增": iid is None,
@@ -1023,7 +1041,39 @@ def _manual_overlap(workdir: Path, iid: str | None, al: dict, info: dict) -> str
     return iid
 
 
+def words_text(workdir: Path, start: float, end: float) -> str:
+    """這段時間裡逐字稿的字（照每個字的時間挑，中點落在範圍裡的）。沒有逐字時間就回傳空字串。"""
+    merged = wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}
+    return "".join(w.get("word", "") for w in merged.get("words") or [] if start <= (w["start"] + w["end"]) / 2 <= end).strip()
+
+
+def add_teacher_item(workdir: str | Path, start: float, end: float, text: str | None = None, info: dict | None = None) -> str:
+    """加一筆「老師這一段用 AI 聲音重念」（記在 `人工名字`，帶 `老師整段`；組裝時整段照打的字重念、原聲換掉）。
+    `text` 沒給就用這段時間逐字稿的字當初稿；名冊上的本名、敏感詞先換成代號。回傳這一筆的 id（NM001…）。"""
+    workdir = Path(workdir)
+    raw = (text if text is not None else words_text(workdir, start, end)).strip()
+    draft, _ = replace_real_names(raw, replace_table(workdir))
+    with _lock:
+        dec = load_decisions(workdir)
+        iid = _next_id(dec["人工名字"], "NM")
+        dec["人工名字"].append({"id": iid, "start": round(float(start), 3), "end": round(float(end), 3), "代號": "",
+                              "matched_text": "", "sentence_id": None, "sentence": "", "老師整段": True, "整段文字": draft,
+                              "來源": "人工新增", **(info or {}), "建立時間": _now(), "更新時間": _now()})
+        dec["人工名字"].sort(key=lambda x: x["start"])
+        _save_decisions(workdir, dec)
+    return iid
+
+
 def _manual_name(workdir: Path, iid: str | None, al: dict, info: dict, fields: dict) -> str:
+    if iid:   # 09-30：人工標的老師整段改時間：只改起訖，不去對名字
+        with _lock:
+            dec = load_decisions(workdir)
+            mine = next((x for x in dec["人工名字"] if x["id"] == iid and x.get("老師整段")), None)
+            if mine is not None:
+                mine.update({"start": al["start"], "end": al["end"], **info, "更新時間": _now()})
+                dec["人工名字"].sort(key=lambda x: x["start"])
+                _save_decisions(workdir, dec)
+                return iid
     sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
     sent = align.sentence_at((al["start"] + al["end"]) / 2, sents)
     word = str(fields.get("名字") or "").strip() or al["文字"]

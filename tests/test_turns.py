@@ -75,14 +75,129 @@ def test_save_merge_split_and_person():
         assert r["段落"]["說話者"] == "學員2" and r["段落"]["校對秒數"] == turns.MAX_COUNT_S
         turns.split_turn(w, "T001", 4)
         d1 = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
-        assert [t["id"] for t in d1["段落"]] == ["T001", "T001b", "T002"]
+        assert [t["id"] for t in d1["段落"]] == ["T001", "T001m1", "T002"]
         assert d1["段落"][0]["校對稿"] == "我先說。" and d1["段落"][1]["start"] == 5.0
-        turns.merge_turn(w, "T001b")
+        turns.merge_turn(w, "T001m1")
         turns.set_person_code(w, "學員2", "Laura")
         d2 = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
         assert len(d2["段落"]) == 2 and d2["段落"][0]["end"] == 9 and d2["學員"]["學員2"]["代號"] == "Laura"
         p = turns.turns_progress(d2)
         assert p["學員段落數"] == 2 and p["已確認"] == 1
+
+
+def test_turn_sentences_clip_and_map_pos():
+    # 09-30：人把段落結尾提早（或切在句子裡面）時，句子的時間、文字照段落實際的範圍
+    by_id = {"a": {"id": "a", "start": 0.0, "end": 4.0, "text": "我先說，"},
+             "b": {"id": "b", "start": 4.0, "end": 34.0, "text": "我講完了。好啊謝謝小美。"}}
+    t = {"start": 0.0, "end": 16.0, "句子": ["a", "b"], "句尾切點": {"b": 5}}
+    ss = turns.turn_sentences(t, by_id)
+    assert [(x["start"], x["end"], x["text"]) for x in ss] == [(0.0, 4.0, "我先說，"), (4.0, 16.0, "我講完了。")]
+    assert by_id["b"]["end"] == 34.0 and by_id["b"]["text"].endswith("小美。")          # 原本的句子不動
+    assert turns.turn_sentences({"start": 0.0, "end": 40.0, "句子": ["a", "b"]}, by_id)[1]["end"] == 34.0
+    # 校對稿的游標位置 → 原文的位置（名字換成代號後字數不同）
+    raw, edited = "謝謝小美，我講完了。", "謝謝Amy，我講完了。"
+    assert turns.map_pos(raw, edited, edited.index("，") + 1) == raw.index("，") + 1
+    assert turns.map_pos(raw, raw, 3) == 3 and turns.map_pos(raw, edited, len(edited)) == len(raw)
+    # 句子裡第幾個字是幾秒：用逐字時間；沒有就照字數比例
+    s = {"id": "b", "start": 4.0, "end": 34.0, "text": "我講完了。好啊謝謝小美。"}
+    words = [{"word": c, "start": 4.0 + k, "end": 4.8 + k} for k, c in enumerate("我講完了")] + \
+            [{"word": c, "start": 24.0 + k, "end": 24.8 + k} for k, c in enumerate("好啊謝謝小美")]
+    cut, exact = turns.cut_time_in_sentence(s, 5, words)       # 「我講完了。」後面
+    assert exact and 7.8 <= cut <= 24.0, cut                    # 落在「了」跟「好」中間的空檔
+    cut2, exact2 = turns.cut_time_in_sentence(s, 5, [])
+    assert not exact2 and 4.0 < cut2 < 34.0
+
+
+def test_split_inside_a_sentence_and_teacher_item():
+    """09-30 宇軒：學員的最後一句跟老師的話被轉成同一句 → 從游標處切開要切得了；
+    後面那半句（沒有逐字稿句子）改成老師時，變成一筆「老師這一段用 AI 聲音重念」。"""
+    import os
+
+    from bookclub import nameplan, review, students
+
+    old = os.environ.get("BOOKCLUB_DATA_DIR")
+    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as data_dir:
+        os.environ["BOOKCLUB_DATA_DIR"] = data_dir
+        (Path(data_dir) / "名冊.csv").write_text("中文名,其他寫法,性別\n小美,,女\n", encoding="utf-8")
+        try:
+            w = Path(d)
+            (w / "校對").mkdir()
+            (w / "transcript").mkdir()
+            sents = [{"id": "s0", "start": 0.0, "end": 4.0, "text": "我先說，", "label": "不是老師"},
+                     {"id": "s1", "start": 4.0, "end": 34.0, "text": "我講完了。好啊謝謝小美。", "label": "不確定"},
+                     {"id": "s2", "start": 40.0, "end": 44.0, "text": "我們繼續。", "label": "老師"}]
+            words = [{"word": c, "start": 0.2 + k * 0.8, "end": 0.9 + k * 0.8} for k, c in enumerate("我先說")] + \
+                    [{"word": c, "start": 4.0 + k, "end": 4.8 + k} for k, c in enumerate("我講完了")] + \
+                    [{"word": c, "start": 24.0 + k, "end": 24.8 + k} for k, c in enumerate("好啊謝謝小美")]
+            (w / "說話者判斷.json").write_text(json.dumps({"sentences": sents}, ensure_ascii=False), encoding="utf-8")
+            (w / "transcript" / "merged.json").write_text(json.dumps({"sentences": sents, "words": words}, ensure_ascii=False),
+                                                          encoding="utf-8")
+            raw = "我先說，我講完了。好啊謝謝小美。"
+            data = {"段落": [
+                {"id": "T001", "start": 0.0, "end": 34.0, "句子": ["s0", "s1"], "說話者": "學員1", "原文": raw,
+                 "校對稿": raw.replace("小美", "Amy"), "已確認": True, "校對秒數": None},
+                {"id": "T002", "start": 40.0, "end": 44.0, "句子": ["s2"], "說話者": "老師", "原文": "我們繼續。",
+                 "校對稿": "我們繼續。", "已確認": False, "校對秒數": None}],
+                "學員": {"學員1": {"秒數": 34, "段數": 1, "點名線索": {}, "代號": "Amy", "本名": "小美"}},
+                "本名代號": {"小美": "Amy"}}
+            (w / "校對" / "段落.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            load = lambda: json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))   # noqa: E731
+
+            # 游標放最後面／最前面：切不了，訊息講清楚
+            for bad in (0, len(raw) + 5):
+                try:
+                    turns.split_turn(w, "T001", bad)
+                    raise AssertionError("應該要擋下來")
+                except ValueError as e:
+                    assert "中間" in str(e)
+
+            at = data["段落"][0]["校對稿"].index("好啊")            # 游標放在「好啊」前面＝切在最後一句裡面
+            r = turns.split_turn(w, "T001", at)
+            assert r["切在"].startswith("一句話裡面") and len(r["新段落"]) == 1
+            d1 = load()
+            a, b = d1["段落"][0], d1["段落"][1]
+            assert a["id"] == "T001" and a["句子"] == ["s0", "s1"] and a["句尾切點"] == {"s1": 5}
+            assert a["原文"] == "我先說，我講完了。" and a["校對稿"] == "我先說，我講完了。" and not a["已確認"]
+            assert 7.8 <= a["end"] <= 24.0 and b["start"] == a["end"] and b["end"] == 34.0
+            assert b["句子"] == [] and b["手動標記"] and b["原文"] == "好啊謝謝小美。" and b["校對稿"] == "好啊謝謝Amy。"
+            assert b["說話者"] == "學員1" and len(d1["段落"]) == 3
+
+            # 學員重念的時間格只到切點，文字只有學員自己的話
+            items, _ = students.build_items(w)
+            mine = [it for it in items if it["段落"] == "T001"]
+            assert mine[-1]["slot"][1] == a["end"] and "好啊" not in "".join(it["text"] for it in mine)
+
+            # 併回去：那一句又整句是這一段的
+            turns.merge_turn(w, b["id"])
+            d2 = load()
+            assert "句尾切點" not in d2["段落"][0] and d2["段落"][0]["end"] == 34.0 and len(d2["段落"]) == 2
+
+            # 再切一次，後面那半句改成老師 → 段落拿掉，變成一筆「老師整段」的項目，文字裡的本名換成代號
+            d2["段落"][0]["校對稿"] = raw                        # 這次校對稿沒換代號
+            (w / "校對" / "段落.json").write_text(json.dumps(d2, ensure_ascii=False), encoding="utf-8")
+            r = turns.split_turn(w, "T001", raw.index("好啊"))
+            tail = r["新段落"][0]
+            res = turns.save_turn(w, tail, {"說話者": "老師"})
+            assert res["改成老師重念"] == "NM001"
+            assert [t["id"] for t in load()["段落"]] == ["T001", "T002"]
+            m = review.load_decisions(w)["人工名字"][0]
+            assert m["老師整段"] and m["整段文字"] == "好啊謝謝Amy。" and m["end"] == 34.0
+            cands = review.effective_name_candidates(w, [], {})
+            plan = nameplan.build_plan(cands, {}, {x["id"]: x for x in sents})
+            assert [(g["id"], g["text"], g["slot"], g["候選"]) for g in plan["生成"]] == \
+                [("SNM001", "好啊謝謝Amy。", [m["start"], 34.0], ["NM001"])]
+            # 卡片上改了字就用改的；選直接消音、或字刪光 → 整段消音；標不用改 → 照原聲
+            plan = nameplan.build_plan(cands, {"NM001": {"改稿": "好啊，謝謝 Amy。"}}, {})
+            assert plan["生成"][0]["text"] == "好啊，謝謝 Amy。"
+            plan = nameplan.build_plan(cands, {"NM001": {"做法": "直接消音"}}, {})
+            assert not plan["生成"] and plan["消音"] == [{"候選": "NM001", "start": m["start"], "end": 34.0}]
+            plan = nameplan.build_plan(cands, {"NM001": {"tags": ["不是名字"]}}, {})
+            assert not plan["生成"] and not plan["消音"] and plan["略過"]
+        finally:
+            if old is None:
+                os.environ.pop("BOOKCLUB_DATA_DIR", None)
+            else:
+                os.environ["BOOKCLUB_DATA_DIR"] = old
 
 
 def test_chunk_ranges_and_parallel_stitch_match_sequential():

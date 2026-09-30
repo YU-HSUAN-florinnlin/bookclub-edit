@@ -195,6 +195,26 @@ def test_manual_add_and_edit_every_kind():
     assert [x["id"] for x in dec["人工重疊"]] == ["OM001"] and [x["id"] for x in dec["人工名字"]] == ["NM001"]
     assert dec["重疊"]["O69.60"]["改過的起訖"] == [68.0, 71.6]
 
+    # 09-30 宇軒：漏抓的發言選「老師」＝這一段用老師的 AI 聲音重念（記成一筆「老師整段」，列在名字清單）
+    try:   # 跟學員段落疊在一起：擋下來（不然組裝時學員重念會蓋掉這一筆）
+        review.manual_edit(w, {"類型": "學員發言", "start": 100.1, "end": 103.5, "說話者": "老師"})
+        raise AssertionError("跟學員段落重疊應該擋下來")
+    except ValueError as e:
+        assert "疊在一起" in str(e)
+    r = review.manual_edit(w, {"類型": "學員發言", "start": 124.1, "end": 127.5, "說話者": "老師"})
+    assert r["類型"] == "名字" and r["id"] == "NM002" and r["新增"]
+    it = _items(w)["名字:NM002"]
+    assert it["老師整段"] and it["人工新增"] and it["整句"]["原文"] and it["整句"]["start"] == it["start"]
+    g = next(x for x in nameplan.compute_plan(w)["生成"] if "NM002" in x["候選"])
+    assert g["slot"] == [it["start"], it["end"]] and g["text"] == it["整句"]["原文"] and g["句子"] == []
+    review.save_name(w, "NM002", {"改稿": "好啊，謝謝 Tom。"})
+    assert next(x for x in nameplan.compute_plan(w)["生成"] if "NM002" in x["候選"])["text"] == "好啊，謝謝 Tom。"
+    review.manual_edit(w, {"類型": "名字", "id": "NM002", "start": 124.0, "end": 128.0})     # 改時間：只改起訖
+    it = _items(w)["名字:NM002"]
+    assert it["老師整段"] and it["整句"]["改稿"] == "好啊，謝謝 Tom。" and it["end"] >= 127.5
+    review.save_name(w, "NM002", {"tags": ["不是名字"]})                                    # 不用改，保留老師原聲
+    assert not [x for x in nameplan.compute_plan(w)["生成"] if "NM002" in x["候選"]]
+
 
 def test_bad_input_rejected():
     w = _fresh()

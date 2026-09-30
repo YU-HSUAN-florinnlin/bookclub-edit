@@ -115,6 +115,15 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         how = d.get("做法") or default_how
         pad = float(c.get("建議緩衝秒數") or 0.0)
 
+        if c.get("老師整段"):   # 09-30：人工標的一段老師的話：整段照打的字重念；沒有字、或選直接消音就整段消音
+            text = ((d.get("改稿") or "").strip() or (c.get("整段文字") or "").strip())
+            if how == MUTE or not text:
+                mutes.append({"候選": i, "start": round(c["start"], 3), "end": round(c["end"], 3)})
+            else:
+                gen.append({"id": f"S{_num(i)}", "text": text, "slot": [round(c["start"], 3), round(c["end"], 3)],
+                            "候選": [i], "句子": [], "整段": True})
+            continue
+
         if how == MUTE:
             mutes.append({"候選": i, "start": round(c["start"] - pad, 3), "end": round(c["end"] + pad, 3)})
             continue
