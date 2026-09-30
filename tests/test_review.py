@@ -305,6 +305,10 @@ def test_overlap_student_voice_outside_turns_and_stacked():
     items, _ = students.build_items(w)
     mine = [it for it in items if it.get("重疊") == oid]
     assert mine[0]["疊放"] and mine[0]["slot"] == [79.9, 80.9]
+    # 預設的學員那邊（沒改過）不伸進後面的學員段落（10-01）
+    sides = review.overlap_sides({"start": 89.0, "end": 89.5}, {}, [{"start": 88.0, "end": 91.6, "text": "x", "label": "不是老師"}],
+                                 [{"start": 90.0, "end": 110.0, "說話者": "學員2"}])
+    assert sides["學員起訖"] == [88.0, 90.0], sides
     plan = nameplan.compute_plan(w)
     tw = [g for g in plan["生成"] if g.get("疊放")]
     assert len(tw) == 1 and tw[0]["text"] == "可以啊" and tw[0]["slot"] == [80.6, 81.2] and tw[0]["重疊項目"] == [oid]

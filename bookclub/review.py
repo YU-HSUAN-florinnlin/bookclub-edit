@@ -339,7 +339,7 @@ def is_stacked(how: str | None, arrange: str | None) -> bool:
     return how == "兩邊都重生成" and arrange == STACK
 
 
-def overlap_sides(o: dict, d: dict, sents: list[dict]) -> dict:
+def overlap_sides(o: dict, d: dict, sents: list[dict], turns: list[dict] | None = None) -> dict:
     """B 方案兩邊各自的起訖（純函式）：人在卡片上改過的優先；沒改過的，老師那邊＝蓋到重疊的老師句子、
     學員那邊＝蓋到重疊的其他句子（前後各最多 3 秒），找不到就用重疊本身的起訖。"""
     near = _overlapping(sents, o["start"] - 0.3, o["end"] + 0.3)
@@ -350,8 +350,15 @@ def overlap_sides(o: dict, d: dict, sents: list[dict]) -> dict:
         return [round(max(min(r["start"] for r in rows), o["start"] - 3), 3),
                 round(min(max(r["end"] for r in rows), o["end"] + 3), 3)]
 
+    stu = span([s for s in near if s.get("label") != "老師"])
+    for t in turns or []:   # 10-01：預設的學員那邊不伸進前後的學員段落（那裡會整段重念，兩筆會搶同一段時間）
+        if t.get("說話者") not in (None, "老師") and not (t["start"] <= o["start"] and o["end"] <= t["end"]):
+            if o["end"] <= t["start"] < stu[1]:
+                stu[1] = round(t["start"], 3)
+            if stu[0] < t["end"] <= o["start"]:
+                stu[0] = round(t["end"], 3)
     return {"老師起訖": d.get("老師起訖") or span([s for s in near if s.get("label") == "老師"]),
-            "學員起訖": d.get("學員起訖") or span([s for s in near if s.get("label") != "老師"])}
+            "學員起訖": d.get("學員起訖") or stu}
 
 
 def overlap_choice(o: dict, d: dict, sents: list[dict], turns: list[dict], voices: dict) -> dict:
@@ -391,7 +398,7 @@ def overlap_choices(workdir: str | Path, voices: dict | None = None) -> list[dic
                     "老師整句改稿": d.get("老師整句改稿", ""), "已確認": bool(d.get("已確認")),
                     "老師文字": d.get("老師文字", defaults["老師文字"]) or "",
                     "學員文字": d.get("學員文字", defaults["學員文字"]) or "",
-                    **overlap_sides(o, d, sents)})
+                    **overlap_sides(o, d, sents, turns)})
     return out
 
 
@@ -789,7 +796,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                           "涵蓋": cover_seen.get(oid), "涵蓋待通過": _cover_info(cov_wait) if cov_wait else None,
                           "涵蓋消失": cover_gone.get(oid),
                           "學員已選": bool(d.get("學員說話者")),
-                          **overlap_sides(o, d, sents)})
+                          **overlap_sides(o, d, sents, turns)})
     if cover_seen or cover_gone:
         _remember_cover(workdir, cover_seen, cover_gone)
     linked = {c["建議id"]: c for c in dec["刪除段落"] if c.get("建議id")}

@@ -375,6 +375,15 @@ def test_plan_falls_back_to_word_text_when_sentence_spelled_differently():
     assert not plan["要人處理"] and plan["生成"][0]["text"] == "我們請Amy分享。" and plan["生成"][0]["範圍"] == "逐字"
 
 
+def test_overlap_outcome_stacked_pair_not_counted_as_mute():
+    """10-01：B 方案兩句都帶 重疊，不能被當成這一處的消音（處理紀錄會寫錯）。"""
+    o = {"id": "O1", "start": 10.0, "end": 11.0, "做法": "兩邊都重生成"}
+    edits = [{"類型": "學員重念", "id": "O1_學員", "start": 9.5, "end": 11.2, "疊放": True, "重疊": "O1"},
+             {"類型": "名字整句換掉", "id": "W1", "start": 10.2, "end": 11.0, "疊放": True, "重疊": "O1"}]
+    r = assemble.overlap_outcome(o, edits)
+    assert r["沒處理秒"] == 0 and "照原本的時間疊著" in r["處理"] and "消音" not in r["處理"], r
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0

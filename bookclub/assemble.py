@@ -177,7 +177,7 @@ def overlap_outcome(o: dict, edits: list[dict], cuts: list[tuple[float, float]] 
     if not free:
         return {"處理": "落在刪除段落裡，已經剪掉", "沒處理秒": 0.0}
     muted = sum(min(e["end"], y) - max(e["start"], x) for x, y in free for e in edits
-                if e.get("重疊") == o["id"] and e["start"] < y and x < e["end"])
+                if e.get("重疊") == o["id"] and e["類型"] in MUTE_KINDS and e["start"] < y and x < e["end"])   # B 方案的兩句也帶 重疊，不算消音
     others = [e for e in edits if e.get("重疊") != o["id"]]
     left = sum(e - s for x, y in free for s, e in subtract(x, y, [(k["start"], k["end"]) for k in edits]))
     by = "、".join(dict.fromkeys(str(e.get("id") or e["類型"]) for e in others
@@ -185,6 +185,9 @@ def overlap_outcome(o: dict, edits: list[dict], cuts: list[tuple[float, float]] 
     if left > OVERLAP_LEFT_TOL_S:
         return {"處理": f"還有 {left:.2f} 秒原聲沒處理", "沒處理秒": round(left, 3)}
     if muted < 0.01:
+        mine = [e for e in edits if e.get("疊放") and e.get("重疊") == o["id"]]
+        if len(mine) >= 2:
+            return {"處理": f"兩邊都重新生成、照原本的時間疊著（{'、'.join(str(e.get('id')) for e in mine)}）", "沒處理秒": 0.0}
         return {"處理": f"在 {by} 換聲音時一起換掉", "沒處理秒": 0.0}
     text = f"消音 {muted:.2f} 秒（墊環境底噪，老師的聲音跟著靜音）"
     if by:
