@@ -186,6 +186,34 @@ def test_subtract_and_add_local_mutes():
     assert [e["霧化"] for e in out if e.get("id") == "M003"] == [True]
 
 
+def test_overlap_mutes_and_outcome():
+    """09-30：重疊處除了「不用改」一律消音；被換聲音蓋到的讓給那一筆；還留著原聲的算得出來。"""
+    ovs = [{"id": "O10.00", "start": 10.0, "end": 10.5, "做法": "只留老師原聲學員消音"},   # 老師段落裡的附和 → 消音
+           {"id": "O20.00", "start": 20.0, "end": 20.4, "做法": "只留學員"},                # 整個在學員重念裡 → 不另外消
+           {"id": "O30.00", "start": 29.8, "end": 30.3, "做法": "兩邊都重生成"},            # 一半在學員重念裡 → 剩下的消音
+           {"id": "O40.00", "start": 40.0, "end": 40.5, "做法": "不用改"},                  # 保留原聲 → 不動
+           {"id": "O50.00", "start": 50.0, "end": 50.5, "做法": "只留老師"}]                # 整個在刪除段落裡
+    edits = [{"類型": "學員重念", "id": "T001_1", "start": 19.0, "end": 22.0},
+             {"類型": "學員重念", "id": "T002_1", "start": 30.0, "end": 33.0}]
+    cuts = [(49.0, 52.0)]
+    mutes = assemble.overlap_mutes(ovs)
+    assert [m["重疊"] for m in mutes] == ["O10.00", "O20.00", "O30.00", "O50.00"]
+    out, warns = assemble.add_local_mutes(edits, mutes, cuts)
+    assert warns == []   # 被學員重念蓋到、落在刪除段落裡都是正常的，不吵
+    got = [(e["重疊"], round(e["start"], 2), round(e["end"], 2)) for e in out if e.get("重疊")]
+    assert got == [("O10.00", 10.0, 10.5), ("O30.00", 29.8, 30.0)], got
+    res = {o["id"]: assemble.overlap_outcome(o, out, cuts) for o in ovs}
+    assert all(r["沒處理秒"] == 0 for r in res.values()), res
+    assert "消音 0.50 秒" in res["O10.00"]["處理"]
+    assert "T001_1" in res["O20.00"]["處理"] and "消音" not in res["O20.00"]["處理"]
+    assert "消音 0.20 秒" in res["O30.00"]["處理"] and "T002_1" in res["O30.00"]["處理"] and "還沒做" in res["O30.00"]["處理"]
+    assert "不用改" in res["O40.00"]["處理"] and "刪除" in res["O50.00"]["處理"]
+    # 消音沒加進去（例如之後有人改壞）→ 算得出還留著原聲
+    bad = assemble.overlap_outcome(ovs[0], edits, cuts)
+    assert bad["沒處理秒"] == 0.5 and "沒處理" in bad["處理"]
+    assert assemble.overlap_outcome(ovs[2], edits, cuts)["沒處理秒"] == 0.2
+
+
 def test_render_audio_applies_local_mute():
     """09-29：第 3 步標的局部消音，組裝時真的消掉；長度不變；處理紀錄有這一筆。"""
     if not shutil.which("ffmpeg"):

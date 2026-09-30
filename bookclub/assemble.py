@@ -109,18 +109,62 @@ def add_local_mutes(edits: list[dict], mutes: list[dict], cuts: list[tuple[float
     out, warnings = list(edits), []
     taken = [(e["start"], e["end"]) for e in edits]
     for m in mutes:
+        ov = m.get("重疊")   # 重疊處的消音（`overlap_mutes`）：被學員重念蓋到是正常的，不列警告
         free = subtract(m["start"], m["end"], list(cuts))
         if not free:
-            warnings.append(f"局部消音 {m['id']} 整段落在刪除段落裡，不用消")
+            if not ov:
+                warnings.append(f"局部消音 {m['id']} 整段落在刪除段落裡，不用消")
             continue
         parts = [p for s, e in free for p in subtract(s, e, taken)]
-        if len(parts) != len(free) or sum(e - s for s, e in parts) < sum(e - s for s, e in free) - 0.01:
+        if not ov and (len(parts) != len(free) or sum(e - s for s, e in parts) < sum(e - s for s, e in free) - 0.01):
             warnings.append(f"局部消音 {m['id']} 跟換聲音或名字的處理重疊，重疊的地方以那一筆為準")
         for s, e in parts:
             out.append({"類型": "局部消音", "start": s, "end": e, "id": m["id"], "方式": m.get("方式", "墊底噪"),
-                        "霧化": m.get("方式") == "霧化", "候選": []})
+                        "霧化": m.get("方式") == "霧化", "候選": [],
+                        **({"重疊": ov, "做法": m.get("做法")} if ov else {})})
     out.sort(key=lambda e: e["start"])
     return out, warnings
+
+
+OVERLAP_KEEP = "不用改"            # 重疊的做法裡，只有這個會把原聲留在成品
+OVERLAP_NOT_BUILT = ("兩邊都重生成", "只留老師", "兩邊都不留")   # 還沒做的做法，先消音
+OVERLAP_LEFT_TOL_S = 0.05          # 重疊處沒蓋到的原聲在這個秒數以內不算漏（剪點對齊畫面格的誤差）
+
+
+def overlap_mutes(overlaps: list[dict]) -> list[dict]:
+    """重疊處要消音的範圍（純函式，09-30）：兩個聲音混在同一段錄音裡，學員原聲拿不掉，
+    所以除了「不用改」，不管選哪個做法，重疊那一小段一律消音（老師跟著靜音零點幾秒）。
+    被學員重念、名字處理蓋到的部分由 `add_local_mutes` 讓給那一筆。
+    `overlaps`：[{id, start, end, 做法}]。"""
+    return [{"id": f"重疊{o['id']}", "start": o["start"], "end": o["end"], "方式": "墊底噪",
+             "重疊": o["id"], "做法": o["做法"]}
+            for o in overlaps if o["做法"] != OVERLAP_KEEP and o["end"] > o["start"]]
+
+
+def overlap_outcome(o: dict, edits: list[dict], cuts: list[tuple[float, float]] = ()) -> dict:
+    """這一處重疊在剪輯決策裡實際怎麼了（純函式）：{處理: 一句話, 沒處理秒: 還留著原聲的秒數}。
+    `edits` 是排好的全部動作（換聲音、消音都會把那段原聲拿掉）。"""
+    if o["做法"] == OVERLAP_KEEP:
+        return {"處理": "照原樣，沒有動（不用改）", "沒處理秒": 0.0}
+    free = subtract(o["start"], o["end"], list(cuts))
+    if not free:
+        return {"處理": "落在刪除段落裡，已經剪掉", "沒處理秒": 0.0}
+    muted = sum(min(e["end"], y) - max(e["start"], x) for x, y in free for e in edits
+                if e.get("重疊") == o["id"] and e["start"] < y and x < e["end"])
+    others = [e for e in edits if e.get("重疊") != o["id"]]
+    left = sum(e - s for x, y in free for s, e in subtract(x, y, [(k["start"], k["end"]) for k in edits]))
+    by = "、".join(dict.fromkeys(str(e.get("id") or e["類型"]) for e in others
+                                if any(e["start"] < y and x < e["end"] for x, y in free)))
+    if left > OVERLAP_LEFT_TOL_S:
+        return {"處理": f"還有 {left:.2f} 秒原聲沒處理", "沒處理秒": round(left, 3)}
+    if muted < 0.01:
+        return {"處理": f"在 {by} 換聲音時一起換掉", "沒處理秒": 0.0}
+    text = f"消音 {muted:.2f} 秒（墊環境底噪，老師的聲音跟著靜音）"
+    if by:
+        text += f"，其餘在 {by} 換聲音時一起換掉"
+    if o["做法"] in OVERLAP_NOT_BUILT:
+        text += f"；「{o['做法']}」還沒做，先消音"
+    return {"處理": text, "沒處理秒": 0.0}
 
 
 def student_name_edits(sp: dict) -> list[dict]:

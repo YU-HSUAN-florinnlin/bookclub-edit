@@ -90,6 +90,9 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
         elif kind == "名字消音":
             rec["覆核項目"] = [f"名字:{c}" for c in e.get("候選", [])]
             rec["做了什麼"] = "老師提到名字：名字消音（墊環境底噪）"
+        elif kind == "局部消音" and e.get("重疊"):
+            rec["覆核項目"] = [f"重疊:{e['重疊']}"]
+            rec["做了什麼"] = mute_text(e)
         elif kind == "局部消音":
             rec["覆核項目"] = [f"局部消音:{e['id']}"]
             rec["做了什麼"] = mute_text(e)
@@ -151,6 +154,8 @@ def student_name_text(e: dict) -> str:
 
 
 def mute_text(e: dict) -> str:
+    if e.get("重疊"):
+        return f"聲音重疊處消音（墊環境底噪，老師的聲音跟著靜音；第 3 步選的做法：{e.get('做法') or '照建議'}）"
     return f"第 3 步標的局部消音 {e['id']}（墊環境底噪" + ("；選的是霧化，霧化還沒做，先墊底噪）" if e.get("霧化") else "）")
 
 

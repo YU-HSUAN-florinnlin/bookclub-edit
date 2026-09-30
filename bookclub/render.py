@@ -8,7 +8,9 @@
    （`生成/名字處理計畫.json`＋`生成/老師紀錄.json`），音量對齊、接縫淡入淡出（沿用 `assemble.py`）
 2. 刪除段落：覆核決定裡確認刪除的範圍（聲音畫面一起刪），剪點對齊到畫面格（1/25 秒）
 3. 停格：學員重念比時間格長 15% 以上（`fit.py` 標紅）→ 在時間格結尾停格補長，多出來的聲音放在停格裡；
-   範圍內沒有「重疊兩邊都重生成、前後排開」時，挑一筆重疊做一次停格示範（`--demo-freeze`）
+   `--demo-freeze` 挑一筆重疊做一次停格示範
+   聲音重疊（09-30）：除了「不用改」，重疊那一小段一律消音（被學員重念蓋到的跟著換掉）；
+   「兩邊都重生成、前後排開」還沒做，先消音、不停格。還有重疊留著原聲就不輸出成品
 4. 模糊示範：一段 30 秒模糊畫面右上四分之一
 5. 輸出三種做法比速度：整段硬體編碼（h264_videotoolbox）、整段軟體編碼（libx264 medium）、
    只重做有動到的片段（其他直接複製，片段接在一起）
@@ -166,25 +168,23 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     for m in plan.get("要人處理", []):
         marks.append({"類型": "名字要人處理", "候選": m["候選"], "原因": m["原因"]})
 
-    # 重疊：這輪測試所有學員都重念（不管覆核的「保留原聲」），建議照 voices={} 重算
+    # 重疊（09-30）：做法照覆核工作台那一套算（人選的優先、沒選照建議；保留原聲的學員「不用改」）。
+    # 除了「不用改」，重疊那一小段一律消音（下面跟局部消音一起加）；「兩邊都重生成、前後排開」還沒做，不再停格
     ov = wd.read_json(wd.overlap_path(workdir), default=None) or {}
     overlap_mod.apply_simple_filters(ov)
     ov["overlaps"] = review.effective_overlaps(workdir, ov.get("overlaps", []), dec)   # 覆核時人工補的、改過時間的
     tdata = turns_mod.page_data(workdir)
     turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
+    sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
+    ov_voices = {} if include_kept else dec["學員聲音"]
     freezes = []
     for o in ov.get("overlaps", []):
-        if o.get("已自動跳過") or not _in(o["start"], o["end"], a, b):
+        oid = review.overlap_id(o)
+        d = dec["重疊"].get(oid, {})
+        if (o.get("已自動跳過") and not d.get("救回")) or not _in(o["start"], o["end"], a, b):
             continue
-        d = dec["重疊"].get(review.overlap_id(o), {})
-        sug = review.suggest_overlap(o, turns, None, {})
-        how = d.get("做法") or sug["做法"]
-        covered = next((e["id"] for e in edits if e["類型"] == "學員重念" and e["start"] <= o["start"] and o["end"] <= e["end"]), None)
-        marks.append({"類型": "重疊", "start": o["start"], "end": o["end"], "做法": how,
-                      "處理": f"學員那邊在 {covered} 整段重念時一起換掉（重疊的老師小聲回應跟著拿掉）" if covered and how == "只留學員"
-                      else "這輪沒有另外處理"})
-        if how == "兩邊都重生成" and (d.get("排法") or sug.get("排法")) == "前後排開":
-            freezes.append({"at": snap(o["end"]), "dur": ceil_frames(o["end"] - o["start"]), "原因": "重疊前後排開"})
+        how = review.overlap_choice(o, d, sents, turns, ov_voices)["做法"]
+        marks.append({"類型": "重疊", "id": oid, "start": max(o["start"], a), "end": min(o["end"], b), "做法": how})
     if demo_freeze and not freezes and marks:
         o = next((m for m in marks if m["類型"] == "重疊"), None)
         if o:
@@ -214,6 +214,8 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     mutes = [{**m, "start": max(m["start"], a), "end": min(m["end"], b)} for m in mutes]
     # 校對稿刪光、不生成的學員時間格也要消音（09-29），不然會留學員原聲
     mutes += [m for m in students.empty_chunks(workdir, a, b) if m["學員"] not in kept_now]
+    ov_marks = [m for m in marks if m["類型"] == "重疊"]
+    mutes += assemble.overlap_mutes(ov_marks)   # 09-30：重疊處的學員原聲不能留在成品
     kept, w = assemble.add_local_mutes(kept, mutes, cuts)
     warnings += w
     # 保留原聲的學員自己講到名字（09-29）：直接消音、或用他自己的聲音生成代號短句
@@ -221,9 +223,16 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     warnings += w
     for e in kept:
         e["start"], e["end"] = clip_to_cuts(e["start"], e["end"], cuts)
+    # 每一處重疊最後實際怎麼了；還留著原聲的列出來，`render_video` 看到就不輸出成品
+    left = []
+    for m in ov_marks:
+        res = assemble.overlap_outcome(m, kept, cuts)
+        m["處理"] = res["處理"]
+        if res["沒處理秒"]:
+            left.append({"id": m["id"], "start": m["start"], "end": m["end"], "做法": m["做法"], "沒處理秒": res["沒處理秒"]})
     blur = pick_blur(kept, cuts, a, b) if demo_blur else None   # 09-29：模糊只有測試示範才做，正式成品不模糊
     return {"範圍": [a, b], "刪除": cuts, "動作": kept, "停格": sorted(freezes, key=lambda f: f["at"]),
-            "模糊": blur, "標記": marks, "警告": warnings, "學員聲線": voices}
+            "模糊": blur, "標記": marks, "警告": warnings, "學員聲線": voices, "重疊沒處理": left}
 
 
 def clip_to_cuts(a: float, b: float, cuts: list[tuple[float, float]]) -> tuple[float, float]:
@@ -611,6 +620,8 @@ def label_text(e: dict) -> str:
         return f"AI：{e['學員']} 重念（{e['聲線']}聲）"
     if e["類型"] == "名字整句換掉":
         return "AI：名字整句換掉"
+    if e["類型"] == "局部消音" and e.get("重疊"):
+        return "重疊處消音"
     if e["類型"] == "局部消音":
         return "局部消音" + ("（霧化還沒做，先墊底噪）" if e.get("霧化") else "")
     if e["類型"] == "學員名字消音":
@@ -965,6 +976,9 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     out = workdir / "輸出"
     out.mkdir(parents=True, exist_ok=True)
     d = build_decisions(workdir, a, b, demo_freeze=demo_freeze, demo_blur=demo_blur, include_kept=include_kept)
+    if d["重疊沒處理"]:   # 09-30：重疊處還留著學員原聲就不輸出（隱私），先擋下來
+        where = "、".join(f"{wd.fmt_time(x['start'])}（{x['做法']}，{x['沒處理秒']:.2f} 秒）" for x in d["重疊沒處理"])
+        raise RuntimeError(f"有 {len(d['重疊沒處理'])} 處聲音重疊還留著原聲，沒有輸出成品：{where}")
     t = time.time()
     au = build_audio(workdir, video, d, out, tag)
     audio_s = time.time() - t

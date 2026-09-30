@@ -323,6 +323,15 @@ def _overlap_defaults(o: dict, sents: list[dict], turns: list[dict]) -> dict:
     return {"老師文字": teacher, "學員文字": student, "學員說話者": who, "附近逐字稿": context}
 
 
+def overlap_choice(o: dict, d: dict, sents: list[dict], turns: list[dict], voices: dict) -> dict:
+    """這一處重疊最後照哪個做法（組裝用）：人選的優先，沒選就照建議——跟覆核工作台顯示的是同一套算法。
+    `d` 是這一筆的覆核決定。回傳 {做法, 排法, 學員}。"""
+    defaults = _overlap_defaults(o, sents, turns)
+    who = d.get("學員說話者", defaults["學員說話者"])
+    sug = suggest_overlap(o, turns, who, voices, d.get("學員文字", defaults["學員文字"]))
+    return {"做法": d.get("做法") or sug["做法"], "排法": d.get("排法") or sug.get("排法"), "學員": who}
+
+
 ALIGN_KEYS = ("標的起訖", "對齊", "對齊到")
 
 

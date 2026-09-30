@@ -123,6 +123,45 @@ def test_output_segments_stream_same_as_concat():
         got, _ = sf.read(str(out), dtype="float32")
     assert len(got) == len(whole) and np.max(np.abs(got - np.clip(whole, -1, 1))) < 1e-4
 
+
+def test_build_decisions_mutes_overlaps():
+    """09-30：重疊處除了「不用改」都要消音（或被換聲音蓋掉），成品不能留學員原聲；保留原聲的學員不動；救回的也算。"""
+    import os
+    import tempfile
+
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    import fake_workdir
+    from bookclub import review
+
+    with tempfile.TemporaryDirectory() as root:
+        old = os.environ.get("BOOKCLUB_DATA_DIR")
+        os.environ["BOOKCLUB_DATA_DIR"] = str(Path(root) / "資料")
+        try:
+            w = fake_workdir.make(root)
+            d = render.build_decisions(w, 0.0, 180.0)
+            ov = [m for m in d["標記"] if m["類型"] == "重疊"]
+            assert [m["id"] for m in ov] == ["O69.60"], ov   # 0 秒的那筆不算、第三筆自動跳過（兩位學員）
+            assert d["重疊沒處理"] == [] and all(m["處理"] for m in ov)
+            muted = [(e["重疊"], e["start"], e["end"]) for e in d["動作"] if e.get("重疊")]
+            assert muted == [("O69.60", 69.6, 70.1)], muted
+            assert not [f for f in d["停格"] if "重疊" in f.get("原因", "")]   # 前後排開還沒做，不再停格
+
+            # 救回自動跳過的那筆 → 也要處理
+            review.save_overlap(w, "O150.20", {"救回": True})
+            d = render.build_decisions(w, 0.0, 180.0)
+            assert "O150.20" in [e.get("重疊") for e in d["動作"]] and d["重疊沒處理"] == []
+
+            # 人選「不用改」→ 原樣保留、不消音
+            review.save_overlap(w, "O69.60", {"做法": "不用改"})
+            d = render.build_decisions(w, 0.0, 180.0)
+            assert "O69.60" not in [e.get("重疊") for e in d["動作"]] and d["重疊沒處理"] == []
+        finally:
+            if old is None:
+                os.environ.pop("BOOKCLUB_DATA_DIR", None)
+            else:
+                os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
