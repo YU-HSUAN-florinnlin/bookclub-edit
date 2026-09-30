@@ -131,8 +131,9 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     try:
         now_items, _ = students.build_items(workdir, include_kept=include_kept)
         now_slots = {it["id"]: it["slot"] for it in now_items}
+        now_by = {it["id"]: it for it in now_items}
     except FileNotFoundError:
-        now_slots = None   # 沒有段落分析（匯入的工作區）：照紀錄放
+        now_slots, now_by = None, {}   # 沒有段落分析（匯入的工作區）：照紀錄放
     stale_mutes = []
     for r in st.get("句子", []):
         if r.get("學員") in kept_now:
@@ -160,7 +161,9 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
              "差異比例": fitted["差異比例"], "要人聽": r.get("要人聽", False), "text": r["text"],
              "生成用文字": r.get("生成用文字") or r["text"], "轉回文字": _chosen_heard(r),
              "生成秒數": _chosen_len(r), "文字來源": r.get("文字來源")}
-        if fitted["放回做法"] == "標紅" and fitted["差異比例"] > 0 and fitted.get("來源檔案"):
+        if (now_by.get(r["id"]) or r).get("疊放"):   # 10-01 B 方案：學員那一句跟老師那一句疊著放，不停格
+            e.update({"疊放": True, "重疊": (now_by.get(r["id"]) or r).get("重疊")})
+        elif fitted["放回做法"] == "標紅" and fitted["差異比例"] > 0 and fitted.get("來源檔案"):
             # 09-29 宇軒選 C：還是太長就先加快（最多 15%），剩下的才停格
             e["加快"] = speedup_for(e["生成秒數"] or 0.0, s1 - s0)
             e["停格秒"] = ceil_frames(e["生成秒數"] / e["加快"] - (s1 - s0)) if e["生成秒數"] else 0.0
@@ -181,7 +184,8 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
             edits.append({"類型": "名字整句換掉", "start": n["start"], "end": n["end"], "id": n["生成編號"],
                           "檔案": n["檔案"], "候選": n["候選"], "重疊項目": n.get("重疊項目") or [], "要人聽": n.get("要人聽", False), "text": r.get("text", n["文字"]),
                           "生成用文字": r.get("生成用文字") or n["文字"], "轉回文字": _chosen_heard(r),
-                          "生成秒數": _chosen_len(r), "放回做法": (r.get("放回時間格") or {}).get("放回做法")})
+                          "生成秒數": _chosen_len(r), "放回做法": (r.get("放回時間格") or {}).get("放回做法"),
+                          **({"疊放": True, "重疊": n["重疊"]} if n.get("疊放") else {})})
         else:
             edits.append({"類型": "名字消音", "start": n["start"], "end": n["end"], "候選": n["候選"]})
     for m in plan.get("要人處理", []):
@@ -209,7 +213,7 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     edits.sort(key=lambda e: -(e["end"] - e["start"]))
     kept = []
     for e in edits:
-        if any(_in(e["start"], e["end"], k["start"], k["end"]) for k in kept):
+        if any(_in(e["start"], e["end"], k["start"], k["end"]) and not assemble.stackable(e, k) for k in kept):
             warnings.append(f"{e['id'] if 'id' in e else e['類型']} 跟別筆重疊，被較長的那筆蓋過")
             continue
         kept.append(e)
@@ -323,8 +327,33 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
     tails: dict[str, np.ndarray] = {}
     placed = {}
     spans = [(int((e["start"] - a) * SR), int((e["end"] - a) * SR)) for e in d["動作"]]
-    for e, (s, t) in zip(d["動作"], spans):
+    stacks: dict[str, list[int]] = {}   # 10-01 B 方案：同一處重疊兩邊都生成的，聲音相加
+    for k, e in enumerate(d["動作"]):
+        if e.get("疊放") and e["類型"] not in MUTE_KINDS:
+            stacks.setdefault(e["重疊"], []).append(k)
+    for oid, ks in stacks.items():
+        if len(ks) < 2:
+            continue
+        s0 = max(0, min(spans[k][0] for k in ks))
+        t0 = min(len(x), max(spans[k][1] for k in ks))
+        mix = assemble.room_tone(x, s0, t0, t0 - s0, SR) if ROOM_UNDER else np.zeros(t0 - s0, np.float32)
+        for k in ks:
+            e = d["動作"][k]
+            s, t = max(0, spans[k][0]), min(len(x), spans[k][1])
+            clip = _read_audio_tempo(workdir / e["檔案"])
+            gain = _gain(clip, x[s:t])
+            part = assemble.fit_length((clip * gain).astype(np.float32), t - s)
+            f = min(int(SR * JOIN_FADE_S), len(part) // 2)
+            if f:
+                part[:f] *= np.linspace(0, 1, f, dtype=np.float32)
+                part[-f:] *= np.linspace(1, 0, f, dtype=np.float32)
+            mix[s - s0:t - s0] += part
+            placed[e["id"]] = {"增益": round(float(gain), 3), "疊放": oid}
+        assemble.splice(y, s0, mix, SR)
+    for k, (e, (s, t)) in enumerate(zip(d["動作"], spans)):
         s, t = max(0, s), min(len(x), t)
+        if any(k in ks for ks in stacks.values() if len(ks) > 1):
+            continue
         if e["類型"] in MUTE_KINDS:
             local = [sp for sp in spans if sp != (s, t)]
             new = assemble.room_tone(x, s, t, t - s, SR, avoid=local)

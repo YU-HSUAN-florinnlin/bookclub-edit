@@ -282,7 +282,40 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
                 "text": text, "原文": raw, "slot": [a, b], "slot_s": b - a, "句子": [s["id"] for s in group],
                 "換成代號": len(changes), "文字來源": "校對稿" if pieces else "建議稿",
             })
+    if not keep_empty:
+        items += overlap_items(workdir, items, spans, kept, cuts, table, lo, hi, only)
     return items, spans
+
+
+def overlap_items(workdir: Path, turn_items: list[dict], spans: dict, kept: set, cuts: list, table: list,
+                  lo: float, hi: float, only: list[str] | None) -> list[dict]:
+    """重疊卡片要自己生成的學員那一句（10-01）：
+    - 選「生成學員聲音」、又不在任何學員重念的時間格裡 → 用卡片上「學員說的」、重疊的起訖
+    - 選「兩邊都重新生成（照原本的時間）」→ 用「學員說的」、學員那邊的起訖，帶 `疊放`（組裝時跟老師那一句混在一起）
+    沒選學員是誰、文字是空的，就不生成（覆核時擋通過、開始前總檢查會列出來；組裝時照消音）。"""
+    from bookclub import review
+
+    slots = [tuple(it["slot"]) for it in turn_items]
+    out = []
+    for o in review.overlap_choices(workdir):
+        if not review.overlap_student_gen(o, slots) or review.overlap_gen_problem(o, slots):
+            continue
+        stacked = review.is_stacked(o["做法"], o.get("排法"))
+        who = o["學員"]
+        if who in kept or (only and o["id"] not in only):
+            continue
+        a, b = o["學員起訖"] if stacked else (o["start"], o["end"])
+        if b <= lo or a >= hi:
+            continue
+        a, b = clip_slot(max(a, lo), min(b, hi), cuts)
+        if b - a < 0.1 or in_ranges(a, b, list(cuts)):
+            continue
+        text, changes = review.replace_real_names(o["學員文字"].strip(), table)
+        spans.setdefault(who, []).append((a, b))
+        out.append({"id": f"{o['id']}_學員", "段落": o["id"], "學員": who, "text": text, "原文": "",
+                    "slot": [round(a, 3), round(b, 3)], "slot_s": b - a, "句子": [], "換成代號": len(changes),
+                    "文字來源": "重疊卡片的「學員說的」", "重疊": o["id"], **({"疊放": True} if stacked else {})})
+    return out
 
 
 def split_edited(turn: dict, sents: list[dict]) -> dict[str, str] | None:
@@ -549,7 +582,8 @@ def generate_students(
             f"{len(group)} 段（{sum(it['slot_s'] for it in group):.0f} 秒），要生成 {len(todo)} 段")
         if not todo:
             continue
-        extra = {it["id"]: {k: it[k] for k in ("段落", "學員", "聲線", "聲線名稱", "句子", "換成代號", "文字來源")} for it in todo}
+        extra = {it["id"]: {k: it[k] for k in ("段落", "學員", "聲線", "聲線名稱", "句子", "換成代號", "文字來源", "重疊", "疊放")
+                            if k in it} for it in todo}
 
         def save_group() -> None:
             for sid, ex in extra.items():

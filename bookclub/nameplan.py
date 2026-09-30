@@ -89,8 +89,145 @@ def ok_teacher(s: dict) -> bool:
     return s.get("label", "老師") in ("老師", "太短", "不確定")
 
 
+# ---------- 重念範圍（10-01 宇軒：整句太長時，只重念名字所在的那一小句） ----------
+
+LONG_SENTENCE_S = 10.0   # 整句超過這麼長，預設改成只重念名字所在的那一小句
+RANGE_MIN_S = 2.0        # 縮小後的範圍至少這麼長（太短念不成一句話）
+RANGE_MAX_S = 10.0
+CLEAR_GAP_S = 0.3        # 字跟字之間的空白超過這個秒數，算「明顯的空白」
+NEAR_S = 3.0             # 先在名字前後這麼遠裡找切點，找不到才放寬到 RANGE_MAX_S
+WORD_PUNCT = END_PUNCT + CONT_PUNCT
+
+
+def _gaps(words: list[dict]) -> list[dict]:
+    """相鄰兩個字之間的切點候選：{t: 空白的中間, gap: 空白秒數, punct: 前一個字後面有標點}。"""
+    out = []
+    for w, n in zip(words, words[1:]):
+        gap = n["start"] - w["end"]
+        tail = (w.get("word") or "").rstrip()
+        out.append({"t": (w["end"] + n["start"]) / 2 if gap > 0 else w["end"], "gap": max(0.0, gap),
+                    "punct": bool(tail) and tail[-1] in WORD_PUNCT})
+    return out
+
+
+def _is_cut(g: dict) -> bool:
+    return g["gap"] >= CLEAR_GAP_S or g["punct"]
+
+
+def name_range(words: list[dict], name_a: float, name_b: float, lo: float, hi: float,
+               position: str = "") -> tuple[float, float] | None:
+    """名字所在的那一小句（純函式）：從名字往前、往後各找一個切點，範圍約 2–10 秒、名字一定包在裡面。
+
+    切點＝逐字稿相鄰兩個字之間的空白，切在空白的中間。先在名字前後 NEAR_S 秒裡找，找不到再放寬到 RANGE_MAX_S；
+    優先順序：明顯的空白（≥ CLEAR_GAP_S）又落在標點上 → 明顯的空白 → 標點。找不到切點的那一邊用整句的邊界。
+    太短（< RANGE_MIN_S）就往外再多取一段：名字在句尾多取前面，在句首多取後面，其他兩邊輪流。
+    `lo`、`hi` 是整句的起訖（範圍不會超出整句）。找不到逐字時間、或縮不到 RANGE_MAX_S 以內，回傳 None（照整句）。"""
+    ws = sorted((w for w in words or [] if lo - 0.05 <= (w["start"] + w["end"]) / 2 <= hi + 0.05), key=lambda w: w["start"])
+    if len(ws) < 2:
+        return None
+    gaps = _gaps(ws)
+    left = sorted((g for g in gaps if g["t"] <= name_a), key=lambda g: -g["t"])
+    right = sorted((g for g in gaps if g["t"] >= name_b), key=lambda g: g["t"])
+
+    def pick(side: list[dict], dist) -> float | None:
+        for reach in (NEAR_S, RANGE_MAX_S):
+            near = [g for g in side if dist(g) <= reach]
+            for test in (lambda g: g["gap"] >= CLEAR_GAP_S and g["punct"], lambda g: g["gap"] >= CLEAR_GAP_S,
+                         lambda g: g["punct"]):
+                hit = next((g for g in near if test(g)), None)
+                if hit:
+                    return hit["t"]
+        return None
+
+    a = pick(left, lambda g: name_a - g["t"])
+    b = pick(right, lambda g: g["t"] - name_b)
+    a = lo if a is None else a
+    b = hi if b is None else b
+
+    def further(side: list[dict], cur: float, before: bool) -> float | None:
+        nxt = next((g["t"] for g in side if _is_cut(g) and (g["t"] < cur - 0.01 if before else g["t"] > cur + 0.01)), None)
+        edge = lo if before else hi
+        if nxt is not None:
+            return nxt
+        return edge if abs(edge - cur) > 0.01 else None
+
+    fixed = {"句尾": ("前", "後"), "句首": ("後", "前")}.get(position)
+    turn = 0
+    while b - a < RANGE_MIN_S:
+        sides = fixed or (("前", "後") if turn % 2 == 0 else ("後", "前"))
+        turn += 1
+        for s in sides:
+            n = further(left, a, True) if s == "前" else further(right, b, False)
+            if n is not None:
+                a, b = (n, b) if s == "前" else (a, n)
+                break
+        else:
+            break
+    if b - a > RANGE_MAX_S or not (a <= name_a + 0.01 and name_b - 0.01 <= b):
+        return None
+    return round(max(a, lo), 3), round(min(b, hi), 3)
+
+
+def range_words(words: list[dict], a: float, b: float) -> str:
+    """這段時間裡逐字稿的字（純函式，跟 `review.words_text` 同一個挑法：字的中點落在範圍裡）。"""
+    return "".join(w.get("word", "") for w in words or [] if a <= (w["start"] + w["end"]) / 2 <= b).strip()
+
+
+def say_count(text: str) -> int:
+    """要念的字有幾個（純函式）：中文一個字算 1；英文、數字連在一起的算 2（代號 Jasmine 念起來約兩個字）；
+    標點、空白不算。"""
+    n, run = 0, False
+    for ch in text or "":
+        if ch.isascii() and ch.isalnum():
+            if not run:
+                n += 2
+            run = True
+            continue
+        run = False
+        if ch.isspace() or ch in WORD_PUNCT or ch in "「」『』（）()〔〕[]-—～~\"'…":
+            continue
+        n += 1
+    return n
+
+
+TOO_SHORT_RATIO = 0.5    # 要念的字不到那段時間逐字稿字數的一半 → 擋下來（這一段其他的話會不見）
+TOO_SHORT_MIN = 6        # 逐字稿不到這麼多字的不檢查（太短，比例不準）
+
+
+def too_short(say: str, source: str) -> bool:
+    """要念的字比那段時間逐字稿的字少太多（純函式，2-1 的保護）。"""
+    src = say_count(source)
+    return src >= TOO_SHORT_MIN and say_count(say) < src * TOO_SHORT_RATIO
+
+
+def whole_slot(c: dict, d: dict, group: list[dict], words: list[dict] | None) -> dict:
+    """「整句換掉」要重念的時間格（純函式；`build_plan` 與覆核工作台共用，兩邊一定一樣）。
+
+    - 名字覆核決定有 `整句起訖`（人在卡片上改的）→ 照人改的
+    - 整句超過 LONG_SENTENCE_S、有逐字時間、沒改過名字時間 → 縮成名字所在的那一小句（`name_range`）；
+      人已經改過要念的字（`改稿`）的話，改稿的字數比較接近縮小後的範圍才縮（改稿是照整句寫的就照整句）
+    回傳 {start, end, 範圍: None｜"自動"｜"人選", 整句: [起, 訖]}。"""
+    lo = min(group[0]["start"], c["start"])
+    hi = max(group[-1]["end"], c["end"])
+    out = {"start": lo, "end": hi, "範圍": None, "整句": [round(lo, 3), round(hi, 3)]}
+    rng = d.get("整句起訖")
+    if rng:
+        return {**out, "start": float(rng[0]), "end": float(rng[1]), "範圍": "人選"}
+    if not words or c.get("改過時間") or hi - lo <= LONG_SENTENCE_S:
+        return out
+    nr = name_range(words, c["start"], c["end"], lo, hi, c.get("位置", ""))
+    if not nr:
+        return out
+    edited = (d.get("改稿") or "").strip()
+    if edited:
+        n = say_count(edited)
+        if abs(n - say_count(range_words(words, *nr))) > abs(n - say_count(range_words(words, lo, hi))):
+            return out
+    return {**out, "start": nr[0], "end": nr[1], "範圍": "自動"}
+
+
 def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dict],
-               default_how: str = WHOLE) -> dict:
+               default_how: str = WHOLE, words: list[dict] | None = None) -> dict:
     """純函式：候選＋覆核決定＋句子（id → {start, end, text}）→ 處理計畫。
 
     做法：覆核決定的 `做法` 優先；沒有就用 default_how（09-25 宇軒定案：預設整句換掉；
@@ -99,8 +236,11 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
 
     回傳 {"生成": [...句子清單...], "消音": [...], "略過": [...], "要人處理": [...]}，
     每一筆都帶 `候選` 編號（1 起算，跟覆核決定的 id 一致）。
+    `words`（逐字時間）給了的話，整句太長時只重念名字所在的那一小句（`whole_slot`，10-01），
+    這種項目帶 `範圍`（自動／人選）與 `整句`（原本整句的起訖），文字照範圍裡逐字稿的字。
     """
     gen, mutes, skipped, manual = [], [], [], []
+    ranged: list[dict] = []       # 縮小範圍的（範圍疊在一起的名字併成一筆）
     whole: dict[str, dict] = {}   # 完整句子第一段的 id → 生成項目（同一句合併）
     ordered = sorted(sentences.values(), key=lambda x: x["start"])
     pos = {x["id"]: k for k, x in enumerate(ordered)}
@@ -140,6 +280,10 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         if c.get("改過時間"):   # 09-29 宇軒：改時間把後面幾秒也納進來（逐字稿漏了第二次叫名字）→ 範圍內的句子一起重念
             group = [g for g in ordered if g["end"] > min(c["start"], group[0]["start"]) + 0.05
                      and g["start"] < max(c["end"], group[-1]["end"]) - 0.05 and (g in group or ok_teacher(g))] or group
+        ws = whole_slot(c, d, group, words)
+        if ws["範圍"]:
+            _add_ranged(ranged, manual, c, i, d, ws, words)
+            continue
         key = group[0]["id"]
         item = whole.get(key)
         # 名字只在原本那一段裡換（避免換到前後段同音的字），再接成整句
@@ -168,9 +312,46 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
     for item in whole.values():
         item.pop("_texts", None)
         item["slot"] = [round(item["slot"][0], 3), round(item["slot"][1], 3)]
+    for item in ranged:
+        item.pop("_cands", None)
     gen.extend(whole.values())
+    gen.extend(ranged)
     gen.sort(key=lambda g: g["slot"][0])
     return {"生成": gen, "消音": mutes, "略過": skipped, "要人處理": manual}
+
+
+def _names_in(text: str, cands: list[dict]) -> str | None:
+    """範圍裡的字，名字一個一個換成代號；有任何一個找不到就回傳 None。"""
+    for c in cands:
+        text = replace_name(text, c)
+        if text is None:
+            return None
+    return text
+
+
+def _add_ranged(ranged: list[dict], manual: list[dict], c: dict, i, d: dict, ws: dict, words: list[dict] | None) -> None:
+    """縮小範圍的名字加進生成清單；範圍跟已經有的疊在一起就併成一筆（文字照合起來的範圍重排）。"""
+    edited = (d.get("改稿") or "").strip()
+    item = next((g for g in ranged if g["slot"][0] < ws["end"] and ws["start"] < g["slot"][1]), None)
+    a, b = (min(item["slot"][0], ws["start"]), max(item["slot"][1], ws["end"])) if item else (ws["start"], ws["end"])
+    cands = (item["_cands"] if item else []) + [c]
+    new = _names_in(range_words(words, a, b), cands)
+    if new is None and not edited and not (item and item.get("改稿")):
+        manual.append({"候選": i, "原因": "重念範圍裡的逐字稿找不到比對到的字，無法自動換成代號"})
+        return
+    if item is None:
+        item = {"id": f"S{_num(i)}", "text": "", "slot": [a, b], "候選": [], "句子": [], "範圍": ws["範圍"],
+                "整句": ws["整句"], "_cands": []}
+        ranged.append(item)
+    item["slot"] = [round(a, 3), round(b, 3)]
+    item["候選"].append(i)
+    item["_cands"].append(c)
+    if ws["範圍"] == "人選":
+        item["範圍"] = "人選"
+    if not item.get("改稿"):
+        item["text"] = new or item["text"]
+    if edited:   # 人直接改的要念的句子優先
+        item["text"], item["改稿"] = edited, True
 
 
 def teacher_by_turns(turns: list[dict]):
@@ -223,6 +404,16 @@ def add_overlap_items(plan: dict, picks: list[dict], sentences: dict[str, dict],
         lo, hi = round(min(group[0]["start"], o["start"]), 3), round(max(group[-1]["end"], o["end"]), 3)
         item = next((g for g in plan["生成"] if (g.get("句子") or [None])[0] == group[0]["id"]), None)
         edited = (o.get("老師整句改稿") or "").strip()
+        rng = next((g for g in plan["生成"] if g.get("範圍") and g["slot"][0] < hi and lo < g["slot"][1]), None)
+        if rng is not None:   # 10-01：名字只重念一小句的那一筆跟老師這一句疊到
+            if rng["slot"][0] <= o["start"] and o["end"] <= rng["slot"][1]:
+                rng.setdefault("重疊項目", []).append(o["id"])   # 重疊整個在那一小句裡：跟著換掉
+            else:   # 只疊到一部分：兩筆會搶同一段時間，請人把名字的重念範圍改大到包住重疊
+                plan.setdefault("要人處理", []).append({
+                    "候選": rng["候選"][0], "原因": f"重念範圍跟重疊 {o['id']}（選了生成老師聲音）只疊到一部分："
+                                                 "把重念範圍改大到包住重疊，或重疊改選別的做法"})
+                plan.setdefault("重疊沒句子", []).append(o["id"])
+            continue
         if item:
             item.setdefault("重疊項目", []).append(o["id"])
             item["slot"] = [min(item["slot"][0], lo), max(item["slot"][1], hi)]
@@ -234,6 +425,23 @@ def add_overlap_items(plan: dict, picks: list[dict], sentences: dict[str, dict],
         if edited:
             item["改稿"] = True
         plan["生成"].append(item)
+    plan["生成"].sort(key=lambda g: g["slot"][0])
+    return plan
+
+
+def add_stacked_items(plan: dict, choices: list[dict]) -> dict:
+    """重疊選「兩邊都重新生成（照原本的時間）」的老師那一句（10-01 B 方案，純函式，改 plan 本身）：
+    照卡片上「老師說的」、老師那邊的起訖重念，帶 `疊放`（組裝時跟學員那一句混在一起，不互相蓋掉）。
+    「老師說的」是空的不排（覆核時擋通過、開始前總檢查會列出來）。"""
+    from bookclub import review
+
+    for o in choices:
+        text = (o.get("老師文字") or "").strip()
+        if not review.is_stacked(o["做法"], o.get("排法")) or not text:
+            continue
+        a, b = o["老師起訖"]
+        plan["生成"].append({"id": f"W{int(round(o['start'] * 100)):07d}", "text": text, "slot": [a, b], "候選": [],
+                           "句子": [], "重疊項目": [o["id"]], "疊放": True})
     plan["生成"].sort(key=lambda g: g["slot"][0])
     return plan
 
@@ -281,9 +489,12 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
         for i in range(1, len(candidates) + 1):
             if i not in keep:
                 decisions[str(i)] = {"tags": ["不是名字"]}  # 只在計算時略過，不寫回覆核決定
-    plan = build_plan(candidates, decisions, sentences)
+    words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words") or []
+    plan = build_plan(candidates, decisions, sentences, words=words)
     if not only:   # 09-30：重疊選「生成老師聲音」的，老師整句一起排進生成清單
-        picks = [o for o in review.overlap_choices(workdir) if o["做法"] == "只留老師"]
+        choices = review.overlap_choices(workdir)
+        picks = [o for o in choices if o["做法"] == "只留老師"]
+        add_stacked_items(plan, choices)
         if picks:
             from bookclub import turns as turns_mod
 

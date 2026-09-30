@@ -287,6 +287,84 @@ def test_render_audio_applies_local_mute():
         assert not proclog.load(w)["未登記的變動"]
 
 
+# ---------- 重念範圍（10-01：整句太長只重念名字那一小句） ----------
+
+def _words(spec):
+    """[(字, 起, 訖)] → 逐字時間。"""
+    return [{"word": w, "start": a, "end": b} for w, a, b in spec]
+
+
+LONG_WORDS = _words([("今天", 0.0, 0.5), ("天氣", 0.5, 1.0), ("很好，", 1.0, 1.6),   # 1.6→2.2 空白＋逗號
+                     ("我們", 2.2, 2.6), ("先", 2.6, 2.8), ("請", 2.8, 3.0), ("小美", 3.0, 3.4), ("分享，", 3.4, 3.9),
+                     ("然後", 4.5, 5.0), ("大家", 5.0, 5.4), ("再", 5.4, 5.6), ("一起", 5.6, 6.0), ("討論", 6.0, 6.4),
+                     ("這", 6.4, 6.6), ("一段", 6.6, 7.0), ("的", 7.0, 7.1), ("內容", 7.1, 7.6), ("好不好", 7.6, 8.4),
+                     ("我", 8.6, 8.8), ("覺得", 8.8, 9.2), ("很", 9.2, 9.4), ("重要", 9.4, 12.0)])
+
+
+def test_name_range_cuts_at_clear_gaps_around_name():
+    a, b = nameplan.name_range(LONG_WORDS, 3.0, 3.4, 0.0, 12.0, "句中")
+    assert 1.8 < a < 2.0 and 4.1 < b < 4.3, (a, b)      # 切在前後兩個明顯空白的中間
+    assert nameplan.range_words(LONG_WORDS, a, b) == "我們先請小美分享，"
+
+
+def test_name_range_extends_to_min_length_on_sentence_side():
+    words = _words([("好，", 0.0, 0.4), ("小美", 0.9, 1.2), ("。", 1.2, 1.3), ("接著", 1.8, 2.2), ("我們", 2.2, 2.6),
+                    ("看", 2.6, 2.8), ("下一段", 2.8, 3.6), ("吧。", 3.6, 4.0), ("再來", 4.6, 5.0), ("是", 5.0, 16.0)])
+    a, b = nameplan.name_range(words, 0.9, 1.2, 0.0, 16.0, "句首")
+    assert b - a >= nameplan.RANGE_MIN_S and a <= 0.9 and b >= 4.0, (a, b)   # 句首：往後多取一句
+
+
+def test_name_range_none_without_words():
+    assert nameplan.name_range([], 3.0, 3.4, 0.0, 12.0) is None
+
+
+def test_say_count_and_too_short():
+    assert nameplan.say_count("謝謝 Jasmine，很好。") == 6          # 謝謝(2)＋Jasmine(算 2)＋很好(2)
+    assert nameplan.too_short("謝謝 Amy。", "我們先請小美分享然後大家再一起討論")
+    assert not nameplan.too_short("我們先請 Amy 分享然後大家再討論", "我們先請小美分享然後大家再一起討論")
+    assert not nameplan.too_short("好", "好啊")                    # 逐字稿太短不檢查
+
+
+def _long_sents():
+    return {"L1": {"id": "L1", "start": 0.0, "end": 12.0, "text": "今天天氣很好，我們先請小美分享，然後大家再一起討論這一段的內容好不好我覺得很重要"}}
+
+
+def test_plan_long_sentence_only_rereads_name_clause():
+    c = _cand(3.0, 3.4, "整句換掉", sid="L1", 位置="句中")
+    plan = nameplan.build_plan([c], {}, _long_sents(), words=LONG_WORDS)
+    g = plan["生成"][0]
+    assert g["範圍"] == "自動" and g["整句"] == [0.0, 12.0] and 1.8 < g["slot"][0] < 2.0 and g["slot"][1] < 4.3
+    assert g["text"] == "我們先請Amy分享，"
+    # 沒給逐字時間：照舊整句
+    assert "範圍" not in nameplan.build_plan([c], {}, _long_sents())["生成"][0]
+    # 人在卡片上改的範圍優先
+    plan = nameplan.build_plan([c], {"1": {"整句起訖": [2.0, 6.5]}}, _long_sents(), words=LONG_WORDS)
+    assert plan["生成"][0]["slot"] == [2.0, 6.5] and plan["生成"][0]["範圍"] == "人選"
+    # 改稿照整句寫的（字數接近整句）：不縮
+    whole = "今天天氣很好，我們先請Amy分享，然後大家再一起討論這一段的內容好不好我覺得很重要"
+    plan = nameplan.build_plan([c], {"1": {"改稿": whole}}, _long_sents(), words=LONG_WORDS)
+    assert "範圍" not in plan["生成"][0] and plan["生成"][0]["slot"] == [0.0, 12.0]
+
+
+def test_plan_two_names_in_overlapping_ranges_merge():
+    words = LONG_WORDS[:6] + _words([("小美", 2.8, 3.0), ("阿明", 3.0, 3.4), ("分享，", 3.4, 3.9)]) + LONG_WORDS[8:]
+    cands = [_cand(2.8, 3.0, "整句換掉", sid="L1"), _cand(3.0, 3.4, "整句換掉", sid="L1", matched="阿明", code="Tom")]
+    sents = {"L1": {**_long_sents()["L1"], "text": "今天天氣很好，我們先小美阿明分享，然後大家再一起討論這一段的內容好不好我覺得很重要"}}
+    plan = nameplan.build_plan(cands, {}, sents, words=words)
+    assert len(plan["生成"]) == 1 and plan["生成"][0]["候選"] == [1, 2]
+    assert "Amy" in plan["生成"][0]["text"] and "Tom" in plan["生成"][0]["text"]
+
+
+def test_stacked_pair_both_kept_in_edl():
+    plan = {"生成": [{"id": "W1", "text": "可以啊", "slot": [10.0, 10.8], "候選": [], "重疊項目": ["O1"], "疊放": True},
+                   {"id": "S1", "text": "別句", "slot": [10.5, 12.0], "候選": [1]}], "消音": []}
+    log = {"句子": [{"id": "W1", "放回時間格": {"檔案": "a.wav"}}, {"id": "S1", "放回時間格": {"檔案": "b.wav"}}]}
+    edl, warn = assemble.build_edl(plan, log)
+    assert [e["生成編號"] for e in edl] == ["S1"] and warn          # 不是同一對的照舊長的優先
+    a = {"疊放": True, "重疊": "O1", "start": 0, "end": 1}
+    assert assemble.stackable(a, {**a}) and not assemble.stackable(a, {**a, "重疊": "O2"})
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0

@@ -58,20 +58,26 @@ def build_edl(plan: dict, teacher_log: dict | None) -> tuple[list[dict], list[st
             "類型": "換聲音", "start": g["slot"][0], "end": g["slot"][1], "檔案": r["放回時間格"]["檔案"],
             "文字": g["text"], "候選": g["候選"], "要人聽": r.get("要人聽", False), "生成編號": g["id"],
             **({"重疊項目": g["重疊項目"]} if g.get("重疊項目") else {}),
+            **({"疊放": True, "重疊": g["重疊項目"][0]} if g.get("疊放") else {}),
         })
     for m in plan.get("消音", []):
         edits.append({"類型": "消音", "start": m["start"], "end": m["end"], "候選": [m["候選"]]})
 
-    # 重疊：長的優先
+    # 重疊：長的優先（B 方案兩邊都生成的那一對不算搶，見 stackable）
     edits.sort(key=lambda e: -(e["end"] - e["start"]))
     kept: list[dict] = []
     for e in edits:
-        if any(e["start"] < k["end"] and k["start"] < e["end"] for k in kept):
+        if any(e["start"] < k["end"] and k["start"] < e["end"] and not stackable(e, k) for k in kept):
             warnings.append(f"候選 {e['候選']} 跟別筆重疊，被較長的那筆蓋過")
             continue
         kept.append(e)
     kept.sort(key=lambda e: e["start"])
     return kept, warnings
+
+
+def stackable(e: dict, k: dict) -> bool:
+    """兩筆動作可以疊在一起放（10-01 B 方案）：同一處重疊、兩邊都標了疊放（學員一句＋老師一句，聲音相加）。"""
+    return bool(e.get("疊放") and k.get("疊放") and e.get("重疊") and e.get("重疊") == k.get("重疊"))
 
 
 MUTE_KINDS = ("消音", "名字消音", "局部消音", "學員名字消音")   # 墊環境底噪的動作（其他是換聲音）

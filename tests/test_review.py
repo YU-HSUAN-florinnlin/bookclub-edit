@@ -90,7 +90,7 @@ def test_save_name_overlap_voice_time():
         raise AssertionError
     except ValueError:
         pass
-    review.save_overlap(w, "O69.60", {"做法": "兩邊都重生成", "排法": "照原位置疊著", "學員文字": "改過", "已確認": True})
+    review.save_overlap(w, "O69.60", {"做法": "兩邊都重生成", "排法": "照原位置疊著", "學員文字": "改過", "老師文字": "好", "學員說話者": "學員1", "已確認": True})
     review.save_overlap(w, "O150.20", {"救回": True})
     d = review.page_data(w)
     ovs = {x["id"]: x for x in d["項目"] if x["類型"] == "重疊"}
@@ -279,6 +279,61 @@ def test_merge_split_and_mark_student():
         raise AssertionError
     except ValueError:
         pass
+
+
+def test_overlap_student_voice_outside_turns_and_stacked():
+    """10-01：重疊選「生成學員聲音」、不在學員段落裡 → 用卡片上的字生成；兩邊都生成（照原本的時間）→ 兩句都排進清單。"""
+    from bookclub import nameplan, students
+
+    w = _fresh()
+    oid = review.manual_edit(w, {"類型": "重疊", "start": 80.2, "end": 81.0})["id"]   # 落在老師段落裡
+    review.save_overlap(w, oid, {"做法": "只留學員", "學員說話者": None, "學員文字": ""})
+    try:
+        review.save_overlap(w, oid, {"已確認": True})
+        raise AssertionError("缺學員是誰、缺文字還能通過")
+    except ValueError as e:
+        assert "學員是誰" in str(e) and "學員說的" in str(e)
+    assert not review.load_decisions(w)["重疊"][oid].get("已確認")
+    review.save_overlap(w, oid, {"學員說話者": "學員1", "學員文字": "老師我可以問一個問題嗎", "已確認": True})
+    items, _ = students.build_items(w)
+    mine = [it for it in items if it.get("重疊") == oid]
+    assert len(mine) == 1 and mine[0]["學員"] == "學員1" and mine[0]["文字來源"].startswith("重疊卡片")
+    assert "疊放" not in mine[0]
+    # B 方案：兩邊都重新生成、照原本的時間；老師那一句進老師的生成清單，兩句都帶疊放
+    review.save_overlap(w, oid, {"做法": "兩邊都重生成", "排法": "照原位置疊著", "老師文字": "可以啊",
+                                 "老師起訖": [80.6, 81.2], "學員起訖": [79.9, 80.9]})
+    items, _ = students.build_items(w)
+    mine = [it for it in items if it.get("重疊") == oid]
+    assert mine[0]["疊放"] and mine[0]["slot"] == [79.9, 80.9]
+    plan = nameplan.compute_plan(w)
+    tw = [g for g in plan["生成"] if g.get("疊放")]
+    assert len(tw) == 1 and tw[0]["text"] == "可以啊" and tw[0]["slot"] == [80.6, 81.2] and tw[0]["重疊項目"] == [oid]
+    # 老師說的清空 → 不能通過
+    try:
+        review.save_overlap(w, oid, {"老師文字": "", "已確認": True})
+        raise AssertionError("老師說的空白還能通過")
+    except ValueError as e:
+        assert "老師說的" in str(e)
+
+
+def test_name_range_field_and_too_short_blocks_pass():
+    """10-01：名字卡片改重念範圍（要包住名字）；要念的字少於逐字稿一半不能通過。"""
+    w = _fresh()
+    try:
+        review.save_name(w, "1", {"整句起訖": [70.0, 72.0]})       # 名字在 76 秒，範圍沒包住
+        raise AssertionError("範圍沒包住名字還能存")
+    except ValueError as e:
+        assert "包住名字" in str(e)
+    assert "整句起訖" not in json.loads((w / "名字覆核決定.json").read_text(encoding="utf-8")).get("1", {})
+    review.save_name(w, "1", {"整句起訖": [75.9, 77.0]})
+    it = next(x for x in review.page_data(w)["項目"] if x["類型"] == "名字" and x["id"] == "1")
+    assert it["整句"]["範圍"] == "人選" and it["整句"]["start"] == 75.9 and it["整句"]["字數"][1] > 0
+    review.save_name(w, "1", {"整句起訖": None})
+    try:
+        review.save_name(w, "1", {"改稿": "好", "已確認": True})
+        raise AssertionError("字太少還能通過")
+    except ValueError as e:
+        assert "一半" in str(e)
 
 
 def _run_all() -> int:

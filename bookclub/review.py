@@ -330,6 +330,28 @@ def _overlap_defaults(o: dict, sents: list[dict], turns: list[dict]) -> dict:
     return {"老師文字": teacher, "學員文字": student, "學員說話者": who, "附近逐字稿": context}
 
 
+STACK = "照原位置疊著"   # 「兩邊都重生成」＋這個排法＝B 方案（10-01）：兩邊各自生成、放回原本的時間，疊到的地方混在一起
+
+
+def is_stacked(how: str | None, arrange: str | None) -> bool:
+    return how == "兩邊都重生成" and arrange == STACK
+
+
+def overlap_sides(o: dict, d: dict, sents: list[dict]) -> dict:
+    """B 方案兩邊各自的起訖（純函式）：人在卡片上改過的優先；沒改過的，老師那邊＝蓋到重疊的老師句子、
+    學員那邊＝蓋到重疊的其他句子（前後各最多 3 秒），找不到就用重疊本身的起訖。"""
+    near = _overlapping(sents, o["start"] - 0.3, o["end"] + 0.3)
+
+    def span(rows: list[dict]) -> list[float]:
+        if not rows:
+            return [round(o["start"], 3), round(o["end"], 3)]
+        return [round(max(min(r["start"] for r in rows), o["start"] - 3), 3),
+                round(min(max(r["end"] for r in rows), o["end"] + 3), 3)]
+
+    return {"老師起訖": d.get("老師起訖") or span([s for s in near if s.get("label") == "老師"]),
+            "學員起訖": d.get("學員起訖") or span([s for s in near if s.get("label") != "老師"])}
+
+
 def overlap_choice(o: dict, d: dict, sents: list[dict], turns: list[dict], voices: dict) -> dict:
     """這一處重疊最後照哪個做法（組裝用）：人選的優先，沒選就照建議——跟覆核工作台顯示的是同一套算法。
     `d` 是這一筆的覆核決定。回傳 {做法, 排法, 學員}。"""
@@ -361,8 +383,13 @@ def overlap_choices(workdir: str | Path, voices: dict | None = None) -> list[dic
         if o.get("已自動跳過") and not d.get("救回"):
             continue
         ch = overlap_choice(o, d, sents, turns, voices)
-        out.append({"id": oid, "start": o["start"], "end": o["end"], "做法": ch["做法"], "學員": ch["學員"],
-                    "老師整句改稿": d.get("老師整句改稿", "")})
+        defaults = _overlap_defaults(o, sents, turns)
+        out.append({"id": oid, "start": o["start"], "end": o["end"], "做法": ch["做法"], "排法": ch["排法"],
+                    "學員": ch["學員"], "學員已選": bool(d.get("學員說話者")),   # 人在卡片上選的（不是猜的）
+                    "老師整句改稿": d.get("老師整句改稿", ""), "已確認": bool(d.get("已確認")),
+                    "老師文字": d.get("老師文字", defaults["老師文字"]) or "",
+                    "學員文字": d.get("學員文字", defaults["學員文字"]) or "",
+                    **overlap_sides(o, d, sents)})
     return out
 
 
@@ -459,6 +486,7 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     pos = {s["id"]: k for k, s in enumerate(ordered)}
     items = []
     table = replace_table(workdir)
+    words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words") or []
     cands = effective_name_candidates(workdir, result.get("candidates", []), decisions)
     for i, c in enumerate(cands, start=1):
         cid = str(c.get("id") or i)
@@ -477,8 +505,14 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
                 texts[c["sentence_id"]] = new
                 replaced = "".join(texts[g["id"]] for g in group)
         sentence = c.get("sentence") or (ordered[pos[c["sentence_id"]]]["text"] if c.get("sentence_id") in pos else "")
-        whole = {"start": min(group[0]["start"], c["start"]), "end": max(group[-1]["end"], c["end"]),
-                 "原文": whole_text, "換成代號": replaced, "改稿": d.get("改稿", "")} if group else None
+        whole = None
+        if group:   # 10-01：重念範圍跟 nameplan.build_plan 同一個算法（整句太長只重念名字那一小句、人改過的照人改的）
+            ws = nameplan.whole_slot(c, d, group, words)
+            if ws["範圍"]:
+                whole_text = nameplan.range_words(words, ws["start"], ws["end"])
+                replaced = nameplan.replace_name(whole_text, c)
+            whole = {"start": ws["start"], "end": ws["end"], "原文": whole_text, "換成代號": replaced,
+                     "改稿": d.get("改稿", ""), "範圍": ws["範圍"], "原本整句": ws["整句"]}
         if c.get("老師整段"):
             sentence = c.get("整段文字", "")
             whole = {"start": c["start"], "end": c["end"], "原文": sentence, "換成代號": sentence, "改稿": d.get("改稿", "")}
@@ -486,6 +520,9 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
             shown = whole["改稿"] or whole["換成代號"] or ""
             said, _ch = replace_real_names(shown, table)
             whole["實際會念"] = said if shown and said != shown else ""
+            src = nameplan.range_words(words, whole["start"], whole["end"]) if words else whole["原文"]
+            whole["字數"] = [nameplan.say_count(shown), nameplan.say_count(src)]   # 要念的／這段時間逐字稿的
+            whole["字太少"] = bool(shown) and nameplan.too_short(shown, src)
         items.append({
             "類型": "名字", "id": cid, "start": c["start"], "end": c["end"],
             "sentence_html": _highlight_sentence(sentence, c.get("matched_text", ""), c.get("位置", "")),
@@ -791,6 +828,15 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
             d["note"] = str(fields["note"])
         if "已確認" in fields:
             d["已確認"] = bool(fields["已確認"])
+        if "整句起訖" in fields:   # 10-01：名字卡片上改重念範圍（空＝照預設）
+            v = fields["整句起訖"]
+            if v:
+                a, b = float(v[0]), float(v[1])
+                if b - a < 0.3:
+                    raise ValueError("重念範圍的結束要晚於開始")
+                d["整句起訖"] = [round(a, 3), round(b, 3)]
+            else:
+                d.pop("整句起訖", None)
         if "改稿" in fields:   # 09-29：要重念的句子人直接改（空白＝回到自動換好的）
             txt = str(fields["改稿"] or "").strip()
             if txt:
@@ -799,11 +845,28 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
                 d.pop("改稿", None)
         d["更新時間"] = _now()
         wd.write_json(name_decisions_path(workdir), decisions)
+    if fields.get("整句起訖"):
+        c = next((c for i, c in enumerate(effective_name_candidates(workdir, cands, wd.read_json(name_decisions_path(workdir), default={}) or {}), start=1)
+                  if str(c.get("id") or i) == cid), None)
+        a, b = d["整句起訖"]
+        if c and not (a <= c["start"] + 0.05 and c["end"] - 0.05 <= b):
+            with _lock:
+                decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
+                decisions.get(cid, {}).pop("整句起訖", None)
+                wd.write_json(name_decisions_path(workdir), decisions)
+            raise ValueError(f"重念範圍要包住名字（{wd.fmt_time(c['start'])}–{wd.fmt_time(c['end'])}）")
     if fields.get("已確認"):
         # 09-30：按了通過，但這一筆其實處理不了（句子裡找不到名字、換不了代號）→ 成品會照原聲念出名字。擋下來
         from bookclub import nameplan
 
-        stuck = next((m for m in nameplan.compute_plan(workdir)["要人處理"] if str(m["候選"]) == cid), None)
+        plan = nameplan.compute_plan(workdir)
+        stuck = next((m for m in plan["要人處理"] if str(m["候選"]) == cid), None)
+        if not stuck:   # 10-01：要念的字比那段時間逐字稿少太多 → 這一段其他的話會不見
+            g = next((g for g in plan["生成"] if cid in {str(x) for x in g.get("候選", [])}), None)
+            if g and nameplan.too_short(g["text"], words_text(workdir, *g["slot"])):
+                stuck = {"原因": f"要念的字（{nameplan.say_count(g['text'])} 字）不到重念範圍逐字稿"
+                                 f"（{nameplan.say_count(words_text(workdir, *g['slot']))} 字）的一半，這一段其他的話會不見。"
+                                 "請把重念範圍改小，或把話補齊"}
         if stuck:
             with _lock:
                 decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
@@ -857,6 +920,16 @@ def save_overlap(workdir: str | Path, oid: str, fields: dict) -> dict:
                 d["老師整句改稿"] = txt
             else:
                 d.pop("老師整句改稿", None)
+        for k in ("老師起訖", "學員起訖"):   # 10-01 B 方案：兩邊各自的起訖（空＝照預設）
+            if k in fields:
+                v = fields[k]
+                if v:
+                    a, b = float(v[0]), float(v[1])
+                    if b <= a:
+                        raise ValueError(f"{k}：結束要晚於開始")
+                    d[k] = [round(a, 3), round(b, 3)]
+                else:
+                    d.pop(k, None)
         for k in ("已確認", "救回"):
             if k in fields:
                 d[k] = bool(fields[k])
@@ -864,7 +937,49 @@ def save_overlap(workdir: str | Path, oid: str, fields: dict) -> dict:
             raise ValueError("先選這一處要怎麼處理，再確認")
         d["更新時間"] = _now()
         _save_decisions(workdir, dec)
-        return {"ok": True, "id": oid, "決定": d}
+    if d.get("已確認"):
+        # 10-01：要生成學員聲音（或兩邊都生成），得知道念什麼、用誰的聲線；缺的話不能通過
+        o = next((x for x in overlap_choices(workdir) if x["id"] == str(oid)), None)
+        why = overlap_gen_problem(o, student_slots(workdir)) if o else None
+        if why:
+            with _lock:
+                dec = load_decisions(workdir)
+                dec["重疊"].setdefault(str(oid), {})["已確認"] = False
+                _save_decisions(workdir, dec)
+            raise ValueError(f"這一處還不能通過：{why}")
+    return {"ok": True, "id": oid, "決定": d}
+
+
+def student_slots(workdir: Path) -> list[tuple[float, float]]:
+    """學員段落重念的時間格（不含重疊卡片自己產生的那幾格）；沒有段落分析回傳空的。"""
+    from bookclub import students
+
+    try:
+        items, _ = students.build_items(Path(workdir))
+    except FileNotFoundError:
+        return []
+    return [tuple(it["slot"]) for it in items if not it.get("重疊")]
+
+
+def overlap_student_gen(o: dict, slots: list[tuple[float, float]]) -> bool:
+    """這一處重疊要不要自己生成學員那一句（純函式，10-01）：兩邊都重生成（照原位置疊著）一定要；
+    生成學員聲音而且整個不在任何學員重念的時間格裡（在的話跟著那一格整段換掉）才要。"""
+    if is_stacked(o["做法"], o.get("排法")):
+        return True
+    return o["做法"] == "只留學員" and not any(a < o["end"] and o["start"] < b for a, b in slots)
+
+
+def overlap_gen_problem(o: dict, slots: list[tuple[float, float]]) -> str | None:
+    """選了要生成、但缺東西的原因（純函式）；沒問題回傳 None。"""
+    miss = []
+    if overlap_student_gen(o, slots):
+        if not (o.get("學員文字") or "").strip():
+            miss.append("「學員說的」是空的")
+        if not o.get("學員已選") or o.get("學員") in (None, "", "老師"):   # 要人選過，不用猜的
+            miss.append("還沒選學員是誰（要知道用哪一位的聲線）")
+    if is_stacked(o["做法"], o.get("排法")) and not (o.get("老師文字") or "").strip():
+        miss.append("「老師說的」是空的")
+    return "、".join(miss) + "：要生成聲音，得知道念什麼、用誰的聲線" if miss else None
 
 
 def snap_to_quiet(workdir: Path, t: float, search_s: float = SNAP_SEARCH_S) -> tuple[float, bool]:
