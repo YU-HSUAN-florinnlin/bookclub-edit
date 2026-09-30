@@ -228,6 +228,12 @@ def run_analyze(
             turns_stats = turns_mod.build_turns(workdir, roster_path=roster_path, text=text_data)["統計"]
             elapsed["7_段落聲紋"] = round(time.time() - t0, 1)
             print(f"[分析一條龍] 7/7 段落分析完成：{turns_stats['段落數']} 段、學員 {turns_stats['學員人數']} 位")
+            try:   # 09-30：先估每位學員的音高，第 3 步就看得到配了哪個匿名聲線
+                from bookclub import students as students_mod
+
+                students_mod.estimate_pitches(workdir)
+            except Exception as exc:
+                print(f"⚠️ [分析一條龍] 學員音高沒估成（{exc}）；開始生成時會再估")
         except Exception as exc:
             print(f"⚠️ [分析一條龍] 7/7 段落分析（聲紋部分）失敗：{exc}")
             print("   → 修好之後單獨重跑：bookclub run turns <工作區>")

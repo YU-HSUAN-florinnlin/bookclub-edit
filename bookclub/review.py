@@ -143,16 +143,17 @@ def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict, s
     """重疊的預設建議（純函式，規則照 02 規格第三節的定案，減少人的決策）：
     1. 學員是「保留原聲」的人 → 不用改
     2. 一來一往交接（老師收尾、學員開口，或反過來；重疊離換人的地方 1.5 秒內）→ 兩邊都重生成、前後排開
-    3. 學員在老師連續講話中間附和（整個重疊落在老師的段落裡）→ 只留老師原聲、學員消音
+    3. 學員在老師連續講話中間附和（整個重疊落在老師的段落裡）→ 不用改
+       （09-30 宇軒聽過成品：消音會讓老師的話斷掉、干擾理解；要消的話在第 3 步逐筆改「只留老師原聲、學員消音」）
     4. 老師在學員說話中間短短回應（整個重疊落在學員的段落裡）→ 只留學員（09-26 加，待宇軒確認）
     5. 判斷不出來 → 兩邊都重生成、前後排開（最保險）"""
     if who and voices.get(who) == "保留原聲":
         return {"做法": "不用改", "排法": None, "原因": f"{who} 保留原聲，重疊照原樣"}
-    if stu_text is not None:   # 09-29 宇軒：學員只是附和（3 個字以內或聽不出字）→ 學員那一點點消掉，省生成
+    if stu_text is not None:   # 09-29 宇軒：學員只是附和（3 個字以內或聽不出字）→ 不用生成；09-30 改成也不消音
         bare = "".join(ch for ch in stu_text if ch not in _PUNCT)
         if len(bare) <= 3 or is_filler(bare):
-            return {"做法": "只留老師原聲學員消音", "排法": None,
-                    "原因": "學員只是附和（3 個字以內或只有嗯、對），留老師原聲、學員消音，不用生成"}
+            return {"做法": "不用改", "排法": None,
+                    "原因": "學員只是附和（3 個字以內或只有嗯、對），照原樣留著：消音會讓老師的話斷掉"}
     ordered = sorted(turns, key=lambda t: t["start"])
     for a, b in zip(ordered, ordered[1:]):
         if (a["說話者"] == "老師") == (b["說話者"] == "老師"):
@@ -163,8 +164,8 @@ def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict, s
             return {"做法": "兩邊都重生成", "排法": "前後排開", "原因": f"一來一往交接的地方（{how}），兩邊都重念、前後排開"}
     inside = any(t["說話者"] == "老師" and t["start"] <= o["start"] and o["end"] <= t["end"] for t in ordered)
     if inside:
-        return {"做法": "只留老師原聲學員消音", "排法": None,
-                "原因": "學員在老師連續講話中間附和（學員那邊短），留老師原聲、學員消音"}
+        return {"做法": "不用改", "排法": None,
+                "原因": "學員在老師連續講話中間附和（學員那邊短），照原樣留著：消音會讓老師的話斷掉"}
     in_student = any(t["說話者"] != "老師" and t["start"] <= o["start"] and o["end"] <= t["end"] for t in ordered)
     if in_student:   # 09-26 加（待宇軒確認）：第一堂 9 筆都是學員分享中間老師短短回應
         return {"做法": "只留學員", "排法": None,

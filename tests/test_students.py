@@ -166,6 +166,36 @@ def test_voices_rotate_by_gender_and_key_by_real_name():
             os.environ["BOOKCLUB_DATA_DIR"] = old
 
 
+def test_pitch_estimated_in_step1_used_without_estimating():
+    """09-30：第 1 步先估好的音高，網頁載入（estimate=False）就能配聲線；沒估過的照舊等開始生成。"""
+    import os
+    import tempfile
+
+    data = Path(tempfile.mkdtemp())
+    w = Path(tempfile.mkdtemp()) / "工作區"
+    (w / "生成").mkdir(parents=True)
+    old = os.environ.get("BOOKCLUB_DATA_DIR")
+    os.environ["BOOKCLUB_DATA_DIR"] = str(data)
+    try:
+        d = data / "聲線" / "候選_0928"
+        d.mkdir(parents=True)
+        for name in ("男1", "女1"):
+            (d / f"{name}.wav").write_bytes(b"x")
+            (d / f"{name}.txt").write_text("參考音逐字稿", encoding="utf-8")
+        students.wd.write_json(students.voices_path(w), {"版本": 2, "學員": {}, "音高": {"學員1": {"hz": 120}, "學員2": {"hz": 210},
+                                                                          "學員3": {"hz": None}}})
+        people = {f"學員{i}": {"第一次": i * 10.0} for i in (1, 2, 3, 4)}
+        got = students.assign_voices(w, list(people), {}, people=people, estimate=False, log=lambda s: None)
+        assert got["學員1"]["名稱"] == "男1" and got["學員2"]["名稱"] == "女1", got
+        assert got["學員3"]["性別"] == "女" and "估不出來" in got["學員3"]["依據"]      # 估過但估不出來 → 先用女聲
+        assert got["學員4"]["檔案"] is None and got["學員4"]["依據"] == "還沒判斷"     # 沒估過 → 開始生成時才估
+    finally:
+        if old is None:
+            os.environ.pop("BOOKCLUB_DATA_DIR", None)
+        else:
+            os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

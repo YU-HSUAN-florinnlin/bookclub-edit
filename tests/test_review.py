@@ -201,7 +201,7 @@ def test_suggest_overlap_rules():
     turns = [{"start": 0, "end": 30, "說話者": "老師"}, {"start": 30.2, "end": 50, "說話者": "學員2"},
              {"start": 50.3, "end": 90, "說話者": "老師"}]
     f = review.suggest_overlap
-    assert f({"start": 10, "end": 10.4}, turns, None, {})["做法"] == "只留老師原聲學員消音"        # 老師講話中間附和
+    assert f({"start": 10, "end": 10.4}, turns, None, {})["做法"] == "不用改"        # 老師講話中間附和（09-30：不消音）
     r = f({"start": 29.5, "end": 30.3}, turns, "學員2", {})
     assert r["做法"] == "兩邊都重生成" and r["排法"] == "前後排開" and "老師收尾" in r["原因"]      # 交接
     assert "學員收尾" in f({"start": 49.8, "end": 50.5}, turns, "學員2", {})["原因"]
@@ -305,7 +305,7 @@ def test_minor_student_and_filler_overlap_rules():
     assert review.is_minor_student("老師再見", 5.0) == "只有招呼、附和或笑聲"
     assert review.is_minor_student("我覺得今天很有收穫", 6.0) is None
     s = review.suggest_overlap({"start": 1.0, "end": 1.3}, [], None, {}, "嗯")
-    assert s["做法"] == "只留老師原聲學員消音"
+    assert s["做法"] == "不用改"
     s = review.suggest_overlap({"start": 1.0, "end": 1.3}, [], None, {}, "我想問一下這個練習")
     assert s["做法"] == "兩邊都重生成"
 

@@ -661,8 +661,8 @@ function rvMoreHtml(it) {
     const whoOpts = ['<option value="">（不知道是誰）</option>', ...rvStudents().map((n) => `<option value="${esc(n)}" ${n === it["學員說話者"] ? "selected" : ""}>${esc(rvWho(n))}</option>`)].join("");
     const ctx = (it["附近逐字稿"] || []).map((s) => `<p><b>${esc(s["說話者"])}</b> ${esc(s.text)}</p>`).join("");
     return `<div class="rv-field rv-choices">${rvRadios("rv-ovhow", opts["重疊"], how, "rv-ovhow")}</div>
-      <p class="rv-warnline" id="rv-keepwarn" ${how === "不用改" ? "" : "hidden"}>「不用改」會保留原聲：只有同意保留原聲的學員才選這個。</p>
-      <p class="rv-meta">目前成品的做法：除了「不用改」，重疊的這一小段一律消音（老師的聲音跟著靜音零點幾秒）；學員整段重念時會一起換掉。「兩邊都重生成」「只留老師」「兩邊都不留」還沒做，先照消音處理。</p>
+      <p class="rv-warnline" id="rv-keepwarn" ${how === "不用改" ? "" : "hidden"}>「不用改」會把這一小段的學員原聲留在成品：學員只是短短附和（嗯、對），或這位學員同意保留原聲才選這個。</p>
+      <p class="rv-meta">目前成品的做法：「不用改」照原樣留著；其他做法重疊的這一小段一律消音（老師的聲音跟著靜音零點幾秒），學員整段重念時會一起換掉。「兩邊都重生成」「只留老師」「兩邊都不留」還沒做，先照消音處理。</p>
       <div class="rv-field rv-choices" id="rv-arr" ${how === "兩邊都重生成" ? "" : "hidden"}>兩邊都重生成時：${rvRadios("rv-ar", opts["重疊排法"], it["排法"] || (it["建議"] || {})["排法"] || "前後排開", "rv-ar")}</div>
       <div class="rv-field rv-two"><label>老師說的<textarea id="rv-tt" rows="2">${esc(it["老師文字"])}</textarea></label>
         <label>學員說的（<select id="rv-ovwho">${whoOpts}</select>）<textarea id="rv-st" rows="2">${esc(it["學員文字"])}</textarea></label></div>

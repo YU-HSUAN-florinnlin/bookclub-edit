@@ -352,12 +352,41 @@ def _student_gender(workdir: Path, person: str, info: dict, spans: dict, table: 
     old = (table.get("舊的性別判斷") or {}).get(person)
     if old and "基頻" in old.get("依據", ""):
         return old["聲線"], old["依據"]
-    if not estimate:
-        return None, "還沒判斷"
-    f0 = estimate_student_f0(Path(workdir), spans.get(person, []))
-    if f0 is None:
+    pitch = table.setdefault("音高", {})
+    if person not in pitch:
+        if not estimate:
+            return None, "還沒判斷"
+        f0 = estimate_student_f0(Path(workdir), spans.get(person, []))
+        pitch[person] = {"hz": round(f0) if f0 else None}
+    return _gender_from_hz(pitch[person].get("hz"))
+
+
+def _gender_from_hz(hz: float | None) -> tuple[str, str]:
+    if not hz:
         return "女", "基頻估不出來，先用女聲"
-    return ("男" if f0 < MALE_F0_HZ else "女"), f"原音中位數基頻 {f0:.0f} Hz（< {MALE_F0_HZ:.0f} 算男聲）"
+    return ("男" if hz < MALE_F0_HZ else "女"), f"原音中位數基頻 {hz:.0f} Hz（< {MALE_F0_HZ:.0f} 算男聲）"
+
+
+def estimate_pitches(workdir: str | Path, log: Callable[[str], None] = print) -> dict:
+    """第 1 步段落分析完就先估每位學員的音高（09-30 宇軒：聲線看音質像不像，不看實際男女），
+    記在 `生成/學員聲線.json` 的 `音高`，第 3 步「學員是誰」打開就看得到配了哪個聲線。
+    每位取最多 60 秒原音，一位約幾秒；整份重估（學員編號重排過也不會沿用舊的）。回傳 {學員N: hz 或 None}。"""
+    workdir = Path(workdir)
+    from bookclub import turns as turns_mod
+
+    tdata = wd.read_json(turns_mod.turns_path(workdir), default={}) or {}
+    spans: dict[str, list[tuple[float, float]]] = {}
+    for t in tdata.get("段落", []):
+        if t.get("說話者") in (tdata.get("學員") or {}):
+            spans.setdefault(t["說話者"], []).append((t["start"], t["end"]))
+    table = load_voice_table(workdir)
+    table["音高"] = {}
+    for who, sp in spans.items():
+        f0 = estimate_student_f0(workdir, sp)
+        table["音高"][who] = {"hz": round(f0) if f0 else None}
+    wd.write_json(voices_path(workdir), table)
+    log(f"[學員聲音] 估好 {len(spans)} 位學員的音高")
+    return {k: v["hz"] for k, v in table["音高"].items()}
 
 
 def assign_voices(workdir: Path, students: list[str], spans: dict, people: dict | None = None,

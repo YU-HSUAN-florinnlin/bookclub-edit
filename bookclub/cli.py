@@ -263,6 +263,9 @@ def main(argv: list[str] | None = None) -> int:
             from bookclub.turns import build_turns
 
             build_turns(args.workdir, model=args.model)
+            from bookclub import students as students_mod
+
+            students_mod.estimate_pitches(args.workdir)   # 09-30：第 3 步就看得到配了哪個匿名聲線
             return 0
         print("用法：bookclub run analyze <影片> <工作區> [--roster 名冊.csv] [--sensitive 敏感詞.csv] "
               "[--exclusions 名字排除清單.csv] [--skip-overlap]")
