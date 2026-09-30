@@ -191,6 +191,34 @@ def test_generate_teacher_end_to_end_with_resume():
 
 # ---------- 插入停頓（pauses） ----------
 
+def test_content_check_failure_does_not_stop_generation():
+    """09-30：掛一整晚時 Groq 連不上，不能讓整批生成停下來——這一句標要人聽、照常往下；下次續跑只補檢查、不重新生成。"""
+    with tempfile.TemporaryDirectory() as d:
+        work = Path(d)
+        ref = work / "參考音"
+        ref.mkdir()
+        sf.write(str(ref / "ref.wav"), np.zeros(SR, dtype=np.float32), SR)
+        (ref / "ref.txt").write_text("參考音逐字稿", encoding="utf-8")
+        sentences = {"A": "這個是我們今天課程的重點之一。", "B": "我們下週見。"}
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": k, "text": v} for k, v in sentences.items()], ensure_ascii=False), encoding="utf-8")
+
+        def broken(path):
+            raise ConnectionError("連不上")
+
+        synth = FakeSynth()
+        log = tts.generate_teacher(work, sp, synth=synth, hear=broken, check_similarity=False)
+        assert [r["要人聽"] for r in log["句子"]] == [True, True] and len(synth.calls) == 2     # 兩句都生成了，沒有整批停
+        assert all(r["嘗試"][0]["內容檢查沒做成"] and not r["內容已檢查"] for r in log["句子"])
+
+        # 網路好了重跑（--redo）：聲音沿用上次生成的，只補做內容檢查
+        synth2 = FakeSynth()
+        log = tts.generate_teacher(work, sp, synth=synth2, hear=lambda p: sentences[Path(p).name.split("_")[0]],
+                                   check_similarity=False, redo=True)
+        assert synth2.calls == [] and [r["要人聽"] for r in log["句子"]] == [False, False]
+        assert all(r["內容已檢查"] for r in log["句子"])
+
+
 def _tone_s(sec):
     t = np.arange(int(sec * SR)) / SR
     return (0.3 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)

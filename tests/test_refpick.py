@@ -457,6 +457,42 @@ def test_cosine_orthogonal_vectors():
     assert abs(refpick.cosine(a, b)) < 1e-9
 
 
+def test_groq_retry_on_flaky_network():
+    """09-30：斷線、逾時、伺服器錯誤會等一下再試；試完還不行才往外丟；金鑰不對這種重試沒用的直接丟。"""
+    import httpx
+    from groq import APIConnectionError, AuthenticationError, InternalServerError
+
+    req = httpx.Request("POST", "https://example.invalid/x")
+    waits, logs = [], []
+
+    def flaky(n_fail, exc):
+        state = {"n": 0}
+
+        def call():
+            state["n"] += 1
+            if state["n"] <= n_fail:
+                raise exc
+            return {"text": "好"}
+        return call
+
+    r = refpick.groq_retry(flaky(3, APIConnectionError(request=req)), sleep=waits.append, log=logs.append)
+    assert r == {"text": "好"} and waits == list(refpick.GROQ_FLAKY_WAITS_S[:3]) and len(logs) == 3
+    waits.clear()
+    err = InternalServerError("壞了", response=httpx.Response(503, request=req), body=None)
+    try:
+        refpick.groq_retry(flaky(99, err), sleep=waits.append, log=logs.append)
+        raise AssertionError("試完還不行應該往外丟")
+    except InternalServerError:
+        assert waits == list(refpick.GROQ_FLAKY_WAITS_S)
+    waits.clear()
+    auth = AuthenticationError("金鑰不對", response=httpx.Response(401, request=req), body=None)
+    try:
+        refpick.groq_retry(flaky(1, auth), sleep=waits.append, log=logs.append)
+        raise AssertionError("金鑰不對不該重試")
+    except AuthenticationError:
+        assert waits == []
+
+
 TESTS = [obj for name, obj in list(globals().items()) if name.startswith("test_") and callable(obj)]
 
 

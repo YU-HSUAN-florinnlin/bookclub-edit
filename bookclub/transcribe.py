@@ -169,28 +169,16 @@ def _build_chunk_audio(audio: np.ndarray, segments: list[dict], out_path: Path) 
 # ---------- Groq 呼叫（429 就等重試，做法照 refpick._groq_transcribe_bytes） ----------
 
 def _groq_call_with_retry(client, filename: str, data: bytes, prompt: str) -> dict:
-    from groq import RateLimitError
+    from bookclub.refpick import groq_retry   # 09-30：429 以外，斷線、逾時、伺服器錯誤也重試
 
-    while True:
-        try:
-            return client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=(filename, data),
-                response_format="verbose_json",
-                timestamp_granularities=["word", "segment"],
-                language="zh",
-                prompt=prompt,
-            ).model_dump()
-        except RateLimitError as e:
-            wait_s = GROQ_RETRY_DEFAULT_WAIT_S
-            try:
-                retry_after = e.response.headers.get("retry-after")
-                if retry_after:
-                    wait_s = float(retry_after)
-            except Exception:
-                pass
-            print(f"[轉文字] 碰到 429（速率限制），等待 {wait_s:.0f} 秒後重試...")
-            time.sleep(wait_s)
+    return groq_retry(lambda: client.audio.transcriptions.create(
+        model="whisper-large-v3",
+        file=(filename, data),
+        response_format="verbose_json",
+        timestamp_granularities=["word", "segment"],
+        language="zh",
+        prompt=prompt,
+    ).model_dump())
 
 
 def _build_prompt(roster_names: list[str] | None) -> str:

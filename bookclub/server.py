@@ -66,6 +66,32 @@ class SecurityError(Exception):
     """路徑跳出允許範圍（工作區或資料夾根目錄）。"""
 
 
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _hostname(value: str) -> str:
+    v = (value or "").strip()
+    if v.startswith("["):            # [::1]:8766
+        return v[1:].split("]", 1)[0]
+    return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
+
+
+def request_allowed(host: str | None, origin: str | None, writes: bool) -> bool:
+    """這個請求是不是從這台電腦、這個工具自己的網頁來的（純函式，09-30）。
+
+    工具開著的時候，瀏覽器裡別的網站也能對 127.0.0.1 送請求（例如把全部學員改成保留原聲、啟動執行）。
+    - `Host` 要是本機（擋掉把別的網域指到 127.0.0.1 來讀資料的做法）
+    - 帶 `Origin` 的（瀏覽器跨站送出的一定會帶）要是本機的網頁；會改資料的請求連 `Origin: null` 也不收
+    指令列工具（curl、測試）不帶 `Origin`，照常可以用。"""
+    if host and _hostname(host) not in LOCAL_HOSTS:
+        return False
+    if origin is None or origin == "":
+        return True
+    if origin == "null":
+        return not writes
+    return (urlparse(origin).hostname or "") in LOCAL_HOSTS
+
+
 # ---------------------------------------------------------------------------
 # 路徑安全
 # ---------------------------------------------------------------------------
@@ -907,9 +933,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:
         self.do_GET()
 
+    def _from_here(self, writes: bool) -> bool:
+        if request_allowed(self.headers.get("Host"), self.headers.get("Origin"), writes):
+            return True
+        self._send_json(403, {"error": "只接受這台電腦上、這個工具自己的網頁送來的請求"})
+        return False
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path, query = parsed.path, parse_qs(parsed.query)
+        if not self._from_here(writes=False):
+            return
         try:
             if path.startswith("/api/"):
                 self._route_get_api(path, query)
@@ -1023,6 +1057,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
+        if not self._from_here(writes=True):
+            return
         try:
             length = int(self.headers.get("Content-Length", 0) or 0)
             raw = self.rfile.read(length) if length else b""

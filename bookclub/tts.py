@@ -222,6 +222,7 @@ class Attempt:
     content: float | None   # content_score；沒檢查就是 None
     similarity: float | None = None
     paused_s: float | None = None   # 照原片停頓插入空白後的長度；沒做就是 None
+    check_failed: bool = False      # 09-30：要檢查內容但沒做成（網路、Groq 有問題）→ 這一句標要人聽
 
     def content_ok(self) -> bool:
         return self.content is None or self.content >= CONTENT_MIN
@@ -243,7 +244,7 @@ class Attempt:
             "耗時秒": round(self.elapsed_s, 1),
             "倍數": round(self.elapsed_s / self.audio_s, 1) if self.audio_s else None,
             "轉回文字": self.heard, "內容相似度": self.content,
-            "內容通過": self.content_ok(),
+            "內容通過": self.content_ok(), "內容檢查沒做成": self.check_failed,
             "長度通過": self.length_ok(slot_s, tolerance),
             "聲紋相似度": self.similarity,
         }
@@ -426,8 +427,15 @@ def _run_attempt(
     audio_s = len(wav) / sr
     path = out_dir / f"{sid}_第{n}次.wav"
     _save_wav(path, wav, sr)
-    heard = hear(path) if hear else None
-    att = Attempt(seed, speed, audio_s, elapsed, heard, content_score(text, heard) if heard is not None else None)
+    heard, check_failed = None, False
+    if hear:
+        try:
+            heard = hear(path)
+        except Exception as exc:  # noqa: BLE001 — 重試完還是連不上：不要讓整晚的生成停在這裡，這一句標要人聽
+            check_failed = True
+            log(f"  ⚠️ 內容檢查沒做成（{type(exc).__name__}），這一句先標要人聽，生成照常往下")
+    att = Attempt(seed, speed, audio_s, elapsed, heard, content_score(text, heard) if heard is not None else None,
+                  check_failed=check_failed)
     if similar:
         try:
             att.similarity = similar(path)
@@ -469,7 +477,7 @@ def _finalize(
         "嘗試": [a.to_dict(i + 1, slot_s, tolerance) for i, a in enumerate(history)],
         "選定": best + 1,
         "檔案": str(chosen_path.relative_to(workdir)),
-        "要人聽": not chosen.content_ok(),
+        "要人聽": not chosen.content_ok() or chosen.check_failed,
         "內容已檢查": chosen.content is not None,
     }
     if not slot_s:
@@ -650,7 +658,18 @@ def run_generation(
         hit = cache.get(key)
         if hit and (out_dir / f"{it['id']}_第{n}次.wav").is_file():
             log(f"  第 {n} 次：沿用上次生成的檔案")
-            return Attempt(**hit)
+            att = Attempt(**hit)
+            if att.check_failed and hear:   # 上次內容檢查沒做成（網路）：聲音不用重新生成，補檢查就好
+                try:
+                    att.heard = hear(out_dir / f"{it['id']}_第{n}次.wav")
+                    att.content = content_score(it["text"], att.heard)
+                    att.check_failed = False
+                    cache[key] = att.__dict__.copy()
+                    wd.write_json(cache_path, cache)
+                    log(f"  第 {n} 次：補做內容檢查，內容 {att.content:.2f}")
+                except Exception as exc:  # noqa: BLE001
+                    log(f"  ⚠️ 補做內容檢查還是沒成（{type(exc).__name__}），維持要人聽")
+            return att
         check_stop(workdir)   # 09-30：按了停止就不再開始新的生成（已經生成的都在快取裡）
         nonlocal synth
         if synth is None:

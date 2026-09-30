@@ -126,12 +126,31 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     kept_now = set() if include_kept else {k for k, v in dec["學員聲音"].items() if v == "保留原聲"}
     tinfo = turns_mod.page_data(workdir)
     turn_who = {t["id"]: t.get("說話者") for t in tinfo.get("段落", [])} if not tinfo.get("尚未準備") else {}
+    # 09-30：生成紀錄只增不減——段落切開、合併、改時間之後，舊的重念還留在紀錄裡。只用「現在的段落排出來的」那幾筆：
+    # 編號已經不存在的不用；編號還在但時間格改過、還沒重新生成的，那一格先消音（不放舊的，也不留學員原聲）
+    try:
+        now_items, _ = students.build_items(workdir, include_kept=include_kept)
+        now_slots = {it["id"]: it["slot"] for it in now_items}
+    except FileNotFoundError:
+        now_slots = None   # 沒有段落分析（匯入的工作區）：照紀錄放
+    stale_mutes = []
     for r in st.get("句子", []):
         if r.get("學員") in kept_now:
             continue
         if turn_who and r.get("段落") in turn_who and turn_who[r["段落"]] != r.get("學員"):
             warnings.append(f"{r['id']}：段落 {r['段落']} 現在是{turn_who[r['段落']]}，舊的重念不用")
             continue
+        if now_slots is not None:
+            cur = now_slots.get(r["id"])
+            if cur is None:
+                if _in(r["slot"][0], r["slot"][1], a, b):
+                    warnings.append(f"{r['id']}：段落改過，這一筆舊的重念不用")
+                continue
+            if abs(cur[0] - r["slot"][0]) > 0.05 or abs(cur[1] - r["slot"][1]) > 0.05:
+                if _in(cur[0], cur[1], a, b):
+                    warnings.append(f"{r['id']}：時間格改過、還沒重新生成，這一格先消音（重新跑第 4 步的學員重念）")
+                    stale_mutes.append({"id": r["id"], "start": max(cur[0], a), "end": min(cur[1], b), "方式": "墊底噪"})
+                continue
         s0, s1 = r["slot"]
         if not _in(s0, s1, a, b) or not r.get("放回時間格"):
             continue
@@ -204,6 +223,7 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     mutes = [{**m, "start": max(m["start"], a), "end": min(m["end"], b)} for m in mutes]
     # 校對稿刪光、不生成的學員時間格也要消音（09-29），不然會留學員原聲
     mutes += [m for m in students.empty_chunks(workdir, a, b) if m["學員"] not in kept_now]
+    mutes += stale_mutes
     ov_marks = [m for m in marks if m["類型"] == "重疊"]
     mutes += assemble.overlap_mutes(ov_marks)   # 09-30：重疊處的學員原聲不能留在成品
     kept, w = assemble.add_local_mutes(kept, mutes, cuts)

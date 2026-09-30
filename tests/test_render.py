@@ -184,6 +184,43 @@ def test_build_decisions_mutes_overlaps():
                 os.environ["BOOKCLUB_DATA_DIR"] = old
 
 
+def test_build_decisions_ignores_outdated_student_records():
+    """09-30：生成紀錄只增不減。段落改過之後：編號不存在的舊重念不用；時間格改過還沒重新生成的，那一格先消音。"""
+    import os
+    import tempfile
+
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    import fake_workdir
+    from bookclub import students
+    from bookclub import workdir as wdmod
+
+    with tempfile.TemporaryDirectory() as root:
+        old = os.environ.get("BOOKCLUB_DATA_DIR")
+        os.environ["BOOKCLUB_DATA_DIR"] = str(Path(root) / "資料")
+        try:
+            w = fake_workdir.make(root)
+            items, _ = students.build_items(w)
+            ok, moved = items[0], items[1]
+            fitted = {"檔案": "生成/學員/x.wav", "放回做法": "補靜音", "差異比例": 0.0}
+            rec = lambda it, slot: {"id": it["id"], "學員": it["學員"], "段落": it["段落"], "slot": slot, "text": it["text"],   # noqa: E731
+                                    "聲線": "女", "放回時間格": fitted}
+            wdmod.write_json(students.log_path(w), {"句子": [
+                rec(ok, ok["slot"]),                                             # 對得上：照放
+                rec(moved, [moved["slot"][0], moved["slot"][1] + 5.0]),          # 時間格改過、還沒重新生成
+                {**rec(ok, [170.0, 175.0]), "id": "T999_01", "段落": "T999"}]})  # 段落已經不存在
+            d = render.build_decisions(w, 0.0, 180.0)
+            got = {e.get("id"): e["類型"] for e in d["動作"] if e.get("id") in (ok["id"], moved["id"], "T999_01")}
+            assert got == {ok["id"]: "學員重念", moved["id"]: "局部消音"}, got
+            m = next(e for e in d["動作"] if e.get("id") == moved["id"])
+            assert abs(m["start"] - moved["slot"][0]) < 0.05 and m["end"] <= moved["slot"][1] + 0.05
+            assert any("T999_01" in x for x in d["警告"]) and any(moved["id"] in x and "消音" in x for x in d["警告"])
+        finally:
+            if old is None:
+                os.environ.pop("BOOKCLUB_DATA_DIR", None)
+            else:
+                os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

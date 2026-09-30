@@ -188,6 +188,19 @@ def test_build_state_video_param_overrides_analysis_json():
         assert state["video"]["name"] == "新的.mp4"
 
 
+# ---------- 請求來源 ----------
+
+def test_request_allowed_only_from_this_machine_and_page():
+    ok = srv.request_allowed
+    assert ok("127.0.0.1:8766", None, True) and ok("localhost:8766", None, True)          # curl、測試：沒有 Origin
+    assert ok("127.0.0.1:8766", "http://127.0.0.1:8766", True)                           # 工具自己的網頁
+    assert ok("localhost:8766", "http://localhost:8766", True) and ok("[::1]:8766", "http://[::1]:8766", True)
+    assert not ok("127.0.0.1:8766", "https://evil.example", True)                        # 別的網站送來的
+    assert not ok("127.0.0.1:8766", "https://evil.example", False)
+    assert not ok("evil.example:8766", None, False)                                      # 別的網域指到本機
+    assert not ok("127.0.0.1:8766", "null", True) and ok("127.0.0.1:8766", "null", False)
+
+
 # ---------- /api/refs ----------
 
 def test_build_refs_returns_accepted_sorted_by_rank_with_audio_url():

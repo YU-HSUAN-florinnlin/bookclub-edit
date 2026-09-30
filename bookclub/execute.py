@@ -252,6 +252,30 @@ def _default_checks() -> dict[str, Callable]:
             "組裝": lambda w, c: render_done(w, c["標記"], c["輸出做法"])}
 
 
+def keep_awake(log: Callable[[str], None] = print):
+    """第 4 步掛著跑的時候不讓電腦睡著（09-30）。macOS 用內建的 `caffeinate`（螢幕可以關，電腦不睡）；
+    其他系統不處理（Windows／WSL 照 README 設電源選項）。回傳要在結束時呼叫的函式。"""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    if sys.platform != "darwin" or not shutil.which("caffeinate"):
+        return lambda: None
+    try:
+        p = subprocess.Popen(["caffeinate", "-i", "-m", "-s", "-w", str(os.getpid())])
+    except OSError:
+        return lambda: None
+    log("[AI 執行] 執行期間不讓電腦睡著（caffeinate），做完自動恢復")
+
+    def stop() -> None:
+        try:
+            p.terminate()
+        except OSError:
+            pass
+    return stop
+
+
 def run_execute(workdir: str | Path, *, start: float | None = None, end: float | None = None,
                 methods: list[str] | None = None, redo: bool = False, only_steps: list[str] | None = None,
                 runners: dict | None = None, checks: dict | None = None, skip_precheck: bool = False,
@@ -274,6 +298,7 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     if b <= a:
         raise ValueError("不知道影片多長，用 --end 指定到幾分幾秒")
     ctx = {"範圍": [a, b], "輸出做法": list(methods or default_methods()), "標記": tag_for(a, b)}
+    runners_given = bool(runners)
     runners = {**_default_runners(), **(runners or {})}
     checks = {**_default_checks(), **(checks or {})}
     prog = {"開始時間": _now(), "結束時間": None, "範圍": ctx["範圍"], "輸出做法": ctx["輸出做法"],
@@ -286,42 +311,46 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
 
     _clear_stop(workdir)   # 上次按的停止不算這一次
     save()
-    for key, _desc in STEPS:
-        st = prog["步驟"][key]
-        if only_steps and key not in only_steps:
-            st.update({"狀態": "略過", "訊息": "這次沒選這一步"})
-            continue
-        try:
-            check_stop(workdir)
-        except StopRequested as e:
-            return _stopped(prog, st, e, save, log)
-        done, why = checks[key](workdir, ctx)
-        if done and not redo:
-            st.update({"狀態": "跳過", "訊息": f"做過了：{why}"})
-            log(f"[AI 執行] {key}：做過了，跳過（{why}）")
+    awake_off = (lambda: None) if runners_given else keep_awake(log)   # 測試用假步驟時不用
+    try:
+        for key, _desc in STEPS:
+            st = prog["步驟"][key]
+            if only_steps and key not in only_steps:
+                st.update({"狀態": "略過", "訊息": "這次沒選這一步"})
+                continue
+            try:
+                check_stop(workdir)
+            except StopRequested as e:
+                return _stopped(prog, st, e, save, log)
+            done, why = checks[key](workdir, ctx)
+            if done and not redo:
+                st.update({"狀態": "跳過", "訊息": f"做過了：{why}"})
+                log(f"[AI 執行] {key}：做過了，跳過（{why}）")
+                save()
+                continue
+            st.update({"狀態": "進行中", "開始": _now(), "訊息": why})
             save()
-            continue
-        st.update({"狀態": "進行中", "開始": _now(), "訊息": why})
-        save()
-        log(f"[AI 執行] {key}：開始（{why}）")
-        try:
-            runners[key](workdir, ctx)
-        except StopRequested as e:
-            return _stopped(prog, st, e, save, log)
-        except Exception as e:  # noqa: BLE001 — 記下來再往外丟，網頁看得到是哪一步、什麼錯
-            st.update({"狀態": "失敗", "結束": _now(), "訊息": f"{type(e).__name__}：{e}"})
-            prog["錯誤"] = f"{key}：{type(e).__name__}：{e}"
-            prog["結束時間"] = _now()
+            log(f"[AI 執行] {key}：開始（{why}）")
+            try:
+                runners[key](workdir, ctx)
+            except StopRequested as e:
+                return _stopped(prog, st, e, save, log)
+            except Exception as e:  # noqa: BLE001 — 記下來再往外丟，網頁看得到是哪一步、什麼錯
+                st.update({"狀態": "失敗", "結束": _now(), "訊息": f"{type(e).__name__}：{e}"})
+                prog["錯誤"] = f"{key}：{type(e).__name__}：{e}"
+                prog["結束時間"] = _now()
+                save()
+                log(traceback.format_exc(limit=3))
+                raise
+            st.update({"狀態": "做完", "結束": _now()})
             save()
-            log(traceback.format_exc(limit=3))
-            raise
-        st.update({"狀態": "做完", "結束": _now()})
+            log(f"[AI 執行] {key}：做完")
+        prog["結束時間"] = _now()
         save()
-        log(f"[AI 執行] {key}：做完")
-    prog["結束時間"] = _now()
-    save()
-    log("[AI 執行] 全部做完。下一步：網頁第 5 步「成品檢查」")
-    return prog
+        log("[AI 執行] 全部做完。下一步：網頁第 5 步「成品檢查」")
+        return prog
+    finally:
+        awake_off()
 
 
 def _stopped(prog: dict, st: dict, e: Exception, save: Callable[[], None], log: Callable[[str], None]) -> dict:

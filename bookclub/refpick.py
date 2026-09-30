@@ -206,21 +206,22 @@ def _step1_extract_audio(video: Path, workdir: Path) -> tuple[Path, float]:
 
 # ---------- 步驟 2：整支轉文字 ----------
 
-def _groq_transcribe_bytes(client, filename: str, data: bytes) -> dict:
-    """呼叫 Groq whisper-large-v3，429 就等待重試；金鑰只從環境變數讀，不印出。"""
-    from groq import RateLimitError
+GROQ_FLAKY_WAITS_S = (5, 15, 30, 60, 60, 120, 120, 180)   # 斷線、逾時、伺服器錯誤：照這個間隔重試，全部約 10 分鐘
 
+
+def groq_retry(call, *, sleep=time.sleep, log=print):
+    """呼叫 Groq，暫時性的錯誤等一下再試（09-30：第 4 步掛一整晚，網路閃一下不能整批停掉）：
+
+    - 429（速率限制）：照回應說的秒數等，一直等到過（跟以前一樣）
+    - 斷線、逾時、Groq 伺服器錯誤（5xx）：照 `GROQ_FLAKY_WAITS_S` 重試，全部試完還不行才往外丟
+    - 其他錯誤（金鑰不對、檔案格式不對）：重試沒用，直接往外丟
+    `call` 是不帶參數的函式；`sleep` 測試時換成假的。"""
+    from groq import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
+
+    flaky = 0
     while True:
         try:
-            r = client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=(filename, data),
-                response_format="verbose_json",
-                timestamp_granularities=["word", "segment"],
-                language="zh",
-                prompt=FILLER_PROMPT,
-            ).model_dump()
-            return r
+            return call()
         except RateLimitError as e:
             wait_s = GROQ_RETRY_DEFAULT_WAIT_S
             try:
@@ -229,8 +230,27 @@ def _groq_transcribe_bytes(client, filename: str, data: bytes) -> dict:
                     wait_s = float(retry_after)
             except Exception:
                 pass
-            print(f"[轉文字] 碰到 429（速率限制），等待 {wait_s:.0f} 秒後重試...")
-            time.sleep(wait_s)
+            log(f"[轉文字] 碰到 429（速率限制），等待 {wait_s:.0f} 秒後重試...")
+            sleep(wait_s)
+        except (APIConnectionError, APITimeoutError, InternalServerError) as e:
+            if flaky >= len(GROQ_FLAKY_WAITS_S):
+                raise
+            wait_s = GROQ_FLAKY_WAITS_S[flaky]
+            flaky += 1
+            log(f"[轉文字] 連不上 Groq（{type(e).__name__}），{wait_s} 秒後再試（第 {flaky}／{len(GROQ_FLAKY_WAITS_S)} 次）...")
+            sleep(wait_s)
+
+
+def _groq_transcribe_bytes(client, filename: str, data: bytes) -> dict:
+    """呼叫 Groq whisper-large-v3，暫時性的錯誤等待重試（`groq_retry`）；金鑰只從環境變數讀，不印出。"""
+    return groq_retry(lambda: client.audio.transcriptions.create(
+        model="whisper-large-v3",
+        file=(filename, data),
+        response_format="verbose_json",
+        timestamp_granularities=["word", "segment"],
+        language="zh",
+        prompt=FILLER_PROMPT,
+    ).model_dump())
 
 
 def _step2_transcribe(audio_path: Path, workdir: Path) -> tuple[list[dict], list[dict], dict, float]:
