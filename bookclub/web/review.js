@@ -591,7 +591,8 @@ function rvBodyHtml(it) {
     return `<p class="rv-who">老師這一段（${esc(rvFmt(w.start, 1))}–${esc(rvFmt(w.end, 1))}）用老師的 AI 聲音重念，原本的聲音整段換掉</p>
       <div class="rv-field"><label>要念的字（名字要寫成代號；範圍內老師講的話都要寫進來，學員的話不要寫）
         <textarea id="rv-namesay" rows="2" data-auto="${esc(w["換成代號"] || "")}">${esc(w["改稿"] || w["換成代號"] || "")}</textarea></label>
-        <span class="rv-meta" id="rv-namesay-st">${w["改稿"] ? "人改過" : w["換成代號"] ? "逐字稿的字（名冊上的本名已換成代號），請對照聲音確認" : "逐字稿這段沒有字，請打上要念的字；空白的話整段會消音"}</span></div>
+        <span class="rv-meta" id="rv-namesay-st">${w["改稿"] ? "人改過" : w["換成代號"] ? "逐字稿的字（名冊上的本名已換成代號），請對照聲音確認" : "逐字稿這段沒有字，請打上要念的字；空白的話整段會消音"}</span>
+        ${w["實際會念"] ? `<p class="rv-warnline">文字裡還有名冊上的名字，生成時會自動換成代號。實際會念：${esc(w["實際會念"])}</p>` : ""}</div>
       <p class="rv-meta">這一段不用重念、要保留老師原聲：按「不用改，保留老師原聲」。</p>`;
   }
   if (t === "名字") {
@@ -600,7 +601,8 @@ function rvBodyHtml(it) {
       ${w ? `<p class="rv-note">整句換掉（${esc(rvFmt(w.start, 1))}–${esc(rvFmt(w.end, 1))}）的原文：${esc(w["原文"])}</p>
         <div class="rv-field"><label>老師 AI 聲音要重念的句子（逐字稿漏了名字、名字講了兩次，直接在這裡改；改過時間的話，範圍內講的話都要寫進來）
           <textarea id="rv-namesay" rows="2" data-auto="${esc(w["換成代號"] || "")}">${esc(w["改稿"] || w["換成代號"] || w["原文"])}</textarea></label>
-          <span class="rv-meta" id="rv-namesay-st">${w["改稿"] ? "人改過" : w["換成代號"] ? "自動換好的" : "句子裡找不到比對到的字，要人改"}</span></div>` : ""}
+          <span class="rv-meta" id="rv-namesay-st">${w["改稿"] ? "人改過" : w["換成代號"] ? "自動換好的" : "句子裡找不到比對到的字，要人改（把名字改成代號才能通過）"}</span>
+          ${w["實際會念"] ? `<p class="rv-warnline">句子裡還有名冊上的名字，生成時會自動換成代號。實際會念：${esc(w["實際會念"])}</p>` : ""}</div>` : ""}
       <p class="rv-meta">代號 ${esc(it["代號"] || "（沒有）")}${it["信心"] === "低" ? "　低信心，先聽清楚是不是名字" : ""}</p>`;
   }
   if (t === "重疊") {
@@ -621,7 +623,8 @@ function rvBindBody(it) {
   const say = document.getElementById("rv-namesay");   // 09-29：名字整句的重念稿
   if (say) say.addEventListener("blur", async () => {
     const v = say.value.trim();
-    const txt = v === (say.dataset.auto || "").trim() ? "" : v;
+    const same = v === (say.dataset.auto || "").trim() || (!it["老師整段"] && v === ((it["整句"] || {})["原文"] || "").trim());
+    const txt = same ? "" : v;   // 沒改（還是原文）不算人改過：原文裡可能還有本名
     if (txt === ((it["整句"] || {})["改稿"] || "")) return;
     await apiPost("/api/review/name", { id: it.id, "改稿": txt });
     if (it["整句"]) it["整句"]["改稿"] = txt;
@@ -859,7 +862,15 @@ async function rvPass() {
       it["校對稿"] = it["建議稿"] = text;
       it["換過的字"] = [];
     } else if (rvIsName(t)) {
-      await apiPost(t === "名字" ? "/api/review/name" : "/api/review/stuname", { id: it.id, "做法": it["做法"], "已確認": !undo });
+      const body = { id: it.id, "做法": it["做法"], "已確認": !undo };
+      const say = document.getElementById("rv-namesay");   // 09-30：要重念的句子跟通過一起存（不然剛改的字還沒存到就先檢查了）
+      if (t === "名字" && say && !undo) {
+        const v = say.value.trim();
+        const same = v === (say.dataset.auto || "").trim() || v === ((it["整句"] || {})["原文"] || "").trim();
+        body["改稿"] = same ? "" : v;   // 沒改（還是原文）不算人改過：原文裡可能還有本名
+        if (it["整句"]) it["整句"]["改稿"] = body["改稿"];
+      }
+      await apiPost(t === "名字" ? "/api/review/name" : "/api/review/stuname", body);
     } else if (t === "重疊") {
       const how = rvChosen(it);
       const ar = it["排法"] || (it["建議"] || {})["排法"] || "前後排開";

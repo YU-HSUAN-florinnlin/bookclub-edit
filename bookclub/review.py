@@ -458,6 +458,7 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     ordered = sorted(sents, key=lambda s: s["start"])
     pos = {s["id"]: k for k, s in enumerate(ordered)}
     items = []
+    table = replace_table(workdir)
     cands = effective_name_candidates(workdir, result.get("candidates", []), decisions)
     for i, c in enumerate(cands, start=1):
         cid = str(c.get("id") or i)
@@ -481,6 +482,10 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
         if c.get("老師整段"):
             sentence = c.get("整段文字", "")
             whole = {"start": c["start"], "end": c["end"], "原文": sentence, "換成代號": sentence, "改稿": d.get("改稿", "")}
+        if whole:   # 09-30：生成前還會再過一次名冊換代號（`nameplan.compute_plan`）；跟畫面上的字不一樣時讓人看得到
+            shown = whole["改稿"] or whole["換成代號"] or ""
+            said, _ch = replace_real_names(shown, table)
+            whole["實際會念"] = said if shown and said != shown else ""
         items.append({
             "類型": "名字", "id": cid, "start": c["start"], "end": c["end"],
             "sentence_html": _highlight_sentence(sentence, c.get("matched_text", ""), c.get("位置", "")),
@@ -794,6 +799,18 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
                 d.pop("改稿", None)
         d["更新時間"] = _now()
         wd.write_json(name_decisions_path(workdir), decisions)
+    if fields.get("已確認"):
+        # 09-30：按了通過，但這一筆其實處理不了（句子裡找不到名字、換不了代號）→ 成品會照原聲念出名字。擋下來
+        from bookclub import nameplan
+
+        stuck = next((m for m in nameplan.compute_plan(workdir)["要人處理"] if str(m["候選"]) == cid), None)
+        if stuck:
+            with _lock:
+                decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
+                decisions.setdefault(cid, d)["已確認"] = False
+                wd.write_json(name_decisions_path(workdir), decisions)
+            raise ValueError(f"這一筆還不能通過：{stuck['原因']}。先在卡片上把「老師 AI 聲音要重念的句子」改好（名字寫成代號），"
+                             "或在「改做法」選直接消音。不處理的話，成品會照原聲念出名字。")
     added = removed = False
     is_not_name = any(t in ("是地名", "不是名字") for t in d.get("tags", []))
     if "tags" in fields and is_not_name != was_not_name:

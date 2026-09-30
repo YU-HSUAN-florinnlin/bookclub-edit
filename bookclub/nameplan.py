@@ -145,10 +145,12 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         # 名字只在原本那一段裡換（避免換到前後段同音的字），再接成整句
         texts = item["_texts"] if item else {g["id"]: g["text"] for g in group}
         new = replace_name(texts[sid], c)
-        if new is None:
+        edited = (d.get("改稿") or "").strip()
+        if new is None and not edited:
             manual.append({"候選": i, "原因": "句子裡找不到比對到的字，無法自動換成代號"})
             continue
-        texts[sid] = new
+        if new is not None:     # 找不到字但人已經改好要念的句子（09-30）：照人改的念，不算「要人處理」
+            texts[sid] = new
         full = "".join(texts[g["id"]] for g in group)
         lo = min(group[0]["start"], c["start"])   # 名字本身一定包進時間格（句首的字可能比句子早開始）
         hi = max(group[-1]["end"], c["end"])
@@ -288,6 +290,11 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
             tdata = turns_mod.page_data(workdir)
             turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
             add_overlap_items(plan, picks, sentences, teacher_by_turns(turns))
+    # 09-30：最後一道保險——老師要念的每一句再過一次名冊（本名、其他寫法、敏感詞 → 代號），
+    # 同一句裡的第二個名字、人改稿時漏掉的也會換（卡片上看得到「實際會念」）
+    table = review.replace_table(workdir)
+    for g in plan["生成"]:
+        g["text"], _changes = review.replace_real_names(g["text"], table)
     if only:
         plan["略過"] = [s for s in plan["略過"] if s["候選"] in set(only)]
         plan["只處理"] = sorted(set(only))

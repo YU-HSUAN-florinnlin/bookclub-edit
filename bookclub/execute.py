@@ -126,6 +126,22 @@ def precheck(workdir: str | Path) -> dict:
     if lack_codes:
         missing.append(f"有 {len(lack_codes)} 個名字這一集還沒選英文代號：第 3 步開始前 ②（學員）或 ③（其他名稱）選好，"
                        "或按「幫還沒代號的自動配」")
+    # 09-30：老師提到名字裡有「換不了代號」的（句子裡找不到名字），不處理的話成品會照原聲念出名字 → 不能開始
+    if wd.read_json(wd.names_path(workdir), default=None):
+        from bookclub import nameplan
+
+        try:
+            stuck = nameplan.compute_plan(workdir)["要人處理"]
+        except Exception:  # noqa: BLE001 — 排不出計畫的話，生成那一步會講清楚
+            stuck = []
+        if stuck:
+            names = wd.read_json(wd.names_path(workdir), default={}) or {}
+            decisions = wd.read_json(review.name_decisions_path(workdir), default={}) or {}
+            cands = review.effective_name_candidates(workdir, names.get("candidates", []), decisions)
+            when = {str(c.get("id") or i): c["start"] for i, c in enumerate(cands, start=1)}
+            where = "、".join(wd.fmt_time(when[str(m["候選"])]) for m in stuck if str(m["候選"]) in when)
+            missing.append(f"老師提到名字有 {len(stuck)} 筆還處理不了（{where}）：句子裡找不到名字、換不了代號，成品會照原聲念出來。"
+                           "在第 3 步那一筆的卡片上改好要重念的句子，或改成直接消音")
     dec = review.load_decisions(workdir)
     if not any(dec["開始前確認"].values()):
         notes.append("第 3 步還沒覆核：照第 1 步的建議做（名字整句換掉、學員全部重念、建議刪除的段落不刪）")

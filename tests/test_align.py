@@ -216,6 +216,37 @@ def test_manual_add_and_edit_every_kind():
     assert not [x for x in nameplan.compute_plan(w)["生成"] if "NM002" in x["候選"]]
 
 
+def test_name_that_cannot_be_replaced_blocks_pass_and_start():
+    """09-30：句子裡找不到名字、換不了代號的那一筆，不處理的話成品會照原聲念出名字：
+    不能按通過、第 4 步不能開始；人把要念的句子改好（或改成直接消音）就可以。"""
+    from bookclub import execute
+
+    w = _fresh()
+    r = review.manual_edit(w, {"類型": "名字", "start": 84.12, "end": 84.8, "代號": "Tom", "名字": "逐字稿沒有的字"})
+    nid = r["id"]
+    assert any(str(m["候選"]) == nid for m in nameplan.compute_plan(w)["要人處理"])
+    try:
+        review.save_name(w, nid, {"已確認": True})
+        raise AssertionError("處理不了的名字不該能通過")
+    except ValueError as e:
+        assert "還不能通過" in str(e)
+    assert not _items(w)[f"名字:{nid}"]["已確認"]
+    pre = execute.precheck(w)
+    assert any("還處理不了" in m and "1:24" in m for m in pre["缺"]), pre["缺"]
+    # 人把要念的句子改好：照人改的念，可以通過、可以開始
+    review.save_name(w, nid, {"改稿": "Tom說的第21句，", "已確認": True})
+    plan = nameplan.compute_plan(w)
+    assert not plan["要人處理"] and next(g for g in plan["生成"] if nid in g["候選"])["text"] == "Tom說的第21句，"
+    assert _items(w)[f"名字:{nid}"]["已確認"] and not any("還處理不了" in m for m in execute.precheck(w)["缺"])
+    # 改成直接消音也可以
+    review.save_name(w, nid, {"改稿": "", "做法": "直接消音", "已確認": True})
+    assert not nameplan.compute_plan(w)["要人處理"]
+    # 老師要念的句子生成前再過一次名冊：人改稿裡漏掉的本名會換成代號，卡片上看得到實際會念什麼
+    review.save_name(w, nid, {"做法": "整句換掉", "改稿": "小美說的第21句，"})
+    assert next(g for g in nameplan.compute_plan(w)["生成"] if nid in g["候選"])["text"] == "Amy說的第21句，"
+    assert _items(w)[f"名字:{nid}"]["整句"]["實際會念"] == "Amy說的第21句，"
+
+
 def test_bad_input_rejected():
     w = _fresh()
     for f in ({"類型": "亂寫", "start": 1, "end": 2}, {"類型": "刪除段落", "start": 5, "end": 4},
