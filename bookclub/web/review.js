@@ -152,7 +152,7 @@ async function renderReview() {
   rv.video = document.getElementById("rv-video");
   if (rv.video) rvBindVideo();
   document.getElementById("rv-goto").addEventListener("keydown", (e) => {
-    if (e.key !== "Enter") return;
+    if (e.key !== "Enter" || e.isComposing) return;
     e.preventDefault();
     const t = rvParseTime(e.target.value);
     e.target.classList.toggle("bad", t == null);
@@ -1336,7 +1336,7 @@ function rvRenderIO() {
       if (t != null) rvEdSet(w, t, false);
     };
     box.addEventListener("change", take);
-    box.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); take(); } });
+    box.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); e.stopPropagation(); take(); } });
   }
   el.querySelectorAll("[data-now]").forEach((b) => b.addEventListener("click", () => rvEdSet(b.dataset.now, rv.video ? rv.video.currentTime : null)));
   el.querySelectorAll("[data-nudge]").forEach((b) => b.addEventListener("click", () => {
@@ -1473,6 +1473,8 @@ function rvStartTimeTracking() {
 
 document.addEventListener("keydown", (e) => {
   if (currentRouteId() !== "step3" || !rv.data) return;
+  // 09-30 宇軒：中文輸入法選字按的 Enter 不算快捷鍵（以前會被當成「通過」，卡片重畫後游標跑掉，再按 ↓ 就跳到下一筆）
+  if (e.isComposing || e.keyCode === 229) return;
   if (document.querySelector("dialog[open]")) return;   // 確認視窗開著時，快捷鍵不作用
   rv.lastActivity = Date.now();
   const tag = e.target.tagName;
