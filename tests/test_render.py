@@ -171,7 +171,7 @@ def test_build_decisions_mutes_overlaps():
             page = review.page_data(w)
             its = {i["id"]: i for i in page["項目"] if i["類型"] == "重疊"}
             assert its["O78.00"]["老師整句"]["原文"] and its["O69.60"]["老師整句"] is None
-            assert "兩邊都重生成" not in page["選項"]["重疊"]
+            assert "兩邊都不留" not in page["選項"]["重疊"]
 
             # 人選「不用改」→ 原樣保留、不消音
             review.save_overlap(w, "O69.60", {"做法": "不用改"})

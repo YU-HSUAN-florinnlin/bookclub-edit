@@ -231,8 +231,48 @@ async function renderExecute() {
   await renderExecuteBody();
 }
 
+// 10-01 宇軒 7-5：按「開始執行」之前的總檢查（一定要處理／請看一眼），每一列可以跳過去聽
+function fcTime(t) { const m = Math.floor(t / 60), s = t - m * 60; return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`; }
+
+function finalCheckHtml(fc) {
+  const row = (r) => `<tr><td class="nowrap">${esc(fcTime(r.start))}–${esc(fcTime(r.end))}</td><td>${esc(r["說明"])}</td>
+    <td class="nowrap"><button class="secondary small" data-fcplay="${r.start}|${r.end}">跳過去聽</button>
+    ${r["可以按聽過"] ? `<label class="nowrap"><input type="checkbox" data-fcheard="${esc(r.key)}" ${r["已按聽過"] ? "checked" : ""}> 我聽過了，這裡沒有學員的聲音</label>` : ""}</td></tr>`;
+  const m = fc["摘要"] || {};
+  const must = fc["一定要處理"] || [], look = fc["請看一眼"] || [];
+  return `<h2>開始前總檢查</h2>
+    <div class="card">
+      <p><b>一定要處理</b>（有任何一列還沒處理就不能開始）：${must.length ? `${fc["還要處理"]} 列還沒處理` : "沒有"}</p>
+      ${must.length ? `<table class="kv">${must.map(row).join("")}</table>
+        <p class="muted">要改的回第 3 步改；改完這一頁會重算。</p>` : ""}
+      <p><b>請看一眼</b>（不擋，但要按一次「我看過了」）</p>
+      ${look.length ? `<table class="kv">${look.map(row).join("")}</table>` : "<p class=\"muted\">沒有剪掉、消音、超過 10 秒的老師重念。</p>"}
+      <p class="muted">自動算處理好的（被別筆涵蓋）：${(m["自動算處理好"] || []).length} 筆
+        ${(m["自動算處理好"] || []).length ? `<details><summary>展開</summary>${m["自動算處理好"].map((x) => `${esc(fcTime(x.start))} 由〈${esc(x["涵蓋"])}〉涵蓋`).join("<br>")}</details>` : ""}</p>
+      <p class="muted">要生成約 ${Math.round((m["要生成秒數"] || 0) / 60)} 分鐘的聲音，預估 ${((m["預估秒數"] || 0) / 3600).toFixed(1)} 小時（含組裝約 21 分鐘）；硬碟可用 ${m["硬碟可用GB"]} GB。${esc(m["提醒"] || "")}</p>
+      <label><input type="checkbox" id="fcSeen" ${fc["看過"] ? "checked" : ""}> 我看過了</label>
+      <audio id="fcAudio" preload="none"></audio>
+    </div>`;
+}
+
+function bindFinalCheck(reload) {
+  document.querySelectorAll("[data-fcplay]").forEach((b) => b.addEventListener("click", () => {
+    const [a, e] = b.dataset.fcplay.split("|").map(Number);
+    const au = document.getElementById("fcAudio");
+    au.src = `/api/audio?start=${Math.max(0, a - 1).toFixed(2)}&end=${(e + 1).toFixed(2)}`;
+    au.play();
+  }));
+  document.querySelectorAll("[data-fcheard]").forEach((c) => c.addEventListener("change", async () => {
+    await apiPost("/api/execute/finalcheck", { key: c.dataset.fcheard, "聽過": c.checked }); await reload();
+  }));
+  const seen = document.getElementById("fcSeen");
+  if (seen) seen.addEventListener("change", async () => { await apiPost("/api/execute/finalcheck", { "看過": seen.checked }); await reload(); });
+}
+
 async function renderExecuteBody() {
   const d = await apiGet("/api/execute");
+  let fc = null;
+  try { if (!d.running) fc = await apiGet("/api/execute/finalcheck"); } catch (e) { fc = null; }
   const pre = d["前置檢查"];
   const prog = d["進度"] || {};
   const rows = execStepRows(d);
@@ -249,6 +289,7 @@ async function renderExecuteBody() {
     ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
     <h2>要修改的項目</h2>
     <div class="card" id="execStats">${execStatsHtml(d)}</div>
+    ${fc ? finalCheckHtml(fc) : ""}
     <h2>執行步驟</h2>
     <div class="card"><table class="kv exec">
       <thead><tr><th style="text-align:left">步驟</th><th style="text-align:left">狀態</th><th style="text-align:left">說明</th></tr></thead>
@@ -261,7 +302,8 @@ async function renderExecuteBody() {
         <label>到 <input type="text" id="exEnd" class="short" placeholder="${esc(d["影片長度"] ? fmtRange([0, d["影片長度"]]).split("–")[1] : "結尾")}"></label>
         <label>輸出做法 <select id="exMethod">${["hw", "sw", "smart"].map((m) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${{ hw: "硬體編碼（Mac）", sw: "軟體編碼", smart: "只重做有動到的片段" }[m]}</option>`).join("")}</select></label>
       </div>
-      <button id="btnExec" ${running || !pre["可以開始"] ? "disabled" : ""}>${running ? "執行中…" : "開始執行"}</button>
+      <button id="btnExec" ${running || !pre["可以開始"] || (fc && (!fc["可以開始"] || !fc["看過"])) ? "disabled" : ""}>${running ? "執行中…" : "開始執行"}</button>
+      ${fc && !running && (!fc["可以開始"] || !fc["看過"]) ? `<span class="muted">先處理上面「開始前總檢查」${fc["可以開始"] ? "，按「我看過了」" : "一定要處理的列"}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
       <span class="muted" id="execEta">${execEtaText(d)}</span>
       ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「開始執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
@@ -274,6 +316,7 @@ async function renderExecuteBody() {
       <div class="card"><p class="muted">「一鍵只重做這幾筆」還沒做好：目前要照每一筆下面的指令，在終端機一筆一筆重做，再按「開始執行」重新組裝。</p>
       <table class="kv">${redo.map((it) => `<tr><td>${esc(it["類型"])}　${esc((it["覆核項目"] || []).join("、") || "—")}</td>
         <td>${esc(it["原因"])}<div class="muted"><code>${esc(it["建議指令"])}</code></div></td></tr>`).join("")}</table></div>` : ""}`;
+  bindFinalCheck(renderExecuteBody);
   document.getElementById("btnExec").addEventListener("click", async () => {
     const body = { start: document.getElementById("exStart").value.trim() || null, end: document.getElementById("exEnd").value.trim() || null,
       methods: [document.getElementById("exMethod").value] };

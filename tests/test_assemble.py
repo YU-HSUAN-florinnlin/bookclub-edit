@@ -365,6 +365,16 @@ def test_stacked_pair_both_kept_in_edl():
     assert assemble.stackable(a, {**a}) and not assemble.stackable(a, {**a, "重疊": "O2"})
 
 
+def test_plan_falls_back_to_word_text_when_sentence_spelled_differently():
+    """17 號 2-7：找名字掃的是逐字時間的字；句子文字寫法不一樣時，改用逐字時間的字換代號。"""
+    sents = {"L1": {"id": "L1", "start": 0.0, "end": 3.0, "text": "我們請曉美分享。"}}
+    words = _words([("我們", 0.0, 0.5), ("請", 0.5, 0.8), ("小美", 0.8, 1.2), ("分享。", 1.2, 2.0)])
+    c = _cand(0.8, 1.2, "整句換掉", sid="L1", matched="小美", name="小美", canonical="小美")
+    assert nameplan.build_plan([c], {}, sents)["要人處理"]               # 沒有逐字時間：照舊要人處理
+    plan = nameplan.build_plan([c], {}, sents, words=words)
+    assert not plan["要人處理"] and plan["生成"][0]["text"] == "我們請Amy分享。" and plan["生成"][0]["範圍"] == "逐字"
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0

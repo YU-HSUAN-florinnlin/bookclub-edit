@@ -29,9 +29,11 @@ NAME_DECISIONS_FILE = "名字覆核決定.json"     # 跟 server.py、nameplan.p
 
 OVERLAP_HOWS = ("不用改", "兩邊都重生成", "只留老師", "只留老師原聲學員消音", "只留學員", "兩邊都不留")
 OVERLAP_ARRANGE = ("前後排開", "照原位置疊著")
+OVERLAP_LABEL = {"只留老師": "生成老師聲音", "只留學員": "生成學員聲音", "只留老師原聲學員消音": "消音",
+                 "兩邊都重生成": "兩邊都重新生成"}   # 畫面上的名稱（跟 review.js 的 RV_HOW_LABEL 一致）
 # 第 3 步顯示的選項（09-30 宇軒）：重疊幾乎都是零點幾秒的短回應，學員那邊本來就會跟著整段重念，
 # 「兩邊都重生成」「兩邊都不留」不顯示（舊的決定選過的照樣認得）。畫面上的名稱見 review.js 的 RV_HOW_LABEL
-OVERLAP_SHOWN = ("不用改", "只留老師", "只留學員", "只留老師原聲學員消音")
+OVERLAP_SHOWN = ("不用改", "只留老師", "只留學員", "兩邊都重生成", "只留老師原聲學員消音")   # 10-01：加回「兩邊都重生成」（只做照原本的時間）
 NAME_HOWS = ("整句換掉", "只換名字", "直接消音")
 NAME_TAGS = ("不是名字", "是地名", "切點削到旁邊的字")
 MUTE_WAYS = ("墊底噪", "霧化")
@@ -393,6 +395,74 @@ def overlap_choices(workdir: str | Path, voices: dict | None = None) -> list[dic
     return out
 
 
+def coverers(workdir: Path, dec: dict, turns: list[dict]) -> list[dict]:
+    """會把原聲換掉的範圍（10-01 7-4）：學員重念的時間格、老師重念的範圍、剪掉的片段。
+    每一筆帶 `已通過`（蓋住別人的那一筆自己通過了，被蓋住的才算處理好）與畫面上的名稱。"""
+    from bookclub import nameplan, students
+
+    out = []
+    tmap = {t["id"]: t for t in turns}
+    try:
+        items, _ = students.build_items(Path(workdir))
+    except FileNotFoundError:
+        items = []
+    for it in items:
+        a, b = it["slot"]
+        if it.get("重疊"):
+            out.append({"類型": "學員重念", "id": it["id"], "名稱": f"重疊 {wd.fmt_time(a)} 的學員那一句", "start": a, "end": b,
+                        "已通過": bool(dec["重疊"].get(it["重疊"], {}).get("已確認")), "重疊": it["重疊"]})
+        else:
+            out.append({"類型": "學員段落", "id": it["段落"], "名稱": f"學員段落 {wd.fmt_time(tmap.get(it['段落'], it).get('start', a))}",
+                        "start": a, "end": b, "已通過": bool(tmap.get(it["段落"], {}).get("已確認"))})
+    try:
+        plan = nameplan.compute_plan(Path(workdir))
+    except Exception:  # noqa: BLE001 — 排不出老師的計畫（例如還沒有名字候選）：只看學員段落與剪掉的片段
+        plan = {"生成": []}
+    nd = wd.read_json(name_decisions_path(Path(workdir)), default={}) or {}
+    for g in plan["生成"]:
+        ok = all((nd.get(str(c)) or {}).get("已確認") for c in g.get("候選", [])) \
+            and all(dec["重疊"].get(o, {}).get("已確認") for o in g.get("重疊項目", []))
+        out.append({"類型": "老師重念", "id": g["id"], "名稱": f"老師重念 {wd.fmt_time(g['slot'][0])}",
+                    "start": g["slot"][0], "end": g["slot"][1], "已通過": ok, "重疊項目": g.get("重疊項目", [])})
+    for c in dec["刪除段落"]:
+        if c.get("狀態") != "還原":
+            out.append({"類型": "剪掉的片段", "id": c["id"], "名稱": f"剪掉的片段 {wd.fmt_time(c['start'])}",
+                        "start": c["start"], "end": c["end"], "已通過": True})
+    return out
+
+
+def overlap_cover(o: dict, oid: str, covs: list[dict]) -> tuple[dict | None, dict | None]:
+    """這一處重疊被哪一筆涵蓋（純函式）：(已通過的那一筆, 還沒通過的那一筆)。"""
+    from bookclub import assemble
+
+    done = assemble.find_cover(o["start"], o["end"], [k for k in covs if k["已通過"]], oid)
+    wait = None if done else assemble.find_cover(o["start"], o["end"], covs, oid)
+    return done, wait
+
+
+def covered_overlaps(workdir: Path, dec: dict, turns: list[dict]) -> list[dict]:
+    """只讀：哪幾處重疊自動算處理好（被已通過的那一筆涵蓋）。開始前總檢查用（不寫任何檔）。"""
+    from bookclub import overlap as overlap_mod
+
+    ov = wd.read_json(wd.overlap_path(Path(workdir)), default=None) or {"overlaps": []}
+    overlap_mod.apply_simple_filters(ov)
+    covs = coverers(Path(workdir), dec, turns)
+    out = []
+    for o in effective_overlaps(Path(workdir), ov.get("overlaps", []), dec):
+        oid = overlap_id(o)
+        if o.get("已自動跳過") and not dec["重疊"].get(oid, {}).get("救回"):
+            continue
+        done, _wait = overlap_cover(o, oid, covs)
+        if done:
+            out.append({"id": oid, "start": o["start"], "end": o["end"], "涵蓋": _cover_info(done)})
+    return out
+
+
+def _cover_info(k: dict) -> dict:
+    return {"類型": k["類型"], "id": k["id"], "名稱": k["名稱"], "start": round(k["start"], 3), "end": round(k["end"], 3),
+            "重疊項目": k.get("重疊項目") or []}
+
+
 ALIGN_KEYS = ("標的起訖", "對齊", "對齊到")
 
 
@@ -508,6 +578,9 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
         whole = None
         if group:   # 10-01：重念範圍跟 nameplan.build_plan 同一個算法（整句太長只重念名字那一小句、人改過的照人改的）
             ws = nameplan.whole_slot(c, d, group, words)
+            if not ws["範圍"] and replaced is None and words and \
+                    nameplan.replace_name(nameplan.range_words(words, ws["start"], ws["end"]), c) is not None:
+                ws["範圍"] = "逐字"   # 跟 nameplan.build_plan 一樣：句子裡找不到，改用逐字時間的字（17 號 2-7）
             if ws["範圍"]:
                 whole_text = nameplan.range_words(words, ws["start"], ws["end"])
                 replaced = nameplan.replace_name(whole_text, c)
@@ -596,7 +669,8 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
 
     # 時間軸色帶：老師（灰）、學員、冥想導讀（淡藍）
     bands = [{"start": t["start"], "end": t["end"], "說話者": t["說話者"],
-              "冥想導讀": t.get("內容類型") in CALM_KINDS, "id": t["id"]} for t in turns]
+              "冥想導讀": t.get("內容類型") in CALM_KINDS, "id": t["id"],
+              "人改成老師": t["說話者"] == "老師" and bool(t.get("說話者是人改的"))} for t in turns]
     if not bands and sents:   # 還沒有段落分析：用逐句判斷畫
         bands = [{"start": s["start"], "end": s["end"], "說話者": "老師" if s.get("label") == "老師" else "學員?",
                   "冥想導讀": False, "id": s["id"]} for s in sents]
@@ -606,7 +680,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     cut_ranges = [(c["start"], c["end"]) for c in dec["刪除段落"] if c.get("狀態") != "還原"]
 
     def skip_reason(a: float, b: float) -> str | None:
-        return "落在確認刪除的段落裡" if _in_ranges(a, b, cut_ranges) else None
+        return "落在剪掉的片段裡（聲音和畫面都拿掉）" if _in_ranges(a, b, cut_ranges) else None
 
     # 09-29 宇軒：只在確認刪除的段落（結尾道別等）裡講話的學員，不用判斷是誰（① 建議刪除段落選了「刪除」才算）
     will_cut = cut_ranges + [(sg["start"], sg["end"]) for sg in suggestions
@@ -618,8 +692,16 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     words = roster_words()
     table = replace_table(workdir)
     items: list[dict] = []
+    cut_from = {c["來源段落"]: c for c in dec["刪除段落"] if c.get("來源段落") and c.get("狀態") != "還原"}
     for k, t in enumerate(turns):
         if t["說話者"] == "老師":
+            if t.get("說話者是人改的"):   # 10-01 2-3：人改成老師的段落照樣列出來（看得到、改得回來），不擋進度
+                items.append({"類型": "改成老師", "id": t["id"], "序": k + 1, "start": t["start"], "end": t["end"],
+                              "原文": t.get("原文", ""), "校對稿": t.get("校對稿", ""), "說話者": "老師",
+                              "已確認": False, "人工新增": bool(t.get("人工新增")), **_align_info(t),
+                              "建議": {"做法": "保留老師原聲", "原因": "你把這一段改成老師：照原聲留著。要改回學員、改時間、"
+                                                            "或改成老師 AI 重念，在「改做法」裡選"},
+                              "不用處理": "改成老師（原聲），不用處理"})
             continue
         draft, changes = (t["校對稿"], []) if t["已確認"] else replace_real_names(t["校對稿"], table)
         keep = voices.get(t["說話者"]) == "保留原聲"
@@ -639,9 +721,15 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                       "建議": {"做法": "通過", "原因": why},
                       "短句保留": bool(t.get("短句保留")),
                       "不用處理": "保留原聲，不用校對逐字稿" if keep else skip_reason(t["start"], t["end"])})
-        minor = None if (keep or items[-1]["不用處理"] or t.get("短句保留")) else is_minor_student(draft, t["end"] - t["start"])
-        if minor:   # 09-29 宇軒：不重要的短句預設剪掉（生成聲音反而花時間）；按通過＝刪除這段
-            items[-1]["建議"] = {"做法": "刪除這段", "原因": f"不重要的短句（{minor}）：預設刪掉、省生成時間；要留下在「改做法」選「學員整句生成」"}
+        if t["id"] in cut_from:   # 10-01 2-4：從這一段「通過＝剪掉」產生的剪掉片段，卡片上可以取消
+            items[-1]["剪掉的片段"] = cut_from[t["id"]]["id"]
+        # 10-01 2-4：人剛新增、剛切出來的段落不建議剪掉（人是特地標的）
+        by_hand = t.get("人工新增") or t.get("手動標記") or "人工" in str(t.get("換人依據") or "")
+        minor = None if (keep or items[-1]["不用處理"] or t.get("短句保留") or by_hand) \
+            else is_minor_student(draft, t["end"] - t["start"])
+        if minor:   # 09-29 宇軒：不重要的短句預設剪掉（生成聲音反而花時間）；按通過＝剪掉這段
+            items[-1]["建議"] = {"做法": "刪除這段", "原因": f"不重要的短句（{minor}）：預設剪掉（聲音和畫面都拿掉，影片會變短）、"
+                                                   "省生成時間；要留下在「改做法」選「學員整句生成」"}
     for it in _names_items(workdir, sents):
         cut_hint = f"；第 1 步切點分析建議：{it['建議做法']}" if it.get("建議做法") and it["建議做法"] != nameplan_whole() else ""
         it["建議"] = {"做法": nameplan_whole(), "原因": "預設整句用老師 AI 聲音重念、名字換成代號（09-25 定案）" + cut_hint}
@@ -661,6 +749,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     if ov is None and dec["人工重疊"]:
         ov = {"overlaps": []}
     skipped = []
+    covs, cover_seen, cover_gone = None, {}, {}
     if ov is not None:
         from bookclub import nameplan
 
@@ -677,6 +766,13 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                 continue
             defaults = _overlap_defaults(o, sents, turns)
             who = d.get("學員說話者", defaults["學員說話者"])
+            if covs is None:
+                covs = coverers(workdir, dec, turns)
+            cov, cov_wait = overlap_cover(o, oid, covs)
+            if cov:
+                cover_seen[oid] = _cover_info(cov)
+            elif d.get("涵蓋於"):
+                cover_gone[oid] = d["涵蓋於"]
             grp = nameplan.overlap_sentence(o, ordered_sents, is_teacher)   # 選「生成老師聲音」時要重念的老師整句
             items.append({"類型": "重疊", **base, **defaults,
                           "老師整句": {"start": grp[0]["start"], "end": grp[-1]["end"], "原文": "".join(g["text"] for g in grp),
@@ -688,7 +784,14 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                           "備註": d.get("備註", ""), "已確認": bool(d.get("已確認")), "救回": bool(d.get("救回")),
                           "人工新增": bool(o.get("人工新增")), **_align_info(o),
                           "建議": suggest_overlap(o, turns, who, voices, d.get("學員文字", defaults["學員文字"])),
-                          "不用處理": skip_reason(o["start"], o["end"])})
+                          "不用處理": skip_reason(o["start"], o["end"]),
+                          # 10-01 7-4：整個落在別筆（已通過的）換聲音的範圍裡 → 自動算處理好
+                          "涵蓋": cover_seen.get(oid), "涵蓋待通過": _cover_info(cov_wait) if cov_wait else None,
+                          "涵蓋消失": cover_gone.get(oid),
+                          "學員已選": bool(d.get("學員說話者")),
+                          **overlap_sides(o, d, sents)})
+    if cover_seen or cover_gone:
+        _remember_cover(workdir, cover_seen, cover_gone)
     linked = {c["建議id"]: c for c in dec["刪除段落"] if c.get("建議id")}
     for sg in suggestions:
         d = dec["刪除建議"].get(sg["id"], {})
@@ -758,6 +861,23 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     }
 
 
+def _remember_cover(workdir: Path, seen: dict, gone: dict) -> None:
+    """記下每一處重疊現在被哪一筆涵蓋（下次讀資料時，那一筆改了時間、做法、被還原 → 看得出「原本涵蓋、現在沒有了」）。
+    沒變就不寫檔。涵蓋消失的這一次就清掉記錄（提醒只出現一次；那一筆已經變回還沒確認）。"""
+    with _lock:
+        dec = load_decisions(workdir)
+        changed = False
+        for oid, info in seen.items():
+            d = dec["重疊"].setdefault(oid, {})
+            if d.get("涵蓋於") != info:
+                d["涵蓋於"], changed = info, True
+        for oid in gone:
+            if dec["重疊"].get(oid, {}).pop("涵蓋於", None) is not None:
+                changed = True
+        if changed:
+            _save_decisions(workdir, dec)
+
+
 def _dup_codes(workdir: Path, tdata: dict) -> dict:
     """這一集有出現的人（選成本名的學員＋老師講到的名字）裡，兩個以上用同一個代號的。"""
     from bookclub import epcodes
@@ -787,7 +907,7 @@ def nameplan_whole() -> str:
 def progress(items: list[dict], dec: dict, duration: float) -> dict:
     """已確認／總數、覆核花的時間、推算整支要多久（純函式）。"""
     total = len(items)
-    done = sum(1 for x in items if x.get("已確認") or x.get("不用處理"))
+    done = sum(1 for x in items if x.get("已確認") or x.get("不用處理") or x.get("涵蓋"))
     spent = float(dec.get("覆核秒數") or 0.0)
     passed = sum(1 for x in items if x.get("已確認") and not x.get("不用處理"))
     need = sum(1 for x in items if not x.get("不用處理"))
@@ -796,7 +916,7 @@ def progress(items: list[dict], dec: dict, duration: float) -> dict:
     for x in items:
         c = by_type.setdefault(x["類型"], [0, 0])
         c[1] += 1
-        c[0] += bool(x.get("已確認") or x.get("不用處理"))
+        c[0] += bool(x.get("已確認") or x.get("不用處理") or x.get("涵蓋"))
     return {"已確認": done, "總數": total, "已花秒數": round(spent), "推算全部秒數": round(est) if est else None,
             "各類": {k: {"已確認": v[0], "總數": v[1]} for k, v in by_type.items()}}
 
@@ -1040,8 +1160,9 @@ def save_cut(workdir: str | Path, fields: dict) -> dict:
     """`POST /api/review/cut`：新增或修改一段刪除段落（剪點自動對齊附近安靜處）；狀態＝刪除／還原。"""
     if "狀態" in fields and fields["狀態"] not in ("刪除", "還原"):
         raise ValueError("刪除段落的狀態只能是：刪除、還原")
-    f = {"狀態": "刪除", **{k: v for k, v in fields.items() if k in ("id", "start", "end", "狀態", "備註")}} \
-        if not fields.get("id") else {k: v for k, v in fields.items() if k in ("id", "start", "end", "狀態", "備註")}
+    keys = ("id", "start", "end", "狀態", "備註", "來源段落")   # 10-01：來源段落＝從哪一段學員段落「通過＝剪掉」來的
+    f = {"狀態": "刪除", **{k: v for k, v in fields.items() if k in keys}} \
+        if not fields.get("id") else {k: v for k, v in fields.items() if k in keys}
     return _upsert_range(Path(workdir), "刪除段落", "D", f, snap=True)
 
 

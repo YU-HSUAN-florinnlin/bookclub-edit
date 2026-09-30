@@ -208,7 +208,7 @@ def test_suggest_overlap_rules():
     assert f({"start": 29.5, "end": 30.3}, turns, "學員2", {"學員2": "保留原聲"})["做法"] == "不用改"
     assert f({"start": 40, "end": 40.5}, turns, "學員2", {})["做法"] == "只留學員"                  # 學員說話中老師回應
     assert f({"start": 95, "end": 95.5}, turns, None, {})["做法"] == "不用改"                        # 判斷不出來
-    assert set(review.OVERLAP_SHOWN) <= set(review.OVERLAP_HOWS) and "兩邊都重生成" not in review.OVERLAP_SHOWN
+    assert set(review.OVERLAP_SHOWN) <= set(review.OVERLAP_HOWS) and "兩邊都不留" not in review.OVERLAP_SHOWN   # 10-01：兩邊都重生成加回來（B 方案）
 
 
 def test_replace_real_names():
@@ -243,7 +243,7 @@ def test_prep_and_cut_suggestions_mark_items_not_needed():
     review.set_voice(w, "學員2", "保留原聲")
     d = review.page_data(w)
     skip = {x["id"]: x["不用處理"] for x in d["項目"] if x.get("不用處理")}
-    assert skip.get("T003") == "落在確認刪除的段落裡" and "O69.60" in skip and "保留原聲" in skip.get("T005", "")
+    assert skip.get("T003") == "落在剪掉的片段裡（聲音和畫面都拿掉）" and "O69.60" in skip and "保留原聲" in skip.get("T005", "")
     assert all(x.get("建議") and x["建議"].get("原因") for x in d["項目"])       # 每一筆一開始就有建議＋原因
     stu = next(x for x in d["項目"] if x["類型"] == "學員段落")
     assert stu["建議稿"] == stu["校對稿"]
@@ -334,6 +334,76 @@ def test_name_range_field_and_too_short_blocks_pass():
         raise AssertionError("字太少還能通過")
     except ValueError as e:
         assert "一半" in str(e)
+
+
+def test_final_check_rows_and_ack():
+    """10-01 7-5：開始前總檢查（只讀）：學員句子落在段落外面、重疊缺學員是誰要擋；按「我聽過了」、「我看過了」。"""
+    from bookclub import execute
+
+    w = _fresh()
+    before = review.review_path(w).read_bytes() if review.review_path(w).exists() else b""
+    fc = execute.final_check(w)
+    assert review.review_path(w).read_bytes() == before if before else not review.review_path(w).exists()   # 只讀
+    oid = review.manual_edit(w, {"類型": "重疊", "start": 80.2, "end": 81.0})["id"]
+    review.save_overlap(w, oid, {"做法": "只留學員"})
+    t = next(t for t in review.page_data(w)["項目"] if t["類型"] == "學員段落")
+    review.retime_turn(w, t["id"], t["start"] + 1.0, t["end"])      # 開頭晚 1 秒：第一句有一部分在段落外面
+    fc = execute.final_check(w)
+    keys = {r["key"].split(":")[0] for r in fc["一定要處理"]}
+    assert {"重疊", "段落外"} <= keys and not fc["可以開始"], keys
+    out = next(r for r in fc["一定要處理"] if r["key"].startswith("段落外"))
+    assert out["可以按聽過"] and not out["已按聽過"]
+    execute.ack_final(w, out["key"])
+    execute.ack_final(w, seen=True)
+    fc = execute.final_check(w)
+    assert next(r for r in fc["一定要處理"] if r["key"] == out["key"])["已按聽過"] and fc["看過"]
+    assert not fc["可以開始"]                     # 重疊那一列不能按聽過
+    review.save_overlap(w, oid, {"學員說話者": "學員1", "學員文字": "我想問一下"})
+    assert "重疊" not in {r["key"].split(":")[0] for r in execute.final_check(w)["一定要處理"]}
+
+
+def test_teacher_changed_listed_and_minor_cut_undo():
+    """10-01 2-3：改成老師的段落照樣列出來、不擋進度；2-4：人新增的短段落不建議剪掉，「通過＝剪掉」可以取消。"""
+    from bookclub import turns as turns_mod
+
+    w = _fresh()
+    stu = [x for x in review.page_data(w)["項目"] if x["類型"] == "學員段落"]
+    turns_mod.save_turn(w, stu[0]["id"], {"說話者": "老師"})
+    d = review.page_data(w)
+    tf = [x for x in d["項目"] if x["類型"] == "改成老師"]
+    assert [x["id"] for x in tf] == [stu[0]["id"]] and tf[0]["不用處理"]
+    assert any(b.get("人改成老師") for b in d["色帶"])
+    turns_mod.save_turn(w, stu[0]["id"], {"說話者": stu[0]["說話者"]})
+    back = next(x for x in review.page_data(w)["項目"] if x["id"] == stu[0]["id"])
+    assert back["類型"] == "學員段落" and not back["已確認"]
+    # 人新增的 1 秒學員段落：建議照學員整句生成（不是剪掉）
+    new = review.manual_edit(w, {"類型": "學員發言", "start": 80.1, "end": 81.0, "說話者": "學員1"})["id"]
+    it = next(x for x in review.page_data(w)["項目"] if x["id"] == new)
+    assert it["建議"]["做法"] == "通過"
+    # 系統抓的短句按通過＝剪掉，記下來源段落；卡片上看得到是哪一筆剪掉片段（可以取消）
+    cut = review.save_cut(w, {"start": 81.1, "end": 81.9, "來源段落": new})["項目"]
+    it = next(x for x in review.page_data(w)["項目"] if x["id"] == new)
+    assert cut["來源段落"] == new and it["剪掉的片段"] == cut["id"]
+
+
+def test_overlap_covered_by_passed_turn_and_reverts():
+    """10-01 7-4：重疊整個落在已通過的學員段落時間格裡 → 自動算處理好；那一段改掉不再蓋住 → 提醒一次、變回還沒確認。"""
+    from bookclub import turns as turns_mod
+
+    w = _fresh()
+    oid = review.manual_edit(w, {"類型": "重疊", "start": 50.2, "end": 50.8})["id"]   # 學員1 段落中間
+    stu = next(x for x in review.page_data(w)["項目"] if x["類型"] == "學員段落" and x["start"] <= 50.2 and 50.8 <= x["end"])
+    ov = next(x for x in review.page_data(w)["項目"] if x["id"] == oid)
+    assert not ov["涵蓋"] and ov["涵蓋待通過"]["id"] == stu["id"]       # 那一段還沒通過
+    turns_mod.save_turn(w, stu["id"], {"已確認": True})
+    d = review.page_data(w)
+    ov = next(x for x in d["項目"] if x["id"] == oid)
+    assert ov["涵蓋"]["id"] == stu["id"] and d["進度"]["各類"]["重疊"]["已確認"] >= 1
+    review.retime_turn(w, stu["id"], stu["start"], 50.0)                  # 段落提早結束，不再蓋住
+    ov = next(x for x in review.page_data(w)["項目"] if x["id"] == oid)
+    assert not ov["涵蓋"] and ov["涵蓋消失"]["id"] == stu["id"]
+    ov = next(x for x in review.page_data(w)["項目"] if x["id"] == oid)
+    assert not ov["涵蓋消失"]                                             # 提醒只出現一次
 
 
 def _run_all() -> int:

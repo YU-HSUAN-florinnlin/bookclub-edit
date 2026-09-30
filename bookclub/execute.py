@@ -148,6 +148,155 @@ def precheck(workdir: str | Path) -> dict:
     return {"可以開始": not missing, "缺": missing, "提醒": notes, "缺代號": len(lack_codes)}
 
 
+# ---------- 開始前總檢查（10-01 宇軒 7-5，只讀） ----------
+
+GEN_SPEED = 16.5          # 這台 Mac 每 1 秒聲音約 14–19 秒（09-30 實測）
+ASSEMBLE_S = 21 * 60      # 整支組裝約 21 分鐘（09-30 實測）
+LONG_TEACHER_S = 10.0
+OUTSIDE_MIN_S = 0.3       # 學員的話落在段落外面超過這麼久才算
+
+
+def _uncovered(a: float, b: float, ranges: list[tuple[float, float]]) -> float:
+    from bookclub import assemble
+
+    return sum(e - s for s, e in assemble.subtract(a, b, ranges))
+
+
+def final_check(workdir: str | Path) -> dict:
+    """第 3 步全部通過之後、開始第 4 步之前的總檢查（只讀）。回傳：
+    {一定要處理: [列], 請看一眼: [列], 可以開始: bool}；每一列 {key, start, end, 說明, 可以按聽過?, 已按聽過?}。
+    「一定要處理」有還沒按聽過的列就不能開始；「請看一眼」不擋（網頁上要按一次「我看過了」）。"""
+    import shutil
+
+    from bookclub import assemble, nameplan, review, students
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    dec = review.load_decisions(workdir)
+    heard = set((dec.get("總檢查") or {}).get("聽過") or [])
+    tdata = turns_mod.page_data(workdir)
+    turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
+    sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
+    by_id = {x["id"]: x for x in sents}
+    words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words") or []
+    kept = {k for k, v in dec["學員聲音"].items() if v == "保留原聲"}
+    try:
+        items, _ = students.build_items(workdir)
+    except FileNotFoundError:
+        items = []
+    plan = nameplan.compute_plan(workdir) if wd.read_json(wd.names_path(workdir), default=None) else {"生成": [], "消音": [], "要人處理": []}
+    cuts = [(c["start"], c["end"]) for c in dec["刪除段落"] if c.get("狀態") != "還原"]
+    mutes = [(m["start"], m["end"]) for m in assemble.local_mutes(dec)] + [(m["start"], m["end"]) for m in plan.get("消音", [])]
+    teacher = [tuple(g["slot"]) for g in plan["生成"]]
+    stu_slots = [tuple(it["slot"]) for it in items]
+    handled = cuts + mutes + teacher + stu_slots
+    must, look = [], []
+
+    def row(lst, key, a, b, text, ack=False):
+        lst.append({"key": key, "start": round(a, 3), "end": round(b, 3), "說明": text,
+                    **({"可以按聽過": True, "已按聽過": key in heard} if ack else {})})
+
+    # 1. 學員的話落在段落外面（人改過段落的開頭或結尾，句子的一部分在外面、又沒被別的處理蓋到）
+    for t in turns:
+        if t.get("說話者") in (None, "老師") or t["說話者"] in kept:
+            continue
+        for sid in t.get("句子", []):
+            x = by_id.get(sid)
+            if not x:
+                continue
+            for a, b in ((x["start"], min(x["end"], t["start"])), (max(x["start"], t["end"]), x["end"])):
+                if b - a >= OUTSIDE_MIN_S and _uncovered(a, b, handled) >= OUTSIDE_MIN_S:
+                    row(must, f"段落外:{t['id']}:{a:.1f}", a, b,
+                        f"{t['說話者']} 的句子有 {b - a:.1f} 秒在段落（{wd.fmt_time(t['start'])}–{wd.fmt_time(t['end'])}）外面，"
+                        "會是學員原聲：把段落的起訖改回去包住，或另外處理這一段；"
+                        "聽過確定外面那一段不是學員（例如是老師接話），按「我聽過了」", ack=True)
+    # 2. 名字換不了代號
+    names = wd.read_json(wd.names_path(workdir), default={}) or {}
+    ndec = wd.read_json(review.name_decisions_path(workdir), default={}) or {}
+    cands = review.effective_name_candidates(workdir, names.get("candidates", []), ndec) if names else []
+    when = {str(c.get("id") or i): c for i, c in enumerate(cands, start=1)}
+    for m in plan.get("要人處理", []):
+        c = when.get(str(m["候選"]), {})
+        row(must, f"名字:{m['候選']}", c.get("start", 0.0), c.get("end", 0.0), f"老師提到名字（第 {m['候選']} 筆）：{m['原因']}")
+    # 3. 要念的字數跟那段時間逐字稿的字數差太多
+    for g in plan["生成"]:
+        src = nameplan.range_words(words, *g["slot"])
+        if nameplan.too_short(g["text"], src):
+            row(must, f"字太少:{g['id']}", g["slot"][0], g["slot"][1],
+                f"老師重念 {g['id']}：要念 {nameplan.say_count(g['text'])} 個字，這段時間逐字稿有 {nameplan.say_count(src)} 個字，"
+                "其他的話會不見：把重念範圍改小，或把話補齊")
+    # 4. 重疊選了要生成、但缺文字或缺學員是誰
+    for o in review.overlap_choices(workdir):
+        why = review.overlap_gen_problem(o, [tuple(it["slot"]) for it in items if not it.get("重疊")])
+        if why:
+            row(must, f"重疊:{o['id']}", o["start"], o["end"], f"重疊（{review.OVERLAP_LABEL.get(o['做法'], o['做法'])}）：{why}")
+    # 5. 聲紋判成「不是老師」的句子，整句都不在任何處理的範圍、也不在學員段落裡（可能是漏抓的學員發言）
+    #    段落的聲音判斷也不是老師的才放「一定要處理」；段落判成老師的（第一堂 92 句，多半是誤判）在「請看一眼」彙總一列
+    stu_turns = [(t["start"], t["end"]) for t in turns if t.get("說話者") not in (None, "老師")]
+    soft = []
+    for x in sents:
+        if x.get("label") != "不是老師" or x["end"] - x["start"] < OUTSIDE_MIN_S:
+            continue
+        if any(a < x["end"] and x["start"] < b for a, b in handled + stu_turns):
+            continue
+        mid = (x["start"] + x["end"]) / 2
+        home = next((t for t in turns if t["start"] <= mid <= t["end"]), None)
+        if home and home.get("聲音判斷") == "老師":
+            soft.append(x)
+            continue
+        row(must, f"聲紋:{x['id']}", x["start"], x["end"],
+            f"聲紋判成不是老師、{x['end'] - x['start']:.1f} 秒，不在任何學員段落或處理範圍裡：可能是漏抓的學員發言。"
+            "聽一下；沒有學員的聲音就按「我聽過了」", ack=True)
+
+    # 請看一眼
+    for c in dec["刪除段落"]:
+        if c.get("狀態") != "還原":
+            row(look, f"剪掉:{c['id']}", c["start"], c["end"], f"剪掉 {c['end'] - c['start']:.1f} 秒（聲音和畫面都拿掉，影片會變短，畫面會跳一下）")
+    for m in assemble.local_mutes(dec):
+        row(look, f"消音:{m['id']}", m["start"], m["end"], f"消音 {m['end'] - m['start']:.1f} 秒（只拿掉聲音，畫面留著）")
+    for m in plan.get("消音", []):
+        row(look, f"名字消音:{m['候選']}", m["start"], m["end"], f"老師提到名字直接消音 {m['end'] - m['start']:.1f} 秒")
+    for g in plan["生成"]:
+        if g["slot"][1] - g["slot"][0] > LONG_TEACHER_S:
+            row(look, f"長句:{g['id']}", g["slot"][0], g["slot"][1],
+                f"老師 AI 聲音重念 {g['slot'][1] - g['slot'][0]:.1f} 秒（超過 {LONG_TEACHER_S:.0f} 秒）")
+    if soft:
+        row(look, "聲紋:段落是老師", soft[0]["start"], soft[-1]["end"],
+            f"另外 {len(soft)} 句聲紋判成不是老師、但整段的聲音判斷是老師（多半是誤判，例如冥想引導、老師壓低聲音）。"
+            "時間：" + "、".join(wd.fmt_time(x["start"]) for x in soft[:40]) + ("⋯" if len(soft) > 40 else ""))
+    covered = review.covered_overlaps(workdir, dec, turns) if turns else []
+    gen_s = sum(g["slot"][1] - g["slot"][0] for g in plan["生成"]) + sum(it["slot_s"] for it in items)
+    free = shutil.disk_usage(str(workdir)).free / 1e9
+    summary = {"自動算處理好": [{"id": x["id"], "start": x["start"], "end": x["end"], "涵蓋": x["涵蓋"]["名稱"]} for x in covered],
+               "要生成秒數": round(gen_s), "預估秒數": round(gen_s * GEN_SPEED + ASSEMBLE_S), "硬碟可用GB": round(free, 1),
+               "提醒": "執行期間關掉其他程式（Zoom、瀏覽器分頁）；接上電源、筆電不要闔上（螢幕可以關）"}
+    left = [r for r in must if not r.get("已按聽過")]
+    return {"一定要處理": sorted(must, key=lambda r: r["start"]), "請看一眼": sorted(look, key=lambda r: r["start"]),
+            "摘要": summary, "可以開始": not left, "還要處理": len(left),
+            "看過": bool((dec.get("總檢查") or {}).get("看過"))}
+
+
+def ack_final(workdir: str | Path, key: str | None = None, heard: bool = True, seen: bool | None = None) -> dict:
+    """`POST /api/execute/finalcheck`：「一定要處理」裡可以按的那一列按「我聽過了」（key），或整頁「我看過了」（seen）。"""
+    from bookclub import review
+
+    workdir = Path(workdir)
+    with review._lock:
+        dec = review.load_decisions(workdir)
+        fc = dec.setdefault("總檢查", {"聽過": [], "看過": False})
+        fc.setdefault("聽過", [])
+        if key:
+            if heard and key not in fc["聽過"]:
+                fc["聽過"].append(key)
+            elif not heard and key in fc["聽過"]:
+                fc["聽過"].remove(key)
+        if seen is not None:
+            fc["看過"] = bool(seen)
+            fc["看過時間"] = _now()
+        review._save_decisions(workdir, dec)
+    return {"ok": True, "總檢查": fc}
+
+
 # ---------- 每一步做過沒有（不載入模型） ----------
 
 def names_done(workdir: Path) -> tuple[bool, str]:
@@ -304,6 +453,12 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
             raise FileNotFoundError("還不能開始第 4 步：\n- " + "\n- ".join(pre["缺"]))
         for n in pre["提醒"]:
             log(f"[AI 執行] 提醒：{n}")
+        if not only_steps or "組裝" in only_steps:   # 10-01：要組成品才看總檢查（只生成聲音不影響成品，不擋）
+            fc = final_check(workdir)
+            if not fc["可以開始"]:
+                rows = [r for r in fc["一定要處理"] if not r.get("已按聽過")]
+                raise FileNotFoundError("開始前總檢查還有一定要處理的：\n- " + "\n- ".join(
+                    f"{wd.fmt_time(r['start'])} {r['說明']}" for r in rows[:20]) + ("\n（還有更多）" if len(rows) > 20 else ""))
     from bookclub import epcodes
 
     n = epcodes.sync(workdir)   # 09-29：名字候選的代號跟這一集的代號表對齊

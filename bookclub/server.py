@@ -773,6 +773,13 @@ class BookclubServer(ThreadingHTTPServer):
             pre = precheck(self.workdir)
             if not pre["可以開始"]:
                 return {"started": False, "error": "還不能開始：" + "；".join(pre["缺"])}
+            from bookclub.execute import final_check
+
+            fc = final_check(self.workdir)   # 10-01：開始前總檢查
+            if not fc["可以開始"]:
+                return {"started": False, "error": f"開始前總檢查還有 {fc['還要處理']} 列一定要處理的"}
+            if not fc["看過"]:
+                return {"started": False, "error": "開始前總檢查的「請看一眼」還沒按「我看過了」"}
             self.exec_state = self._fresh_run_state()
             self.exec_state.update(running=True, started_at=time.time())
             threading.Thread(target=self._exec_job, args=(opts,), daemon=True).start()
@@ -1035,6 +1042,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, server.run_status())
         elif path == "/api/execute":
             self._send_json(200, server.exec_status())
+        elif path == "/api/execute/finalcheck":   # 10-01：開始前總檢查（只讀）
+            from bookclub.execute import final_check
+
+            self._send_json(200, final_check(server.workdir))
         else:
             self._send_json(404, {"error": f"沒有這個 API：{path}"})
 
@@ -1223,6 +1234,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, fc.export_final(w))
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
+        elif path == "/api/execute/finalcheck":   # 10-01：某一列「我聽過了」、整頁「我看過了」
+            from bookclub.execute import ack_final
+
+            self._send_json(200, ack_final(server.workdir, body.get("key"), bool(body.get("聽過", True)),
+                                           body.get("看過") if "看過" in body else None))
         elif path == "/api/execute/start":
             result = server.start_execute(body)
             self._send_json(202 if result.get("started") else 409, result)

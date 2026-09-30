@@ -79,11 +79,11 @@ def test_render_stage_rows_done_only_after_render():
         dec["局部消音"].append({"id": "M902", "start": 150.0, "end": 151.0})
         wd.write_json(review.review_path(w), dec)
         r = _rows(w, a=0.0, b=100.0)
-        assert r[("刪除段落", "剪掉（聲音＋畫面）")]["總數"] == 1
-        assert r[("局部消音", "只消聲音、畫面保留")]["總數"] == 1    # 範圍外的那筆不算
-        assert r[("局部消音", "只消聲音、畫面保留")]["完成"] == 0
+        assert r[("刪除段落", "剪掉片段：聲音和畫面都拿掉，影片會變短")]["總數"] == 1
+        assert r[("局部消音", "消音：只拿掉聲音，畫面留著")]["總數"] == 1    # 範圍外的那筆不算
+        assert r[("局部消音", "消音：只拿掉聲音，畫面留著")]["完成"] == 0
         r = _rows(w, a=0.0, b=100.0, render_done=True)
-        assert r[("局部消音", "只消聲音、畫面保留")]["完成"] == 1
+        assert r[("局部消音", "消音：只拿掉聲音，畫面留著")]["完成"] == 1
 
 
 def test_broken_kind_does_not_break_others():

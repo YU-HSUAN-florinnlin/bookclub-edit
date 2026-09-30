@@ -624,3 +624,18 @@ table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg)
 .ref-chip.on { border-color: #2b6cb0; background: #ebf4ff; color: #1a4f8a; font-weight: 600; }
 .ref-chip.chosen { border-color: #2f855a; }
 .ref-chip.chosen.on { background: #e6f6ec; color: #22643f; }
+
+/* 10-01：人改成老師的段落（時間軸用深一點的灰加框）、重念範圍、B 方案兩列小時間條 */
+.rv-tl .b.teacher.tfix, .sw.teacher.tfix { background: var(--rv-teacher); filter: brightness(0.8); outline: 1px solid var(--muted); outline-offset: -1px; }
+.rv-chip.tfix i { background: var(--rv-teacher); filter: brightness(0.8); }
+.rv-list .st.warn { color: var(--rv-cut); }
+.rv-range, .rv-sides { border-left: 3px solid var(--rv-ov); padding-left: 8px; }
+.rv-minibar { position: relative; margin: 4px 0 2px; }
+.rv-minibar .row { position: relative; height: 10px; margin: 2px 0; background: var(--rv-track, rgba(127,127,127,0.15)); border-radius: 3px; }
+.rv-minibar .row i { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+.rv-minibar .row.t i { background: var(--rv-teacher); }
+.rv-minibar .row.s i { background: var(--rv-stu); }
+.rv-range .rv-edrow, .rv-sides .rv-edrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 3px 0; }
+.rv-range .rv-edlab, .rv-sides .rv-edlab { min-width: 5.5em; font-weight: normal; }
+.rv-range input.rv-t, .rv-sides input.rv-t { width: 7.5em; flex: 0 0 auto; }
+.nowrap { white-space: nowrap; }

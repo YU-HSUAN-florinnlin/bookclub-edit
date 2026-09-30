@@ -148,9 +148,29 @@ def overlap_mutes(overlaps: list[dict]) -> list[dict]:
             for o in overlaps if o["做法"] != OVERLAP_KEEP and o["end"] > o["start"]]
 
 
+COVER_TOL_S = 0.05   # 涵蓋的判斷容許的誤差（剪點對齊畫面格、四捨五入）
+
+
+def find_cover(a: float, b: float, coverers: list[dict], oid: str | None = None) -> dict | None:
+    """[a, b] 整個落在哪一筆「會把原聲換掉」的範圍裡（純函式，10-01 宇軒 7-4）：學員重念的時間格、
+    老師重念的範圍、剪掉的片段。這一處重疊自己產生的那一筆（`重疊項目`／`重疊` 是 oid）不算。
+    `coverers`：[{類型, id, start, end, ...}]；回傳最短的那一筆，沒有就 None。覆核工作台與組裝共用。"""
+    hits = [k for k in coverers
+            if k["start"] - COVER_TOL_S <= a and b <= k["end"] + COVER_TOL_S
+            and not (oid and (oid in (k.get("重疊項目") or []) or k.get("重疊") == oid))]
+    return min(hits, key=lambda k: k["end"] - k["start"]) if hits else None
+
+
 def overlap_outcome(o: dict, edits: list[dict], cuts: list[tuple[float, float]] = ()) -> dict:
-    """這一處重疊在剪輯決策裡實際怎麼了（純函式）：{處理: 一句話, 沒處理秒: 還留著原聲的秒數}。
-    `edits` 是排好的全部動作（換聲音、消音都會把那段原聲拿掉）。"""
+    """這一處重疊在剪輯決策裡實際怎麼了（純函式）：{處理: 一句話, 沒處理秒: 還留著原聲的秒數, 涵蓋: 那一筆}。
+    `edits` 是排好的全部動作（換聲音、消音都會把那段原聲拿掉）。
+    10-01：整個落在別筆換聲音的範圍裡（`find_cover`）→ 跟著那一筆換掉，不管這一處選了什麼。"""
+    swaps = [e for e in edits if e["類型"] in SWAP_KINDS]
+    cov = find_cover(o["start"], o["end"], [{**e, "id": e.get("id") or e.get("生成編號") or e["類型"]} for e in swaps],
+                     o["id"])
+    if cov:
+        return {"處理": f"整段落在 {cov['id']} 的範圍裡，跟著換掉", "沒處理秒": 0.0,
+                "涵蓋": {"類型": cov["類型"], "id": cov["id"], "start": cov["start"], "end": cov["end"]}}
     if o["做法"] == OVERLAP_KEEP:
         return {"處理": "照原樣，沒有動（不用改）", "沒處理秒": 0.0}
     free = subtract(o["start"], o["end"], list(cuts))

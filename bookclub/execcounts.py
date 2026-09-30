@@ -144,8 +144,8 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
     add("學員段落", "匿名聲線重念", "生成", stu)
     add("保留原聲學員提到名字", "用學員自己的聲音換成代號", "生成", sn_gen)
     add("保留原聲學員提到名字", "直接消音", "組裝", sn_mute)
-    add("刪除段落", "剪掉（聲音＋畫面）", "組裝", lambda: ranged("刪除段落"))
-    add("局部消音", "只消聲音、畫面保留", "組裝", lambda: ranged("局部消音"))
+    add("刪除段落", "剪掉片段：聲音和畫面都拿掉，影片會變短", "組裝", lambda: ranged("刪除段落"))
+    add("局部消音", "消音：只拿掉聲音，畫面留著", "組裝", lambda: ranged("局部消音"))
     return rows
 
 

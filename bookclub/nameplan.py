@@ -290,6 +290,13 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         texts = item["_texts"] if item else {g["id"]: g["text"] for g in group}
         new = replace_name(texts[sid], c)
         edited = (d.get("改稿") or "").strip()
+        if new is None and not item and words:
+            # 10-01（17 號 2-7）：找名字掃的是逐字時間的字，句子文字是另一份轉文字結果，寫法可能不一樣
+            # → 句子裡找不到比對到的字時，改用這段時間逐字時間的字（裡面一定有抓到的那幾個字）
+            lo_, hi_ = min(group[0]["start"], c["start"]), max(group[-1]["end"], c["end"])
+            if replace_name(range_words(words, lo_, hi_), c) is not None:
+                _add_ranged(ranged, manual, c, i, d, {"start": lo_, "end": hi_, "範圍": "逐字", "整句": [lo_, hi_]}, words)
+                continue
         if new is None and not edited:
             manual.append({"候選": i, "原因": "句子裡找不到比對到的字，無法自動換成代號"})
             continue
@@ -346,8 +353,8 @@ def _add_ranged(ranged: list[dict], manual: list[dict], c: dict, i, d: dict, ws:
     item["slot"] = [round(a, 3), round(b, 3)]
     item["候選"].append(i)
     item["_cands"].append(c)
-    if ws["範圍"] == "人選":
-        item["範圍"] = "人選"
+    if ws["範圍"] == "人選" or item["範圍"] == "逐字":
+        item["範圍"] = ws["範圍"]
     if not item.get("改稿"):
         item["text"] = new or item["text"]
     if edited:   # 人直接改的要念的句子優先

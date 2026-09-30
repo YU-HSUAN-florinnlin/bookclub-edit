@@ -242,6 +242,8 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     for m in ov_marks:
         res = assemble.overlap_outcome(m, kept, cuts)
         m["處理"] = res["處理"]
+        if res.get("涵蓋"):
+            m["涵蓋"] = res["涵蓋"]
         if res["沒處理秒"]:
             left.append({"id": m["id"], "start": m["start"], "end": m["end"], "做法": m["做法"], "沒處理秒": res["沒處理秒"]})
     blur = pick_blur(kept, cuts, a, b) if demo_blur else None   # 09-29：模糊只有測試示範才做，正式成品不模糊
