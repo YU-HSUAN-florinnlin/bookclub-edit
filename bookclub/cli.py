@@ -119,6 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
     ref_use_parser.add_argument("rank", type=int, help="名次（第幾段）")
     ref_use_parser.add_argument("--text-file", required=True, help="修正好的逐字稿檔案路徑")
 
+    ref_recut_parser = ref_sub.add_parser(
+        "recut", help="舊工作區的參考音候選照原本的時間重切成 48kHz（10-01，不重挑、不動已選定的 ref.wav）")
+    ref_recut_parser.add_argument("workdir", help="工作區路徑")
+    ref_recut_parser.add_argument("--video", help="原片路徑（預設用挑選紀錄.json 記的）")
+    ref_recut_parser.add_argument("--out-subdir", default="參考音", help="參考音子資料夾名稱（預設「參考音」）")
+
     gen_parser = sub.add_parser("gen", help="流程第 5 步：生成 AI 聲音")
     gen_sub = gen_parser.add_subparsers(dest="gen_command")
     gen_teacher_parser = gen_sub.add_parser("teacher", help="用老師的 AI 聲音重念指定句子")
@@ -311,8 +317,14 @@ def main(argv: list[str] | None = None) -> int:
             text = _Path(args.text_file).read_text(encoding="utf-8")
             finalize_reference(args.workdir, args.rank, text)
             return 0
+        if args.ref_command == "recut":
+            from bookclub.refpick import recut_candidates
+
+            recut_candidates(args.workdir, video=args.video, ref_dir_name=args.out_subdir)
+            return 0
         print("用法：bookclub ref pick <影片> <工作區> [--teacher-ref 檔案] [--n 5]")
         print("     bookclub ref use <工作區> <名次> --text-file <檔案>")
+        print("     bookclub ref recut <工作區> [--video 原片]")
         return 2
 
     if args.command == "gen":

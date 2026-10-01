@@ -40,6 +40,11 @@
        型候選不重跑 Groq，直接把組成的每一小段原本的逐字稿接起來，見下）。
     8. 輸出到 workdir/參考音/：候選{N}.wav/.txt（N 是最終名次）、候選.json
        （含入選跟被淘汰的每一次嘗試）、挑選紀錄.json、試聽.html。
+       候選音檔（10-01 起）是 48kHz、16 位元、單聲道 WAV，保留原片的高音；
+       雙聲道用「平均」合成單聲道，音量跟原片一邊聲道一樣（以前 16kHz、
+       雙聲道相加，8000 赫茲以上被切掉、音量多 3 分貝）。挑選用的分析
+       （抽音、轉文字、聲紋、門檻）照舊用 16kHz，沒有改。舊工作區用
+       `bookclub ref recut <工作區>` 照候選.json 的時間重切，見 recut_candidates。
 
 保底順序（宇軒定案，2026-09-22）：單一連續段落（30–75 秒）湊不到
 MIN_CANDIDATES（3）個候選時，改試「拼接」——從沒碰到排除區域的老師短片段
@@ -83,7 +88,10 @@ import soundfile as sf
 
 # ---------- 參數（各步驟門檻與常數，出處見上面流程說明） ----------
 
-SR = 16000
+SR = 16000                   # 分析用（抽音、轉文字、聲紋）的取樣率
+CLIP_SR = 48000              # 10-01：候選音檔（試聽、給 CosyVoice）的取樣率，保留原片 8000 赫茲以上的高音
+CLIP_FORMAT_DESC = "48kHz、16 位元、單聲道（雙聲道平均）"   # 寫進挑選紀錄.json，看得出是哪一版切的
+RECUT_MAX_DIFF_S = 0.25      # ref recut：重切的長度跟紀錄差超過這麼多秒，代表切點換到別的停頓、逐字稿可能對不上，那一個不換
 FRAME = 0.02                 # 壓縮停頓用的音框長度（秒），照 make_ref.py
 
 # 步驟 2：轉文字
@@ -762,22 +770,87 @@ def _compress_pauses_and_cut(x: np.ndarray, sr: int = SR) -> tuple[np.ndarray, f
     return y[: int(cut * sr)], orig
 
 
-def _make_reference_clip(video: Path, region_start: float, region_end: float) -> dict:
-    raw = subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-ss", str(region_start), "-to", str(region_end),
-         "-i", str(video), "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"],
-        capture_output=True, check=True,
-    ).stdout
-    x = np.frombuffer(raw, np.float32).copy()
-    y, orig_used = _compress_pauses_and_cut(x, SR)
+# ---------- 切候選音檔（10-01：48kHz、雙聲道平均成單聲道） ----------
+
+def audio_channels(video: Path) -> int:
+    """原片第一條音軌有幾個聲道（ffprobe）。讀不到就報錯，不猜。"""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip().splitlines()
+    if not out or not out[0].strip().isdigit():
+        raise RuntimeError(f"讀不到 {Path(video).name} 的聲道數（ffprobe 沒有回傳音軌資訊）")
+    return int(out[0].strip())
+
+
+def to_mono(frames: np.ndarray) -> np.ndarray:
+    """多聲道 → 單聲道：各聲道「平均」（10-01）。左右一樣時結果就是其中一邊、音量不變；
+    左右不一樣時兩邊都留著、不會加總變大聲。以前 ffmpeg `-ac 1` 是加總，左右一樣的
+    Zoom 錄影會大聲 3 分貝、峰值接近破音。已經是單聲道（一維）原樣回傳。"""
+    x = np.asarray(frames, dtype=np.float32)
+    if x.ndim == 1:
+        return x.copy()
+    if x.shape[1] == 1:
+        return x[:, 0].copy()
+    return x.mean(axis=1, dtype=np.float64).astype(np.float32)
+
+
+def cut_clip_audio(video: Path, start: float, end: float, sr: int = CLIP_SR,
+                   channels: int | None = None) -> np.ndarray:
+    """從原片切 [start, end] 的聲音，轉成 sr、單聲道 float32（10-01）。
+
+    聲道照原片抽出來再自己平均（`to_mono`），不用 ffmpeg 的 `-ac 1`（加總）；
+    也不用 `-ac 2` 再平均——ffmpeg 把單聲道升成雙聲道時兩邊各乘 0.707，音量會變小。
+    超過兩個聲道（例如 5.1）先讓 ffmpeg 照標準降成雙聲道再平均，避免把重低音聲道
+    平均進去。channels 沒給就用 ffprobe 問一次。"""
+    ch = channels if channels is not None else audio_channels(video)
+    cmd = ["ffmpeg", "-loglevel", "error", "-ss", str(start), "-to", str(end), "-i", str(video), "-vn"]
+    if ch > 2:
+        cmd += ["-ac", "2"]
+        ch = 2
+    cmd += ["-ar", str(sr), "-f", "f32le", "-"]
+    raw = subprocess.run(cmd, capture_output=True, check=True).stdout
+    x = np.frombuffer(raw, np.float32)
+    x = x[: len(x) - len(x) % ch].reshape(-1, ch)
+    return to_mono(x)
+
+
+def write_clip_wav(path: Path, audio: np.ndarray, sr: int = CLIP_SR) -> None:
+    """候選音檔存成 16 位元單聲道 WAV（10-01）。超過 ±1 的先截住，存成整數時才不會繞回去變爆音。"""
+    sf.write(str(path), np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0), sr, subtype="PCM_16")
+
+
+def _wav_bytes_for_groq(audio: np.ndarray, sr: int) -> bytes:
+    """候選逐字稿送 Groq 時用的音檔（10-01）：降回 16kHz 再送，跟以前送的取樣率一樣、檔案也小，
+    轉文字的做法不變（Whisper 本來就只看 16kHz）。"""
+    import io
+    from math import gcd
+
+    from scipy.signal import resample_poly
+
+    x = np.asarray(audio, dtype=np.float32)
+    if sr != SR:
+        g = gcd(SR, sr)
+        x = resample_poly(x, SR // g, sr // g).astype(np.float32)
+    buf = io.BytesIO()
+    sf.write(buf, np.clip(x, -1.0, 1.0), SR, subtype="PCM_16", format="WAV")
+    return buf.getvalue()
+
+
+def _make_reference_clip(video: Path, region_start: float, region_end: float,
+                         channels: int | None = None) -> dict:
+    x = cut_clip_audio(video, region_start, region_end, CLIP_SR, channels)
+    y, orig_used = _compress_pauses_and_cut(x, CLIP_SR)
     return {
         "audio": y,
+        "sr": CLIP_SR,
         "region_start": region_start,
         "region_end": region_end,
         "used_start": region_start,
         "used_end": region_start + orig_used,
         "original_duration": orig_used,
-        "compressed_duration": len(y) / SR,
+        "compressed_duration": len(y) / CLIP_SR,
     }
 
 
@@ -817,30 +890,26 @@ def _assemble_pieces(piece_audios: list[np.ndarray], sr: int = SR) -> np.ndarray
     return np.concatenate(parts)
 
 
-def _build_combined_clip(video: Path, words: list[dict], pieces: list[_Region]) -> dict:
+def _build_combined_clip(video: Path, words: list[dict], pieces: list[_Region],
+                         channels: int | None = None) -> dict:
     """把選好的 2–3 個短片段（_pick_combine_set 的結果）各自字對齊裁頭尾、壓縮
     停頓，再用 _assemble_pieces 接起來。回傳組好的音訊跟每一小段實際用到的
-    原片時間（給候選.json 的「小段」欄位用）。"""
+    原片時間（給候選.json 的「小段」欄位用）。10-01：改用 CLIP_SR（48kHz）切。"""
     piece_audios: list[np.ndarray] = []
     piece_meta: list[dict] = []
     for seg in pieces:
         wstart, wend = _word_trim_bounds(words, seg.start, seg.end)
-        raw = subprocess.run(
-            ["ffmpeg", "-loglevel", "error", "-ss", str(wstart), "-to", str(wend),
-             "-i", str(video), "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"],
-            capture_output=True, check=True,
-        ).stdout
-        x = np.frombuffer(raw, np.float32).copy()
-        y, orig_used = _compress_pauses_and_cut(x, SR)
+        x = cut_clip_audio(video, wstart, wend, CLIP_SR, channels)
+        y, orig_used = _compress_pauses_and_cut(x, CLIP_SR)
         piece_audios.append(y)
         piece_meta.append({
             "原片起訖": [round(wstart, 2), round(wstart + orig_used, 2)],
-            "長度": round(len(y) / SR, 2),
+            "長度": round(len(y) / CLIP_SR, 2),
             "文字": seg.text,
         })
 
-    audio = _assemble_pieces(piece_audios, SR)
-    return {"audio": audio, "compressed_duration": len(audio) / SR, "pieces": piece_meta}
+    audio = _assemble_pieces(piece_audios, CLIP_SR)
+    return {"audio": audio, "sr": CLIP_SR, "compressed_duration": len(audio) / CLIP_SR, "pieces": piece_meta}
 
 
 # ---------- 步驟 5c：細看聲紋抓漏 ----------
@@ -947,10 +1016,13 @@ def _classify_window_issues(
 
 # ---------- 步驟 7：前 n 名再轉一次文字 ----------
 
-def _transcribe_candidate_text(client, wav_path: Path) -> str:
+def _transcribe_candidate_text(client, wav_path: Path, data: bytes | None = None) -> str:
+    """data：要送的音檔內容（10-01：候選音檔改 48kHz 後，送降回 16kHz 的版本，見 _wav_bytes_for_groq）；
+    沒給就送 wav_path 本身。"""
     import opencc
 
-    data = wav_path.read_bytes()
+    if data is None:
+        data = wav_path.read_bytes()
     r = _groq_transcribe_bytes(client, wav_path.name, data)
     text = r.get("text", "").strip()
     converter = opencc.OpenCC("s2twp")
@@ -1168,6 +1240,7 @@ def pick_reference(
     attempts_out: list[dict] = []
     candidates_out: list[dict] = []  # 只放入選的（rank 1..n）
     rank = 0
+    channels = audio_channels(video)  # 10-01：切候選要知道原片幾個聲道（平均成單聲道），問一次就好
 
     if mode in ("拼接", "放寬"):
         remaining = list(combine_pool)
@@ -1182,13 +1255,13 @@ def pick_reference(
             remaining = [s for s in remaining if s.start not in used_starts]
 
             t5e_0 = time.time()
-            clip = _build_combined_clip(video, words, combo)
+            clip = _build_combined_clip(video, words, combo, channels)
             t5e_total += time.time() - t5e_0
 
             rank += 1
             wav_path = ref_dir / f"候選{rank}.wav"
             txt_path = ref_dir / f"候選{rank}.txt"
-            sf.write(str(wav_path), clip["audio"], SR)
+            write_clip_wav(wav_path, clip["audio"], CLIP_SR)
 
             import opencc
             raw_text = "。".join(seg.text.strip() for seg in combo if seg.text.strip())
@@ -1248,7 +1321,7 @@ def pick_reference(
             clip = None
             if status == "入選":
                 t5b_0 = time.time()
-                clip = _make_reference_clip(video, fstart, fend)
+                clip = _make_reference_clip(video, fstart, fend, channels)
                 t5b_total += time.time() - t5b_0
                 if clip["compressed_duration"] < MIN_CLIP_AFTER_TRIM_S:
                     status = "淘汰"
@@ -1283,13 +1356,13 @@ def pick_reference(
             rank += 1
             wav_path = ref_dir / f"候選{rank}.wav"
             txt_path = ref_dir / f"候選{rank}.txt"
-            sf.write(str(wav_path), clip["audio"], SR)
+            write_clip_wav(wav_path, clip["audio"], CLIP_SR)
 
             print(f"[7/候選 {rank}] Groq 轉文字中...")
             if client is None:
                 client = Groq()
             t7_0 = time.time()
-            transcript = _transcribe_candidate_text(client, wav_path)
+            transcript = _transcribe_candidate_text(client, wav_path, _wav_bytes_for_groq(clip["audio"], CLIP_SR))
             time.sleep(GROQ_CALL_INTERVAL_S)
             t7_total += time.time() - t7_0
             txt_path.write_text(transcript, encoding="utf-8")
@@ -1349,6 +1422,7 @@ def pick_reference(
         "嘗試次數": len(attempts_out),
         "淘汰數": sum(1 for a in attempts_out if a["狀態"] == "淘汰"),
         "候選數": len(candidates_out),
+        "候選音檔格式": CLIP_FORMAT_DESC,
         "選定名次": None,
     }
     (ref_dir / "挑選紀錄.json").write_text(
@@ -1381,3 +1455,134 @@ def finalize_reference(workdir: str | Path, rank: int, transcript_text: str) -> 
 
     print(f"[完成] 已存成 {dst_wav} 與 {dst_txt}")
     return {"ref_wav": str(dst_wav), "ref_txt": str(dst_txt), "rank": rank}
+
+
+# ---------- 舊工作區換成新格式的候選（10-01） ----------
+
+def _recorded_video(workdir: Path, record: dict) -> Path | None:
+    """挑選紀錄.json 或 分析結果.json 記的原片路徑。"""
+    for src in (record, _read_json_quiet(workdir / "分析結果.json")):
+        v = (src or {}).get("video")
+        if v:
+            return Path(v).expanduser()
+    return None
+
+
+def _read_json_quiet(path: Path) -> dict | list | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+def _recut_one(video: Path, a: dict, channels: int) -> tuple[np.ndarray, float, float]:
+    """照候選.json 的一筆紀錄重切（不重挑、不轉文字）。回傳 (音訊, 新長度, 跟紀錄差最多幾秒)。
+    單一段落：照「最終起訖」切、壓縮停頓（跟 pick_reference 一樣）；拼接：每小段照「原片起訖」切、
+    各自壓縮停頓，再接起來，每小段都比一次長度。"""
+    if a.get("type") == "拼接":
+        pieces, diffs = [], []
+        for p in a.get("小段") or []:
+            s, e = p["原片起訖"]
+            y, _ = _compress_pauses_and_cut(cut_clip_audio(video, s, e, CLIP_SR, channels), CLIP_SR)
+            pieces.append(y)
+            if p.get("長度") is not None:
+                diffs.append(abs(len(y) / CLIP_SR - float(p["長度"])))
+        if not pieces:
+            raise ValueError("拼接候選沒有小段紀錄")
+        audio = _assemble_pieces(pieces, CLIP_SR)
+    else:
+        s, e = a.get("最終起訖") or [a["used_start"], a["used_end"]]
+        audio, _ = _compress_pauses_and_cut(cut_clip_audio(video, s, e, CLIP_SR, channels), CLIP_SR)
+        diffs = []
+    new_s = len(audio) / CLIP_SR
+    if a.get("compressed_duration") is not None:
+        diffs.append(abs(new_s - float(a["compressed_duration"])))
+    return audio, new_s, max(diffs, default=0.0)
+
+
+def recut_candidates(workdir: str | Path, video: str | Path | None = None,
+                     ref_dir_name: str = REF_DIR_NAME) -> dict:
+    """`bookclub ref recut <工作區>`（10-01）：把現有的候選音檔照 `候選.json` 記的時間重切成新格式
+    （CLIP_SR、雙聲道平均），不重挑（不呼叫 Groq、不載入聲紋模型），逐字稿不動。
+
+    - 舊的候選音檔先複製到 `參考音/舊候選備份_<時間>/`，再換上新的；不刪任何檔案
+    - 已經是新格式的略過（可以重跑）
+    - 重切出來的長度跟紀錄差超過 RECUT_MAX_DIFF_S 秒：切點可能換到別的停頓、逐字稿會對不上，那一個不換、印出來
+    - **不動已選定的 `ref.wav`／`ref.txt`**：換了老師的句子要全部重新生成，由人自己在第 2 步重選
+    """
+    import os
+    from datetime import datetime
+
+    workdir = Path(workdir).expanduser()
+    rd = _ref_dir(workdir, ref_dir_name)
+    attempts = _read_json_quiet(rd / "候選.json")
+    if not attempts:
+        raise FileNotFoundError(f"找不到 {rd / '候選.json'}：這個工作區還沒挑過參考音（bookclub ref pick），沒有東西可以重切。")
+    record_path = rd / "挑選紀錄.json"
+    record = _read_json_quiet(record_path) or {}
+    video = Path(video).expanduser() if video else _recorded_video(workdir, record)
+    if video is None or not video.is_file():
+        raise FileNotFoundError(f"找不到原片（紀錄裡是 {video}）：用 --video 指定原片位置。")
+
+    accepted = sorted((a for a in attempts if a.get("狀態") == "入選" and a.get("名次")), key=lambda a: a["名次"])
+    channels = audio_channels(video)
+    print(f"[重切] 原片 {video.name}（{channels} 聲道），候選 {len(accepted)} 個，改成 {CLIP_FORMAT_DESC}")
+
+    backup: Path | None = None
+    rows: list[dict] = []
+    for a in accepted:
+        n = a["名次"]
+        wav = rd / f"候選{n}.wav"
+        row: dict = {"名次": n, "type": a.get("type")}
+        if wav.is_file() and sf.info(str(wav)).samplerate == CLIP_SR:
+            row["結果"] = "已經是新格式，略過"
+            print(f"[重切] 候選{n}：已經是新格式，略過")
+            rows.append(row)
+            continue
+        audio, new_s, diff = _recut_one(video, a, channels)
+        row.update({"新長度": round(new_s, 2), "跟紀錄差": round(diff, 3)})
+        if diff > RECUT_MAX_DIFF_S:
+            row["結果"] = "沒換（長度差太多，逐字稿可能對不上）"
+            print(f"⚠️ [重切] 候選{n}：新長度 {new_s:.2f} 秒，跟紀錄差 {diff:.2f} 秒（超過 {RECUT_MAX_DIFF_S} 秒），"
+                  f"切點可能換了、逐字稿會對不上，這一個保留舊檔沒換")
+            rows.append(row)
+            continue
+        if wav.is_file():
+            if backup is None:
+                base = f"舊候選備份_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                backup, k = rd / base, 2
+                while backup.exists():   # 同一秒跑兩次也不蓋到上一份備份
+                    backup, k = rd / f"{base}_{k}", k + 1
+                backup.mkdir(parents=True)
+            shutil.copy2(wav, backup / wav.name)
+        tmp = rd / f"_重切中_{wav.name}"
+        write_clip_wav(tmp, audio, CLIP_SR)
+        os.replace(tmp, wav)   # 寫完才換上，中斷時不會留下半個檔
+        row["結果"] = "已換成新格式"
+        print(f"[重切] 候選{n}：{new_s:.2f} 秒（跟紀錄差 {diff:.2f} 秒），已換成新格式")
+        rows.append(row)
+
+    done = all(r["結果"] != "沒換（長度差太多，逐字稿可能對不上）" for r in rows)
+    record["候選音檔格式"] = CLIP_FORMAT_DESC if done else f"有的還是舊格式（見重切紀錄），新的是 {CLIP_FORMAT_DESC}"
+    record.setdefault("重切紀錄", []).append({
+        "時間": datetime.now().isoformat(timespec="seconds"),
+        "原片": str(video),
+        "備份資料夾": backup.name if backup else None,
+        "各候選": rows,
+    })
+    record_path.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
+    if backup:
+        print(f"[重切] 舊的候選音檔備份在 {backup}")
+
+    ref_wav = rd / "ref.wav"
+    ref_sr = sf.info(str(ref_wav)).samplerate if ref_wav.is_file() else None
+    if ref_sr is not None and ref_sr != CLIP_SR:
+        chosen = record.get("選定名次")
+        which = f"第 {chosen} 個" if chosen else "要用的那一個"
+        rank_arg = chosen if chosen else "<名次>"
+        not_new = next((r for r in rows if r["名次"] == chosen and r["結果"].startswith("沒換")), None)
+        note = f"（注意：第 {chosen} 個這次沒換成新格式，見上面）" if not_new else ""
+        print(f"[提醒] 已選定的 ref.wav 沒有換（還是 {ref_sr // 1000}kHz 的舊檔）{note}。要改用新的：到網頁第 2 步重新選定{which}"
+              f"（已選定的那一個按「存逐字稿（繼續用這一個）」也會換上新的音檔），或 bookclub ref use {workdir} {rank_arg} --text-file {rd / 'ref.txt'}；"
+              f"換了之後，老師的句子都要重新生成。")
+    return {"候選": rows, "備份資料夾": str(backup) if backup else None, "ref_wav取樣率": ref_sr}

@@ -1,6 +1,6 @@
 """bookclub/refpick.py 的輕量單元測試：只測不需要網路、不需要 Groq／pyannote
-模型的部分——壓縮停頓、候選區域找出與排序、試聽頁產生。用合成資料，不碰
-真的影片或音檔。
+模型的部分——壓縮停頓、候選區域找出與排序、試聽頁產生、候選音檔格式與 ref recut
+（10-01）。用合成資料（有 ffmpeg 的話用它切合成的假原片），不碰真的影片或音檔。
 
 獨立可跑（不需要 pytest）：.venv/bin/python tests/test_refpick.py
 裝了 pytest 的話也可以：.venv/bin/python -m pytest tests/test_refpick.py
@@ -494,6 +494,260 @@ def test_groq_retry_on_flaky_network():
     except AuthenticationError:
         assert waits == []
 
+
+
+# ---------- 10-01：候選音檔改 48kHz、雙聲道平均 ----------
+
+import json
+import shutil
+import subprocess
+import tempfile
+
+import soundfile as sf
+
+
+def _sine(seconds: float, sr: int, freq: float, amp: float) -> np.ndarray:
+    t = np.arange(int(seconds * sr)) / sr
+    return (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+
+def _band_db(x: np.ndarray, sr: int, lo: float, hi: float) -> float:
+    """lo–hi 赫茲的能量佔總能量幾分貝。"""
+    spec = np.abs(np.fft.rfft(x.astype(np.float64))) ** 2
+    f = np.fft.rfftfreq(len(x), 1 / sr)
+    return float(10 * np.log10(spec[(f >= lo) & (f < hi)].sum() / spec.sum() + 1e-20))
+
+
+def test_to_mono_identical_stereo_keeps_level():
+    """左右一樣（Zoom 錄影）：平均出來就是其中一邊，音量不變（以前相加多 3 分貝）。"""
+    a = _sine(0.5, 48000, 440, 0.6)
+    y = refpick.to_mono(np.stack([a, a], axis=1))
+    assert y.dtype == np.float32 and y.shape == a.shape
+    assert np.allclose(y, a, atol=1e-7)
+
+
+def test_to_mono_different_channels_averages():
+    a, b = _sine(0.5, 48000, 440, 0.6), _sine(0.5, 48000, 3000, 0.2)
+    y = refpick.to_mono(np.stack([a, b], axis=1))
+    assert np.allclose(y, (a + b) / 2, atol=1e-6)
+    assert np.abs(y).max() <= 0.4 + 1e-6, "左右不一樣時不能加總變大聲"
+
+
+def test_to_mono_mono_passthrough():
+    a = _sine(0.2, 48000, 440, 0.5)
+    assert np.array_equal(refpick.to_mono(a), a)
+    assert np.array_equal(refpick.to_mono(a[:, None]), a)
+
+
+def _have_ffmpeg() -> bool:
+    return bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+
+
+def test_cut_clip_audio_keeps_high_freq_and_level_stereo():
+    """假的原片：44.1kHz 雙聲道、左右一樣，220 赫茲＋10000 赫茲。切出來要 48kHz、
+    10000 赫茲還在（16kHz 時會被切掉）、峰值跟原片一邊聲道一樣。"""
+    if not _have_ffmpeg():
+        return
+    with tempfile.TemporaryDirectory() as d:
+        sr0 = 44100
+        a = _sine(3.0, sr0, 220, 0.4) + _sine(3.0, sr0, 10000, 0.1)
+        video = Path(d) / "原片.wav"
+        sf.write(str(video), np.stack([a, a], axis=1), sr0)
+        assert refpick.audio_channels(video) == 2
+        y = refpick.cut_clip_audio(video, 1.0, 2.0)
+        assert abs(len(y) - refpick.CLIP_SR) <= 2, len(y)
+        assert _band_db(y, refpick.CLIP_SR, 9500, 10500) > -20, "10000 赫茲的高音要保留"
+        assert abs(np.abs(y).max() - np.abs(a).max()) < 0.02, (np.abs(y).max(), np.abs(a).max())
+
+
+def test_cut_clip_audio_mono_source_level_unchanged():
+    """原片本來就是單聲道：音量不變（不能經過 ffmpeg 升雙聲道，那會乘 0.707）。"""
+    if not _have_ffmpeg():
+        return
+    with tempfile.TemporaryDirectory() as d:
+        a = _sine(2.0, 48000, 440, 0.5)
+        video = Path(d) / "單聲道.wav"
+        sf.write(str(video), a, 48000)
+        assert refpick.audio_channels(video) == 1
+        y = refpick.cut_clip_audio(video, 0.5, 1.5)
+        assert abs(np.abs(y).max() - 0.5) < 0.01, np.abs(y).max()
+
+
+def test_cut_clip_audio_different_channels_averaged():
+    if not _have_ffmpeg():
+        return
+    with tempfile.TemporaryDirectory() as d:
+        a, b = _sine(2.0, 48000, 440, 0.6), np.zeros(96000, dtype=np.float32)
+        video = Path(d) / "左右不同.wav"
+        sf.write(str(video), np.stack([a, b], axis=1), 48000)
+        y = refpick.cut_clip_audio(video, 0.5, 1.5)
+        assert abs(np.abs(y).max() - 0.3) < 0.01, np.abs(y).max()
+
+
+def test_write_clip_wav_is_48k_16bit_mono_and_clips():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "候選1.wav"
+        x = _sine(0.5, refpick.CLIP_SR, 440, 0.5)
+        x[100] = 1.7   # 超過上限：要截住，不能繞回去
+        refpick.write_clip_wav(p, x)
+        info = sf.info(str(p))
+        assert (info.samplerate, info.channels, info.subtype) == (48000, 1, "PCM_16")
+        y, _ = sf.read(str(p), dtype="float32")
+        assert y[100] > 0.99
+
+
+def test_wav_bytes_for_groq_is_16k():
+    import io
+
+    x = _sine(1.0, refpick.CLIP_SR, 440, 0.5)
+    data = refpick._wav_bytes_for_groq(x, refpick.CLIP_SR)
+    y, sr = sf.read(io.BytesIO(data), dtype="float32")
+    assert sr == refpick.SR and abs(len(y) - refpick.SR) <= 2
+
+
+def test_make_reference_clip_is_48k_and_compresses_pauses():
+    """單一段落：48kHz 切、停頓壓縮照舊（2 秒說話＋1 秒停頓＋2 秒說話 → 約 4.3 秒）。"""
+    if not _have_ffmpeg():
+        return
+    with tempfile.TemporaryDirectory() as d:
+        sr0 = 48000
+        x = np.concatenate([_sine(2.0, sr0, 220, 0.3), np.zeros(sr0, np.float32), _sine(2.0, sr0, 220, 0.3)])
+        video = Path(d) / "原片.wav"
+        sf.write(str(video), np.stack([x, x], axis=1), sr0)
+        clip = refpick._make_reference_clip(video, 0.0, 5.0)
+        assert clip["sr"] == refpick.CLIP_SR
+        assert abs(clip["compressed_duration"] - (4.0 + refpick.KEEP_PAUSE)) < 0.1, clip["compressed_duration"]
+        assert abs(np.abs(clip["audio"]).max() - 0.3) < 0.01
+
+
+# ---------- 10-01：bookclub ref recut ----------
+
+def _old_style_cut(video: Path, s: float, e: float) -> np.ndarray:
+    """舊做法（16kHz、ffmpeg -ac 1 相加），用來做「舊工作區」的候選。"""
+    raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-ss", str(s), "-to", str(e), "-i", str(video),
+                          "-ac", "1", "-ar", "16000", "-f", "f32le", "-"], capture_output=True, check=True).stdout
+    return np.frombuffer(raw, np.float32).copy()
+
+
+def _speechy(seconds: float, sr: int) -> np.ndarray:
+    """有說話、有長停頓的假聲音：1.5 秒聲音、0.8 秒安靜，重複。"""
+    out = []
+    while sum(len(p) for p in out) < seconds * sr:
+        out += [_sine(1.5, sr, 220, 0.3) + _sine(1.5, sr, 9000, 0.03), np.zeros(int(0.8 * sr), np.float32)]
+    return np.concatenate(out)[: int(seconds * sr)]
+
+
+def _old_workdir(d: Path) -> tuple[Path, Path]:
+    """假的舊工作區：一個單一段落候選＋一個拼接候選（16kHz 舊檔）、已選定 ref.wav。"""
+    sr0 = 48000
+    x = _speechy(60.0, sr0)
+    video = d / "原片.wav"
+    sf.write(str(video), np.stack([x, x], axis=1), sr0)
+    w = d / "工作區"
+    rd = w / "參考音"
+    rd.mkdir(parents=True)
+    y1, used1 = refpick._compress_pauses_and_cut(_old_style_cut(video, 2.0, 14.0), 16000)
+    sf.write(str(rd / "候選1.wav"), y1, 16000)
+    pieces, meta = [], []
+    for s, e in ((20.0, 26.0), (40.0, 47.0)):
+        y, used = refpick._compress_pauses_and_cut(_old_style_cut(video, s, e), 16000)
+        pieces.append(y)
+        meta.append({"原片起訖": [s, round(s + used, 2)], "長度": round(len(y) / 16000, 2), "文字": "測試"})
+    y2 = refpick._assemble_pieces(pieces, 16000)
+    sf.write(str(rd / "候選2.wav"), y2, 16000)
+    attempts = [
+        {"狀態": "入選", "名次": 1, "type": "單一段落", "最終起訖": [2.0, 14.0], "used_start": 2.0,
+         "used_end": round(2.0 + used1, 2), "compressed_duration": round(len(y1) / 16000, 2), "transcript": "測試"},
+        {"狀態": "淘汰", "名次": None, "type": "單一段落", "最終起訖": [30.0, 35.0]},
+        {"狀態": "入選", "名次": 2, "type": "拼接", "小段": meta, "compressed_duration": round(len(y2) / 16000, 2),
+         "transcript": "測試"},
+    ]
+    (rd / "候選.json").write_text(json.dumps(attempts, ensure_ascii=False), encoding="utf-8")
+    (rd / "挑選紀錄.json").write_text(json.dumps({"video": str(video), "選定名次": 1}, ensure_ascii=False), encoding="utf-8")
+    for n in (1, 2):
+        (rd / f"候選{n}.txt").write_text("測試逐字稿", encoding="utf-8")
+    shutil.copyfile(rd / "候選1.wav", rd / "ref.wav")
+    (rd / "ref.txt").write_text("校對過的逐字稿", encoding="utf-8")
+    return w, video
+
+
+def test_recut_replaces_candidates_backs_up_and_keeps_ref_wav():
+    if not _have_ffmpeg():
+        return
+    with tempfile.TemporaryDirectory() as d:
+        w, _ = _old_workdir(Path(d))
+        rd = w / "參考音"
+        old = {n: (rd / f"候選{n}.wav").read_bytes() for n in (1, 2)}
+        ref_before = (rd / "ref.wav").read_bytes()
+        out = refpick.recut_candidates(w)
+        assert [r["結果"] for r in out["候選"]] == ["已換成新格式", "已換成新格式"], out
+        for n in (1, 2):
+            info = sf.info(str(rd / f"候選{n}.wav"))
+            assert (info.samplerate, info.channels, info.subtype) == (48000, 1, "PCM_16")
+            assert (Path(out["備份資料夾"]) / f"候選{n}.wav").read_bytes() == old[n], "舊檔要原封不動備份"
+            assert (rd / f"候選{n}.txt").read_text(encoding="utf-8") == "測試逐字稿"
+        assert all(r["跟紀錄差"] <= refpick.RECUT_MAX_DIFF_S for r in out["候選"])
+        assert (rd / "ref.wav").read_bytes() == ref_before, "已選定的 ref.wav 不能自動換"
+        assert (rd / "ref.txt").read_text(encoding="utf-8") == "校對過的逐字稿"
+        assert out["ref_wav取樣率"] == 16000
+        rec = json.loads((rd / "挑選紀錄.json").read_text(encoding="utf-8"))
+        assert rec["候選音檔格式"] == refpick.CLIP_FORMAT_DESC and len(rec["重切紀錄"]) == 1
+        assert rec["選定名次"] == 1
+        assert not list(rd.glob("_重切中_*"))
+        # 新檔的音量跟原片一邊聲道一樣（舊檔相加大 3 分貝）
+        y, _ = sf.read(str(rd / "候選1.wav"), dtype="float32")
+        assert abs(np.abs(y).max() - 0.33) < 0.02, np.abs(y).max()
+
+        # 再跑一次：都已經是新格式，略過、不再建備份
+        out2 = refpick.recut_candidates(w)
+        assert all(r["結果"] == "已經是新格式，略過" for r in out2["候選"]) and out2["備份資料夾"] is None
+        assert len([p for p in rd.iterdir() if p.name.startswith("舊候選備份_")]) == 1
+
+
+def test_recut_keeps_old_file_when_length_differs():
+    """紀錄的長度跟重切的差很多（切點換了、逐字稿會對不上）：那一個不換、不備份。"""
+    if not _have_ffmpeg():
+        return
+    with tempfile.TemporaryDirectory() as d:
+        w, _ = _old_workdir(Path(d))
+        rd = w / "參考音"
+        attempts = json.loads((rd / "候選.json").read_text(encoding="utf-8"))
+        attempts[0]["compressed_duration"] += 3.0
+        (rd / "候選.json").write_text(json.dumps(attempts, ensure_ascii=False), encoding="utf-8")
+        old1 = (rd / "候選1.wav").read_bytes()
+        out = refpick.recut_candidates(w)
+        assert out["候選"][0]["結果"].startswith("沒換")
+        assert out["候選"][1]["結果"] == "已換成新格式"
+        assert (rd / "候選1.wav").read_bytes() == old1
+        assert not (Path(out["備份資料夾"]) / "候選1.wav").exists()
+        rec = json.loads((rd / "挑選紀錄.json").read_text(encoding="utf-8"))
+        assert rec["候選音檔格式"] != refpick.CLIP_FORMAT_DESC
+
+
+def test_recut_needs_candidates_and_video():
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        try:
+            refpick.recut_candidates(w)
+            assert False, "沒有候選.json 要報錯"
+        except FileNotFoundError:
+            pass
+        (w / "參考音").mkdir()
+        (w / "參考音" / "候選.json").write_text(json.dumps([{"狀態": "入選", "名次": 1}]), encoding="utf-8")
+        (w / "參考音" / "挑選紀錄.json").write_text(json.dumps({"video": str(w / "不存在.mp4")}), encoding="utf-8")
+        try:
+            refpick.recut_candidates(w)
+            assert False, "找不到原片要報錯"
+        except FileNotFoundError as e:
+            assert "--video" in str(e)
+
+
+def test_cli_ref_recut_parses():
+    from bookclub import cli
+
+    args = cli.build_parser().parse_args(["ref", "recut", "/某工作區", "--video", "/某影片.mp4"])
+    assert (args.command, args.ref_command, args.workdir, args.video, args.out_subdir) == \
+        ("ref", "recut", "/某工作區", "/某影片.mp4", "參考音")
 
 TESTS = [obj for name, obj in list(globals().items()) if name.startswith("test_") and callable(obj)]
 
