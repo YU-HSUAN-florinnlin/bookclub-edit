@@ -315,7 +315,7 @@ def main(argv: list[str] | None = None) -> int:
             from bookclub.refpick import finalize_reference
 
             text = _Path(args.text_file).read_text(encoding="utf-8")
-            finalize_reference(args.workdir, args.rank, text)
+            finalize_reference(args.workdir, args.rank, text, replace_audio=True)   # 10-01：指令列明確選定，一律換音檔
             return 0
         if args.ref_command == "recut":
             from bookclub.refpick import recut_candidates

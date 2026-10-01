@@ -462,8 +462,15 @@ def build_refs(workdir: Path, ref_dir_name: str = "參考音") -> dict:
         if wav_path.exists():
             rel = str(wav_path.relative_to(workdir))
             audio_url = f"/api/audio?path={quote(rel)}"
+        same = None
+        if rank == record.get("選定名次"):
+            from bookclub.refpick import same_audio
+
+            same = same_audio(wav_path, rd / "ref.wav")   # 10-01：重切過的候選跟還在用的舊音檔不是同一份
         candidates.append({
             "rank": rank,
+            "取樣率": _wav_rate(wav_path) if wav_path.exists() else None,
+            "跟現在用的音檔一樣": same,
             "原片時間": _candidate_time_desc(a),
             "長度秒": a.get("compressed_duration"),
             "字數": a.get("字數", len(transcript)),
@@ -472,19 +479,30 @@ def build_refs(workdir: Path, ref_dir_name: str = "參考音") -> dict:
             "音檔網址": audio_url,
         })
 
+    ref_wav = rd / "ref.wav"
     return {
         "總數": len(candidates),
         "已選定名次": record.get("選定名次"),
+        "現在用的音檔取樣率": _wav_rate(ref_wav) if ref_wav.exists() else None,
         "candidates": candidates,
     }
 
 
-def refs_use(workdir: Path, rank: int, transcript: str) -> dict:
+def refs_use(workdir: Path, rank: int, transcript: str, replace_audio: bool | None = None) -> dict:
     """選定某一名次，存成 `ref.wav`／`ref.txt`（呼叫 `bookclub/refpick.py` 的
-    `finalize_reference`，這支只是把 API 參數轉一手）。"""
+    `finalize_reference`，這支只是把 API 參數轉一手）。已選定的那一個預設只存逐字稿（10-01）。"""
     from bookclub.refpick import finalize_reference
 
-    return finalize_reference(workdir, rank, transcript)
+    return finalize_reference(workdir, rank, transcript, replace_audio)
+
+
+def _wav_rate(p: Path) -> int | None:
+    try:
+        import soundfile as sf
+
+        return int(sf.info(str(p)).samplerate)
+    except Exception:  # noqa: BLE001 — 讀不到就不顯示
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1130,7 +1148,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/refs/use":
             rank = int(body["rank"])
             transcript = str(body.get("transcript", ""))
-            self._send_json(200, refs_use(server.workdir, rank, transcript))
+            replace = body.get("換音檔")   # 10-01：只有按「改用這一個」「換成這個候選的新音檔」才換
+            self._send_json(200, refs_use(server.workdir, rank, transcript,
+                                          None if replace is None else bool(replace)))
         elif path == "/api/names/mark":
             cid = str(body["id"])
             tags = body.get("tags", [])

@@ -592,8 +592,21 @@ def _fingerprint(path: str, _mtime_ns: int, _size: int) -> str:
 
 
 def same_ref_file(rec: dict, ref_wav: str | Path) -> bool:
-    """紀錄裡的參考音跟現在的是不是同一個（路徑相同、內容也相同；舊紀錄沒有指紋就只比路徑）。"""
-    return rec.get("參考音") == str(ref_wav) and rec.get("參考音指紋") in (None, ref_fingerprint(ref_wav))
+    """紀錄裡的參考音跟現在的是不是同一個。紀錄有指紋就只比內容（10-01：工作區複製到別的資料夾，
+    路徑不同但內容一樣，不該整批重新生成）；沒有指紋的舊紀錄才比路徑。"""
+    fp = rec.get("參考音指紋")
+    if fp:
+        return fp == ref_fingerprint(ref_wav)
+    return rec.get("參考音") == str(ref_wav)
+
+
+def ref_key(ref_wav: str | Path, ref_fp: str | None = None, legacy: bool = False) -> str:
+    """生成快取鍵裡的參考音部分。10-01 起有指紋只記指紋（複製到別處照樣沿用）；
+    legacy=True 是 10-01 以前的寫法（路徑#指紋），讀舊快取用。"""
+    fp = ref_fingerprint(ref_wav) if ref_fp is None else ref_fp
+    if legacy or not fp:
+        return f"{ref_wav}#{fp}"
+    return f"參考音#{fp}"
 
 
 SLOT_TOLERANCE_S = 0.05
@@ -699,14 +712,22 @@ def run_generation(
     cache = wd.read_json(cache_path, default=None) or {}
     ref_fp = ref_fingerprint(ref_wav)
 
-    def akey(it: dict, n: int, seed: int, speed: float) -> str:
-        return f"{it['id']}|{n}|{seed}|{speed}|{it.get('生成用文字') or it['text']}|{ref_wav}#{ref_fp}"
+    def akey(it: dict, n: int, seed: int, speed: float, legacy: bool = False) -> str:
+        return f"{it['id']}|{n}|{seed}|{speed}|{it.get('生成用文字') or it['text']}|{ref_key(ref_wav, ref_fp, legacy)}"
+
+    def cache_hit(key_new: str, key_old: str) -> tuple[str, dict | None]:
+        """10-01：先找新寫法的鍵，找不到再找舊寫法（路徑#指紋）；找到舊的就搬成新鍵。"""
+        if key_new in cache:
+            return key_new, cache[key_new]
+        if key_old != key_new and key_old in cache:
+            cache[key_new] = cache[key_old]
+            return key_new, cache[key_new]
+        return key_new, None
 
     def attempt(it: dict, n: int, seed: int, speed: float) -> Attempt:
         """生成一次；同一句同一種子語速文字已經生成過（上次中斷），直接沿用檔案與檢查結果。"""
         nonlocal synth, similar, want_similar
-        key = akey(it, n, seed, speed)
-        hit = cache.get(key)
+        key, hit = cache_hit(akey(it, n, seed, speed), akey(it, n, seed, speed, legacy=True))
         if hit and (out_dir / f"{it['id']}_第{n}次.wav").is_file():
             say(f"  第 {n} 次：沿用上次生成的檔案")
             att = Attempt(**hit)
@@ -751,9 +772,13 @@ def run_generation(
     pcache_path = out_dir / PAUSE_CACHE
     pcache = (wd.read_json(pcache_path, default=None) or {}) if phase else {}
 
-    def pkey(it: dict, bi: int) -> str:
+    def pkey(it: dict, bi: int, legacy: bool = False) -> str:
         a = histories[it["id"]][bi]
-        return f"{akey(it, bi + 1, a.seed, a.speed)}|{it.get('原文')}|{it['slot']}"
+        return f"{akey(it, bi + 1, a.seed, a.speed, legacy)}|{it.get('原文')}|{it['slot']}"
+
+    def pkey_ok(ent: dict | None, it: dict, bi: int) -> bool:
+        """停頓快取對不對得上（10-01：舊寫法的鍵也算）。"""
+        return bool(ent) and ent.get("鍵") in (pkey(it, bi), pkey(it, bi, legacy=True))
 
     def use_entry(it: dict, ent: dict) -> None:
         sid = it["id"]
@@ -771,7 +796,7 @@ def run_generation(
             miss = []
             for it in slotted:
                 ent = pcache.get(it["id"])
-                if ent and ent.get("鍵") == pkey(it, _base_index(histories[it["id"]])):
+                if pkey_ok(ent, it, _base_index(histories[it["id"]])):
                     use_entry(it, ent)
                 else:
                     miss.append(it["id"])
@@ -802,7 +827,7 @@ def run_generation(
                 if phase == "停頓":
                     check_stop(workdir)   # 10-01：停頓那一支也是做完一句就停
                     ent = pcache.get(sid)
-                    if not fresh_pauses and ent and ent.get("鍵") == pkey(it, bi):
+                    if not fresh_pauses and pkey_ok(ent, it, bi):
                         use_entry(it, ent)
                         continue
                 ent = {"鍵": pkey(it, bi), "ctx": None, "插入停頓": None}

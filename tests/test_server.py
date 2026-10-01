@@ -241,7 +241,7 @@ def test_build_refs_returns_accepted_sorted_by_rank_with_audio_url():
 def test_build_refs_missing_files_returns_empty():
     with _TmpWorkdir() as wd:
         result = srv.build_refs(wd)
-        assert result == {"總數": 0, "已選定名次": None, "candidates": []}
+        assert result == {"總數": 0, "已選定名次": None, "現在用的音檔取樣率": None, "candidates": []}
 
 
 # ---------- /api/refs/use ----------

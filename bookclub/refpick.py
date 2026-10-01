@@ -1435,8 +1435,13 @@ def pick_reference(
     return {**record, "candidates": candidates_out, "html_path": str(html_path)}
 
 
-def finalize_reference(workdir: str | Path, rank: int, transcript_text: str) -> dict:
-    """夥伴聽完、逐字稿修好之後呼叫：把候選{rank}.wav 存成 ref.wav，逐字稿存成 ref.txt。"""
+def finalize_reference(workdir: str | Path, rank: int, transcript_text: str,
+                       replace_audio: bool | None = None) -> dict:
+    """夥伴聽完、逐字稿修好之後呼叫：逐字稿存成 ref.txt；選另一個候選時把候選{rank}.wav 存成 ref.wav。
+
+    replace_audio（10-01）：None＝選的是另一個候選（或還沒有 ref.wav）才換音檔，已選定的那一個只存逐字稿
+    （候選用 `ref recut` 重切過之後，只想改逐字稿不該連音檔一起換、害老師的句子全部重新生成）；
+    True＝人明確要換成這個候選的音檔；False＝只存逐字稿。"""
     workdir = Path(workdir).expanduser()
     ref_dir = _ref_dir(workdir)
     src_wav = ref_dir / f"候選{rank}.wav"
@@ -1445,16 +1450,32 @@ def finalize_reference(workdir: str | Path, rank: int, transcript_text: str) -> 
 
     dst_wav = ref_dir / "ref.wav"
     dst_txt = ref_dir / "ref.txt"
-    shutil.copyfile(src_wav, dst_wav)
-    dst_txt.write_text(transcript_text, encoding="utf-8")
-
     record_path = ref_dir / "挑選紀錄.json"
     record = json.loads(record_path.read_text(encoding="utf-8")) if record_path.exists() else {}
+    if replace_audio is None:
+        replace_audio = record.get("選定名次") != rank or not dst_wav.exists()
+    if not replace_audio and record.get("選定名次") != rank:
+        raise ValueError(f"現在選定的不是第 {rank} 個，只存逐字稿會讓逐字稿跟音檔對不上")
+    if replace_audio:
+        shutil.copyfile(src_wav, dst_wav)
+    dst_txt.write_text(transcript_text, encoding="utf-8")
+
     record["選定名次"] = rank
     record_path.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    print(f"[完成] 已存成 {dst_wav} 與 {dst_txt}")
-    return {"ref_wav": str(dst_wav), "ref_txt": str(dst_txt), "rank": rank}
+    print(f"[完成] 已存成 {dst_txt}" + (f" 與 {dst_wav}" if replace_audio else "（音檔沒換）"))
+    return {"ref_wav": str(dst_wav), "ref_txt": str(dst_txt), "rank": rank, "換了音檔": replace_audio}
+
+
+def same_audio(a: Path, b: Path) -> bool | None:
+    """兩個音檔內容是不是一模一樣（10-01：第 2 步看「現在用的」跟「這個候選」是不是同一份）。有一個不在就 None。"""
+    import hashlib
+
+    if not (a.is_file() and b.is_file()):
+        return None
+    if a.stat().st_size != b.stat().st_size:
+        return False
+    return hashlib.sha1(a.read_bytes()).digest() == hashlib.sha1(b.read_bytes()).digest()
 
 
 # ---------- 舊工作區換成新格式的候選（10-01） ----------
@@ -1583,6 +1604,6 @@ def recut_candidates(workdir: str | Path, video: str | Path | None = None,
         not_new = next((r for r in rows if r["名次"] == chosen and r["結果"].startswith("沒換")), None)
         note = f"（注意：第 {chosen} 個這次沒換成新格式，見上面）" if not_new else ""
         print(f"[提醒] 已選定的 ref.wav 沒有換（還是 {ref_sr // 1000}kHz 的舊檔）{note}。要改用新的：到網頁第 2 步重新選定{which}"
-              f"（已選定的那一個按「存逐字稿（繼續用這一個）」也會換上新的音檔），或 bookclub ref use {workdir} {rank_arg} --text-file {rd / 'ref.txt'}；"
+              f"（已選定的那一個按「換成這個候選的新音檔」），或 bookclub ref use {workdir} {rank_arg} --text-file {rd / 'ref.txt'}；"
               f"換了之後，老師的句子都要重新生成。")
     return {"候選": rows, "備份資料夾": str(backup) if backup else None, "ref_wav取樣率": ref_sr}

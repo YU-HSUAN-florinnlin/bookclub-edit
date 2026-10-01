@@ -197,6 +197,25 @@ def test_real_name_and_code_columns():
     assert r["改成老師"] and "學員2" not in turns_mod.page_data(w)["學員"]
 
 
+def test_current_ref_uses_this_workdir_ref():
+    """10-01：第 4 步「做過沒有」比的是這個工作區裡的參考音（複製到別處時紀錄記的是舊路徑）。"""
+    from bookclub import studentgen, tts
+
+    with tempfile.TemporaryDirectory() as d:
+        old = Path(d) / "舊" / "參考音" / "學員" / "學員1" / "ref.wav"
+        old.parent.mkdir(parents=True)
+        old.write_bytes(b"RIFFxx")
+        new_w = Path(d) / "新"
+        rec = {"參考音": str(old), "參考音指紋": tts.ref_fingerprint(old)}
+        assert studentgen.current_ref(new_w, "學員1", rec) == str(old)     # 這裡還沒挑過：照紀錄
+        cur = studentgen.ref_dir(new_w, "學員1") / "ref.wav"
+        cur.parent.mkdir(parents=True)
+        cur.write_bytes(b"RIFFxx")
+        old.unlink()                                                      # 舊工作區刪掉了
+        assert studentgen.current_ref(new_w, "學員1", rec) == str(cur)
+        assert tts.same_ref_file(rec, studentgen.current_ref(new_w, "學員1", rec))
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

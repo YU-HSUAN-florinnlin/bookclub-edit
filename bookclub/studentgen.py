@@ -38,6 +38,13 @@ def ref_dir(workdir: Path, who: str) -> Path:
     return Path(workdir) / "參考音" / "學員" / who
 
 
+def current_ref(workdir: Path, who: str, rec: dict | None = None) -> str | None:
+    """第 4 步「做過沒有」比的參考音（10-01）：這個工作區裡這位學員的 ref.wav，跟生成程式用的同一個；
+    工作區複製到別處時，紀錄記的是舊路徑，比內容指紋就好。還沒挑過參考音才退回紀錄記的路徑。"""
+    p = ref_dir(workdir, who) / "ref.wav"
+    return str(p) if p.is_file() else (rec or {}).get("參考音")
+
+
 # ---------- 挑參考音（純函式＋讀音檔） ----------
 
 def ref_windows(sents: list[dict], blocked: list[tuple[float, float]], min_s: float | None = None,
@@ -140,7 +147,7 @@ def pending(workdir: str | Path) -> list[str]:
     left = {g["學員"] for g in sp["生成"] if g["id"] not in back
             and (not (recs.get(g["id"]) or {}).get("放回時間格")
                  or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]},
-                                     recs[g["id"]].get("參考音")))}
+                                     current_ref(workdir, g["學員"], recs[g["id"]])))}
     return sorted(left)
 
 

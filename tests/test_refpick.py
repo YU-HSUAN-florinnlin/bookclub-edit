@@ -749,6 +749,78 @@ def test_cli_ref_recut_parses():
     assert (args.command, args.ref_command, args.workdir, args.video, args.out_subdir) == \
         ("ref", "recut", "/某工作區", "/某影片.mp4", "參考音")
 
+
+# ---------- 10-01：第 2 步「存逐字稿」只存逐字稿，換音檔要明確選 ----------
+
+def _chosen_workdir(d: Path) -> Path:
+    import json
+
+    import soundfile as sf
+
+    rd = d / "參考音"
+    rd.mkdir(parents=True)
+    sf.write(str(rd / "候選1.wav"), _tone(2.0, 48000), 48000)      # 重切過的新候選
+    sf.write(str(rd / "候選2.wav"), _tone(2.0, 48000, 330.0), 48000)
+    sf.write(str(rd / "ref.wav"), _tone(2.0, 16000), 16000)         # 還在用的舊音檔
+    (rd / "ref.txt").write_text("舊逐字稿", encoding="utf-8")
+    for n in (1, 2):
+        (rd / f"候選{n}.txt").write_text("初稿", encoding="utf-8")
+    (rd / "挑選紀錄.json").write_text(json.dumps({"選定名次": 1}), encoding="utf-8")
+    (rd / "候選.json").write_text(json.dumps([{"狀態": "入選", "名次": n, "最終起訖": [0, 2]} for n in (1, 2)]),
+                                 encoding="utf-8")
+    return d
+
+
+def test_finalize_reference_chosen_only_saves_text():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        w = _chosen_workdir(Path(d))
+        rd = w / "參考音"
+        before = (rd / "ref.wav").read_bytes()
+        out = refpick.finalize_reference(w, 1, "改過的逐字稿")
+        assert out["換了音檔"] is False
+        assert (rd / "ref.wav").read_bytes() == before, "已選定的那一個存逐字稿不能換音檔"
+        assert (rd / "ref.txt").read_text(encoding="utf-8") == "改過的逐字稿"
+        # 明確要換：換成候選的新音檔
+        out = refpick.finalize_reference(w, 1, "改過的逐字稿", replace_audio=True)
+        assert out["換了音檔"] and (rd / "ref.wav").read_bytes() == (rd / "候選1.wav").read_bytes()
+
+
+def test_finalize_reference_other_rank_swaps_audio():
+    import json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        w = _chosen_workdir(Path(d))
+        rd = w / "參考音"
+        try:
+            refpick.finalize_reference(w, 2, "只存逐字稿", replace_audio=False)
+            assert False, "沒選定的那一個只存逐字稿會對不上，要報錯"
+        except ValueError:
+            pass
+        out = refpick.finalize_reference(w, 2, "第二個")
+        assert out["換了音檔"] and (rd / "ref.wav").read_bytes() == (rd / "候選2.wav").read_bytes()
+        assert json.loads((rd / "挑選紀錄.json").read_text(encoding="utf-8"))["選定名次"] == 2
+
+
+def test_build_refs_shows_whether_chosen_audio_is_same():
+    import tempfile
+
+    from bookclub import server
+
+    with tempfile.TemporaryDirectory() as d:
+        w = _chosen_workdir(Path(d))
+        r = server.build_refs(w)
+        c1 = r["candidates"][0]
+        assert c1["rank"] == 1 and c1["跟現在用的音檔一樣"] is False
+        assert c1["取樣率"] == 48000 and r["現在用的音檔取樣率"] == 16000
+        assert r["candidates"][1]["跟現在用的音檔一樣"] is None     # 沒選定的不比
+        assert c1["transcript"] == "舊逐字稿"
+        server.refs_use(w, 1, "新逐字稿", True)
+        r = server.build_refs(w)
+        assert r["candidates"][0]["跟現在用的音檔一樣"] is True and r["現在用的音檔取樣率"] == 48000
+
 TESTS = [obj for name, obj in list(globals().items()) if name.startswith("test_") and callable(obj)]
 
 

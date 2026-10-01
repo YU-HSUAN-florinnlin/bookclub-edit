@@ -543,5 +543,69 @@ def test_three_programs_speed_retry_only_in_last():
         assert calls == [1.0, 0.85]             # 改語速重生成在收尾那一支
         assert [v["版本"] for v in r["候選做法"]] == ["補靜音", "改語速重生成", "拉長"]
 
+
+# ---------- 10-01：工作區複製到別的資料夾，參考音只比內容 ----------
+
+def test_same_ref_file_compares_content_when_fingerprint_recorded():
+    a = Path(tempfile.mkdtemp()) / "參考音" / "ref.wav"
+    a.parent.mkdir()
+    a.write_bytes(b"AAAA")
+    b = Path(tempfile.mkdtemp()) / "別的資料夾" / "ref.wav"
+    b.parent.mkdir()
+    b.write_bytes(b"AAAA")
+    rec = {"參考音": str(a), "參考音指紋": tts.ref_fingerprint(a)}
+    assert tts.same_ref_file(rec, a)
+    assert tts.same_ref_file(rec, b), "路徑不同、內容一樣：算同一個"
+    b.write_bytes(b"BBBB")
+    assert not tts.same_ref_file(rec, b), "內容換了：不算"
+    old = {"參考音": str(a)}                          # 舊紀錄沒有指紋：只比路徑
+    assert tts.same_ref_file(old, a) and not tts.same_ref_file(old, b)
+    it = {"text": "你好", "slot": [1.0, 2.0]}
+    assert not tts.record_stale({**rec, **it}, it, a.parent.parent / "參考音" / "ref.wav")
+    assert tts.ref_key(a) == f"參考音#{tts.ref_fingerprint(a)}"
+    assert tts.ref_key(a, legacy=True) == f"{a}#{tts.ref_fingerprint(a)}"
+
+
+def test_copied_workdir_reuses_teacher_sentences():
+    """生成完把整個工作區複製到別處：老師的句子全部沿用，不重新生成（10-01）。"""
+    with tempfile.TemporaryDirectory() as d:
+        work = Path(d) / "原本"
+        ref = work / "參考音"
+        ref.mkdir(parents=True)
+        sf.write(str(ref / "ref.wav"), np.zeros(SR, dtype=np.float32), SR)
+        (ref / "ref.txt").write_text("參考", encoding="utf-8")
+        (work / "句子.json").write_text(json.dumps([{"id": "A", "text": "甲乙丙丁", "slot_s": 6.0},
+                                                   {"id": "B", "text": "戊己庚辛", "slot_s": 6.0}]), encoding="utf-8")
+        hear = lambda p: "甲乙丙丁" if "A_" in Path(p).name else "戊己庚辛"   # noqa: E731
+        tts.generate_teacher(work, work / "句子.json", synth=lambda t, s, v: (_tone_s(4.0), SR), hear=hear,
+                             check_similarity=False, use_pauses=False)
+        copy = Path(d) / "複製到別處"
+        shutil.copytree(work, copy)
+        r = tts.generate_teacher(copy, copy / "句子.json", synth=_never, hear=hear, check_similarity=False,
+                                 use_pauses=False)
+        assert [x["id"] for x in r["句子"]] == ["A", "B"]
+
+
+def test_legacy_attempt_cache_key_still_used():
+    """10-01 以前的生成快取鍵（路徑#指紋）照樣沿用，跑到一半換新版程式不用重新生成。"""
+    with tempfile.TemporaryDirectory() as d:
+        work = Path(d)
+        ref = work / "參考音"
+        ref.mkdir()
+        sf.write(str(ref / "ref.wav"), np.zeros(SR, dtype=np.float32), SR)
+        (ref / "ref.txt").write_text("參考", encoding="utf-8")
+        (work / "句子.json").write_text(json.dumps([{"id": "A", "text": "甲乙丙丁", "slot_s": 6.0}]), encoding="utf-8")
+        hear = lambda p: "甲乙丙丁"   # noqa: E731
+        tts.generate_teacher(work, work / "句子.json", synth=lambda t, s, v: (_tone_s(4.0), SR), hear=hear,
+                             check_similarity=False, phase="生成")
+        od = tts.teacher_out_dir(work)
+        cache = json.loads((od / tts.ATTEMPT_CACHE).read_text(encoding="utf-8"))
+        fp = tts.ref_fingerprint(ref / "ref.wav")
+        old = {k.replace(f"參考音#{fp}", f"{ref / 'ref.wav'}#{fp}"): v for k, v in cache.items()}
+        assert old != cache
+        (od / tts.ATTEMPT_CACHE).write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+        tts.generate_teacher(work, work / "句子.json", synth=_never, hear=hear, check_similarity=False,
+                             phase="生成")
+
 if __name__ == "__main__":
     sys.exit(_run_all())

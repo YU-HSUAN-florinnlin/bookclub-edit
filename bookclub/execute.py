@@ -465,9 +465,11 @@ def students_done(workdir: Path, a: float | None, b: float | None) -> tuple[bool
     recs = {r["id"]: r for r in log.get("句子", [])}
     table = tts.load_pron_table()
     # 09-29 檢查 #7：跟生成程式用同一個判斷（文字、發音對照表、時間格、參考音內容）
+    # 10-01：比「現在配到的聲線」，不是紀錄自己記的路徑（以前等於自己比自己，換了聲線也看不出來）
+    now = students.current_refs(workdir, items) if recs else {}
     left = [it["id"] for it in items if not (recs.get(it["id"]) or {}).get("放回時間格")
             or tts.record_stale(recs[it["id"]], {**it, "生成用文字": tts.apply_pron(it["text"], table)[0]},
-                                recs[it["id"]].get("參考音"))]
+                                now.get(it["學員"]) or recs[it["id"]].get("參考音"))]
     return (not left), (f"{len(items)} 段都生成好了" if not left else f"還有 {len(left)}／{len(items)} 段要生成")
 
 
@@ -486,7 +488,7 @@ def stunames_done(workdir: Path) -> tuple[bool, str]:
     left = [g["id"] for g in sp["生成"] if g["id"] not in back
             and (not (recs.get(g["id"]) or {}).get("放回時間格")
                  or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]},
-                                     recs[g["id"]].get("參考音")))]
+                                     studentgen.current_ref(workdir, g["學員"], recs[g["id"]])))]
     return (not left), (f"{len(sp['生成'])} 句都處理好了" if not left else f"還有 {len(left)}／{len(sp['生成'])} 句要生成")
 
 

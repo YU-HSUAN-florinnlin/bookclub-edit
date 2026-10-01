@@ -734,8 +734,10 @@ function renderStep2Body(play = false) {
       </div>
       <p style="margin-top:12px;">逐字稿（可以直接修改；要跟聲音一字不差）：</p>
       <textarea id="refText" rows="4">${esc(text)}</textarea>
+      ${refAudioNote(c, isChosen)}
       <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <button id="btnUse">${isChosen ? "存逐字稿（繼續用這一個）" : "改用這一個"}</button>
+        <button id="btnUse">${isChosen ? "存逐字稿（音檔不換）" : "改用這一個"}</button>
+        ${isChosen && c["跟現在用的音檔一樣"] === false ? `<button id="btnSwapAudio" class="secondary">換成這個候選的新音檔</button>` : ""}
       </div>
       <p id="refMsg"></p>
     </div>
@@ -747,21 +749,45 @@ function renderStep2Body(play = false) {
   const audio = document.getElementById("refAudio");
   if (play && audio) audio.play().catch(() => {});   // 切換過來的直接播，方便比對
 
-  document.getElementById("btnUse").addEventListener("click", async () => {
+  // 10-01：「存逐字稿」只存逐字稿；換音檔只在「改用這一個」「換成這個候選的新音檔」（老師的句子會全部重新生成）
+  const save = async (swapAudio) => {
     const msgEl = document.getElementById("refMsg");
     const text = document.getElementById("refText").value;
+    if (swapAudio && chosenRank != null &&
+        !confirm(`換了音檔之後，已經生成好的老師句子都要重新生成。確定要${isChosen ? "換成這個候選的新音檔" : `改用第 ${refsPointer + 1} 個`}？`)) return;
     try {
-      await apiPost("/api/refs/use", { rank: c.rank, transcript: text });
-      refsCache["已選定名次"] = c.rank;
-      c.transcript = text;
+      const r = await apiPost("/api/refs/use", { rank: c.rank, transcript: text, 換音檔: swapAudio });
+      refsCache = await apiGet("/api/refs");
       delete refsDrafts[c.rank];
       renderStep2Body();
-      document.getElementById("refMsg").innerHTML = `<span class="badge done">已存檔</span> 目前選定第 ${refsPointer + 1} 個（已存成 ref.wav／ref.txt）`;
+      document.getElementById("refMsg").innerHTML = r["換了音檔"]
+        ? `<span class="badge done">已存檔</span> 目前選定第 ${refsPointer + 1} 個：逐字稿和音檔都換成這一個`
+        : `<span class="badge done">已存檔</span> 只存了逐字稿，音檔沒有換`;
       await renderSidebar();
     } catch (e) {
       msgEl.innerHTML = `<span class="badge error">失敗</span> ${esc(e.message)}`;
     }
-  });
+  };
+  document.getElementById("btnUse").addEventListener("click", () => save(!isChosen));
+  const swapBtn = document.getElementById("btnSwapAudio");
+  if (swapBtn) swapBtn.addEventListener("click", () => save(true));
+}
+
+function refRateName(rate) {   // 10-01：不用「48kHz」這種說法
+  if (!rate) return "";
+  return rate >= 44100 ? "保留高音的新版" : "舊版（高音比較少）";
+}
+
+function refAudioNote(c, isChosen) {
+  // 10-01：看得出「現在用的音檔」跟「這個候選的音檔」是不是同一份（候選重切過、選定的還是舊的）
+  if (!isChosen) return "";
+  const same = c["跟現在用的音檔一樣"];
+  if (same === true) return `<p class="hint">現在用的音檔就是這個候選的音檔（${esc(refRateName(c["取樣率"]))}）。</p>`;
+  if (same === false) {
+    return `<div class="notyet-card" style="margin-top:10px;">現在用的音檔（${esc(refRateName(refsCache["現在用的音檔取樣率"]) || "舊的")}）跟這個候選的音檔（${esc(refRateName(c["取樣率"]) || "重切過")}）不是同一份。
+      按「存逐字稿（音檔不換）」只存逐字稿；要改用這個候選的音檔，按「換成這個候選的新音檔」，換了之後老師的句子都要重新生成。</div>`;
+  }
+  return "";
 }
 
 document.addEventListener("keydown", (e) => {   // 第 2 步：← → 切換候選（在打字時不搶）

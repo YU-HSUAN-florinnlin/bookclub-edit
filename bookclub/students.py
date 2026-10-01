@@ -500,6 +500,15 @@ def voice_page(workdir: Path, people: dict) -> dict:
     return {"每位": got, "選項": {g: [voice_name(f) for f in fs] for g, fs in voice_pool().items()}}
 
 
+def current_refs(workdir: Path, items: list[dict]) -> dict[str, str | None]:
+    """第 4 步「做過沒有」用（10-01）：每位學員現在配到的聲線檔（不估基頻、不載入模型）。
+    跟生成程式比同一個檔案，才不會一邊說做過了、一邊說要重做；還沒配到的給 None（照紀錄判斷）。"""
+    people = _people(workdir)
+    order = sorted({it["學員"] for it in items}, key=lambda n: people.get(n, {}).get("第一次", 0.0))
+    got = assign_voices(workdir, order, {}, people=people, estimate=False, log=lambda s: None)
+    return {who: (v or {}).get("檔案") for who, v in got.items()}
+
+
 def _people(workdir: Path) -> dict:
     """段落分析的學員表（學員N → 本名等），加上第一次出現的時間（輪流配聲線照這個順序）。"""
     from bookclub import turns as turns_mod
