@@ -172,10 +172,58 @@ def _uncovered(a: float, b: float, ranges: list[tuple[float, float]]) -> float:
     return sum(e - s for s, e in assemble.subtract(a, b, ranges))
 
 
+def t1(sec: float) -> str:
+    """秒數 → 「0:53:18.8」（總檢查的說明要看得出零點幾秒的差別；wd.fmt_time 只到秒）。"""
+    sec = max(0.0, float(sec))
+    h, r = divmod(sec, 3600)
+    m, s = divmod(r, 60)
+    return f"{int(h)}:{int(m):02d}:{s:04.1f}"
+
+
+def _gap_rows(a: float, b: float, named: list[dict], min_s: float) -> tuple[list[tuple[float, float]], list[dict]]:
+    """[a, b] 裡沒被任何處理蓋到的小段（每段至少 min_s 秒），與蓋到一部分的那幾筆（純函式，10-01 1-4）。"""
+    from bookclub import assemble
+
+    left = [(s, e) for s, e in assemble.subtract(a, b, [(x["start"], x["end"]) for x in named]) if e - s >= min_s]
+    hit = [x for x in named if x["start"] < b and a < x["end"]]
+    return left, hit
+
+
+def _fix_paths(a: float, b: float, near: list[dict], index: dict, *, turn: dict | None = None) -> list[dict]:
+    """「聽了有學員的聲音」可以走的路（10-01 1-3）：每一條帶到第 3 步，起訖先填好。
+    near：這段前後 0.5 秒內的處理（可以延長包住）；turn：最近的學員段落（可以把起訖改大包住）。"""
+    paths = []
+    if turn is not None:
+        key = f"學員段落:{turn['id']}"
+        name = (index.get(key) or {}).get("名稱") or f"學員段落 {wd.fmt_time(turn['start'])}"
+        paths.append({"文字": f"把〈{name}〉的起訖改大，包住這一段", "第3步": key,
+                      "改時間": {"類型": "學員發言", "id": turn["id"], "名稱": name,
+                              "start": round(min(turn["start"], a), 3), "end": round(max(turn["end"], b), 3)}})
+    for x in near:
+        info = index.get(x.get("鍵") or "")
+        if not info or not info.get("改時間") or info.get("類型") in ("學員段落",) or info.get("疊放"):
+            continue
+        if info.get("類型") == "名字" and not info.get("老師整段"):
+            continue   # 老師提到名字的範圍照句子走，延長要在卡片上改重念範圍
+        paths.append({"文字": f"把〈{info['名稱']}〉的起訖改大，包住這一段", "第3步": info["第3步"],
+                      "改時間": {"類型": info["改時間"], "id": info["id"], "名稱": info["名稱"],
+                              "start": round(min(info["start"], a), 3), "end": round(max(info["end"], b), 3)}})
+    who = turn.get("說話者") if turn else None
+    paths += [{"文字": "新增一筆「漏抓的發言」（這一段用學員的匿名聲音重念）",
+               "新增": {"類型": "學員發言", "start": round(a, 3), "end": round(b, 3), **({"說話者": who} if who else {})}},
+              {"文字": "新增一筆「消音」（只拿掉這一段的聲音）", "新增": {"類型": "局部消音", "start": round(a, 3), "end": round(b, 3)}},
+              {"文字": "新增一筆「重疊」（老師和學員同時在講）", "新增": {"類型": "重疊", "start": round(a, 3), "end": round(b, 3)}}]
+    return paths
+
+
 def final_check(workdir: str | Path) -> dict:
     """第 3 步全部通過之後、開始第 4 步之前的總檢查（只讀）。回傳：
-    {一定要處理: [列], 請看一眼: [列], 可以開始: bool}；每一列 {key, start, end, 說明, 可以按聽過?, 已按聽過?}。
-    「一定要處理」有還沒按聽過的列就不能開始；「請看一眼」不擋（網頁上要按一次「我看過了」）。"""
+    {一定要處理: [列], 請看一眼: [列], 可以開始: bool}；每一列 {key, start, end, 說明, 可以按聽過?, 已按聽過?,
+    名稱（畫面上看得到的名稱）, 第3步（第 3 步那一張卡片的鍵，沒有卡片是 None）, 去改（去第 3 步要改什麼）,
+    有學員聲音（聽了有學員聲音時可以走的路，見 `_fix_paths`）}。
+    「一定要處理」有還沒按聽過的列就不能開始；「請看一眼」不擋（網頁上要按一次「我看過了」）。
+    10-01：說明一律用畫面上看得到的名稱（不寫 T062、O5602.14 這類內部編號）；學員的話落在段落外面的，
+    已經被別筆處理蓋到的那一部分不再列（只列沒蓋到的那幾秒，說明寫哪一筆蓋了多少）。"""
     import shutil
 
     from bookclub import assemble, nameplan, review, students
@@ -190,86 +238,158 @@ def final_check(workdir: str | Path) -> dict:
     by_id = {x["id"]: x for x in sents}
     words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words") or []
     kept = {k for k, v in dec["學員聲音"].items() if v == "保留原聲"}
+    index = review.item_index(workdir, dec, turns)
     try:
         items, _ = students.build_items(workdir)
     except FileNotFoundError:
         items = []
     plan = nameplan.compute_plan(workdir) if wd.read_json(wd.names_path(workdir), default=None) else {"生成": [], "消音": [], "要人處理": []}
-    cuts = [(c["start"], c["end"]) for c in dec["刪除段落"] if c.get("狀態") != "還原"]
-    mutes = [(m["start"], m["end"]) for m in assemble.local_mutes(dec)] + [(m["start"], m["end"]) for m in plan.get("消音", [])]
-    teacher = [tuple(g["slot"]) for g in plan["生成"]]
-    stu_slots = [tuple(it["slot"]) for it in items]
-    handled = cuts + mutes + teacher + stu_slots
+
+    def gen_name(g: dict) -> tuple[str, str | None]:
+        """老師重念那一筆 → (名稱, 卡片的鍵)。"""
+        cands = [str(c) for c in g.get("候選", [])]
+        if cands and f"名字:{cands[0]}" in index:
+            info = index[f"名字:{cands[0]}"]
+            return (info["名稱"] if info.get("老師整段") else f"老師重念 {wd.fmt_time(g['slot'][0])}（{info['名稱']}）"), f"名字:{cands[0]}"
+        ovs = g.get("重疊項目") or []
+        if ovs and f"重疊:{ovs[0]}" in index:
+            return f"{index[f'重疊:{ovs[0]}']['名稱']} 的老師那一句", f"重疊:{ovs[0]}"
+        return f"老師重念 {wd.fmt_time(g['slot'][0])}", None
+
+    # 會把原聲換掉或拿掉的範圍，每一筆帶畫面上的名稱（說明「哪一筆蓋到了」用）
+    named: list[dict] = []
+    for c in dec["刪除段落"]:
+        if c.get("狀態") != "還原":
+            k = f"刪除段落:{c.get('建議id') or c['id']}"
+            named.append({"start": c["start"], "end": c["end"], "名稱": review.item_name(index, k), "鍵": k})
+    for m in assemble.local_mutes(dec):
+        k = f"局部消音:{m['id']}"
+        named.append({"start": m["start"], "end": m["end"], "名稱": review.item_name(index, k), "鍵": k})
+    for m in plan.get("消音", []):
+        k = f"名字:{m['候選']}"
+        named.append({"start": m["start"], "end": m["end"], "名稱": f"{review.item_name(index, k)}（直接消音）", "鍵": k})
+    for g in plan["生成"]:
+        nm, k = gen_name(g)
+        named.append({"start": g["slot"][0], "end": g["slot"][1], "名稱": nm, "鍵": k})
+    for it in items:
+        k = f"重疊:{it['重疊']}" if it.get("重疊") else f"學員段落:{it['段落']}"
+        nm = f"{review.item_name(index, k)} 的學員那一句" if it.get("重疊") else review.item_name(index, k)
+        named.append({"start": it["slot"][0], "end": it["slot"][1], "名稱": nm, "鍵": k})
+    handled = [(x["start"], x["end"]) for x in named]
     must, look = [], []
 
-    def row(lst, key, a, b, text, ack=False):
-        lst.append({"key": key, "start": round(a, 3), "end": round(b, 3), "說明": text,
+    def row(lst, key, a, b, text, ack=False, *, name="", card=None, todo="", paths=None):
+        lst.append({"key": key, "start": round(a, 3), "end": round(b, 3), "說明": text, "名稱": name,
+                    "第3步": (index.get(card) or {}).get("第3步") if card else None,
+                    "去改": todo, **({"有學員聲音": paths} if paths else {}),
                     **({"可以按聽過": True, "已按聽過": key in heard} if ack else {})})
 
+    def near(a: float, b: float) -> list[dict]:
+        return [x for x in named if x["start"] - 0.5 <= b and a <= x["end"] + 0.5]
+
     # 1. 學員的話落在段落外面（人改過段落的開頭或結尾，句子的一部分在外面、又沒被別的處理蓋到）
+    #    10-01 1-4：只列沒被蓋到的那幾秒；鍵照沒被蓋到的那一段的起點（整段都沒蓋到時跟以前一樣，之前按過的「聽過」照算）
     for t in turns:
         if t.get("說話者") in (None, "老師") or t["說話者"] in kept:
             continue
+        tname = review.item_name(index, f"學員段落:{t['id']}")
         for sid in t.get("句子", []):
             x = by_id.get(sid)
             if not x:
                 continue
             for a, b in ((x["start"], min(x["end"], t["start"])), (max(x["start"], t["end"]), x["end"])):
-                if b - a >= OUTSIDE_MIN_S and _uncovered(a, b, handled) >= OUTSIDE_MIN_S:
-                    row(must, f"段落外:{t['id']}:{a:.1f}", a, b,
-                        f"{t['說話者']} 的句子有 {b - a:.1f} 秒在段落（{wd.fmt_time(t['start'])}–{wd.fmt_time(t['end'])}）外面，"
-                        "會是學員原聲：把段落的起訖改回去包住，或另外處理這一段；"
-                        "聽過確定外面那一段不是學員（例如是老師接話），按「我聽過了」", ack=True)
+                if b - a < OUTSIDE_MIN_S:
+                    continue
+                left, hit = _gap_rows(a, b, named, OUTSIDE_MIN_S)
+                for s, e in left:
+                    done = "、".join(f"〈{h['名稱']}〉" for h in hit)
+                    part = (f"其中 {b - a - sum(y - x0 for x0, y in assemble.subtract(a, b, handled)):.1f} 秒已經由{done}處理，"
+                            f"剩下 {t1(s)}–{t1(e)}（{e - s:.1f} 秒）沒有處理，") if hit else ""
+                    row(must, f"段落外:{t['id']}:{s:.1f}", s, e,
+                        f"〈{tname}〉（{t1(t['start'])}–{t1(t['end'])}）的句子有 {b - a:.1f} 秒在段落外面（{t1(a)}–{t1(b)}）；{part}"
+                        "這幾秒會是學員原聲。聽一下：真的有學員的聲音，按「有學員的聲音」選怎麼處理；"
+                        "外面那一段不是學員（例如是老師接話），按「我聽過了」", ack=True,
+                        name=tname, card=f"學員段落:{t['id']}",
+                        todo=f"到第 3 步〈{tname}〉按「改時間」，把起訖改大包住 {t1(s)}–{t1(e)}",
+                        paths=_fix_paths(s, e, near(s, e), index, turn=t))
     # 2. 名字換不了代號
-    names = wd.read_json(wd.names_path(workdir), default={}) or {}
-    ndec = wd.read_json(review.name_decisions_path(workdir), default={}) or {}
-    cands = review.effective_name_candidates(workdir, names.get("candidates", []), ndec) if names else []
-    when = {str(c.get("id") or i): c for i, c in enumerate(cands, start=1)}
     for m in plan.get("要人處理", []):
-        c = when.get(str(m["候選"]), {})
-        row(must, f"名字:{m['候選']}", c.get("start", 0.0), c.get("end", 0.0), f"老師提到名字（第 {m['候選']} 筆）：{m['原因']}")
+        k = f"名字:{m['候選']}"
+        info = index.get(k, {})
+        nm = review.item_name(index, k)
+        row(must, k, info.get("start", 0.0), info.get("end", 0.0), f"〈{nm}〉：{m['原因']}", name=nm, card=k,
+            todo=f"到第 3 步〈{nm}〉把「老師 AI 聲音要重念的句子」改好（名字寫成代號），或在「改做法」選直接消音")
     # 3. 要念的字數跟那段時間逐字稿的字數差太多
     for g in plan["生成"]:
         src = nameplan.range_words(words, *g["slot"])
         if nameplan.too_short(g["text"], src):
+            nm, k = gen_name(g)
             row(must, f"字太少:{g['id']}", g["slot"][0], g["slot"][1],
-                f"老師重念 {g['id']}：要念 {nameplan.say_count(g['text'])} 個字，這段時間逐字稿有 {nameplan.say_count(src)} 個字，"
-                "其他的話會不見：把重念範圍改小，或把話補齊")
+                f"〈{nm}〉：要念 {nameplan.say_count(g['text'])} 個字，這段時間逐字稿有 {nameplan.say_count(src)} 個字，"
+                "其他的話會不見", name=nm, card=k, todo=f"到第 3 步〈{nm}〉把重念範圍改小，或把要念的話補齊")
     # 4. 重疊選了要生成、但缺文字或缺學員是誰
     for o in review.overlap_choices(workdir):
         why = review.overlap_gen_problem(o, [tuple(it["slot"]) for it in items if not it.get("重疊")])
         if why:
-            row(must, f"重疊:{o['id']}", o["start"], o["end"], f"重疊（{review.OVERLAP_LABEL.get(o['做法'], o['做法'])}）：{why}")
+            k = f"重疊:{o['id']}"
+            nm = review.item_name(index, k)
+            guess = "" if o.get("學員已選") or not o.get("學員") or o.get("學員") == "老師" else f"（程式猜是 {o['學員']}，按「就是這一位」就好）"
+            todo = f"到第 3 步〈{nm}〉的「改做法」"
+            todo += f"，在「學員說的」旁邊選學員是誰{guess}" if "學員是誰" in why else "，把空的那一欄填好"
+            row(must, k, o["start"], o["end"], f"〈{nm}〉（{review.OVERLAP_LABEL.get(o['做法'], o['做法'])}）：{why}",
+                name=nm, card=k, todo=todo)
     # 5. 聲紋判成「不是老師」的句子，整句都不在任何處理的範圍、也不在學員段落裡（可能是漏抓的學員發言）
     #    段落的聲音判斷也不是老師的才放「一定要處理」；段落判成老師的（第一堂 92 句，多半是誤判）在「請看一眼」彙總一列
-    stu_turns = [(t["start"], t["end"]) for t in turns if t.get("說話者") not in (None, "老師")]
+    #    10-01：句子只有一部分被處理蓋到的，沒蓋到的部分（至少 0.3 秒）照樣列（以前整句跳過，例如重疊只蓋到 0.7 秒、
+    #    句子其他 2.8 秒的學員原聲沒人處理）；已經列在「段落外」的那幾秒不重複列
+    stu_turns = [t for t in turns if t.get("說話者") not in (None, "老師")]
+    blockers = handled + [(t["start"], t["end"]) for t in stu_turns] + [(r["start"], r["end"]) for r in must if r["key"].startswith("段落外:")]
     soft = []
     for x in sents:
         if x.get("label") != "不是老師" or x["end"] - x["start"] < OUTSIDE_MIN_S:
             continue
-        if any(a < x["end"] and x["start"] < b for a, b in handled + stu_turns):
+        left = [(a, b) for a, b in assemble.subtract(x["start"], x["end"], blockers) if b - a >= OUTSIDE_MIN_S]
+        if not left:
             continue
         mid = (x["start"] + x["end"]) / 2
         home = next((t for t in turns if t["start"] <= mid <= t["end"]), None)
         if home and home.get("聲音判斷") == "老師":
             soft.append(x)
             continue
-        row(must, f"聲紋:{x['id']}", x["start"], x["end"],
-            f"聲紋判成不是老師、{x['end'] - x['start']:.1f} 秒，不在任何學員段落或處理範圍裡：可能是漏抓的學員發言。"
-            "聽一下；沒有學員的聲音就按「我聽過了」", ack=True)
+        hit = [h for h in named if h["start"] < x["end"] and x["start"] < h["end"]]
+        for a, b in left:
+            gap = lambda t: max(0.0, t["start"] - b, a - t["end"])  # noqa: E731
+            close = min(stu_turns, key=gap, default=None)
+            close = close if close is not None and gap(close) <= 10 else None
+            whole = abs(a - x["start"]) < 1e-6 and abs(b - x["end"]) < 1e-6
+            part = "" if whole else (f"這一句 {t1(x['start'])}–{t1(x['end'])} 有一部分已經由"
+                                     + ("、".join(f"〈{h['名稱']}〉" for h in hit) or "學員段落") + "處理，這裡只列沒處理的這幾秒；")
+            row(must, f"聲紋:{x['id']}" if whole else f"聲紋:{x['id']}:{a:.1f}", a, b,
+                f"聲紋判成不是老師、{b - a:.1f} 秒，不在任何學員段落或處理範圍裡：可能是漏抓的學員發言。{part}"
+                "聽一下：沒有學員的聲音就按「我聽過了」；有的話按「有學員的聲音」選怎麼處理", ack=True,
+                name=f"{t1(a)} 這一句",
+                todo="第 3 步沒有這一句的卡片：有學員的聲音時，用下面「有學員的聲音」帶著這段時間去第 3 步新增或延長",
+                paths=_fix_paths(a, b, near(a, b), index, turn=close))
 
     # 請看一眼
     for c in dec["刪除段落"]:
         if c.get("狀態") != "還原":
-            row(look, f"剪掉:{c['id']}", c["start"], c["end"], f"剪掉 {c['end'] - c['start']:.1f} 秒（聲音和畫面都拿掉，影片會變短，畫面會跳一下）")
+            k = f"刪除段落:{c.get('建議id') or c['id']}"
+            row(look, f"剪掉:{c['id']}", c["start"], c["end"], f"剪掉 {c['end'] - c['start']:.1f} 秒（聲音和畫面都拿掉，影片會變短，畫面會跳一下）",
+                name=review.item_name(index, k), card=k)
     for m in assemble.local_mutes(dec):
-        row(look, f"消音:{m['id']}", m["start"], m["end"], f"消音 {m['end'] - m['start']:.1f} 秒（只拿掉聲音，畫面留著）")
+        k = f"局部消音:{m['id']}"
+        row(look, f"消音:{m['id']}", m["start"], m["end"], f"消音 {m['end'] - m['start']:.1f} 秒（只拿掉聲音，畫面留著）",
+            name=review.item_name(index, k), card=k)
     for m in plan.get("消音", []):
-        row(look, f"名字消音:{m['候選']}", m["start"], m["end"], f"老師提到名字直接消音 {m['end'] - m['start']:.1f} 秒")
+        k = f"名字:{m['候選']}"
+        row(look, f"名字消音:{m['候選']}", m["start"], m["end"], f"〈{review.item_name(index, k)}〉直接消音 {m['end'] - m['start']:.1f} 秒",
+            name=review.item_name(index, k), card=k)
     for g in plan["生成"]:
         if g["slot"][1] - g["slot"][0] > LONG_TEACHER_S:
+            nm, k = gen_name(g)
             row(look, f"長句:{g['id']}", g["slot"][0], g["slot"][1],
-                f"老師 AI 聲音重念 {g['slot'][1] - g['slot'][0]:.1f} 秒（超過 {LONG_TEACHER_S:.0f} 秒）")
+                f"〈{nm}〉老師 AI 聲音重念 {g['slot'][1] - g['slot'][0]:.1f} 秒（超過 {LONG_TEACHER_S:.0f} 秒）", name=nm, card=k)
     if soft:
         row(look, "聲紋:段落是老師", soft[0]["start"], soft[-1]["end"],
             f"另外 {len(soft)} 句聲紋判成不是老師、但整段的聲音判斷是老師（多半是誤判，例如冥想引導、老師壓低聲音）。"
@@ -277,7 +397,8 @@ def final_check(workdir: str | Path) -> dict:
     covered = review.covered_overlaps(workdir, dec, turns) if turns else []
     gen_s = sum(g["slot"][1] - g["slot"][0] for g in plan["生成"]) + sum(it["slot_s"] for it in items)
     free = shutil.disk_usage(str(workdir)).free / 1e9
-    summary = {"自動算處理好": [{"id": x["id"], "start": x["start"], "end": x["end"], "涵蓋": x["涵蓋"]["名稱"]} for x in covered],
+    summary = {"自動算處理好": [{"id": x["id"], "start": x["start"], "end": x["end"], "涵蓋": x["涵蓋"]["名稱"],
+                             "名稱": review.item_name(index, f"重疊:{x['id']}")} for x in covered],
                "要生成秒數": round(gen_s), "預估秒數": round(gen_s * GEN_SPEED + ASSEMBLE_S), "硬碟可用GB": round(free, 1),
                "提醒": "執行期間關掉其他程式（Zoom、瀏覽器分頁）；接上電源、筆電不要闔上（螢幕可以關）"}
     left = [r for r in must if not r.get("已按聽過")]

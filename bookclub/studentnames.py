@@ -151,7 +151,7 @@ def items(workdir: str | Path, cut_ranges: list[tuple[float, float]] = ()) -> li
             "比對層級": c.get("比對層級", ""), "敏感詞": bool(c.get("敏感詞")),
             "做法": d.get("做法") or MUTE, "tags": d.get("tags", []), "note": d.get("note", ""),
             "已確認": bool(d.get("已確認")),
-            "建議": {"做法": MUTE, "原因": f"{c.get('學員')} 保留原聲，講到名字預設直接消音（09-29 定案）；也可以選換成代號，用他自己的聲音生成"},
+            "建議": {"做法": MUTE, "原因": f"{c.get('學員')} 保留原聲，講到名字預設直接消音；也可以選換成代號，用他自己的聲音生成"},
             "不用處理": "落在剪掉的片段裡（聲音和畫面都拿掉）" if review._in_ranges(c["start"], c["end"], list(cut_ranges)) else None,
         })
     return out

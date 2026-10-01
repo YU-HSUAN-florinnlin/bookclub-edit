@@ -465,6 +465,80 @@ def covered_overlaps(workdir: Path, dec: dict, turns: list[dict]) -> list[dict]:
     return out
 
 
+def item_index(workdir: str | Path, dec: dict | None = None, turns: list[dict] | None = None) -> dict[str, dict]:
+    """覆核項目的鍵 → 畫面上看得到的名稱與第 3 步那一張卡片（10-01 1-5：總檢查、成品檢查不用內部編號）。只讀。
+
+    鍵兩種寫法都收：處理紀錄的 `覆核項目`（`學員段落:T003`、`名字:2`、`重疊:O…`、`刪除段落:S1`／`D001`、
+    `局部消音:M001`、`學員名字:…`）與第 3 步卡片的鍵（`類型:id`）。每一筆：
+    {名稱, 類型, id, start, end, 第3步（卡片的鍵，第 3 步沒有這張卡片時是 None）, 改時間（「改時間」面板的類型，沒有就是 None）}；
+    重疊另帶 `疊放`（兩邊都重新生成、照原本的時間），名字另帶 `老師整段`。"""
+    from bookclub import overlap as overlap_mod
+    from bookclub import studentnames
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    dec = dec if dec is not None else load_decisions(workdir)
+    if turns is None:
+        tdata = turns_mod.page_data(workdir)
+        turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
+    out: dict[str, dict] = {}
+
+    def put(keys: list[str], kind: str, iid: str, name: str, a: float, b: float, card: str | None,
+            retime: str | None, **extra) -> None:
+        row = {"名稱": name, "類型": kind, "id": iid, "start": round(a, 3), "end": round(b, 3),
+               "第3步": card, "改時間": retime, **extra}
+        for k in keys:
+            out.setdefault(k, row)
+
+    for t in turns:
+        key = f"學員段落:{t['id']}"
+        if t.get("說話者") == "老師":
+            if t.get("說話者是人改的"):
+                put([f"改成老師:{t['id']}", key], "改成老師", t["id"], f"改成老師 {wd.fmt_time(t['start'])}",
+                    t["start"], t["end"], f"改成老師:{t['id']}", "學員發言")
+            continue
+        put([key], "學員段落", t["id"], f"學員段落 {wd.fmt_time(t['start'])}", t["start"], t["end"], key, "學員發言")
+    ov = wd.read_json(wd.overlap_path(workdir), default=None) or {"overlaps": []}
+    overlap_mod.apply_simple_filters(ov)
+    for o in effective_overlaps(workdir, ov.get("overlaps", []), dec):
+        oid = overlap_id(o)
+        d = dec["重疊"].get(oid, {})
+        shown = not o.get("已自動跳過") or d.get("救回")
+        # 重疊卡片自己生成的學員那一句，處理紀錄寫成 `學員段落:<重疊 id>`
+        put([f"重疊:{oid}", f"學員段落:{oid}"], "重疊", oid, f"重疊 {wd.fmt_time(o['start'])}", o["start"], o["end"],
+            f"重疊:{oid}" if shown else None, "重疊" if shown else None, 疊放=is_stacked(d.get("做法"), d.get("排法")))
+    names = wd.read_json(wd.names_path(workdir), default=None) or {}
+    ndec = wd.read_json(name_decisions_path(workdir), default={}) or {}
+    for i, c in enumerate(effective_name_candidates(workdir, names.get("candidates", []), ndec), start=1):
+        cid = str(c.get("id") or i)
+        whole = bool(c.get("老師整段"))
+        put([f"名字:{cid}"], "名字", cid, f"{'老師重念' if whole else '老師提到名字'} {wd.fmt_time(c['start'])}",
+            c["start"], c["end"], f"名字:{cid}", "名字", 老師整段=whole)
+    for c in dec["刪除段落"]:
+        card = f"刪除段落:{c.get('建議id') or c['id']}"
+        put([card, f"刪除段落:{c['id']}"], "刪除段落", c.get("建議id") or c["id"], f"剪掉片段 {wd.fmt_time(c['start'])}",
+            c["start"], c["end"], card, "刪除段落")
+    for sg in load_cut_suggestions(workdir):
+        put([f"刪除段落:{sg['id']}"], "刪除段落", sg["id"], f"剪掉片段 {wd.fmt_time(sg['start'])}", sg["start"], sg["end"],
+            f"刪除段落:{sg['id']}", "刪除段落")
+    for m in dec["局部消音"]:
+        put([f"局部消音:{m['id']}"], "局部消音", m["id"], f"消音 {wd.fmt_time(m['start'])}", m["start"], m["end"],
+            f"局部消音:{m['id']}", "局部消音")
+    for c in (wd.read_json(studentnames.cands_path(workdir), default=None) or {}).get("candidates", []):
+        put([f"學員名字:{c['id']}"], "學員名字", str(c["id"]), f"學員提到名字 {wd.fmt_time(c['start'])}", c["start"], c["end"],
+            f"學員名字:{c['id']}", None)
+    return out
+
+
+def item_name(index: dict[str, dict], key: str) -> str:
+    """覆核項目的鍵 → 畫面上的名稱；找不到（例如那一筆後來被刪掉）就只寫類型，不寫內部編號。"""
+    if key in index:
+        return index[key]["名稱"]
+    kind = key.split(":", 1)[0]
+    return {"名字": "老師提到名字", "刪除段落": "剪掉片段", "局部消音": "消音", "學員名字": "學員提到名字"}.get(kind, kind) \
+        + "（第 3 步現在找不到這一筆）"
+
+
 def _cover_info(k: dict) -> dict:
     return {"類型": k["類型"], "id": k["id"], "名稱": k["名稱"], "start": round(k["start"], 3), "end": round(k["end"], 3),
             "重疊項目": k.get("重疊項目") or []}
@@ -739,7 +813,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                                                    "省生成時間；要留下在「改做法」選「學員整句生成」"}
     for it in _names_items(workdir, sents):
         cut_hint = f"；第 1 步切點分析建議：{it['建議做法']}" if it.get("建議做法") and it["建議做法"] != nameplan_whole() else ""
-        it["建議"] = {"做法": nameplan_whole(), "原因": "預設整句用老師 AI 聲音重念、名字換成代號（09-25 定案）" + cut_hint}
+        it["建議"] = {"做法": nameplan_whole(), "原因": "預設整句用老師 AI 聲音重念、名字換成代號" + cut_hint}
         if it.get("老師整段"):
             it["建議"]["原因"] = "人工標的老師的話：這一段照上面的字，用老師 AI 聲音重念"
         it["不用處理"] = skip_reason(it["start"], it["end"])
@@ -762,6 +836,9 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
 
         ordered_sents = sorted(sents, key=lambda s: s["start"])
         is_teacher = nameplan.teacher_by_turns(turns)
+        # 10-01 1-1：選了要生成、但還缺東西（例如學員是誰還沒人選）的，卡片上直接寫「還缺」；跟總檢查同一個判斷
+        slots = student_slots(workdir)
+        lacking = {c["id"]: overlap_gen_problem(c, slots) for c in overlap_choices(workdir)}
         overlap_mod.apply_simple_filters(ov)   # 只在記憶體裡套，不改檔
         for o in effective_overlaps(workdir, ov.get("overlaps", []), dec):
             oid = overlap_id(o)
@@ -796,6 +873,9 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                           "涵蓋": cover_seen.get(oid), "涵蓋待通過": _cover_info(cov_wait) if cov_wait else None,
                           "涵蓋消失": cover_gone.get(oid),
                           "學員已選": bool(d.get("學員說話者")),
+                          # 10-01 1-1：還沒人選時，選單不直接顯示猜的那一位（看起來像選好了、其實沒存），旁邊寫「程式猜是」
+                          "學員猜的": None if d.get("學員說話者") else defaults["學員說話者"],
+                          "還缺": lacking.get(oid),
                           **overlap_sides(o, d, sents, turns)})
     if cover_seen or cover_gone:
         _remember_cover(workdir, cover_seen, cover_gone)
@@ -914,7 +994,7 @@ def nameplan_whole() -> str:
 def progress(items: list[dict], dec: dict, duration: float) -> dict:
     """已確認／總數、覆核花的時間、推算整支要多久（純函式）。"""
     total = len(items)
-    done = sum(1 for x in items if x.get("已確認") or x.get("不用處理") or x.get("涵蓋"))
+    done = sum(1 for x in items if (x.get("已確認") or x.get("不用處理") or x.get("涵蓋")) and not x.get("還缺"))
     spent = float(dec.get("覆核秒數") or 0.0)
     passed = sum(1 for x in items if x.get("已確認") and not x.get("不用處理"))
     need = sum(1 for x in items if not x.get("不用處理"))

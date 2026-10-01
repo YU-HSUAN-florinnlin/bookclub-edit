@@ -274,7 +274,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
 
         sid = c.get("sentence_id")
         if sid not in pos:
-            manual.append({"候選": i, "原因": f"找不到所在的句子（{sid}）"})
+            manual.append({"候選": i, "原因": "逐字稿裡找不到這個名字所在的句子"})   # 10-01 1-5：不寫內部編號
             continue
         group = expand_sentence(ordered, pos[sid])
         if c.get("改過時間"):   # 09-29 宇軒：改時間把後面幾秒也納進來（逐字稿漏了第二次叫名字）→ 範圍內的句子一起重念
@@ -417,7 +417,7 @@ def add_overlap_items(plan: dict, picks: list[dict], sentences: dict[str, dict],
                 rng.setdefault("重疊項目", []).append(o["id"])   # 重疊整個在那一小句裡：跟著換掉
             else:   # 只疊到一部分：兩筆會搶同一段時間，請人把名字的重念範圍改大到包住重疊
                 plan.setdefault("要人處理", []).append({
-                    "候選": rng["候選"][0], "原因": f"重念範圍跟重疊 {o['id']}（選了生成老師聲音）只疊到一部分："
+                    "候選": rng["候選"][0], "原因": f"重念範圍跟重疊 {wd.fmt_time(o['start'])}（選了生成老師聲音）只疊到一部分："
                                                  "把重念範圍改大到包住重疊，或重疊改選別的做法"})
                 plan.setdefault("重疊沒句子", []).append(o["id"])
             continue
