@@ -59,6 +59,16 @@ def skipped_overlap_result(workdir: Path, scan_regions: list) -> dict:
     }
 
 
+def keep_elapsed_if_all_reused(elapsed: dict, old_result: dict | None) -> dict:
+    """10-01：每一步都沿用上次結果（接著做、全部跳過）時，保留上次的耗時；
+    不然總覽會寫「影片分析花了 0.1 秒」。有任何一步真的重做就照這次的。"""
+    old = (old_result or {}).get("elapsed") or {}
+    steps = [v for k, v in elapsed.items() if k != "總耗時"]
+    if old.get("總耗時") and all(v < 1.0 for v in steps) and old["總耗時"] > elapsed.get("總耗時", 0):
+        return dict(old)
+    return elapsed
+
+
 def run_analyze(
     video: str | Path,
     workdir: str | Path,
@@ -265,6 +275,7 @@ def run_analyze(
 
     total_elapsed = time.time() - t_grand0
     elapsed["總耗時"] = round(total_elapsed, 1)
+    elapsed = keep_elapsed_if_all_reused(elapsed, read_json(analysis_result_path(workdir), default=None))
 
     result = {
         "video": str(video),

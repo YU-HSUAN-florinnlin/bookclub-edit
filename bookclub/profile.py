@@ -61,11 +61,15 @@ def summary(root: Path | None = None) -> dict:
                 info["代號"] = sorted({r.get("英文代號", "") for r in rows if r.get("英文代號")})
                 info["沒有代號的筆數"] = sum(1 for r in rows if not r.get("英文代號"))
         files[name] = info
-    voice = root / VOICE_DIR
-    voices = [x.name for x in voice.iterdir() if x.suffix.lower() in AUDIO_EXTS] if voice.is_dir() else []
+    # 10-01：數第 4 步真的會用到的聲線（候選資料夾裡男 N、女 N，跳過不用的），以前只數最外層的兩個暫定檔
+    from bookclub.students import voice_pool
+
+    pool = voice_pool(root / VOICE_DIR) if (root / VOICE_DIR).is_dir() else {}
+    voices = [f for fs in pool.values() for f in fs]
+    detail = "、".join(f"{g}聲 {len(fs)} 個" for g, fs in pool.items() if fs)
     return {"資料夾": str(root), "檔案": files,
             "settings.toml": {"有檔案": (root / SETTINGS_FILE).exists(), "最後修改": _mtime(root / SETTINGS_FILE)},
-            "匿名聲線": {"數量": len(voices), "狀態": f"{len(voices)} 個" if voices else "還沒做"}}
+            "匿名聲線": {"數量": len(voices), "狀態": f"{len(voices)} 個（{detail}）" if voices else "還沒做"}}
 
 
 def export_profile(out: str | Path | None = None, root: Path | None = None) -> dict:

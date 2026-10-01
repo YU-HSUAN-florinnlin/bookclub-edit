@@ -908,7 +908,8 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                 for n, p in people.items() if not p.get("都會刪掉") and p.get("聲音") != "保留原聲"}
         vp = students_mod.voice_page(workdir, live)
         for n, v in vp["每位"].items():
-            people[n]["聲線"] = {k: v.get(k) for k in ("名稱", "性別", "依據", "人選的")}
+            people[n]["聲線"] = {**{k: v.get(k) for k in ("名稱", "性別", "依據", "人選的")},
+                                 "自動配原本": (v.get("自動配原本") or {}).get("名稱")}
         voice_opts = vp["選項"]
     except Exception as exc:  # noqa: BLE001 — 聲線配不出來不要擋住工作台
         print(f"⚠️ 學員聲線配不出來：{exc}")

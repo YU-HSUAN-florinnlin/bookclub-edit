@@ -231,8 +231,15 @@ async function renderExecute() {
   await renderExecuteBody();
 }
 
+// 10-01：「2026-10-01T03:16:01」→「10-01 03:16」（畫面上不出現程式的時間格式）
+function fmtStamp(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(iso || ""));
+  return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]}` : String(iso || "");
+}
+
 // 10-01 宇軒 7-5：按「開始執行」之前的總檢查（一定要處理／請看一眼），每一列可以跳過去聽
-function fcTime(t) { const m = Math.floor(t / 60), s = t - m * 60; return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`; }
+function fcTime(t) { t = Math.round(t * 10) / 10; const m = Math.floor(t / 60), s = t - m * 60;   // 10-01：先四捨五入（不會出現「:60.0」）
+  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`; }
 
 let fcRowsCache = [];   // 總檢查每一列（按鈕用編號找回那一列）
 
@@ -317,7 +324,7 @@ async function renderExecuteBody() {
     <div class="card"><table class="kv exec">
       <thead><tr><th style="text-align:left">步驟</th><th style="text-align:left">狀態</th><th style="text-align:left">說明</th></tr></thead>
       <tbody id="execSteps">${rows}</tbody></table>
-      ${prog["開始時間"] ? `<p class="muted">上次：${esc(prog["開始時間"])} 開始${prog["結束時間"] ? `，${esc(prog["結束時間"])} 結束` : ""}；範圍 ${esc(fmtRange(prog["範圍"]))}</p>` : ""}
+      ${prog["開始時間"] ? `<p class="muted">上次：${esc(fmtStamp(prog["開始時間"]))} 開始${prog["結束時間"] ? `，${esc(fmtStamp(prog["結束時間"]))} 結束` : ""}；範圍 ${esc(fmtRange(prog["範圍"]))}</p>` : ""}
     </div>
     <div class="card">
       <div class="exec-opts">
@@ -775,16 +782,16 @@ function renderStep2Body(play = false) {
 
 function refRateName(rate) {   // 10-01：不用「48kHz」這種說法
   if (!rate) return "";
-  return rate >= 44100 ? "保留高音的新版" : "舊版（高音比較少）";
+  return rate >= 44100 ? "新版（保留高音）" : "舊版（高音比較少）";
 }
 
 function refAudioNote(c, isChosen) {
   // 10-01：看得出「現在用的音檔」跟「這個候選的音檔」是不是同一份（候選重切過、選定的還是舊的）
   if (!isChosen) return "";
   const same = c["跟現在用的音檔一樣"];
-  if (same === true) return `<p class="hint">現在用的音檔就是這個候選的音檔（${esc(refRateName(c["取樣率"]))}）。</p>`;
+  if (same === true) return `<p class="hint">現在用的音檔就是這個候選的音檔${c["取樣率"] ? `，是${esc(refRateName(c["取樣率"]))}` : ""}。</p>`;
   if (same === false) {
-    return `<div class="notyet-card" style="margin-top:10px;">現在用的音檔（${esc(refRateName(refsCache["現在用的音檔取樣率"]) || "舊的")}）跟這個候選的音檔（${esc(refRateName(c["取樣率"]) || "重切過")}）不是同一份。
+    return `<div class="notyet-card" style="margin-top:10px;">現在用的音檔是${esc(refRateName(refsCache["現在用的音檔取樣率"]) || "舊的")}，這個候選的音檔是${esc(refRateName(c["取樣率"]) || "重切過的")}，兩個不是同一份。
       按「存逐字稿（音檔不換）」只存逐字稿；要改用這個候選的音檔，按「換成這個候選的新音檔」，換了之後老師的句子都要重新生成。</div>`;
   }
   return "";

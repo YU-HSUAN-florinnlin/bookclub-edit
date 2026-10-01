@@ -47,20 +47,21 @@ CANDIDATE_DIR = "候選_0928"
 SKIP_VOICES = {"女5"}   # 09-29 宇軒聽過：女 5 不用
 
 
-def voice_pool() -> dict[str, list[Path]]:
+def voice_pool(base: Path | None = None) -> dict[str, list[Path]]:
     """學員匿名聲線候選（09-30）：`聲線/候選_0928/男1.wav…`、`女1.wav…`，照編號排、跳過不用的；
     逐字稿同檔名 `.txt` 要在。某個性別一個都沒有時，用 `default_refs()` 的暫定聲線當後備。"""
     import re
 
     pool: dict[str, list[tuple[int, Path]]] = {"男": [], "女": []}
-    d = voice_dir() / CANDIDATE_DIR
+    base = Path(base) if base else voice_dir()   # 10-01：第 0 步數聲線時用這次設定資料夾的
+    d = base / CANDIDATE_DIR
     if d.is_dir():
         for f in d.glob("*.wav"):
             m = re.fullmatch(r"(男|女)(\d+)", f.stem)
             if m and f.stem not in SKIP_VOICES and f.with_suffix(".txt").is_file():
                 pool[m.group(1)].append((int(m.group(2)), f))
     out = {g: [f for _, f in sorted(v)] for g, v in pool.items()}
-    for g, fb in default_refs().items():
+    for g, fb in {"男": base / "男聲_暫定.wav", "女": base / "女聲_暫定.wav"}.items():
         if not out[g] and fb.is_file() and fb.with_suffix(".txt").is_file():
             out[g] = [fb]
     return out
@@ -439,13 +440,19 @@ def assign_voices(workdir: Path, students: list[str], spans: dict, people: dict 
     out: dict = {}
     # 這一集的學員（全部，不只這次範圍內的）已經用掉的聲線；舊鍵（改過本名、合併掉的）不佔位子，人選的照樣佔
     here = {voice_key(n, i) for n, i in people.items()} | set(students)
-    used = {g: {v["檔案"] for k, v in known.items() if v.get("性別") == g and v.get("檔案")
+    # 10-01 走查：比聲線名稱（男1、女4），不比完整路徑——設定資料夾換了位置（別台電腦、匯入設定包），
+    # 以前全部當成沒人用、重新從第一個配起，會跟別人撞同一個聲線
+    used = {g: {voice_name(v["檔案"]) for k, v in known.items() if v.get("性別") == g and v.get("檔案")
                 and (k in here or v.get("人選的"))} for g in ("男", "女")}
+    by_name = {voice_name(f): f for fs in pool.values() for f in fs}
     changed = False
     for who in students:
         info = people.get(who, {})
         key = voice_key(who, info)
         rec = known.get(key)
+        if rec and rec.get("檔案") and not Path(rec["檔案"]).is_file() and voice_name(rec["檔案"]) in by_name:
+            rec = known[key] = {**rec, "檔案": str(by_name[voice_name(rec["檔案"])])}   # 同一個聲線、換了位置
+            changed = True
         if rec and rec.get("檔案") and Path(rec["檔案"]).is_file():
             out[who] = {**rec, "鍵": key}
             continue
@@ -453,7 +460,7 @@ def assign_voices(workdir: Path, students: list[str], spans: dict, people: dict 
         if g is None:
             out[who] = {"檔案": None, "名稱": None, "性別": None, "依據": why, "鍵": key, "人選的": False}
             continue
-        free = [f for f in pool.get(g, []) if str(f) not in used[g]]
+        free = [f for f in pool.get(g, []) if voice_name(f) not in used[g]]
         if free:
             pick = free[0]
         elif pool.get(g):
@@ -461,7 +468,7 @@ def assign_voices(workdir: Path, students: list[str], spans: dict, people: dict 
             why += f"；{g}聲候選不夠，跟別人重複"
         else:
             raise FileNotFoundError(f"找不到{g}聲的匿名聲線：{voice_dir() / CANDIDATE_DIR}／{default_refs()[g]}")
-        used[g].add(str(pick))
+        used[g].add(voice_name(pick))
         known[key] = {"檔案": str(pick), "名稱": voice_name(pick), "性別": g, "依據": why, "人選的": False}
         changed = True
         out[who] = {**known[key], "鍵": key}
@@ -480,15 +487,23 @@ def set_voice_choice(workdir: str | Path, person: str, name: str | None) -> dict
     key = voice_key(person, people[person])
     table = load_voice_table(workdir)
     known = table.setdefault("學員", {})
+    old = known.get(key) or {}
     if not name:
-        known.pop(key, None)
+        # 10-01 走查：回到自動配＝回到人選之前自動配的那一個（以前重新配，可能換成別的聲線、整段要重新生成）
+        prev = old.get("自動配原本")
+        if prev and prev.get("檔案"):
+            known[key] = prev
+        else:
+            known.pop(key, None)
         wd.write_json(voices_path(workdir), table)
-        return {"ok": True, "學員": person, "鍵": key, "聲線": None}
+        return {"ok": True, "學員": person, "鍵": key, "聲線": (prev or {}).get("名稱")}
     pick = next((f for g, fs in voice_pool().items() for f in fs if voice_name(f) == name), None)
     if pick is None:
         raise ValueError(f"沒有這個聲線：{name}")
     g = "男" if name.startswith("男") else "女" if name.startswith("女") else (known.get(key) or {}).get("性別")
-    known[key] = {"檔案": str(pick), "名稱": name, "性別": g, "依據": "人在第 3 步選的", "人選的": True}
+    auto = old.get("自動配原本") if old.get("人選的") else (old if old.get("檔案") else None)
+    known[key] = {"檔案": str(pick), "名稱": name, "性別": g, "依據": "人在第 3 步選的", "人選的": True,
+                  **({"自動配原本": auto} if auto else {})}
     wd.write_json(voices_path(workdir), table)
     return {"ok": True, "學員": person, "鍵": key, "聲線": name}
 

@@ -609,6 +609,17 @@ def ref_key(ref_wav: str | Path, ref_fp: str | None = None, legacy: bool = False
     return f"參考音#{fp}"
 
 
+def teacher_ref_changed(workdir: str | Path, tlog: dict | None) -> bool:
+    """老師參考音（ref.wav／ref.txt）跟生成紀錄記的不一樣（10-01：第 4 步「做過沒有」和逐類統計共用，
+    才不會一邊寫 24／25、一邊寫 25 句都要重新生成）。還沒有紀錄或還沒選參考音就不算換過。"""
+    tlog = tlog or {}
+    rd = Path(workdir) / "參考音"
+    ref_wav, ref_txt = rd / "ref.wav", rd / "ref.txt"
+    if not (tlog.get("句子") and tlog.get("參考音") and ref_wav.is_file() and ref_txt.is_file()):
+        return False
+    return not (same_ref_file(tlog, ref_wav) and tlog.get("參考音逐字稿") == ref_txt.read_text(encoding="utf-8").strip())
+
+
 SLOT_TOLERANCE_S = 0.05
 
 

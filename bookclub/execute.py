@@ -174,7 +174,7 @@ def _uncovered(a: float, b: float, ranges: list[tuple[float, float]]) -> float:
 
 def t1(sec: float) -> str:
     """秒數 → 「0:53:18.8」（總檢查的說明要看得出零點幾秒的差別；wd.fmt_time 只到秒）。"""
-    sec = max(0.0, float(sec))
+    sec = round(max(0.0, float(sec)), 1)   # 10-01：先四捨五入，59.96 秒不會變成「:60.0」
     h, r = divmod(sec, 3600)
     m, s = divmod(r, 60)
     return f"{int(h)}:{int(m):02d}:{s:04.1f}"
@@ -443,9 +443,7 @@ def names_done(workdir: Path) -> tuple[bool, str]:
     tlog = wd.read_json(tts.teacher_log_path(workdir), default=None) or {}
     recs = {r["id"]: r for r in tlog.get("句子", [])}
     # 09-29 檢查 #7：跟生成程式用同一個判斷（文字、發音對照表、時間格、參考音）
-    ref_wav, ref_txt = wd.ref_dir(workdir) / "ref.wav", wd.ref_dir(workdir) / "ref.txt"
-    if recs and tlog.get("參考音") and ref_wav.is_file() and ref_txt.is_file() and not (
-            tts.same_ref_file(tlog, ref_wav) and tlog.get("參考音逐字稿") == ref_txt.read_text(encoding="utf-8").strip()):
+    if tts.teacher_ref_changed(workdir, tlog):
         return False, f"老師參考音換過了，{len(gen)} 句都要重新生成"
     table = tts.load_pron_table(workdir / tts.PRON_TABLE_NAME if (workdir / tts.PRON_TABLE_NAME).is_file() else None)
     left = [g["id"] for g in gen if not (recs.get(g["id"]) or {}).get("放回時間格")

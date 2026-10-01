@@ -23,7 +23,8 @@ const RV_TYPE = {
   "改成老師": { cls: "tfix", label: "改成老師（原聲）" },   // 10-01：人改成老師的段落照樣列出來
 };
 const RV_FILTERS = [["全部", "全部"], ["還沒確認", "還沒確認"], ["學員段落", "學員段落"], ["名字", "名字"],
-  ["學員名字", "學員提到名字"], ["重疊", "重疊"], ["刪除段落", "剪掉片段"]];
+  ["學員名字", "學員提到名字"], ["重疊", "重疊"], ["刪除段落", "剪掉片段"],
+  ["局部消音", "消音"], ["改成老師", "改成老師"]];   // 10-01：以前沒有這兩類的篩選，各篩選加起來對不上「全部」
 const rvIsName = (t) => t === "名字" || t === "學員名字";
 const RV_STU_SHADES = ["#3f8f5a", "#6aae7f", "#2d6b43", "#8cc49d", "#4f9d6b", "#1f5434"];
 
@@ -44,7 +45,12 @@ const RV_RULE_HINT = {
   "重疊": "按新增後，對齊句子的開頭、結尾（1 秒內）",
 };
 // 人工標的老師整段（老師 AI 重念一整段）改時間：對齊句子邊界，不是對字（10-01）
-function rvRuleHint(kind, whole) { return whole ? "按儲存後，對齊句子的開頭、結尾（1 秒內）" : RV_RULE_HINT[kind] || ""; }
+// 10-01 走查：改既有那一筆（按鈕是「儲存修改」）時不寫「按新增後」，也不提新增才有的「選老師」
+function rvRuleHint(kind, whole, editing) {
+  if (whole) return "按儲存後，對齊句子的開頭、結尾（1 秒內）";
+  const h = RV_RULE_HINT[kind] || "";
+  return editing ? h.replace("按新增後", "按儲存後").replace(/。選「老師」.*$/, "") : h;
+}
 const RV_ITEM_KIND = { "改成老師": "學員發言", "學員段落": "學員發言", "名字": "名字", "重疊": "重疊", "刪除段落": "刪除段落", "局部消音": "局部消音" };
 
 function rvKey(it) { return `${it["類型"]}:${it.id}`; }
@@ -61,6 +67,7 @@ function rvDone(it) { return !!(it["已確認"] || it["不用處理"] || it["涵
 function rvFmt(sec, digits = 0) {
   if (sec == null || isNaN(sec)) return "—";
   sec = Math.max(0, sec);
+  if (digits) sec = Math.round(sec * 10 ** digits) / 10 ** digits;   // 10-01 走查：59.96 秒以前顯示成「54:60.0」
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
   const ss = digits ? s.toFixed(digits).padStart(3 + digits, "0") : String(Math.floor(s)).padStart(2, "0");
   return `${h ? h + ":" + String(m).padStart(2, "0") : m}:${ss}`;
@@ -533,7 +540,7 @@ function rvChosen(it) {   // 現在會套用的做法：人改過的，或建議
   if (t === "重疊") return it["做法"] || (it["建議"] || {})["做法"];
   if (rvIsName(t)) return rvNotName(it) ? "不是名字，不用改" : it["做法"];
   if (t === "刪除段落") return it["來源"] === "建議" ? (it["決定"] || "刪除") : (it["狀態"] === "還原" ? "不刪" : "刪除");
-  if (t === "局部消音") return it["方式"];
+  if (t === "局部消音") return it["狀態"] === "還原" ? "不消音" : it["方式"];   // 10-01：還原的以前清單還寫「墊底噪」
   return null;
 }
 
@@ -982,12 +989,13 @@ function rvBindMore(it) {
         rvSeek(Math.min(it["老師起訖"][0], it["學員起訖"][0]), true);
       });
     }
-    q("rv-tt").addEventListener("change", (e) => rvSaveOverlap(it, { "老師文字": e.target.value }));
-    q("rv-st").addEventListener("change", (e) => rvSaveOverlap(it, { "學員文字": e.target.value }));
-    q("rv-ovwho").addEventListener("change", async (e) => { await rvSaveOverlap(it, { "學員說話者": e.target.value || null }); await rvReload(); });
+    // 10-01 走查：被別筆涵蓋的重疊沒有這些欄位（以前這裡丟錯，時間軸不會跟著換到這一筆）
+    q("rv-tt")?.addEventListener("change", (e) => rvSaveOverlap(it, { "老師文字": e.target.value }));
+    q("rv-st")?.addEventListener("change", (e) => rvSaveOverlap(it, { "學員文字": e.target.value }));
+    q("rv-ovwho")?.addEventListener("change", async (e) => { await rvSaveOverlap(it, { "學員說話者": e.target.value || null }); await rvReload(); });
     const guessBtn = q("rv-ovguess");
     if (guessBtn) guessBtn.addEventListener("click", async () => { await rvSaveOverlap(it, { "學員說話者": guessBtn.dataset.who }); await rvReload(); });
-    q("rv-note").addEventListener("change", (e) => rvSaveOverlap(it, { "備註": e.target.value }));
+    q("rv-note")?.addEventListener("change", (e) => rvSaveOverlap(it, { "備註": e.target.value }));
   } else if (t === "刪除段落" && it["來源"] === "建議") {
     document.querySelectorAll(".rv-cutdo").forEach((el) => el.addEventListener("change", async () => {
       await apiPost("/api/review/cutsuggest", { id: it.id, "決定": el.value }); await rvReload();
@@ -1305,7 +1313,7 @@ function rvVoiceSelect(n, p) {
   const all = [...(opts["男"] || []), ...(opts["女"] || [])];
   if (!all.length) return "";
   const cur = v["名稱"] || "";
-  const auto = cur ? `自動配（${v["人選的"] ? "改回自動" : cur}）` : "開始生成時自動配";
+  const auto = cur ? (v["人選的"] ? `改回自動配${v["自動配原本"] ? `（${v["自動配原本"]}）` : ""}` : `自動配（${cur}）`) : "開始生成時自動配";
   const og = (g) => (opts[g] || []).length ? `<optgroup label="${g}聲">${opts[g].map((x) => `<option value="${esc(x)}" ${v["人選的"] && x === cur ? "selected" : ""}>${esc(x)}</option>`).join("")}</optgroup>` : "";
   return `<label title="${esc(v["依據"] || "")}">聲線 <select class="rv-voicepick" data-person="${esc(n)}">
     <option value="" ${v["人選的"] ? "" : "selected"}>${esc(auto)}</option>${og("男")}${og("女")}</select></label>`;
@@ -1675,7 +1683,7 @@ const rvEdCtx = {
       if (ed.kind === "局部消音" && !ed.id) return rvRadios("rv-ed-way", rv.data["選項"]["消音"], ed.way || rv.data["選項"]["消音"][0], "rv-ed-way");
       return "";
     },
-    hint: (ed) => rvRuleHint(ed.kind, ed.whole),
+    hint: (ed) => rvRuleHint(ed.kind, ed.whole, !!ed.id),
     now: () => (rv.video ? rv.video.currentTime : null),
     play: (a, b) => { if (!rv.video) return; rv.stopAt = b; rvSeek(a, true); },
     body: (ed) => {

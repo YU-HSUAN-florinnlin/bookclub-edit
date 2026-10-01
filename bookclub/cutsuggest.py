@@ -63,7 +63,7 @@ def cut_suggest_path(workdir: Path) -> Path:
 
 
 def _hms(sec: float) -> str:
-    h, rem = divmod(max(0.0, sec), 3600)
+    h, rem = divmod(round(max(0.0, sec), 1), 3600)   # 10-01：先四捨五入，59.96 秒不會變成「:60.0」
     m, s = divmod(rem, 60)
     return f"{int(h)}:{int(m):02d}:{s:04.1f}"
 

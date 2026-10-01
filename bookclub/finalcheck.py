@@ -220,6 +220,64 @@ def label_items(items: list[dict], index: dict) -> list[dict]:
     return items
 
 
+_ID_RE = None
+
+
+def plain_ids(text: str, index: dict, workdir: Path | None = None) -> str:
+    """處理紀錄「做了什麼」裡的內部編號（T034_15、V0542232、M001⋯）換成畫面上看得到的名稱（10-01 走查：
+    第 5 步停格、重疊那幾筆還寫著 T034_15）。找不到的寫「另一筆」，不露編號。紀錄檔本身不改。"""
+    import re
+
+    global _ID_RE
+    if not text:
+        return text
+    if _ID_RE is None:
+        _ID_RE = re.compile(r"(?<![A-Za-z0-9_])(T\d{3}(?:m\d+)*(?:_\d+)?|S\d{3}|SNM\d{3}|NM\d{3}|V\d{7}|M\d{3}|D\d{3}|O\d+\.\d+)(?![A-Za-z0-9_])")
+    names = {row["id"]: row["名稱"] for row in index.values() if row.get("id")}
+    if workdir is not None:
+        try:
+            from bookclub import nameplan
+
+            for g in (wd.read_json(nameplan.plan_path(Path(workdir)), default=None) or {}).get("生成", []):
+                if g.get("id") and g.get("slot"):
+                    names.setdefault(g["id"], f"老師重念 {wd.fmt_time(g['slot'][0])}")
+        except Exception:  # noqa: BLE001 — 讀不到計畫就只用第 3 步的名稱
+            pass
+
+    def name_of(tok: str) -> str | None:
+        base = tok
+        while base:
+            if base in names:
+                return names[base]
+            nxt = re.sub(r"(_\d+|m\d+)$", "", base)
+            if nxt == base:
+                return None
+            base = nxt
+        return None
+
+    def sub(m) -> str:
+        tok = m.group(1)
+        nm = name_of(tok)
+        if nm is None:
+            return "另一筆"
+        return f"〈{nm}〉裡的一句" if re.search(r"_\d+$", tok) else f"〈{nm}〉"
+    out = _ID_RE.sub(sub, text)
+    out = re.sub(r"\s*(〈[^〉]*〉(?:裡的一句)?)\s*", r"\1", out)
+    return plain_words(out)
+
+
+def plain_words(text: str) -> str:
+    """10-01 走查：第 5 步跟第 3 步用同一套說法——重疊的做法用畫面上的名稱（存檔的值不變）、刪除叫「剪掉」。"""
+    import re
+
+    from bookclub.review import OVERLAP_LABEL
+
+    text = re.sub(r"^刪除 ([\d.]+) 秒（聲音畫面一起刪）", r"剪掉 \1 秒（聲音和畫面都拿掉）", text)
+    for raw in sorted(OVERLAP_LABEL, key=len, reverse=True):
+        text = text.replace(f"重疊（{raw}）", f"重疊（{OVERLAP_LABEL[raw]}）").replace(f"做法：{raw}）", f"做法：{OVERLAP_LABEL[raw]}）")
+    return text
+
+
 def _index(workdir: Path) -> dict:
     from bookclub import review
 
@@ -348,6 +406,7 @@ def page_data(workdir: str | Path) -> dict:
         if tgt.get("可以") and done and done.get("改成"):   # 10-01 2-4：改過了（還沒重新組裝），面板上顯示改後的
             tgt["start"], tgt["end"] = done["改成"]
         recs.append({**r, "鍵": record_key(r), "結果": d.get("結果"), "原因": d.get("原因", ""),
+                     "做了什麼": plain_ids(r.get("做了什麼") or "", index, workdir),
                      "覆核名稱": [review_name(index, k) for k in r.get("覆核項目") or []],
                      "改範圍": tgt, "已改範圍": done})
     flags = label_items([dict(x) for x in check["整片退回"]], index)

@@ -17,14 +17,27 @@ def _in_range(s: float, e: float, a: float | None, b: float | None) -> bool:
     return (a is None or e > a) and (b is None or s < b)
 
 
-def _gen_done(items: list[dict], log: dict | None, back: dict | None = None) -> int:
+def _gen_done(items: list[dict], log: dict | None, back: dict | None = None, ref_of=None,
+              all_stale: bool = False) -> int:
+    """做完幾句。10-01：跟第 4 步「做過沒有」用同一個判斷（tts.record_stale：文字、發音對照表、時間格、參考音），
+    以前只比文字，參考音換過或改了時間，這裡還寫做完、執行步驟卻說要重做。
+    ref_of(g)：這一句現在的參考音檔（None＝不比）；all_stale：老師參考音整份換過，生成的都不算。"""
+    from bookclub import tts
+
     recs = {r["id"]: r for r in (log or {}).get("句子", [])}
     back = back or {}
-    return sum(1 for g in items if g["id"] in back
-               or ((recs.get(g["id"]) or {}).get("放回時間格") and recs[g["id"]].get("text") in (None, g["text"])))
+
+    def ok(g: dict) -> bool:
+        rec = recs.get(g["id"]) or {}
+        if not rec.get("放回時間格") or all_stale:
+            return False
+        if rec.get("text") is None:
+            rec = {**rec, "text": g.get("text")}
+        return not tts.record_stale(rec, g, ref_of(g) if ref_of else None)
+    return sum(1 for g in items if g["id"] in back or ok(g))
 
 
-def cache_progress(cache: dict | None, items: list[dict]) -> tuple[int, float | None]:
+def cache_progress(cache: dict | None, items: list[dict], ref_suffix: str | dict | None = None) -> tuple[int, float | None]:
     """從 `_嘗試快取.json` 算這批句子「已經生成過至少一次」的句數，與平均每句花的秒數（09-30）。
     生成紀錄要整組跑完才寫，快取是每生成一次就寫，跑到一半也看得到進度。
     快取鍵：`id|第幾次|種子|語速|生成用文字|參考音#指紋`；同一 id、文字對得上（原文或換過發音的）才算。"""
@@ -34,8 +47,11 @@ def cache_progress(cache: dict | None, items: list[dict]) -> tuple[int, float | 
         parts = key.split("|", 4)
         if len(parts) < 5 or parts[0] not in want:
             continue
-        text = parts[4].rsplit("|", 1)[0]
+        text, ref = (parts[4].rsplit("|", 1) + [""])[:2]
         if want[parts[0]] and text not in want[parts[0]]:
+            continue
+        want_ref = ref_suffix.get(parts[0]) if isinstance(ref_suffix, dict) else ref_suffix
+        if want_ref and not ref.endswith(want_ref):   # 10-01：換過參考音（聲線）之前生成的不算
             continue
         seen[parts[0]] = seen.get(parts[0], 0.0) + float((att or {}).get("elapsed_s") or 0.0)
     avg = sum(seen.values()) / len(seen) if seen else None
@@ -63,10 +79,10 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
             total, done = None, None
         rows.append({"類型": kind, "做法": how, "階段": stage, "總數": total, "完成": done, **extra})
 
-    def cached(od: Path, items: list[dict]) -> tuple[int, float | None]:
+    def cached(od: Path, items: list[dict], ref_suffix: str | dict | None = None) -> tuple[int, float | None]:
         from bookclub import tts
 
-        return cache_progress(wd.read_json(od / tts.ATTEMPT_CACHE, default=None), items)
+        return cache_progress(wd.read_json(od / tts.ATTEMPT_CACHE, default=None), items, ref_suffix)
 
     def teacher():
         from bookclub import nameplan
@@ -90,8 +106,11 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
         gen = tplan().get("生成", [])
         table = tts.load_pron_table()
         gen = [{**g, "生成用文字": tts.apply_pron(g["text"], table)[0]} for g in gen]
-        return (len(gen), _gen_done(gen, wd.read_json(tts.teacher_log_path(workdir), default=None)),
-                *cached(tts.teacher_out_dir(workdir), gen))
+        tlog = wd.read_json(tts.teacher_log_path(workdir), default=None)
+        changed = tts.teacher_ref_changed(workdir, tlog)
+        fp = tts.ref_fingerprint(wd.ref_dir(workdir) / "ref.wav")
+        return (len(gen), _gen_done(gen, tlog, all_stale=changed),
+                *cached(tts.teacher_out_dir(workdir), gen, f"#{fp}" if fp else None))
 
     def t_mute():
         n = len(tplan().get("消音", []))
@@ -105,8 +124,12 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
         items, _ = students.build_items(workdir, a, b)
         table = tts.load_pron_table()
         items = [{**g, "生成用文字": tts.apply_pron(g["text"], table)[0]} for g in items]
-        return (len(items), _gen_done(items, wd.read_json(students.log_path(workdir), default=None)),
-                *cached(students.out_dir(workdir), items))
+        log = wd.read_json(students.log_path(workdir), default=None)
+        now = students.current_refs(workdir, items) if items else {}
+        fps = {who: tts.ref_fingerprint(f) for who, f in now.items() if f}
+        suffix = {g["id"]: f"#{fps[g['學員']]}" for g in items if fps.get(g["學員"])}
+        return (len(items), _gen_done(items, log, ref_of=lambda g: now.get(g["學員"])),
+                *cached(students.out_dir(workdir), items, suffix))
 
     sp_cache: dict = {}
 
@@ -126,7 +149,10 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
         rec = wd.read_json(studentgen.log_path(workdir), default=None) or {}
         table = tts.load_pron_table()
         gen = [{**g, "生成用文字": tts.apply_pron(g["text"], table)[0]} for g in gen]
-        return (len(gen), _gen_done(gen, rec, rec.get("退回直接消音")), *cached(studentgen.out_dir(workdir), gen))
+        recs = {r["id"]: r for r in rec.get("句子", [])}
+        return (len(gen), _gen_done(gen, rec, rec.get("退回直接消音"),
+                                    ref_of=lambda g: studentgen.current_ref(workdir, g["學員"], recs.get(g["id"]))),
+                *cached(studentgen.out_dir(workdir), gen))
 
     def sn_mute():
         n = len(splan()["消音"])

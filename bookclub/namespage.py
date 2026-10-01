@@ -30,7 +30,7 @@ MUTE_SUFFIX = "_消音"
 def _fmt_hms1(t: float) -> str:
     """秒數轉 `h:mm:ss.s`（小時不補零，保留一位小數）——覆核頁顯示原片時間用，
     跟 `workdir.fmt_time` 的 `HH:MM:SS`（整數秒、給報告用）是不同用途，不共用。"""
-    t = max(0.0, float(t))
+    t = round(max(0.0, float(t)), 1)   # 10-01：先四捨五入，59.96 秒不會變成「:60.0」
     h = int(t // 3600)
     m = int((t % 3600) // 60)
     s = t - h * 3600 - m * 60
