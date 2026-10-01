@@ -348,7 +348,7 @@ async function renderExecuteBody() {
         <label>從 <input type="text" id="exStart" class="short" placeholder="0:00"></label>
         <label>到 <input type="text" id="exEnd" class="short" placeholder="${esc(d["影片長度"] ? fmtRange([0, d["影片長度"]]).split("–")[1] : "結尾")}"></label>
       </div>
-      <p class="muted">輸出方式：${esc(execMethodName(d, (d["預設輸出做法"] || ["sw"])[0]))}（Mac、Windows 都一樣）</p>
+      <p class="muted">輸出方式：<span id="exMethodName">${esc(execMethodName(d, (d["預設輸出做法"] || ["sw"])[0]))}</span><span id="exMethodNote">${(d["預設輸出做法"] || ["sw"])[0] === "sw" ? "（Mac、Windows 都一樣）" : ""}</span></p>
       <details class="adv"><summary>進階設定</summary>
         <label>輸出方式 <select id="exMethod">${(d["輸出做法選項"] || [["sw", "標準輸出"]]).map(([m, label]) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
         <p class="muted">一般用標準輸出就好。其他方式只有這台電腦支援時才會列出來。</p>
@@ -370,7 +370,7 @@ async function renderExecuteBody() {
         做完到第 5 步，這幾筆會回到「還沒看」、標「重做過」。${d["重做中"] ? "<b>上次重做還沒做完</b>，再按一次會接著做。" : ""}</p>
       <p><button id="btnRedo" ${execBlocked ? "disabled" : ""}>只重做退回的這幾筆（${redo.length} 筆）</button>
         ${execBlocked && !running ? `<span class="muted">要先能按「開始執行」（見上面）</span>` : ""}</p>
-      <table class="kv">${redo.map((it, i) => `<tr><td>${esc(it["類型"])}　${esc((it["覆核名稱"] || []).join("、") || "—")}</td>
+      <table class="kv">${redo.map((it, i) => `<tr><td>${esc(typeof fcKind === "function" ? fcKind(it["類型"]) : it["類型"])}　${esc((it["覆核名稱"] || []).join("、") || "—")}</td>
         <td>${esc(it["原因"])}${it["改範圍"] ? `<div class="muted">範圍改了${it["改範圍"]["原本"] ? `：${esc(fmtRange(it["改範圍"]["原本"]))} → ${esc(fmtRange(it["改範圍"]["改成"]))}` : ""}（存在第 3 步〈${esc(it["改範圍"]["名稱"] || "")}〉）</div>` : ""}
           <div class="muted">按下去會：${esc(it["說明"] || "")}</div></td></tr>`).join("")}</table></div>` : ""}`;
   bindFinalCheck(renderExecuteBody);
@@ -383,6 +383,13 @@ async function renderExecuteBody() {
     if (row) { row.scrollIntoView({ block: "center" }); row.classList.add("fc-back"); }
     else if (t) t.scrollIntoView({ block: "start" });
   }
+  const exMethod = document.getElementById("exMethod");   // 進階設定改了輸出方式：上面那一行跟著改
+  if (exMethod) exMethod.addEventListener("change", () => {
+    const nm = document.getElementById("exMethodName");
+    if (nm) nm.textContent = execMethodName(d, exMethod.value);
+    const note = document.getElementById("exMethodNote");
+    if (note) note.textContent = exMethod.value === "sw" ? "（Mac、Windows 都一樣）" : "（進階設定改的）";
+  });
   const redoBtn = document.getElementById("btnRedo");   // 10-01 第三批：只重做退回的（整支影片的範圍）
   if (redoBtn) redoBtn.addEventListener("click", async () => {
     if (!confirm(`只重做第 5 步退回的 ${redo.length} 筆，再重新組裝？\n要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。`)) return;

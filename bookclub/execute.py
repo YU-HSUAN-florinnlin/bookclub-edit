@@ -239,28 +239,11 @@ def _fix_paths(a: float, b: float, near: list[dict], index: dict, *, turn: dict 
     return paths
 
 
-def final_check(workdir: str | Path) -> dict:
-    """第 3 步全部通過之後、開始第 4 步之前的總檢查（只讀）。回傳：
-    {一定要處理: [列], 請看一眼: [列], 可以開始: bool}；每一列 {key, start, end, 說明, 可以按聽過?, 已按聽過?,
-    名稱（畫面上看得到的名稱）, 第3步（第 3 步那一張卡片的鍵，沒有卡片是 None）, 去改（去第 3 步要改什麼）,
-    有學員聲音（聽了有學員聲音時可以走的路，見 `_fix_paths`）}。
-    「一定要處理」有還沒按聽過的列就不能開始；「請看一眼」不擋（網頁上要按一次「我看過了」）。
-    10-01：說明一律用畫面上看得到的名稱（不寫 T062、O5602.14 這類內部編號）；學員的話落在段落外面的，
-    已經被別筆處理蓋到的那一部分不再列（只列沒蓋到的那幾秒，說明寫哪一筆蓋了多少）。"""
-    import shutil
-
+def coverage(workdir: Path, dec: dict, turns: list[dict]) -> dict:
+    """會把原聲換掉或拿掉的範圍，每一筆帶畫面上的名稱（說明「哪一筆蓋到了」用）。總檢查與第 3 步「切在外面的這幾秒」共用。
+    回傳 {index, items（學員重念）, plan（老師的計畫）, named[{start, end, 名稱, 鍵}], gen_name}。"""
     from bookclub import assemble, nameplan, review, students
-    from bookclub import turns as turns_mod
 
-    workdir = Path(workdir)
-    dec = review.load_decisions(workdir)
-    heard = set((dec.get("總檢查") or {}).get("聽過") or [])
-    tdata = turns_mod.page_data(workdir)
-    turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
-    sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
-    by_id = {x["id"]: x for x in sents}
-    words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words") or []
-    kept = {k for k, v in dec["學員聲音"].items() if v == "保留原聲"}
     index = review.item_index(workdir, dec, turns)
     try:
         items, _ = students.build_items(workdir)
@@ -279,7 +262,6 @@ def final_check(workdir: str | Path) -> dict:
             return f"{index[f'重疊:{ovs[0]}']['名稱']} 的老師那一句", f"重疊:{ovs[0]}"
         return f"老師重念 {wd.fmt_time(g['slot'][0])}", None
 
-    # 會把原聲換掉或拿掉的範圍，每一筆帶畫面上的名稱（說明「哪一筆蓋到了」用）
     named: list[dict] = []
     for c in dec["刪除段落"]:
         if c.get("狀態") != "還原":
@@ -298,24 +280,34 @@ def final_check(workdir: str | Path) -> dict:
         k = f"重疊:{it['重疊']}" if it.get("重疊") else f"學員段落:{it['段落']}"
         nm = f"{review.item_name(index, k)} 的學員那一句" if it.get("重疊") else review.item_name(index, k)
         named.append({"start": it["slot"][0], "end": it["slot"][1], "名稱": nm, "鍵": k})
-    handled = [(x["start"], x["end"]) for x in named]
-    must, look = [], []
+    return {"index": index, "items": items, "plan": plan, "named": named, "gen_name": gen_name}
 
-    def row(lst, key, a, b, text, ack=False, *, name="", card=None, todo="", paths=None):
-        lst.append({"key": key, "start": round(a, 3), "end": round(b, 3), "說明": text, "名稱": name,
-                    "第3步": (index.get(card) or {}).get("第3步") if card else None,
-                    "去改": todo, **({"有學員聲音": paths} if paths else {}),
-                    **({"可以按聽過": True, "已按聽過": key in heard} if ack else {})})
 
-    def near(a: float, b: float) -> list[dict]:
-        return [x for x in named if x["start"] - 0.5 <= b and a <= x["end"] + 0.5]
+def outside_gaps(turns: list[dict], by_id: dict, named: list[dict], kept: set) -> list[dict]:
+    """學員段落的句子落在段落外面、又沒被任何處理蓋到的那幾秒（純函式，至少 OUTSIDE_MIN_S 秒）。
+    每一筆 {段落, a, b（句子在外面的那一段）, start, end（沒蓋到的那幾秒）, 蓋到[], 鍵（段落外:<段落>:<起點>）}。"""
+    from bookclub import assemble
 
-    # 1. 學員的話落在段落外面（人改過段落的開頭或結尾，句子的一部分在外面、又沒被別的處理蓋到）
-    #    10-01 1-4：只列沒被蓋到的那幾秒；鍵照沒被蓋到的那一段的起點（整段都沒蓋到時跟以前一樣，之前按過的「聽過」照算）
+    out = []
+    stu = [t for t in turns if t.get("說話者") not in (None, "老師")]
+    stu_ids = {i for t in stu for i in t.get("句子", [])}
+    stu_ranges = [(t["start"], t["end"]) for t in stu]
     for t in turns:
         if t.get("說話者") in (None, "老師") or t["說話者"] in kept:
             continue
-        tname = review.item_name(index, f"學員段落:{t['id']}")
+        # 10-02 第三批 14：切短時整句還給老師段落的（`切到外面`，見 review.retime_turns）：整句都算切在外面；
+        # 那一句後來又歸到哪個學員段落、或被學員段落的範圍包住的部分不算
+        for sid in t.get("切到外面") or []:
+            x = by_id.get(sid)
+            if not x or sid in stu_ids:
+                continue
+            for a, b in assemble.subtract(x["start"], x["end"], stu_ranges):
+                if b - a < OUTSIDE_MIN_S:
+                    continue
+                left, hit = _gap_rows(a, b, named, OUTSIDE_MIN_S)
+                for s, e in left:
+                    out.append({"段落": t, "a": a, "b": b, "start": s, "end": e, "蓋到": hit, "整句": True,
+                                "鍵": f"段落外:{t['id']}:{s:.1f}"})
         for sid in t.get("句子", []):
             x = by_id.get(sid)
             if not x:
@@ -325,16 +317,147 @@ def final_check(workdir: str | Path) -> dict:
                     continue
                 left, hit = _gap_rows(a, b, named, OUTSIDE_MIN_S)
                 for s, e in left:
-                    done = "、".join(f"〈{h['名稱']}〉" for h in hit)
-                    part = (f"其中 {b - a - sum(y - x0 for x0, y in assemble.subtract(a, b, handled)):.1f} 秒已經由{done}處理，"
-                            f"剩下 {t1(s)}–{t1(e)}（{e - s:.1f} 秒）沒有處理，") if hit else ""
-                    row(must, f"段落外:{t['id']}:{s:.1f}", s, e,
-                        f"〈{tname}〉（{t1(t['start'])}–{t1(t['end'])}）的句子有 {b - a:.1f} 秒在段落外面（{t1(a)}–{t1(b)}）；{part}"
-                        "這幾秒會是學員原聲。聽一下：真的有學員的聲音，按「有學員的聲音」選怎麼處理；"
-                        "外面那一段不是學員（例如是老師接話），按「我聽過了」", ack=True,
-                        name=tname, card=f"學員段落:{t['id']}",
-                        todo=f"到第 3 步〈{tname}〉按「改時間」，把起訖改大包住 {t1(s)}–{t1(e)}",
-                        paths=_fix_paths(s, e, near(s, e), index, turn=t))
+                    out.append({"段落": t, "a": a, "b": b, "start": s, "end": e, "蓋到": hit, "鍵": f"段落外:{t['id']}:{s:.1f}"})
+    return out
+
+
+# 10-01 第三批 14：「切在外面的這幾秒是誰的聲音」的答案（存在覆核決定的 `段落外答案`，鍵跟總檢查那一列一樣）
+OUT_A, OUT_B, OUT_C, OUT_D = "老師不用處理", "老師重念", "還是學員", "好幾個人"
+OUT_ANSWERS = (OUT_A, OUT_B, OUT_C, OUT_D)
+OUT_TODO = {OUT_B: "第 3 步答了「老師的話，要用老師聲音重念」，但這幾秒還沒有老師重念的那一筆：到第 3 步按「新增老師重念這幾秒」，起訖已經填好。",
+            OUT_C: "第 3 步答了「還是學員的聲音」：那就不該切在這裡，把段落的起訖改回去包住這幾秒，或另外新增一筆漏抓的發言。",
+            OUT_D: "第 3 步答了「還有好幾個人的聲音」：要再切開，一個人一段新增（剩下沒處理的幾秒會再問一次）。"}
+OUT_GO = {OUT_B: "到第 3 步〈{name}〉，在「切在段落外面的這幾秒」按「新增老師重念這幾秒」",   # 答過之後「怎麼改」那一行
+          OUT_C: "到第 3 步〈{name}〉，在「切在段落外面的這幾秒」按「把這一段的起訖改回去」或「另外新增一筆漏抓的發言」",
+          OUT_D: "到第 3 步〈{name}〉，在「切在段落外面的這幾秒」按「切出其中一段」，一個人一段新增"}
+OUT_TOL_S = 0.05
+
+
+def outside_answer(answers: dict, heard: set, key: str, start: float, end: float) -> str | None:
+    """這幾秒現在的答案（純函式）：存的範圍要跟現在的一樣（前後差 0.05 秒以內），範圍變了舊答案就不算；
+    總檢查按過「我聽過了」（只記得起點）等於答「老師的話，不用處理」。"""
+    a = answers.get(key)
+    if a and abs(a["start"] - start) <= OUT_TOL_S and abs(a["end"] - end) <= OUT_TOL_S and a.get("答案") in OUT_ANSWERS:
+        return a["答案"]
+    if key in heard and not a:
+        return OUT_A
+    return None
+
+
+def outside_questions(workdir: str | Path) -> dict[str, list[dict]]:
+    """第 3 步學員段落卡片上要問的「切在外面的這幾秒是誰的聲音」：{段落 id: [{鍵, start, end, a, b, 答案}]}。只讀。"""
+    from bookclub import review
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    dec = review.load_decisions(workdir)
+    tdata = turns_mod.page_data(workdir)
+    turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
+    sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
+    kept = {k for k, v in dec["學員聲音"].items() if v == "保留原聲"}
+    heard = set((dec.get("總檢查") or {}).get("聽過") or [])
+    answers = dec.get("段落外答案") or {}
+    named = coverage(workdir, dec, turns)["named"]
+    out: dict[str, list[dict]] = {}
+    for g in outside_gaps(turns, {x["id"]: x for x in sents}, named, kept):
+        out.setdefault(g["段落"]["id"], []).append({
+            "鍵": g["鍵"], "start": round(g["start"], 3), "end": round(g["end"], 3), "句子外面": [round(g["a"], 3), round(g["b"], 3)],
+            "整句": bool(g.get("整句")),
+            "答案": outside_answer(answers, heard, g["鍵"], g["start"], g["end"])})
+    return out
+
+
+def answer_outside(workdir: str | Path, key: str, start: float, end: float, answer: str | None) -> dict:
+    """`POST /api/review/outside`：回答（或「先不回答」＝answer None）某一段切在外面的幾秒是誰的聲音。
+    答「老師的話，不用處理」同時記成總檢查那一列的「我聽過了」；改成別的答案或先不回答，那一列的「我聽過了」拿掉。"""
+    from bookclub import review
+
+    if answer is not None and answer not in OUT_ANSWERS:
+        raise ValueError(f"只能選：{'、'.join(OUT_ANSWERS)}")
+    if not str(key).startswith("段落外:"):
+        raise ValueError("不是切在段落外面的那幾秒")
+    with review._lock:
+        dec = review.load_decisions(Path(workdir))
+        ans = dec.setdefault("段落外答案", {})
+        fc = dec.setdefault("總檢查", {"聽過": [], "看過": False})
+        fc.setdefault("聽過", [])
+        if answer is None:
+            ans.pop(key, None)
+        else:
+            ans[key] = {"段落": key.split(":")[1], "start": round(float(start), 3), "end": round(float(end), 3),
+                        "答案": answer, "時間": _now()}
+        if answer == OUT_A and key not in fc["聽過"]:
+            fc["聽過"].append(key)
+        elif answer != OUT_A and key in fc["聽過"]:
+            fc["聽過"].remove(key)
+        review._save_decisions(Path(workdir), dec)
+    return {"ok": True, "答案": answer}
+
+
+def final_check(workdir: str | Path) -> dict:
+    """第 3 步全部通過之後、開始第 4 步之前的總檢查（只讀）。回傳：
+    {一定要處理: [列], 請看一眼: [列], 可以開始: bool}；每一列 {key, start, end, 說明, 可以按聽過?, 已按聽過?,
+    名稱（畫面上看得到的名稱）, 第3步（第 3 步那一張卡片的鍵，沒有卡片是 None）, 去改（去第 3 步要改什麼）,
+    有學員聲音（聽了有學員聲音時可以走的路，見 `_fix_paths`）}。
+    「一定要處理」有還沒按聽過的列就不能開始；「請看一眼」不擋（網頁上要按一次「我看過了」）。
+    10-01：說明一律用畫面上看得到的名稱（不寫 T062、O5602.14 這類內部編號）；學員的話落在段落外面的，
+    已經被別筆處理蓋到的那一部分不再列（只列沒蓋到的那幾秒，說明寫哪一筆蓋了多少）。"""
+    import shutil
+
+    from bookclub import assemble, nameplan, review, students
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    dec = review.load_decisions(workdir)
+    heard = set((dec.get("總檢查") or {}).get("聽過") or [])
+    answers = dec.get("段落外答案") or {}
+    tdata = turns_mod.page_data(workdir)
+    turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
+    sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
+    by_id = {x["id"]: x for x in sents}
+    words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words") or []
+    kept = {k for k, v in dec["學員聲音"].items() if v == "保留原聲"}
+    cov = coverage(workdir, dec, turns)
+    index, items, plan, named, gen_name = cov["index"], cov["items"], cov["plan"], cov["named"], cov["gen_name"]
+    handled = [(x["start"], x["end"]) for x in named]
+    must, look = [], []
+
+    def row(lst, key, a, b, text, ack=False, *, name="", card=None, todo="", paths=None, heard_now=None):
+        lst.append({"key": key, "start": round(a, 3), "end": round(b, 3), "說明": text, "名稱": name,
+                    "第3步": (index.get(card) or {}).get("第3步") if card else None,
+                    "去改": todo, **({"有學員聲音": paths} if paths else {}),
+                    **({"可以按聽過": True, "已按聽過": key in heard if heard_now is None else heard_now} if ack else {})})
+
+    def near(a: float, b: float) -> list[dict]:
+        return [x for x in named if x["start"] - 0.5 <= b and a <= x["end"] + 0.5]
+
+    # 1. 學員的話落在段落外面（人改過段落的開頭或結尾，句子的一部分在外面、又沒被別的處理蓋到）
+    #    10-01 1-4：只列沒被蓋到的那幾秒；鍵照沒被蓋到的那一段的起點（整段都沒蓋到時跟以前一樣，之前按過的「聽過」照算）
+    #    10-01 第三批 14：第 3 步切的當下問過「外面這幾秒是誰的聲音」：答「老師的話，不用處理」（＝這裡的「我聽過了」）不列；
+    #    其他答案照樣看有沒有處理（處理了就被蓋到、不會列），沒處理的說明寫上答了什麼、還差什麼
+    gaps = outside_gaps(turns, by_id, named, kept)
+    for g in gaps:
+        t, a, b, s0, e = g["段落"], g["a"], g["b"], g["start"], g["end"]
+        key = g["鍵"]
+        ans = outside_answer(answers, heard, key, s0, e)
+        if ans == OUT_A:
+            continue
+        tname = review.item_name(index, f"學員段落:{t['id']}")
+        hit = g["蓋到"]
+        done = "、".join(f"〈{h['名稱']}〉" for h in hit)
+        part = (f"其中 {b - a - sum(y - x0 for x0, y in assemble.subtract(a, b, handled)):.1f} 秒已經由{done}處理，"
+                f"剩下 {t1(s0)}–{t1(e)}（{e - s0:.1f} 秒）沒有處理，") if hit else ""
+        said = OUT_TODO.get(ans, "")
+        row(must, key, s0, e,
+            (f"〈{tname}〉（{t1(t['start'])}–{t1(t['end'])}）切短的時候，原本屬於這一段的一句（{t1(a)}–{t1(b)}，{b - a:.1f} 秒）"
+             f"整句落在段落外面；{part}" if g.get("整句") else
+             f"〈{tname}〉（{t1(t['start'])}–{t1(t['end'])}）的句子有 {b - a:.1f} 秒在段落外面（{t1(a)}–{t1(b)}）；{part}")
+            + (said or "這幾秒會是學員原聲。聽一下：真的有學員的聲音，按「有學員的聲音」選怎麼處理；"
+                        "外面那一段不是學員（例如是老師接話），按「我聽過了」"), ack=True,
+            name=tname, card=f"學員段落:{t['id']}",
+            todo=(OUT_GO[ans].format(name=tname) if ans in OUT_GO else
+                  f"到第 3 步〈{tname}〉回答「切在外面的這幾秒是誰的聲音」，或按「改時間」把起訖改大包住 {t1(s0)}–{t1(e)}"),
+            paths=_fix_paths(s0, e, near(s0, e), index, turn=t), heard_now=False)   # 答過「不用處理」的上面已經跳過
     # 2. 名字換不了代號
     for m in plan.get("要人處理", []):
         k = f"名字:{m['候選']}"
@@ -366,7 +489,8 @@ def final_check(workdir: str | Path) -> dict:
     #    10-01：句子只有一部分被處理蓋到的，沒蓋到的部分（至少 0.3 秒）照樣列（以前整句跳過，例如重疊只蓋到 0.7 秒、
     #    句子其他 2.8 秒的學員原聲沒人處理）；已經列在「段落外」的那幾秒不重複列
     stu_turns = [t for t in turns if t.get("說話者") not in (None, "老師")]
-    blockers = handled + [(t["start"], t["end"]) for t in stu_turns] + [(r["start"], r["end"]) for r in must if r["key"].startswith("段落外:")]
+    # 10-02：「段落外」那幾秒不管答了沒有都不在這裡重複列（答「老師的話，不用處理」的上面不列，這裡也不能冒出來）
+    blockers = handled + [(t["start"], t["end"]) for t in stu_turns] + [(g["start"], g["end"]) for g in gaps]
     soft = []
     for x in sents:
         if x.get("label") != "不是老師" or x["end"] - x["start"] < OUTSIDE_MIN_S:
@@ -435,6 +559,10 @@ def ack_final(workdir: str | Path, key: str | None = None, heard: bool = True, s
     from bookclub import review
 
     workdir = Path(workdir)
+    rng = None
+    if key and str(key).startswith("段落外:") and heard:   # 那一列現在的範圍（記答案用）
+        g = next((x for qs in outside_questions(workdir).values() for x in qs if x["鍵"] == key), None)
+        rng = [g["start"], g["end"]] if g else None
     with review._lock:
         dec = review.load_decisions(workdir)
         fc = dec.setdefault("總檢查", {"聽過": [], "看過": False})
@@ -444,6 +572,12 @@ def ack_final(workdir: str | Path, key: str | None = None, heard: bool = True, s
                 fc["聽過"].append(key)
             elif not heard and key in fc["聽過"]:
                 fc["聽過"].remove(key)
+            if str(key).startswith("段落外:"):   # 10-01 第三批 14：「我聽過了」＝第 3 步答「老師的話，不用處理」，兩邊同一件事
+                ans = dec.setdefault("段落外答案", {})
+                if heard and rng:
+                    ans[key] = {"段落": key.split(":")[1], "start": rng[0], "end": rng[1], "答案": OUT_A, "時間": _now()}
+                elif not heard and (ans.get(key) or {}).get("答案") == OUT_A:
+                    ans.pop(key, None)
         if seen is not None:
             fc["看過"] = bool(seen)
             fc["看過時間"] = _now()

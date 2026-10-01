@@ -569,7 +569,7 @@ function rvRenderCard() {
   const idx = all.findIndex((x) => rvKey(x) === rv.cur);
   const state = it["類型"] === "名字" && it["老師整段"] && rvNotName(it) ? `<span class="rv-state ok">✓ 不用改：這一段保留老師原聲（再按一次取消）</span>`
     : it["類型"] === "名字" && rvNotName(it) ? `<span class="rv-state ok">✓ 不是名字，不用改：抓錯了、這裡沒有人名，照原音保留（這個寫法以後不會再被抓成名字；再按一次取消）</span>`
-    : rvInCut(it) ? `<span class="rv-state ok">✓ 通過：這段落在剪掉的片段裡（聲音和畫面都拿掉）${it["剪掉的片段"] ? "" : "（要救回：把那一筆剪掉片段改成不剪／還原）"}</span>${it["剪掉的片段"] ? ` <button class="ghost small" id="rv-uncut">取消剪掉（還原這一段）</button>` : ""}`
+    : rvInCut(it) ? `<span class="rv-state ok">✓ 通過：這段落在剪掉的片段裡（聲音和畫面都拿掉）${it["剪掉的片段"] ? "" : "（要救回：到蓋住這裡的那一筆「剪掉」，在「改做法」按「還原（不剪）」）"}</span>${it["剪掉的片段"] ? ` <button class="ghost small" id="rv-uncut">取消剪掉（還原這一段）</button>` : ""}`
     : it["涵蓋"] ? `<span class="rv-state ok">✓ 已由〈${esc(it["涵蓋"]["名稱"])}〉涵蓋：這一處會跟著那一筆整段換掉，不用另外選</span> <button class="ghost small" id="rv-gocover">跳到那一筆</button>`
     : it["不用處理"] ? `<span class="rv-state skip">不用處理：${esc(it["不用處理"])}</span>`
     : it["已確認"] && it["還缺"] ? `<span class="rv-warnline">按過通過，但還缺東西（見上面）</span>`
@@ -674,6 +674,7 @@ function rvRenderCard() {
   document.getElementById("rv-prev").addEventListener("click", () => rvStep(-1));
   document.getElementById("rv-next").addEventListener("click", () => rvStep(1));
   rvBindBody(it);
+  rvBindOutQ(it);
   rvBindMore(it);
   rvRenderTimeline();
 }
@@ -741,6 +742,99 @@ function rvSidesHtml(it) {   // 10-01 B 方案：兩邊各自的起訖＋兩列�
       ${rvTimeRows("sd", [["老師起訖:0", "老師 起點", T[0]], ["老師起訖:1", "老師 終點", T[1]], ["學員起訖:0", "學員 起點", S[0]], ["學員起訖:1", "學員 終點", S[1]]])}</div>`;
 }
 
+// ---------------------------------------------------------------------------
+// 10-01 第三批 14：學員段落切短之後，句子切在段落外面、沒被處理蓋到的那幾秒：「是誰的聲音？」
+// 切的當下跳出來問（rvAskNewOutside），卡片上也一直看得到、可以改；答案存在覆核決定的「段落外答案」
+// ---------------------------------------------------------------------------
+const RV_OUT = [["老師不用處理", "老師的話，不用處理"], ["老師重念", "老師的話，要用老師聲音重念"],
+  ["還是學員", "還是學員的聲音"], ["好幾個人", "還有好幾個人的聲音"]];
+
+function rvOutQHtml(it, q, i) {
+  const d = q.end - q.start;
+  const opts = RV_OUT.map(([v, label]) => `<button class="${q["答案"] === v ? "primary" : "ghost"} small rv-outans" data-i="${i}" data-v="${esc(v)}" aria-pressed="${q["答案"] === v}">${esc(label)}</button>`).join(" ");
+  const later = `<button class="${q["答案"] ? "ghost" : "primary"} small rv-outans" data-i="${i}" data-v="" aria-pressed="${!q["答案"]}">先不回答</button>`;
+  const follow = q["答案"] === "老師重念"
+    ? `<p class="rv-warnline">還沒有老師重念這幾秒的那一筆。<button class="ghost small rv-outgo" data-i="${i}" data-go="teacher">新增老師重念這幾秒（起訖已經填好）</button></p>`
+    : q["答案"] === "還是學員"
+      ? `<p class="rv-warnline">那就不該切在這裡：<button class="ghost small rv-outgo" data-i="${i}" data-go="back">把這一段的起訖改回去包住這幾秒</button>
+          或 <button class="ghost small rv-outgo" data-i="${i}" data-go="student">另外新增一筆漏抓的發言</button></p>`
+      : q["答案"] === "好幾個人"
+        ? `<p class="rv-warnline">要再切開：一個人一段。<button class="ghost small rv-outgo" data-i="${i}" data-go="split">切出其中一段（帶去新增修改，起訖先填成這幾秒）</button>
+            把起點或終點縮到只有一個人講話的那一段再新增；剩下沒處理的幾秒會再問一次。</p>`
+        : q["答案"] === "老師不用處理" ? `<p class="rv-meta">照原聲留著；第 4 步總檢查不會再問這幾秒。</p>`
+          : `<p class="rv-meta">先不回答的話，第 4 步總檢查會列出這幾秒。</p>`;
+  return `<div class="rv-field rv-outq"><p><b>切在段落外面的 ${esc(rvFmt(q.start, 1))}–${esc(rvFmt(q.end, 1))}（${d.toFixed(1)} 秒）是誰的聲音？</b>
+      <button class="ghost small rv-outplay" data-i="${i}">試聽這幾秒</button></p>
+    <p class="rv-meta">${q["整句"] ? "這一段切短的時候，原本屬於這一段的一句整句落在段落外面" : "這一段的句子有一部分在段落外面"}，沒有任何處理蓋到：照現在的樣子會留著原聲。</p>
+    <div class="rv-row">${opts} ${later}</div>${follow}</div>`;
+}
+
+function rvPrefill(kind, a, b, who, note) {   // 帶去「新增修改」面板，起訖先填好（還沒存，要按新增）
+  Object.assign(rv.ed, { open: true, id: null, label: null, kind, a: Math.round(a * 100) / 100, b: Math.round(b * 100) / 100,
+    who: who || rv.ed.who, result: note ? { error: note } : null, whole: false });
+  rvRenderIO();
+  rvRenderTimeline();
+  const box = document.getElementById("rv-io");
+  if (box) box.scrollIntoView({ block: "nearest" });
+}
+
+async function rvAnswerOutside(it, q, v) {
+  try { await apiPost("/api/review/outside", { "鍵": q["鍵"], start: q.start, end: q.end, "答案": v || null }); }
+  catch (err) { alert(err.message); return false; }
+  await rvReload();
+  if (v === "老師重念") rvPrefill("學員發言", q.start, q.end, "老師", "下面的起訖已經填好、說話的人選了老師：聽過沒問題按「新增」，這幾秒就會用老師的聲音重念");
+  if (v === "好幾個人") rvPrefill("學員發言", q.start, q.end, it["說話者"], "把起點或終點縮到只有一個人講話的那一段，選是誰說的，再按「新增」；剩下的幾秒會再問一次");
+  return true;
+}
+
+function rvBindOutQ(it) {
+  const qs = it["段落外"] || [];
+  document.querySelectorAll(".rv-outans").forEach((b) => b.addEventListener("click", () => rvAnswerOutside(it, qs[Number(b.dataset.i)], b.dataset.v)));
+  document.querySelectorAll(".rv-outplay").forEach((b) => b.addEventListener("click", () => {
+    const q = qs[Number(b.dataset.i)]; rv.stopAt = q.end + 0.3; rvSeek(Math.max(0, q.start - 0.3), true);
+  }));
+  document.querySelectorAll(".rv-outgo").forEach((b) => b.addEventListener("click", () => {
+    const q = qs[Number(b.dataset.i)];
+    if (b.dataset.go === "teacher") rvPrefill("學員發言", q.start, q.end, "老師");
+    else if (b.dataset.go === "student") rvPrefill("學員發言", q.start, q.end, it["說話者"]);
+    else if (b.dataset.go === "split") rvPrefill("學員發言", q.start, q.end, it["說話者"], "把起點或終點縮到只有一個人講話的那一段，選是誰說的，再按「新增」；剩下的幾秒會再問一次");
+    else { rvOpenEditor(it); rv.ed.a = Math.min(it.start, q.start); rv.ed.b = Math.max(it.end, q.end); rvRenderIO(); rvRenderTimeline(); }
+  }));
+}
+
+function rvOutKeys() {   // 現在畫面上所有「切在外面的幾秒」的鍵（切之前記下來，切完比對哪幾段是新冒出來的）
+  return new Set(rvItems().flatMap((x) => (x["段落外"] || []).map((q) => `${q["鍵"]}|${q.start}|${q.end}`)));
+}
+
+// 切的當下就問：切完重新讀資料後，新冒出來、還沒回答的那幾秒跳出來問（一次一段）
+function rvAskNewOutside(before) {
+  const fresh = [];
+  for (const it of rvItems()) for (const q of it["段落外"] || []) if (!q["答案"] && !before.has(`${q["鍵"]}|${q.start}|${q.end}`)) fresh.push([it, q]);
+  if (!fresh.length) return;
+  const [it, q] = fresh[0];
+  const dlg = document.createElement("dialog");
+  dlg.className = "rv-confirm";
+  dlg.setAttribute("aria-labelledby", "rv-out-title");
+  dlg.innerHTML = `<h2 id="rv-out-title">切在外面的這幾秒是誰的聲音？</h2>
+    <p>〈${esc(rvWho(it["說話者"]))}〉這一段：${q["整句"] ? "原本屬於這一段的一句" : "原本那一句"}有 ${esc(rvFmt(q.start, 1))}–${esc(rvFmt(q.end, 1))}（${(q.end - q.start).toFixed(1)} 秒）落在段落外面，沒有任何處理蓋到。</p>
+    <p><button class="ghost small" id="rv-out-play">試聽這幾秒</button></p>
+    <div class="rv-out-btns">${RV_OUT.map(([v, label]) => `<button class="ghost" data-v="${esc(v)}">${esc(label)}</button>`).join("")}
+      <button class="ghost" data-v="">先不回答</button></div>
+    <p class="rv-meta">先不回答的話，第 4 步總檢查會列出這幾秒；卡片上也可以之後再回答。</p>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
+  dlg.querySelector("#rv-out-play").addEventListener("click", () => { rv.stopAt = q.end + 0.3; rvSeek(Math.max(0, q.start - 0.3), true); });
+  dlg.querySelectorAll("[data-v]").forEach((b) => b.addEventListener("click", async () => {
+    close();
+    const key = rvKey(it);
+    if (b.dataset.v) await rvAnswerOutside(it, q, b.dataset.v);
+    if (rvItem(key)) { rv.cur = key; rvRenderCard(); rvMarkListRow(true); }
+    rvAskNewOutside(new Set([...before, `${q["鍵"]}|${q.start}|${q.end}`]));   // 下一段
+  }));
+  dlg.showModal();
+}
+
 // 10-01 第三批：重疊選「生成學員聲音」、不在學員段落裡：寫清楚會換掉哪幾秒、這幾秒裡老師的話會怎樣
 const RV_GEN_SRC = { "學員整句": "學員那一整句", "你改過的範圍": "你改過的範圍", "你改小的重疊時間": "照你之前改小的重疊時間" };
 
@@ -797,7 +891,8 @@ function rvBodyHtml(it) {
       ${(it["換過的字"] || []).length && !it["已確認"] ? `<p class="rv-note">自動換成代號的地方：${rvMarkChanges(it["建議稿"], it["換過的字"])}</p>` : ""}
       ${it["代號改過"] ? `<p class="rv-warnline">代號改過，請再看一次（原本的代號：${esc(it["代號改過"])}，別人也在用，沒有自動換）。</p>` : ""}
       ${it["含本名"] ? `<p class="rv-warnline">文字裡還有名冊上的本名，要換成代號。</p>` : ""}
-      ${it["問老師"] ? `<p class="rv-note">已標「聽不清楚，問老師」${it["問老師備註"] ? "：" + esc(it["問老師備註"]) : ""}</p>` : ""}`;
+      ${it["問老師"] ? `<p class="rv-note">已標「聽不清楚，問老師」${it["問老師備註"] ? "：" + esc(it["問老師備註"]) : ""}</p>` : ""}
+      ${(it["段落外"] || []).map((q, i) => rvOutQHtml(it, q, i)).join("")}`;
   }
   if (t === "學員名字") {
     const w = it["整句"];
@@ -998,8 +1093,10 @@ function rvBindMore(it) {
     });
     q("rv-merge").addEventListener("click", async () => {
       await rvSaveTurnText(it);
+      const before = rvOutKeys();
       try { await apiPost("/api/turns/merge", { id: it.id }); } catch (err) { alert(err.message); return; }
       await rvReload();
+      rvAskNewOutside(before);
     });
     q("rv-split").addEventListener("mousedown", (e) => e.preventDefault());
     q("rv-split").addEventListener("click", async () => {
@@ -1007,9 +1104,11 @@ function rvBindMore(it) {
       const at = ta.selectionStart;
       if (!at || at >= ta.value.length) { alert("先在逐字稿裡把游標放在要切開的地方（換人的第一個字前面）"); return; }
       await rvSaveTurnText(it);
+      const before = rvOutKeys();
       let sp;
       try { sp = await apiPost("/api/turns/split", { id: it.id, at }); } catch (err) { alert(err.message); return; }
       await rvReload();
+      rvAskNewOutside(before);
       if (sp && String(sp["切在"] || "").startsWith("一句話裡面")) {   // 09-30：切在一句話裡面，切點是照逐字稿每個字的時間找的
         alert(`切在${sp["切在"]}：切點 ${rvFmt(sp["切點"], 1)}。\n前後兩段請各聽一下開頭結尾，不準的話用「改時間」調整。後面那一段如果是老師講的，按「這段其實是老師」。`);
       }
@@ -1243,7 +1342,7 @@ function rvRenderList() {
     return `<li class="${key === rv.cur ? "cur" : ""} ${rvDone(it) ? "done" : ""}" data-key="${esc(key)}" tabindex="-1">
       <span class="tm">${esc(rvFmt(it.start))}</span>
       <span class="ty">${rvChip(it)}</span>
-      <span class="tx">${it["第5步退回"] ? `<span class="rv-tag warn" title="${esc(it["第5步退回"].join("；"))}">第 5 步退回</span>` : ""}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}${esc(rvPreview(it))}</span>
+      <span class="tx">${(it["段落外"] || []).some((q) => !q["答案"]) ? `<span class="rv-tag warn">段落外面有幾秒還沒回答</span>` : ""}${it["第5步退回"] ? `<span class="rv-tag warn" title="${esc(it["第5步退回"].join("；"))}">第 5 步退回</span>` : ""}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}${esc(rvPreview(it))}</span>
       <span class="sg">${esc(sug)}</span>
       ${st}</li>`;
   }).join("");
@@ -1800,8 +1899,10 @@ const rvEdCtx = {
     },
     saved: async (r, res) => {
       // 新增完清空起點終點，可以接著標下一筆；結果留在面板上
+      const before = rvOutKeys();   // 10-01 第三批 14：改時間把段落切短 → 切在外面的幾秒當下就問
       Object.assign(rv.ed, { id: null, label: null, a: null, b: null, result: res, word: "", code: "" });   // 代號每筆重選，免得沿用上一筆
       await rvReload();
+      rvAskNewOutside(before);
       const key = `${r["類型"]}:${r.id}`;
       if (rvItem(key)) { rv.filter = "全部"; rvRenderList(); rvSelect(key, { seek: false }); }
     },

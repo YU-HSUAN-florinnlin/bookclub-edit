@@ -659,3 +659,6 @@ details.adv { margin-top: 10px; }
 details.adv summary { cursor: pointer; color: var(--muted); }
 .muted.small, div.small { font-size: 12px; }
 .rv-gennote { margin-top: 6px; }
+.rv-out-btns { display: flex; flex-direction: column; gap: 6px; align-items: stretch; margin: 10px 0; }
+.rv-outq { border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 8px; }
+.rv-outq .rv-row { flex-wrap: wrap; gap: 6px; }

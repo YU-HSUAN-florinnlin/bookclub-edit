@@ -594,6 +594,7 @@ def redo_list(workdir: str | Path) -> dict:
         items = [{**i, **({"改範圍": latest[i["鍵"]]["改範圍"]} if latest.get(i["鍵"], {}).get("改範圍") else {})} for i in items]
     index = _index(workdir)
     ctx = _redo_ctx(workdir) if items else {}
+    logs: dict = {}
     for it in items:
         it["建議指令"] = suggest_command(workdir, it)
         it["做了什麼"] = plain_ids(it.get("做了什麼") or "", index, workdir)   # 10-01 走查：第 4 步也不露內部編號
@@ -602,6 +603,10 @@ def redo_list(workdir: str | Path) -> dict:
         it["做法"] = "重新生成" if it["生成"] else "重新組裝"
         it["說明"] = (f"重新生成這一筆的 {len(it['生成'])} 句聲音，再重新組裝" if it["生成"]
                     else "只重新組裝：這一筆沒有聲音要重新生成；要改的地方先到第 3 步改好")
+        # 10-02：文字和範圍都沒改的，生成規則一樣（從同一個種子開始），重新生成的聲音多半跟上一版一樣；畫面上寫清楚
+        it["沒改"] = bool(it["生成"]) and all(_same_as_last(workdir, u, ctx, logs) for u in it["生成"])
+        if it["沒改"]:
+            it["說明"] += "。注意：文字和範圍都沒改，重新生成的聲音多半會跟上一版一樣；要不一樣，先到第 3 步改要念的字或範圍"
     label_items(items, index)
     doing = check.get("重做中")
     return {"已送回": bool(sent), "時間": (sent or {}).get("時間"), "項目": items,
@@ -682,6 +687,21 @@ def redo_units(it: dict, ctx: dict) -> list[dict]:
             seen.add((role, x["id"]))
             out.append({"角色": role, "id": x["id"], "slot": [round(x["slot"][0], 3), round(x["slot"][1], 3)]})
     return out
+
+
+def _same_as_last(workdir: Path, unit: dict, ctx: dict, logs: dict) -> bool:
+    """這一句現在要念的字、時間格跟上一次生成的一樣嗎（一樣的話重新生成多半是同一個聲音）。讀不到就當作有改。"""
+    role = unit["角色"]
+    if role not in logs:
+        rec = wd.read_json(_role_paths(Path(workdir), role)[0], default=None) or {}
+        logs[role] = {r.get("id"): r for r in rec.get("句子") or []}
+    last = logs[role].get(unit["id"])
+    now = next((x for x in ctx.get(role, []) if x.get("id") == unit["id"]), None)
+    if not last or not now:
+        return False
+    same_slot = all(abs(a - b) <= 0.05 for a, b in zip(now["slot"], last.get("slot") or [None, None]) if a is not None and b is not None) \
+        and len(last.get("slot") or []) == 2
+    return same_slot and (now.get("text") or "") == (last.get("text") or "")
 
 
 def _role_paths(workdir: Path, role: str) -> tuple[Path, Path]:

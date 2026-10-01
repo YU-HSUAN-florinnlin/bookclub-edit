@@ -970,6 +970,15 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     for it in items:
         if back.get(f"{it['類型']}:{it['id']}"):
             it["第5步退回"] = back[f"{it['類型']}:{it['id']}"]
+    try:   # 10-01 第三批 14：學員段落切短後，句子切在外面、沒被處理蓋到的幾秒：卡片上問是誰的聲音
+        from bookclub import execute
+
+        outside = execute.outside_questions(workdir)
+    except Exception:  # noqa: BLE001 — 算不出來不擋第 3 步（第 4 步總檢查照樣會列）
+        outside = {}
+    for it in items:
+        if it["類型"] == "學員段落" and outside.get(it["id"]) and not it.get("不用處理"):
+            it["段落外"] = outside[it["id"]]
     items.sort(key=lambda x: (x["start"], x["類型"]))
     restored.sort(key=lambda x: x["start"])
 
@@ -1661,6 +1670,15 @@ def retime_turns(turns: list[dict], tid: str, start: float, end: float, sent: di
             ts.append(to)
         to["句子"] = (to["句子"] + give) if at_end else (give + to["句子"])
         changed.add(id(to))
+        if me.get("說話者") not in (None, "老師") and to.get("說話者") == "老師":
+            # 10-02 第三批 14：學員段落切短、整句被還給老師段落的，記在這一段（第 3 步當下問「切在外面的這幾秒是誰的聲音」）
+            me["切到外面"] = sorted(set(me.get("切到外面") or []) | set(give), key=lambda i: sent[i]["start"] if i in sent else 0.0)
+    if me.get("切到外面"):   # 改回去包住的，不再算切到外面
+        left = [i for i in me["切到外面"] if i not in inside]
+        if left:
+            me["切到外面"] = left
+        else:
+            me.pop("切到外面")
     out = []
     for t in ts:
         if id(t) in changed:

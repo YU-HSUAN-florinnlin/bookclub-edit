@@ -595,6 +595,27 @@ def test_redo_returned_regenerates_only_returned_then_step5_unseen():
     assert prog["步驟"]["組裝"]["狀態"] == "跳過" and rendered == [1]
 
 
+def test_redo_list_warns_when_text_and_range_unchanged():
+    """10-02：退回的那一句文字、範圍都沒改：第 4 步寫清楚重新生成多半跟上一版一樣；改了字就不寫。"""
+    from bookclub import finalcheck, proclog
+
+    w = _fresh()
+    items = _all_generated(w)
+    t = items[0]
+    log = {"產生時間": "t1", "片段": None, "紀錄": [
+        {"類型": "學員重念", "原片": list(t["slot"]), "成品": list(t["slot"]), "做了什麼": "x", "檔案": "a.wav",
+         "覆核項目": [f"學員段落:{t['段落']}"], "文字": t["text"]}]}
+    wd.write_json(proclog.log_path(w), log)
+    finalcheck.decide_record(w, finalcheck.record_key(log["紀錄"][0]), "退回重做", "念錯字")
+    it = finalcheck.redo_list(w)["項目"][0]
+    assert it["沒改"] and "多半會跟上一版一樣" in it["說明"]
+    rec = wd.read_json(students.log_path(w))
+    rec["句子"][0]["text"] = "上一次念的字"                                    # 這次要念的字跟上一次不一樣
+    wd.write_json(students.log_path(w), rec)
+    it = finalcheck.redo_list(w)["項目"][0]
+    assert not it["沒改"] and "上一版" not in it["說明"]
+
+
 def test_redo_stopped_midway_finishes_on_next_run():
     """重做到一半按停止：清掉的那幾句下次接著生成；下一次組裝做完一樣收尾（回到還沒看）。"""
     from bookclub import finalcheck, proclog

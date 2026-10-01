@@ -1227,6 +1227,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, rv.save_cut(server.workdir, body))
             elif path == "/api/review/mute":
                 self._send_json(200, rv.save_mute(server.workdir, body))
+            elif path == "/api/review/outside":   # 10-01 第三批 14：切在段落外面的幾秒是誰的聲音
+                from bookclub.execute import answer_outside
+
+                self._send_json(200, answer_outside(server.workdir, str(body["鍵"]), float(body["start"]), float(body["end"]),
+                                                    body.get("答案") or None))
             elif path == "/api/review/delete":   # 10-01 第三批：人工新增的加錯了可以直接刪（留紀錄）
                 self._send_json(200, rv.delete_manual(server.workdir, str(body["類型"]), str(body["id"])))
             elif path == "/api/review/manual":
