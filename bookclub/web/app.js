@@ -234,21 +234,32 @@ async function renderExecute() {
 // 10-01 宇軒 7-5：按「開始執行」之前的總檢查（一定要處理／請看一眼），每一列可以跳過去聽
 function fcTime(t) { const m = Math.floor(t / 60), s = t - m * 60; return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`; }
 
+let fcRowsCache = [];   // 總檢查每一列（按鈕用編號找回那一列）
+
 function finalCheckHtml(fc) {
-  const row = (r) => `<tr><td class="nowrap">${esc(fcTime(r.start))}–${esc(fcTime(r.end))}</td><td>${esc(r["說明"])}</td>
-    <td class="nowrap"><button class="secondary small" data-fcplay="${r.start}|${r.end}">跳過去聽</button>
-    ${r["可以按聽過"] ? `<label class="nowrap"><input type="checkbox" data-fcheard="${esc(r.key)}" ${r["已按聽過"] ? "checked" : ""}> 我聽過了，這裡沒有學員的聲音</label>` : ""}</td></tr>`;
+  fcRowsCache = [];
+  const row = (r) => {
+    const i = fcRowsCache.push(r) - 1;
+    const paths = r["有學員聲音"] || [];
+    return `<tr><td class="nowrap">${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}</td>
+    <td>${esc(r["說明"])}${r["去改"] ? `<div class="muted fc-todo">怎麼改：${esc(r["去改"])}</div>` : ""}</td>
+    <td class="fc-acts"><button class="secondary small" data-fcplay="${r.start}|${r.end}">跳過去聽</button>
+    ${r["第3步"] ? `<button class="secondary small" data-fcgo="${i}">去第 3 步改這一筆</button>` : ""}
+    ${r["可以按聽過"] ? `<label class="nowrap"><input type="checkbox" data-fcheard="${esc(r.key)}" ${r["已按聽過"] ? "checked" : ""}> 我聽過了，這裡沒有學員的聲音</label>` : ""}
+    ${paths.length ? `<details class="fc-paths"><summary>有學員的聲音</summary><p class="muted">選一個，會帶著這段時間到第 3 步（起訖先填好，按「新增」或「儲存修改」才會存）：</p>
+      <ul>${paths.map((p, j) => `<li><button class="secondary small" data-fcpath="${i}|${j}">${esc(p["文字"])}</button></li>`).join("")}</ul></details>` : ""}</td></tr>`;
+  };
   const m = fc["摘要"] || {};
   const must = fc["一定要處理"] || [], look = fc["請看一眼"] || [];
   return `<h2>開始前總檢查</h2>
     <div class="card">
       <p><b>一定要處理</b>（有任何一列還沒處理就不能開始）：${must.length ? `${fc["還要處理"]} 列還沒處理` : "沒有"}</p>
-      ${must.length ? `<table class="kv">${must.map(row).join("")}</table>
-        <p class="muted">要改的回第 3 步改；改完這一頁會重算。</p>` : ""}
+      ${must.length ? `<table class="kv fc-check">${must.map(row).join("")}</table>
+        <p class="muted">要改的按「去第 3 步改這一筆」；改完回這一頁會重算。</p>` : ""}
       <p><b>請看一眼</b>（不擋，但要按一次「我看過了」）</p>
-      ${look.length ? `<table class="kv">${look.map(row).join("")}</table>` : "<p class=\"muted\">沒有剪掉、消音、超過 10 秒的老師重念。</p>"}
+      ${look.length ? `<table class="kv fc-check">${look.map(row).join("")}</table>` : "<p class=\"muted\">沒有剪掉、消音、超過 10 秒的老師重念。</p>"}
       <p class="muted">自動算處理好的（被別筆涵蓋）：${(m["自動算處理好"] || []).length} 筆
-        ${(m["自動算處理好"] || []).length ? `<details><summary>展開</summary>${m["自動算處理好"].map((x) => `${esc(fcTime(x.start))} 由〈${esc(x["涵蓋"])}〉涵蓋`).join("<br>")}</details>` : ""}</p>
+        ${(m["自動算處理好"] || []).length ? `<details><summary>展開</summary>${m["自動算處理好"].map((x) => `${esc(x["名稱"] || fcTime(x.start))} 由〈${esc(x["涵蓋"])}〉涵蓋`).join("<br>")}</details>` : ""}</p>
       <p class="muted">要生成約 ${Math.round((m["要生成秒數"] || 0) / 60)} 分鐘的聲音，預估 ${((m["預估秒數"] || 0) / 3600).toFixed(1)} 小時（含組裝約 21 分鐘）；硬碟可用 ${m["硬碟可用GB"]} GB。${esc(m["提醒"] || "")}</p>
       <label><input type="checkbox" id="fcSeen" ${fc["看過"] ? "checked" : ""}> 我看過了</label>
       <audio id="fcAudio" preload="none"></audio>
@@ -261,6 +272,18 @@ function bindFinalCheck(reload) {
     const au = document.getElementById("fcAudio");
     au.src = `/api/audio?start=${Math.max(0, a - 1).toFixed(2)}&end=${(e + 1).toFixed(2)}`;
     au.play();
+  }));
+  // 10-01 1-2：直接跳到第 3 步那一張卡片（重疊打開「改做法」，看得到學員是誰的選單）
+  document.querySelectorAll("[data-fcgo]").forEach((b) => b.addEventListener("click", () => {
+    const r = fcRowsCache[Number(b.dataset.fcgo)];
+    rvJump({ key: r["第3步"], openMore: r["第3步"].startsWith("重疊:"), note: `從開始前總檢查過來：${r["去改"] || r["說明"]}` });
+  }));
+  // 10-01 1-3：聽了有學員的聲音 → 帶著這段時間去第 3 步新增，或把旁邊那一筆的起訖改大
+  document.querySelectorAll("[data-fcpath]").forEach((b) => b.addEventListener("click", () => {
+    const [i, j] = b.dataset.fcpath.split("|").map(Number);
+    const r = fcRowsCache[i], p = r["有學員聲音"][j];
+    const edit = p["改時間"] || p["新增"];
+    rvJump({ key: p["第3步"] || null, edit, note: `從開始前總檢查過來：${p["文字"]}（${fcTime(r.start)}–${fcTime(r.end)}）。下面的起訖已經填好，聽過沒問題按「${p["改時間"] ? "儲存修改" : "新增"}」` });
   }));
   document.querySelectorAll("[data-fcheard]").forEach((c) => c.addEventListener("change", async () => {
     await apiPost("/api/execute/finalcheck", { key: c.dataset.fcheard, "聽過": c.checked }); await reload();
@@ -315,9 +338,10 @@ async function renderExecuteBody() {
       <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
     </div>
     ${redo.length ? `<h2>第 5 步退回重做的（${redo.length} 筆）</h2>
-      <div class="card"><p class="muted">「一鍵只重做這幾筆」還沒做好：目前要照每一筆下面的指令，在終端機一筆一筆重做，再按「開始執行」重新組裝。</p>
-      <table class="kv">${redo.map((it) => `<tr><td>${esc(it["類型"])}　${esc((it["覆核項目"] || []).join("、") || "—")}</td>
-        <td>${esc(it["原因"])}<div class="muted"><code>${esc(it["建議指令"])}</code></div></td></tr>`).join("")}</table></div>` : ""}`;
+      <div class="card"><p class="muted">在第 5 步改了時間範圍的，按「開始執行」就會只重做那一筆、再重新組裝。其他的「一鍵只重做這幾筆」還沒做好：要照下面的指令，在終端機一筆一筆重做，再按「開始執行」重新組裝。</p>
+      <table class="kv">${redo.map((it) => `<tr><td>${esc(it["類型"])}　${esc((it["覆核名稱"] || []).join("、") || "—")}</td>
+        <td>${esc(it["原因"])}${it["改範圍"] ? `<div class="muted">範圍改了${it["改範圍"]["原本"] ? `：${esc(fmtRange(it["改範圍"]["原本"]))} → ${esc(fmtRange(it["改範圍"]["改成"]))}` : ""}（存在第 3 步〈${esc(it["改範圍"]["名稱"] || "")}〉）；按「開始執行」會${esc(it["改範圍"]["重做"] || "重新組裝")}</div>`
+          : `<div class="muted"><code>${esc(it["建議指令"])}</code></div>`}</td></tr>`).join("")}</table></div>` : ""}`;
   bindFinalCheck(renderExecuteBody);
   document.getElementById("btnExec").addEventListener("click", async () => {
     const body = { start: document.getElementById("exStart").value.trim() || null, end: document.getElementById("exEnd").value.trim() || null,

@@ -1217,7 +1217,8 @@ class Handler(BaseHTTPRequestHandler):
 
             w = server.workdir
             if path == "/api/final/item":
-                self._send_json(200, fc.decide_record(w, str(body["鍵"]), body.get("結果"), str(body.get("原因", ""))))
+                self._send_json(200, fc.decide_record(w, str(body["鍵"]), body.get("結果"), str(body.get("原因", "")),
+                                                     body.get("改範圍")))
             elif path == "/api/final/unlogged":
                 self._send_json(200, fc.decide_unlogged(w, str(body["鍵"]), body.get("結果"), str(body.get("原因", ""))))
             elif path == "/api/final/flag":

@@ -539,5 +539,53 @@ def test_code_changed_flag_shown_until_passed():
     assert not it["代號改過"]
 
 
+def test_final_check_names_links_and_uncovered_part():
+    """10-01 介面修改 1-1～1-5：總檢查用畫面上的名稱（不寫內部編號）、每一列帶第 3 步那一張卡片與要改什麼、
+    有學員聲音時可以走的路；學員的話落在段落外面、被別筆蓋到一部分的，只列沒蓋到的那幾秒；重疊卡片沒人選學員時寫「還缺」。"""
+    from bookclub import execute
+
+    w = _fresh()
+    oid = review.manual_edit(w, {"類型": "重疊", "start": 80.2, "end": 81.0})["id"]
+    review.save_overlap(w, oid, {"做法": "只留學員"})
+    t = next(t for t in review.page_data(w)["項目"] if t["類型"] == "學員段落")
+    review.retime_turn(w, t["id"], t["start"] + 1.0, t["end"])
+    fc = execute.final_check(w)
+    rows = fc["一定要處理"]
+    text = " ".join(r["說明"] + r["去改"] + r["名稱"] for r in rows)
+    assert oid not in text and t["id"] not in text, text
+    out = next(r for r in rows if r["key"].startswith("段落外"))
+    assert out["第3步"] == f"學員段落:{t['id']}" and "改時間" in out["去改"] and out["名稱"].startswith("學員段落 ")
+    fix = out["有學員聲音"][0]["改時間"]
+    assert fix["id"] == t["id"] and fix["類型"] == "學員發言" and fix["start"] <= out["start"]
+    assert {p["新增"]["類型"] for p in out["有學員聲音"] if "新增" in p} == {"學員發言", "局部消音", "重疊"}
+    ov = next(r for r in rows if r["key"].startswith("重疊"))
+    assert ov["第3步"] == f"重疊:{oid}" and "學員是誰" in ov["去改"]
+    card = next(x for x in review.page_data(w)["項目"] if x["類型"] == "重疊" and x["id"] == oid)
+    assert not card["學員已選"] and "學員是誰" in (card["還缺"] or "")
+    # 段落外那一段的前一半被消音蓋到 → 只列後一半，說明寫是哪一筆蓋了多少
+    a, b = out["start"], out["end"]
+    mid = round((a + b) / 2, 2)
+    m = review.save_mute(w, {"start": a - 0.05, "end": mid})["項目"]
+    fc = execute.final_check(w)
+    out2 = next(r for r in fc["一定要處理"] if r["key"].startswith("段落外"))
+    assert abs(out2["start"] - mid) < 0.01 and abs(out2["end"] - b) < 0.01
+    assert "已經由〈消音 " in out2["說明"] and "剩下" in out2["說明"] and m["id"] not in out2["說明"]
+    # 選了學員是誰 → 卡片不再「還缺」
+    review.save_overlap(w, oid, {"學員說話者": "學員1", "學員文字": "我想問一下"})
+    card = next(x for x in review.page_data(w)["項目"] if x["類型"] == "重疊" and x["id"] == oid)
+    assert card["學員已選"] and card["學員猜的"] is None and not card["還缺"]
+
+
+def test_item_index_names_and_teacher_whole_retime_aligns_sentences():
+    """10-01：覆核項目 → 畫面上的名稱；人工標的老師整段改時間對齊句子邊界（以前對字，會縮回去）。"""
+    w = _fresh()
+    nm = review.manual_edit(w, {"類型": "學員發言", "start": 112.1, "end": 115.5, "說話者": "老師"})["id"]
+    idx = review.item_index(w)
+    assert idx[f"名字:{nm}"]["名稱"].startswith("老師重念 ") and idx[f"名字:{nm}"]["老師整段"]
+    assert review.item_name(idx, "學員段落:T999") == "學員段落（第 3 步現在找不到這一筆）"
+    r = review.manual_edit(w, {"類型": "名字", "id": nm, "start": 112.1, "end": 119.4})
+    assert r["對齊結果"]["end"] == 119.6 and "句子" in r["對齊結果"]["對齊到"], r
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

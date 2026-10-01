@@ -125,6 +125,26 @@ def test_keep_all_voices_needs_confirm():
     assert block.index("confirm(") < block.index('apiPost("/api/review/voice"')
 
 
+def test_interface_1001():
+    # 10-01 介面修改：網頁上不留「09-18 定：」這類內部備註；第 3、5 步共用同一套起訖編輯器；
+    # 第 5 步紅線重畫時放在目前時間；總檢查每一列可以去第 3 步；重疊卡片沒人選時顯示「（請選）」
+    import re as _re
+
+    for name in ("app.js", "review.js", "finalcheck.js"):
+        code = "\n".join(_re.sub(r"//.*$", "", ln) for ln in (WEB / name).read_text(encoding="utf-8").splitlines()
+                         if not ln.lstrip().startswith(("*", "/*")))
+        assert not _re.search(r"\d{2}-\d{2} ?定", code), name
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    fcjs = (WEB / "finalcheck.js").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert "function teRender(ctx)" in rv and "teRender(rvEdCtx)" in rv and "teRender(ctx)" in fcjs
+    assert "function rvEdSave" not in rv and "rv-ed-save" not in rv           # 舊的那一份拿掉了，只留共用的
+    assert 'id="fc-head" style="left:' in fcjs and '"seeked"' in fcjs
+    assert "data-fcgo" in app and "data-fcpath" in app and "rvJump(" in app and "function rvJump" in rv
+    assert "（請選）" in rv and "就是這一位" in rv and "程式猜是" in rv
+    assert '"primary on"' in fcjs and "已退回重做" in fcjs
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

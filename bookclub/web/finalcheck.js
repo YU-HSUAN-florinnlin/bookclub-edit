@@ -156,7 +156,7 @@ function fcRenderTop() {
   const msg = document.getElementById("fc-msg");
   if (fc.data["輸出成品"]) msg.innerHTML = `<span class="badge done">已輸出</span> <code>${esc(fc.data["輸出成品"]["檔案"])}</code>（${esc(fc.data["輸出成品"]["時間"])}）`;
   else if (fc.data["送回AI重做"]) msg.innerHTML = `已送回 AI 重做 ${fc.data["送回AI重做"]["項目"].length} 筆（${esc(fc.data["送回AI重做"]["時間"])}）：第 4 步照清單重做，終端機 <code>bookclub redo list</code> 也看得到。`;
-  else if (!st["可以輸出"]) msg.innerHTML = `<span class="rv-meta">還不能輸出：${esc(st["還不能輸出的原因"].join("；"))}（09-18 定：最後一定要有人完整看過整支）</span>`;
+  else if (!st["可以輸出"]) msg.innerHTML = `<span class="rv-meta">還不能輸出：${esc(st["還不能輸出的原因"].join("；"))}（最後一定要有人完整看過整支）</span>`;
   else msg.innerHTML = "";
 }
 
@@ -165,9 +165,10 @@ function fcRenderTop() {
 function fcBindVideo() {
   const v = fc.video;
   v.addEventListener("timeupdate", () => {
-    document.getElementById("fc-clock").textContent = fcFmt(v.currentTime, 1);
-    const head = document.getElementById("fc-head");
-    if (head) head.style.left = `${(v.currentTime / (fc.data["成品長度"] || 1)) * 100}%`;
+    const clock = document.getElementById("fc-clock");
+    if (!clock) return;   // 已經換到別的步驟（影片還在送事件）
+    clock.textContent = fcFmt(v.currentTime, 1);
+    fcMoveHead();
     fcFollow(v.currentTime);
     fcTrack();
   });
@@ -179,6 +180,7 @@ function fcBindVideo() {
   v.addEventListener("pause", () => { stop(); fcSendWatched(); });
   v.addEventListener("ended", () => { stop(); fcSendWatched(); });
   v.addEventListener("seeking", stop);
+  v.addEventListener("seeked", () => { const c = document.getElementById("fc-clock"); if (c) c.textContent = fcFmt(v.currentTime, 1); fcMoveHead(); });
   v.addEventListener("ratechange", () => {
     fcEndSeg();
     const w = document.getElementById("fc-ratewarn");
@@ -229,7 +231,13 @@ function fcRenderTimeline() {
   const seen = fc.data["看過區段"].map(([s, e]) => `<i class="seen" style="left:${pct(s)}%;width:${pct(e - s)}%"></i>`).join("");
   const cur = fc.cur && fcRec(fc.cur);
   const curMark = cur && fcHasTime(cur) ? `<i class="cur" style="left:${pct(cur["成品"][0])}%;width:${Math.max(0.3, pct((cur["成品"][1] || cur["成品"][0]) - cur["成品"][0]))}%"></i>` : "";
-  el.innerHTML = `<div class="track"></div>${marks}${bad}${flags}${curMark}<div class="seenbar">${seen}</div><i class="head" id="fc-head"></i>`;
+  // 10-01 2-2：重畫時紅線放在目前時間（以前重畫後紅線沒有位置，要等下一次播放進度更新才回來，暫停時就停在 0:00）
+  el.innerHTML = `<div class="track"></div>${marks}${bad}${flags}${curMark}<div class="seenbar">${seen}</div><i class="head" id="fc-head" style="left:${pct(fc.video ? fc.video.currentTime : 0)}%"></i>`;
+}
+
+function fcMoveHead() {
+  const head = document.getElementById("fc-head");
+  if (head && fc.video) head.style.left = `${(fc.video.currentTime / (fc.data["成品長度"] || 1)) * 100}%`;
 }
 
 // ---------- 右邊 ----------
@@ -243,8 +251,10 @@ function fcRenderRight() {
   const idx = all.findIndex((x) => x["鍵"] === fc.cur);
   const o = r["原片"], p = r["成品"];
   const canAB = !!o && r["類型"] !== "名字要人處理";
+  const done = r["已改範圍"];
   const state = r["結果"] === "通過" ? `<span class="rv-state ok">✓ 通過</span>`
-    : r["結果"] === "退回重做" ? `<span class="rv-warnline">退回重做：${esc(r["原因"])}</span>` : "";
+    : r["結果"] === "退回重做" ? `<span class="rv-warnline">退回重做：${esc(r["原因"])}</span>${done && done["改成"]
+      ? `<br><span class="rv-meta">範圍改了：${done["原本"] ? `${esc(fcFmt(done["原本"][0]))}–${esc(fcFmt(done["原本"][1]))} → ` : ""}${esc(fcFmt(done["改成"][0]))}–${esc(fcFmt(done["改成"][1]))}（原片時間，第 3 步〈${esc(done["名稱"] || "")}〉看得到）。第 4 步按「開始執行」會${esc(done["重做"] || "重新組裝")}</span>` : ""}` : "";
   box.innerHTML = `<article class="rv-card">
       <header><span class="rv-chip fc-${FC_TYPE[r["類型"]] || "ov"}"><i></i>${esc(r["類型"])}</span>
         <span class="rv-when">${p && p[0] != null ? `成品 ${esc(fcFmt(p[0]))}${p[1] != null && p[1] !== p[0] ? "–" + esc(fcFmt(p[1])) : ""}` : "成品裡沒有（刪掉了）"}</span>
@@ -253,7 +263,7 @@ function fcRenderRight() {
         <p>${esc(r["做了什麼"])}</p>
         ${r["文字"] ? `<p class="rv-note">念的稿子：${esc(r["文字"])}</p>` : ""}
         <p class="rv-meta">原片 ${o ? `${esc(fcFmt(o[0]))}${o[1] !== o[0] ? "–" + esc(fcFmt(o[1])) : ""}` : "—"}
-          ${(r["覆核項目"] || []).length ? `　第 3 步：${esc(r["覆核項目"].join("、"))}` : ""}${r["檔案"] ? `　檔案：${esc(r["檔案"])}` : ""}</p>
+          ${(r["覆核名稱"] || []).length ? `　第 3 步：${esc(r["覆核名稱"].join("、"))}` : ""}</p>
         ${r["要人聽"] ? `<p class="rv-warnline">生成檢查沒過或放不進時間格：仔細聽</p>` : ""}
       </div>
       ${canAB ? `<div class="rv-row fc-ab"><span class="rv-meta">試聽（前後各多 2 秒）</span>
@@ -261,14 +271,16 @@ function fcRenderRight() {
         <button class="ghost small" id="fc-ab-stop">停</button></div>` : ""}
       ${state ? `<div class="rv-statebox">${state}</div>` : ""}
       <div class="rv-actions">
-        <button class="primary" id="fc-pass">${r["結果"] === "通過" ? "已通過（再按取消）" : "通過"}</button>
-        <button class="ghost" id="fc-redo" aria-expanded="${fc.redoOpen}">退回重做</button>
+        <button class="${r["結果"] === "通過" ? "primary on" : r["結果"] ? "ghost" : "primary"}" id="fc-pass" aria-pressed="${r["結果"] === "通過"}">${r["結果"] === "通過" ? "✓ 已通過（再按取消）" : "通過"}</button>
+        <button class="ghost${r["結果"] === "退回重做" ? " on" : ""}" id="fc-redo" aria-pressed="${r["結果"] === "退回重做"}" aria-expanded="${fc.redoOpen}">${r["結果"] === "退回重做" ? "✓ 已退回重做（再按可改）" : "退回重做"}</button>
         <span class="spacer"></span>
         <button class="ghost" id="fc-prev">上一筆</button><button class="ghost" id="fc-next">下一筆</button>
       </div>
       <div class="rv-more" id="fc-redobox" ${fc.redoOpen ? "" : "hidden"}>
         <label>退回的原因（AI 重做時照這個改）<textarea id="fc-reason" rows="2" placeholder="例如：第二句念錯字「課」念成「顆」；停格太久">${esc(r["結果"] === "退回重做" ? r["原因"] : "")}</textarea></label>
-        <div class="rv-row"><button class="primary small" id="fc-redo-go">確定退回</button><button class="ghost small" id="fc-redo-cancel">取消</button></div>
+        <div class="rv-row"><button class="primary small" id="fc-redo-go">確定退回</button><button class="ghost small" id="fc-redo-cancel">取消</button>
+          ${r["結果"] === "退回重做" ? `<button class="ghost small" id="fc-redo-undo">取消退回（改回還沒看）</button>` : ""}</div>
+        ${fcRetimeHtml(r)}
       </div></article>`;
   box.querySelectorAll("[data-ab]").forEach((b) => b.addEventListener("click", () => fcPlayAB(r, b.dataset.ab)));
   const stop = document.getElementById("fc-ab-stop"); if (stop) stop.addEventListener("click", () => fc.audio.pause());
@@ -282,6 +294,75 @@ function fcRenderRight() {
   });
   document.getElementById("fc-prev").addEventListener("click", () => fcStep(-1));
   document.getElementById("fc-next").addEventListener("click", () => fcStep(1));
+  const undo = document.getElementById("fc-redo-undo");
+  if (undo) undo.addEventListener("click", () => fcDecide(r, null));
+  fcBindRetime(r);
+}
+
+// ---------- 10-01 2-4：退回重做時直接調整這一筆的時間範圍（用第 3 步同一套起訖編輯器，存到第 3 步同一個地方） ----------
+
+function fcSrcTime(t) {   // 成品時間 → 原片時間（跟後端 finalcheck.from_output_time 一樣；落在停格裡算停格那一點）
+  const plist = fc.data["片段"];
+  if (!plist || !plist.length) return t;
+  let acc = 0;
+  for (const p of plist) {
+    const [s, e] = p.src;
+    if (t <= acc + (e - s)) return s + Math.max(0, t - acc);
+    acc += e - s;
+    if (t <= acc + p.freeze) return e;
+    acc += p.freeze;
+  }
+  return plist[plist.length - 1].src[1];
+}
+
+function fcRetimeHtml(r) {
+  const t = r["改範圍"] || {};
+  const go = t["第3步"] ? `<button class="ghost small" id="fc-go3">去第 3 步〈${esc(t["名稱"] || "這一筆")}〉</button>` : "";
+  if (!t["可以"]) {
+    return `<div class="rv-field fc-retime"><b>調整時間範圍</b>
+      <p class="rv-meta">這一筆不能在這裡改範圍：${esc(t["原因"] || "")}。下一步：${esc(t["下一步"] || "")}</p>${go}</div>`;
+  }
+  return `<div class="rv-field fc-retime"><b>調整時間範圍</b>（原片時間）
+      <p class="rv-meta">時間點抓得不準，在這裡直接改起點終點：存到第 3 步〈${esc(t["名稱"])}〉同一個地方，這一筆自動標成退回重做，第 4 步按「開始執行」會${esc(t["重做"])}（其他做好的不重做）。</p>
+      <div id="fc-retime"></div>${go}</div>`;
+}
+
+function fcBindRetime(r) {
+  const t = r["改範圍"] || {};
+  const go = document.getElementById("fc-go3");
+  if (go) go.addEventListener("click", () => rvJump({ key: t["第3步"], back: "step5",
+    note: `從第 5 步成品檢查過來：${t["可以"] ? "改這一筆" : t["下一步"] || ""}` }));
+  if (!t["可以"] || !document.getElementById("fc-retime")) return;
+  const range = t["方式"] === "重念範圍";
+  const before = [t.start, t.end];
+  const ctx = {
+    host: "fc-retime",
+    st: { kind: t["類型"], id: t.id, a: t.start, b: t.end, busy: false, result: fc.retimeResult || null },
+    o: {
+      aria: "調整時間範圍",
+      head: () => `<span class="rv-meta">〈${esc(t["名稱"])}〉${range ? "的重念範圍" : ""}</span>`,
+      hint: () => (range ? "重念範圍照你填的時間（不自動對齊），要包住名字" : rvRuleHint(t["類型"], t["老師整段"])),
+      now: () => (fc.video ? Math.round(fcSrcTime(fc.video.currentTime) * 100) / 100 : null),
+      nowLabel: "用影片目前位置（換成原片時間）",
+      play: (a, b) => { fc.video.pause(); fc.audio.src = `/api/audio?start=${a.toFixed(2)}&end=${b.toFixed(2)}`; fc.audio.play().catch(() => {}); },
+      api: range ? "/api/review/name" : "/api/review/manual",
+      body: (st) => (range ? { id: t.id, "整句起訖": [st.a, st.b] } : { "類型": t["類型"], id: t.id, start: st.a, end: st.b }),
+      toResult: (res, st) => (range ? { "不對齊": true, start: st.a, end: st.b } : { ...res["對齊結果"], "新增": false }),
+      saved: async (res, out) => {
+        const box = document.getElementById("fc-reason");
+        const typed = box ? box.value.trim() : "";
+        const why = (typed && !typed.startsWith("時間範圍改成") ? typed : "") || `時間範圍改成 ${fcFmt(out.start)}–${fcFmt(out.end)}（原本 ${fcFmt(before[0])}–${fcFmt(before[1])}）`;
+        await apiPost("/api/final/item", { "鍵": r["鍵"], "結果": "退回重做", "原因": why,
+          "改範圍": { "名稱": t["名稱"], "原本": before, "改成": [out.start, out.end], "第3步": t["第3步"], "重做": t["重做"] } });
+        fc.retimeResult = out;
+        fc.redoOpen = true;
+        await fcReload();
+        fc.retimeResult = null;
+      },
+      saveLabel: () => "儲存修改",
+    },
+  };
+  teRender(ctx);
 }
 
 function fcPlayAB(r, which) {
@@ -337,7 +418,7 @@ function fcRenderWhole() {
         <input id="fc-flag-why" placeholder="例如：這裡聲音突然變小"></label></div>
       <div class="rv-actions"><button class="primary" id="fc-flag">這裡有問題（退回重做）</button></div>
       ${flags.length ? `<ul class="fc-flags">${flags.map((x) => `<li><button class="linkish" data-t="${x["成品秒"]}">${esc(fcFmt(x["成品秒"]))}</button>
-        ${esc(x["原因"])}${(x["覆核項目"] || []).length ? `<span class="rv-meta">（${esc(x["覆核項目"].join("、"))}）</span>` : ""}
+        ${esc(x["原因"])}${(x["覆核名稱"] || []).length ? `<span class="rv-meta">（${esc(x["覆核名稱"].join("、"))}）</span>` : ""}
         <button class="ghost small" data-rm="${esc(x.id)}">刪掉</button></li>`).join("")}</ul>` : ""}
     </article>`;
   document.getElementById("fc-flag").addEventListener("click", async () => {
@@ -369,7 +450,7 @@ function fcRenderLower() {
       <span class="tm">${fcHasTime(r) ? esc(fcFmt(r["成品"][0])) : "—"}</span>
       <span class="ty"><span class="rv-chip fc-${FC_TYPE[r["類型"]] || "ov"}"><i></i>${esc(r["類型"])}</span></span>
       <span class="tx">${esc(r["做了什麼"])}</span>
-      <span class="sg">${esc((r["覆核項目"] || []).join("、"))}</span>
+      <span class="sg">${esc((r["覆核名稱"] || []).join("、"))}</span>
       <span class="st ${r["結果"] === "通過" ? "ok" : ""}">${r["結果"] === "通過" ? "✓ 通過" : r["結果"] === "退回重做" ? "退回" : "—"}</span></li>`).join("");
   lower.innerHTML = `${unHtml}<h2 class="fc-h2">處理紀錄（${fcRecs().length} 筆，成品時間）</h2>
     <ol class="rv-list" id="fc-list">${rows || `<li class="empty">沒有處理紀錄。</li>`}</ol>`;

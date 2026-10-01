@@ -140,6 +140,95 @@ def status(log: dict | None, check: dict, total: float | None = None) -> dict:
             "成品長度": total, "退回數": len(redo), "可以輸出": not why, "還不能輸出的原因": why}
 
 
+REGEN_KINDS = ("學員重念", "名字整句換掉", "換聲音")   # 改了範圍要重新生成的（其他的只要重新組裝）
+
+
+def retime_target(rec: dict, index: dict) -> dict:
+    """第 5 步按「退回重做」時，能不能在這裡直接改這一筆的時間範圍（10-01 2-4，純函式）。
+
+    能改的，改的是第 3 步同一個地方（跟第 3 步「改時間」同一支 API），回傳
+    {可以: True, 方式: 改時間｜重念範圍, 類型（改時間面板的類型）, id, 名稱, 第3步, start, end, 重做}；
+    不能改的回傳 {可以: False, 原因, 下一步, 第3步, 名稱}，畫面上帶到第 3 步那一張卡片。
+    `index` 是 `review.item_index`。"""
+    from bookclub.review import item_name
+
+    kind = rec["類型"]
+    keys = rec.get("覆核項目") or []
+    cards = [k for k in keys if (index.get(k) or {}).get("第3步")]
+    first = cards[0] if cards else None
+    base = {"第3步": index[first]["第3步"] if first else None, "名稱": item_name(index, first) if first else ""}
+    redo = "重新生成這一筆、再重新組裝" if kind in REGEN_KINDS else "重新組裝"
+
+    def no(why: str, nxt: str) -> dict:
+        return {**base, "可以": False, "原因": why, "下一步": nxt}
+
+    def yes(info: dict, how: str = "改時間", a: float | None = None, b: float | None = None) -> dict:
+        return {**base, "可以": True, "方式": how, "類型": info.get("改時間"), "id": info["id"], "名稱": info["名稱"],
+                "第3步": info["第3步"], "老師整段": bool(info.get("老師整段")), "start": round(info["start"] if a is None else a, 3),
+                "end": round(info["end"] if b is None else b, 3), "重做": redo}
+
+    def editable(k: str | None) -> dict | None:
+        info = index.get(k or "")
+        return info if info and info.get("第3步") and info.get("改時間") else None
+
+    go = f"到第 3 步〈{base['名稱']}〉" if first else "到第 3 步找原片這個時間附近的那一筆"
+    names = [k for k in keys if k.startswith("名字:")]
+    ovs = [k for k in keys if k.startswith("重疊:") or (k.startswith("學員段落:") and (index.get(k) or {}).get("類型") == "重疊")]
+    if kind == "停格":
+        return no("停格是自動加的：重念的聲音比原本長，畫面停一下補長，不能單獨改範圍", f"{go}改範圍或要念的字")
+    if kind in ("學員名字消音", "學員名字換代號"):
+        return no("學員提到名字的範圍照逐字稿的字自動抓，第 3 步也沒有改時間", f"{go}改做法（直接消音或換成代號）")
+    if kind == "模糊示範":
+        return no("畫面模糊是示範用的，沒有範圍可以改", "不用改")
+    if kind == "名字要人處理":
+        return no("這一筆沒有自動處理（原片沒動）", f"{go}把要重念的句子改好（名字寫成代號），或改成直接消音")
+    if ovs and any((index.get(k) or {}).get("疊放") for k in ovs):
+        return no("這一處重疊選了兩邊都重新生成：老師和學員各有自己的起訖", f"{go}的「改做法」裡改兩邊各自的起訖")
+    if kind in ("名字整句換掉", "換聲音"):
+        if len(names) > 1:
+            return no("這一句同時換掉好幾個名字（" + "、".join(f"〈{item_name(index, k)}〉" for k in names)
+                      + "），重念範圍是合起來的", "到第 3 步這幾張卡片各自改重念範圍")
+        if names and ovs:
+            return no("這一句同時是名字重念和重疊的老師那一句", f"{go}改重念範圍")
+        if not names:
+            return no("這一句是重疊選了「生成老師聲音」：重念的是老師整句，範圍照逐字稿的句子走", f"{go}改重疊的時間或做法")
+        info = editable(names[0])
+        if not info:
+            return no("第 3 步現在找不到這一筆", go)
+        if info.get("老師整段"):
+            return yes(info)
+        o = rec.get("原片") or [info["start"], info["end"]]
+        return yes(info, "重念範圍", o[0], o[1])
+    if kind in ("名字消音", "消音"):
+        info = editable(names[0]) if len(names) == 1 else None
+        return yes(info) if info else no("對不到第 3 步的名字卡片", go)
+    target = editable(first)
+    if kind in ("學員重念", "局部消音", "刪除", "重疊") and target:
+        if kind == "刪除":
+            o = rec.get("原片") or [target["start"], target["end"]]
+            return yes(target, a=o[0], b=o[1])
+        return yes(target)
+    return no("第 3 步現在找不到可以改時間的那一筆", go)
+
+
+def label_items(items: list[dict], index: dict) -> list[dict]:
+    """每一筆加 `覆核名稱`（畫面上看得到的名稱，10-01 1-5：不顯示 T062、O5602.14 這類內部編號）。"""
+    from bookclub.review import item_name
+
+    for it in items:
+        it["覆核名稱"] = [item_name(index, k) for k in it.get("覆核項目") or []]
+    return items
+
+
+def _index(workdir: Path) -> dict:
+    from bookclub import review
+
+    try:
+        return review.item_index(workdir)
+    except Exception:  # noqa: BLE001 — 讀不到第 3 步的資料不要擋住成品檢查，只是名稱退回類型
+        return {}
+
+
 def redo_items(log: dict | None, check: dict) -> list[dict]:
     """要送回 AI 重做的：逐筆退回的、整片看時退回的、沒登記的變動退回的。每一筆帶對應的第 3 步覆核項目。"""
     out = []
@@ -149,7 +238,8 @@ def redo_items(log: dict | None, check: dict) -> list[dict]:
         d = items.get(record_key(r), {})
         if d.get("結果") == REDO:
             out.append({"來源": "逐筆", "鍵": record_key(r), "類型": r["類型"], "原片": r.get("原片"), "成品": r.get("成品"),
-                        "覆核項目": r.get("覆核項目", []), "做了什麼": r.get("做了什麼"), "原因": d.get("原因", "")})
+                        "覆核項目": r.get("覆核項目", []), "做了什麼": r.get("做了什麼"), "原因": d.get("原因", ""),
+                        **({"改範圍": d["改範圍"]} if d.get("改範圍") else {})})
     for x in check.get("整片退回", []):
         out.append({"來源": "整片看", "鍵": x["id"], "類型": "整片看時標的", "原片": [x["原片秒"], x["原片秒"]],
                     "成品": [x["成品秒"], x["成品秒"]], "覆核項目": x.get("覆核項目", []), "做了什麼": "",
@@ -249,10 +339,18 @@ def page_data(workdir: str | Path) -> dict:
         log, check = _current(workdir)
         _save(workdir, check)
     plist = (log or {}).get("片段")
+    index = _index(workdir)
     recs = []
     for r in (log or {}).get("紀錄", []):
         d = check["逐筆"].get(record_key(r), {})
-        recs.append({**r, "鍵": record_key(r), "結果": d.get("結果"), "原因": d.get("原因", "")})
+        tgt = retime_target(r, index)
+        done = d.get("改範圍")
+        if tgt.get("可以") and done and done.get("改成"):   # 10-01 2-4：改過了（還沒重新組裝），面板上顯示改後的
+            tgt["start"], tgt["end"] = done["改成"]
+        recs.append({**r, "鍵": record_key(r), "結果": d.get("結果"), "原因": d.get("原因", ""),
+                     "覆核名稱": [review_name(index, k) for k in r.get("覆核項目") or []],
+                     "改範圍": tgt, "已改範圍": done})
+    flags = label_items([dict(x) for x in check["整片退回"]], index)
     un = []
     for u in (log or {}).get("未登記的變動", []):
         d = check["未登記確認"].get(unlogged_key(u), {})
@@ -263,7 +361,7 @@ def page_data(workdir: str | Path) -> dict:
         "處理紀錄產生時間": (log or {}).get("產生時間"),
         "成品影片": check["成品影片"], "成品影片清單": products(workdir), "成品長度": check.get("成品長度") or 0.0,
         "影片網址": "/api/final/video" if check["成品影片"] else None,
-        "紀錄": recs, "未登記的變動": un, "整片退回": check["整片退回"], "看過區段": check["看過區段"],
+        "紀錄": recs, "未登記的變動": un, "整片退回": flags, "看過區段": check["看過區段"], "片段": plist,
         "送回AI重做": check.get("送回AI重做"), "輸出成品": check.get("輸出成品"),
         "狀態": status(log, check),
     }
@@ -281,8 +379,16 @@ def choose_product(workdir: str | Path, rel: str) -> dict:
     return {"ok": True}
 
 
-def decide_record(workdir: str | Path, key: str, result: str | None, reason: str = "") -> dict:
-    """`POST /api/final/item`：一筆通過或退回重做（退回要寫原因）；result 給 None 是改回還沒看。"""
+def review_name(index: dict, key: str) -> str:
+    from bookclub.review import item_name
+
+    return item_name(index, key)
+
+
+def decide_record(workdir: str | Path, key: str, result: str | None, reason: str = "", retime: dict | None = None) -> dict:
+    """`POST /api/final/item`：一筆通過或退回重做（退回要寫原因）；result 給 None 是改回還沒看。
+    retime（10-01 2-4）：退回時在這裡改了時間範圍 → 記在這一筆的 `改範圍`（{名稱, 原本, 改成, 第3步, 重做, 時間}），
+    第 4 步的退回清單照這個寫「按開始執行只重做這一筆」。範圍本身已經存在第 3 步的地方（`/api/review/manual`、`/api/review/name`）。"""
     if result not in (PASS, REDO, None):
         raise ValueError("只能選：通過、退回重做")
     if result == REDO and not str(reason).strip():
@@ -296,7 +402,14 @@ def decide_record(workdir: str | Path, key: str, result: str | None, reason: str
         if result is None:
             check["逐筆"].pop(key, None)
         else:
+            old = (check["逐筆"].get(key) or {}).get("改範圍") if result == REDO else None
             check["逐筆"][key] = {"結果": result, "原因": str(reason).strip(), "指紋": record_print(rec), "更新時間": _now()}
+            if result == REDO and (retime or old):
+                new = {k: v for k, v in (retime or {}).items() if k in ("名稱", "原本", "改成", "第3步", "重做")}
+                merged = {**(old or {}), **new, "時間": _now()}
+                if old and old.get("原本"):   # 改了好幾次：「原本」留第一次改之前的
+                    merged["原本"] = old["原本"]
+                check["逐筆"][key]["改範圍"] = merged
         _save(workdir, check)
         return {"ok": True, "狀態": status(log, check)}
 
@@ -398,8 +511,12 @@ def redo_list(workdir: str | Path) -> dict:
         items = [i for i in sent["項目"] if i["鍵"] in keys]
         sent = sent if items else None
     items = items if sent else now
+    if sent:   # 送回之後才在第 5 步改了範圍的，照最新的
+        latest = {i["鍵"]: i for i in now}
+        items = [{**i, **({"改範圍": latest[i["鍵"]]["改範圍"]} if latest.get(i["鍵"], {}).get("改範圍") else {})} for i in items]
     for it in items:
         it["建議指令"] = suggest_command(workdir, it)
+    label_items(items, _index(workdir))
     return {"已送回": bool(sent), "時間": (sent or {}).get("時間"), "項目": items}
 
 
@@ -409,6 +526,8 @@ def suggest_command(workdir: Path, it: dict) -> str:
     TODO（09-29）：真的只重做這幾筆，要（1）清掉那一段的生成快取（`生成/學員/_嘗試快取.json` 那一段、
     `生成/老師紀錄.json` 那一句），不然重跑會沿用舊的結果；（2）把退回原因交給 AI（例如改稿子、換種子、改停頓）；
     （3）重跑 `render video` 同一個範圍。宇軒本機同時在改 tts／students／render，等那邊定案再串。"""
+    if it.get("改範圍"):   # 10-01 2-4：範圍改過了，第 4 步的「做過沒有」會看出這一筆的時間格變了
+        return f"（範圍已經改了：第 4 步按「開始執行」會{it['改範圍'].get('重做') or '重新組裝'}，其他做好的不重做）"
     stu = sorted({k.split(":", 1)[1] for k in it.get("覆核項目", []) if k.startswith("學員段落:")})
     names = sorted({k.split(":", 1)[1] for k in it.get("覆核項目", []) if k.startswith("名字:")})
     w = str(workdir)

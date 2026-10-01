@@ -639,3 +639,16 @@ table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg)
 .rv-range .rv-edlab, .rv-sides .rv-edlab { min-width: 5.5em; font-weight: normal; }
 .rv-range input.rv-t, .rv-sides input.rv-t { width: 7.5em; flex: 0 0 auto; }
 .nowrap { white-space: nowrap; }
+
+/* 10-01 介面修改：總檢查每一列的「去第 3 步」「有學員的聲音」；第 3 步從別的步驟跳過來的提示；重疊卡片程式猜的學員；第 5 步改範圍 */
+.fc-check td { vertical-align: top; }
+.fc-acts { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; min-width: 220px; }
+.fc-todo { margin-top: 4px; }
+.fc-paths summary { cursor: pointer; color: var(--warn); font-size: 14px; }
+.fc-paths ul { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
+.rv-gonote { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--rv-sug-bg); color: var(--rv-sug-fg); font-size: 14px; }
+.rv-guess { margin-left: 6px; }
+.rv-lack { font-weight: 600; }
+.rv2 button.primary.on { box-shadow: 0 0 0 3px var(--rv-stu); }
+.rv2 button.ghost.on { font-weight: 600; }
+.fc-retime { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rv-line); }

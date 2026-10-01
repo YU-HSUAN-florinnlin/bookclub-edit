@@ -1298,7 +1298,10 @@ def manual_edit(workdir: str | Path, fields: dict) -> dict:
     if b <= a:
         raise ValueError("終點要晚於起點")
     iid = str(fields["id"]) if fields.get("id") else None
-    al = align_range(workdir, kind, a, b)
+    rule = kind
+    if kind == "名字" and iid and any(x["id"] == iid and x.get("老師整段") for x in load_decisions(workdir)["人工名字"]):
+        rule = "學員發言"   # 10-01：人工標的老師整段（一整段老師的話）改時間對齊句子邊界，跟新增時一樣；對字會縮回名字附近
+    al = align_range(workdir, rule, a, b)
     info = {"標的起訖": al["標的起訖"], "對齊": al["對齊"], "對齊到": al["對齊到"]}
     if kind == "刪除段落":
         new_id = _manual_cut(workdir, iid, al, info)

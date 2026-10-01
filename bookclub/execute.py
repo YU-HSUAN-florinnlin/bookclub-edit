@@ -206,7 +206,7 @@ def _fix_paths(a: float, b: float, near: list[dict], index: dict, *, turn: dict 
         if info.get("類型") == "名字" and not info.get("老師整段"):
             continue   # 老師提到名字的範圍照句子走，延長要在卡片上改重念範圍
         paths.append({"文字": f"把〈{info['名稱']}〉的起訖改大，包住這一段", "第3步": info["第3步"],
-                      "改時間": {"類型": info["改時間"], "id": info["id"], "名稱": info["名稱"],
+                      "改時間": {"類型": info["改時間"], "id": info["id"], "名稱": info["名稱"], "老師整段": bool(info.get("老師整段")),
                               "start": round(min(info["start"], a), 3), "end": round(max(info["end"], b), 3)}})
     who = turn.get("說話者") if turn else None
     paths += [{"文字": "新增一筆「漏抓的發言」（這一段用學員的匿名聲音重念）",
