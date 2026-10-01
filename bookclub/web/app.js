@@ -306,8 +306,10 @@ async function renderExecuteBody() {
       ${fc && !running && (!fc["可以開始"] || !fc["看過"]) ? `<span class="muted">先處理上面「開始前總檢查」${fc["可以開始"] ? "，按「我看過了」" : "一定要處理的列"}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
       <span class="muted" id="execEta">${execEtaText(d)}</span>
+      ${!running ? `<p class="muted">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}
       ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「開始執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
-      ${!running && prog["停止"] ? `<p><span class="badge">已停止</span> 上次按了停止；按「開始執行」會接著做（做好的不重做）。</p>` : ""}
+      ${!running && prog["停止"] ? `<p><span class="badge">已停止</span> ${prog["停止原因"] && !prog["停止原因"].startsWith("按了停止")
+        ? esc(prog["停止原因"]) : "上次按了停止；按「開始執行」會接著做（做好的不重做）。"}</p>` : ""}
       ${!running && prog["中斷"] ? `<p><span class="badge error">中斷</span> 上次跑到一半網頁伺服器被關掉了；按「開始執行」會接著做（做好的不重做）。</p>` : ""}
       ${d.error ? `<p><span class="badge error">失敗</span> ${esc(d.error)}</p>` : ""}
       <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>

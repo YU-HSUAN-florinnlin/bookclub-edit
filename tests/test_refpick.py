@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import _testtmp  # noqa: F401 — 10-01：這支測試建的暫存資料夾跑完自己清（要在 tempfile 之前）
+
 import sys
 from pathlib import Path
 

@@ -19,6 +19,14 @@ length_tolerance = 0.15
 echo_overlap_max_s = 0.5
 # 名字比對要不要放寬（同音字也算候選）。true 比較不會漏掉，但候選會變多，覆核量增加
 name_match_relaxed = true
+# 第 4 步「AI 執行」硬碟、記憶體不夠就停（10-01）。每一支子程式開始前、跑的過程中約每 20 秒看一次；
+# 不夠就請它做完目前這一句再停，做好的都留著，處理完再按一次「開始執行」會接著做。
+# 開始前硬碟可用空間至少要幾 GB
+execute_min_disk_gb_start = 5.0
+# 跑的過程中硬碟可用空間低於幾 GB 就停
+execute_min_disk_gb = 2.5
+# 跑的過程中 swap（記憶體不夠時系統拿硬碟頂替的量）超過幾 GB 就停。只有 Mac 讀得到，其他系統只看硬碟
+execute_max_swap_gb = 8.5
 
 [paths]
 cosyvoice_model_dir = "~/.cache/bookclub/Fun-CosyVoice3-0.5B"  # 聲音生成模型放的位置

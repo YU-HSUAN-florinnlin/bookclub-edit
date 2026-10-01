@@ -22,7 +22,17 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
 import traceback
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -417,6 +427,369 @@ def _default_checks() -> dict[str, Callable]:
             "組裝": lambda w, c: render_done(w, c["標記"], c["輸出做法"])}
 
 
+# ---------- 10-01：每一步、每一個聲線各自一支程式跑 ----------
+#
+# 10-01 夜間第一堂試跑：四步在同一支程式裡跑，換步驟、換學員時前一個模型的記憶體沒有還給系統
+# （`gc.collect()` 不保證），8GB 的 Mac swap 衝到 11 GB、程式沒留訊息就結束。改成每一段各自一支程式，
+# 做完那支程式就結束，記憶體一定還給系統；任何時候記憶體裡最多一個大模型：
+#   老師名字：生成 → 插入停頓 → 收尾（各一支）
+#   學員重念：每個聲線一支「生成」→ 全部聲線一支「插入停頓」（對位模型只載入一次）→ 每個聲線一支「收尾」
+#   保留原聲學員名字：同上，以學員分（每位用自己的聲音）
+#   組裝：一支
+# 「收尾」＝長度還是不過的才改語速重生成（要的話才載入生成模型）＋放回時間格、寫紀錄。
+
+PART_STOPPED = 3   # 子程式因為按了停止（或硬碟、記憶體不夠被請停）而結束的結束碼
+PEAK_PREFIX = "[記憶體] 這支程式最高用到"
+_PEAK_RE = re.compile(r"\[記憶體\] 這支程式最高用到 ([\d.]+) GB")
+PART_LOG = "子程式紀錄.jsonl"   # 生成/ 底下，每一支子程式一行：記憶體高峰、swap 最高、硬碟最低（晚上實測用）
+STOP_MSG = "按了停止：停在目前這一句做完之後，下次按「開始執行」會接著做（做好的不重做）"
+GB = 1024 ** 3
+
+
+class PartFailed(RuntimeError):
+    """子程式出錯（訊息帶最後幾行），或被系統結束、重試一次還是一樣。"""
+
+
+def part_log_path(workdir: Path) -> Path:
+    return Path(workdir) / "生成" / PART_LOG
+
+
+def parse_swapusage(text: str) -> float | None:
+    """`sysctl -n vm.swapusage` 的輸出（例如 `total = 10240.00M  used = 6144.25M  free = ...`）→ used 幾 GB。"""
+    m = re.search(r"used\s*=\s*([\d.]+)\s*([KMG])", text or "")
+    if not m:
+        return None
+    return float(m.group(1)) / {"K": 1024 ** 2, "M": 1024, "G": 1}[m.group(2)]
+
+
+def swap_used_gb() -> float | None:
+    """swap 用了幾 GB。只有 macOS 讀（`sysctl vm.swapusage`）；其他系統、讀不到回 None（只看硬碟，不出錯）。"""
+    if sys.platform != "darwin":
+        return None
+    try:
+        out = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_swapusage(out)
+
+
+def read_resources(workdir: Path) -> dict:
+    """{硬碟GB: 工作區那顆硬碟可用空間, swapGB: swap 用量或 None}。"""
+    try:
+        disk = shutil.disk_usage(str(workdir)).free / GB
+    except OSError:
+        disk = None
+    return {"硬碟GB": disk, "swapGB": swap_used_gb()}
+
+
+def default_limits() -> dict:
+    """門檻（settings.toml 的 [thresholds]，10-01）。"""
+    from bookclub.config import load_settings
+
+    th = load_settings().thresholds
+    return {"開始前硬碟GB": th.execute_min_disk_gb_start, "硬碟GB": th.execute_min_disk_gb, "swapGB": th.execute_max_swap_gb}
+
+
+def resource_problem(res: dict, limits: dict, *, starting: bool = False) -> str | None:
+    """硬碟、swap 超過門檻就回傳要給人看的說明（哪一個數字、現在多少、門檻多少、怎麼處理）；沒事回 None。
+    讀不到的數字（None）不算。starting＝這次第一支程式開始前（硬碟門檻用「開始前」那個）。"""
+    disk, swap = res.get("硬碟GB"), res.get("swapGB")
+    need = limits["開始前硬碟GB"] if starting else limits["硬碟GB"]
+    if disk is not None and disk < need:
+        return (f"硬碟可用空間剩 {disk:.1f} GB，{'開始前' if starting else '跑的過程'}至少要 {need:g} GB。"
+                "處理：清掉用不到的檔案（例如舊的測試工作區、輸出資料夾裡用不到的中間檔），或重開機讓系統收回暫存空間；"
+                "再按一次「開始執行」會接著做（做好的不重做）")
+    if swap is not None and swap > limits["swapGB"]:
+        return (f"記憶體不夠，系統拿硬碟頂替的量（swap）到了 {swap:.1f} GB，門檻是 {limits['swapGB']:g} GB。"
+                "處理：關掉瀏覽器其他分頁與用不到的程式，或重開機；再按一次「開始執行」會接著做（做好的不重做）")
+    return None
+
+
+def _child_rss_gb(pid: int) -> float | None:
+    """從外面看子程式現在用了多少記憶體（`ps`，Mac、Linux 都有）；讀不到回 None。被系統結束時這是唯一的數字。"""
+    try:
+        out = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True, timeout=5).stdout
+        return int(out.strip()) * 1024 / GB if out.strip() else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def peak_rss_gb() -> float | None:
+    """這支程式自己到目前為止的記憶體高峰（macOS 單位是 byte、Linux 是 KB）。"""
+    try:
+        import resource
+    except ImportError:   # Windows 原生沒有；夥伴用 WSL2 是 Linux，有
+        return None
+    v = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return v / GB if sys.platform == "darwin" else v * 1024 / GB
+
+
+def default_part_command(workdir: Path, args: list[str]) -> list[str]:
+    """子程式的指令：用同一個 Python（`sys.executable`）跑 `bookclub run part`，不靠 shell 腳本（Windows／WSL 也一樣）。"""
+    return [sys.executable, "-m", "bookclub.cli", "run", "part", str(workdir), *args]
+
+
+def _child_env() -> dict:
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"        # 子程式的輸出一行一行即時送回來（10-01 夜間 生成.log 要等結束才寫）
+    env["PYTHONIOENCODING"] = "utf-8"
+    root = str(Path(__file__).resolve().parent.parent)   # 子程式用跟這支程式同一份程式碼（分身資料夾也一樣）
+    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    return env
+
+
+@dataclass
+class PartOptions:
+    """分開程式跑的設定。測試從外面傳假的子程式指令、假的硬碟／swap 數字、短的等待時間。"""
+
+    command: Callable[[Path, list[str]], list[str]] | None = None     # (工作區, 參數) → 指令
+    planners: dict | None = None        # 步驟 → (工作區, ctx) → [(名稱, 參數), ...]；不給用 _default_planners
+    probe: Callable[[Path], dict] | None = None   # 工作區 → {硬碟GB, swapGB}
+    limits: dict | None = None          # 不給讀 settings.toml
+    check_every_s: float = 20.0         # 跑的過程中多久看一次硬碟、swap
+    retry_wait_s: float = 30.0          # 被系統結束後等多久重試
+    keep_awake: bool = True
+
+
+def _plan_names(workdir: Path, ctx: dict) -> list[tuple[str, list[str]]]:
+    from bookclub import nameplan, tts
+
+    plan = nameplan.make_plan(workdir)   # 排計畫、寫句子清單（不載入模型），子程式讀句子清單
+    if not plan["生成"]:
+        return []
+    return [(f"老師聲音：{p}", ["老師名字", p]) for p in tts.PHASES]
+
+
+def _range_args(ctx: dict) -> list[str]:
+    return ["--start", repr(float(ctx["範圍"][0])), "--end", repr(float(ctx["範圍"][1]))]
+
+
+def _plan_students(workdir: Path, ctx: dict) -> list[tuple[str, list[str]]]:
+    from bookclub import students
+
+    rng = _range_args(ctx)
+    groups = [g for g in students.voice_groups(workdir, *ctx["範圍"]) if g["要做"]]
+    if not groups:
+        return []
+    return ([(f"學員聲音 {g['名稱']}：生成（{g['要做']} 段）", ["學員重念", "生成", "--voice", g["參考音"], *rng])
+             for g in groups]
+            + [(f"學員聲音：插入停頓（{len(groups)} 個聲線一起）", ["學員重念", "停頓", *rng])]
+            + [(f"學員聲音 {g['名稱']}：收尾", ["學員重念", "收尾", "--voice", g["參考音"], *rng]) for g in groups])
+
+
+def _plan_stunames(workdir: Path, ctx: dict) -> list[tuple[str, list[str]]]:
+    from bookclub import studentgen
+
+    who = studentgen.pending(workdir)
+    if not who:
+        return []
+    return ([(f"保留原聲學員名字 {w}：生成", ["保留原聲學員名字", "生成", "--who", w]) for w in who]
+            + [(f"保留原聲學員名字：插入停頓（{len(who)} 位一起）", ["保留原聲學員名字", "停頓"])]
+            + [(f"保留原聲學員名字 {w}：收尾", ["保留原聲學員名字", "收尾", "--who", w]) for w in who])
+
+
+def _plan_render(workdir: Path, ctx: dict) -> list[tuple[str, list[str]]]:
+    return [("組裝成品", ["組裝", *_range_args(ctx), "--methods", ",".join(ctx["輸出做法"]), "--tag", ctx["標記"]])]
+
+
+def _default_planners() -> dict[str, Callable]:
+    return {"老師名字": _plan_names, "學員重念": _plan_students, "保留原聲學員名字": _plan_stunames, "組裝": _plan_render}
+
+
+def _part_runners(opts: PartOptions, say: Callable[[str], None]) -> dict[str, Callable]:
+    """每一步的「跑法」：排出這一步要開哪幾支子程式，一支一支開（開之前看停止、硬碟、swap）。"""
+    from bookclub.tts import StopRequested
+
+    planners = {**_default_planners(), **(opts.planners or {})}
+    probe = opts.probe or read_resources
+    state = {"開過": False, "停止原因": None, "limits": None}
+
+    def limits() -> dict:
+        if state["limits"] is None:
+            state["limits"] = opts.limits or default_limits()
+        return state["limits"]
+
+    def stop_reason() -> str:
+        return state["停止原因"] or STOP_MSG
+
+    def guard(workdir: Path) -> None:
+        if stop_requested(workdir):
+            raise StopRequested(stop_reason())
+        why = resource_problem(probe(workdir), limits(), starting=not state["開過"])
+        if why:
+            state["停止原因"] = why
+            raise StopRequested(why)
+
+    def wait(workdir: Path, seconds: float) -> None:
+        end = time.time() + seconds
+        while time.time() < end:
+            if stop_requested(workdir):
+                raise StopRequested(stop_reason())
+            time.sleep(min(0.5, max(0.0, end - time.time())))
+
+    def run_child(workdir: Path, label: str, args: list[str]) -> dict:
+        cmd = (opts.command or default_part_command)(workdir, args)
+        state["開過"] = True
+        started = _now()
+        t0 = time.time()
+        say(f"[AI 執行] 開一支程式：{label}")
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                             env=_child_env(), text=True, encoding="utf-8", errors="replace", bufsize=1)
+        tail: deque = deque(maxlen=20)
+        seen: dict = {"自己量": None}
+
+        def pump_out() -> None:   # 一般訊息：照以前一樣進網頁訊息列與終端機
+            for line in p.stdout:
+                line = line.rstrip("\r\n")
+                if not line.strip():
+                    continue
+                tail.append(line)
+                m = _PEAK_RE.search(line)
+                if m:
+                    seen["自己量"] = float(m.group(1))
+                say(line)
+
+        def pump_err() -> None:   # 錯誤訊息、模型的進度條：只到終端機（以前同一支程式時也是），留最後幾行給出錯時看
+            for line in p.stderr:
+                last_seg = line.rstrip("\r\n").split("\r")[-1]
+                if last_seg.strip():
+                    tail.append(last_seg)
+                try:
+                    if sys.__stderr__:
+                        sys.__stderr__.write(line)
+                        sys.__stderr__.flush()
+                except (OSError, ValueError):
+                    pass
+
+        readers = [threading.Thread(target=f, daemon=True) for f in (pump_out, pump_err)]
+        for r in readers:
+            r.start()
+        peak = {"swap": None, "rss": None, "disk": None}
+        try:
+            last = 0.0
+            while p.poll() is None:
+                if time.time() - last >= opts.check_every_s:
+                    last = time.time()
+                    res = probe(workdir)
+                    if res.get("swapGB") is not None:
+                        peak["swap"] = max(peak["swap"] or 0.0, res["swapGB"])
+                    if res.get("硬碟GB") is not None:
+                        peak["disk"] = res["硬碟GB"] if peak["disk"] is None else min(peak["disk"], res["硬碟GB"])
+                    rss = _child_rss_gb(p.pid)
+                    if rss is not None:
+                        peak["rss"] = max(peak["rss"] or 0.0, rss)
+                    if not state["停止原因"]:
+                        why = resource_problem(res, limits())
+                        if why:
+                            state["停止原因"] = why
+                            say(f"[AI 執行] ⚠️ {why}")
+                            say("[AI 執行] 已請目前這一支程式做完這一句就停")
+                            request_stop(workdir)
+                time.sleep(min(0.2, opts.check_every_s))
+        finally:
+            if p.poll() is None:   # 母程式自己出事（例如按了 Ctrl-C）：子程式不要留著
+                p.terminate()
+        for r in readers:
+            r.join(timeout=10)
+        swap_max, rss_max, disk_min = peak["swap"], peak["rss"], peak["disk"]
+        rc = p.returncode
+        rec = {"名稱": label, "參數": args, "開始": started, "結束": _now(), "秒": round(time.time() - t0, 1),
+               "結束碼": rc, "被系統結束": rc is not None and rc < 0,
+               "記憶體高峰GB": round(seen["自己量"], 2) if seen["自己量"] is not None else None,
+               "從外面看到的最高記憶體GB": round(rss_max, 2) if rss_max is not None else None,
+               "swap最高GB": round(swap_max, 2) if swap_max is not None else None,
+               "硬碟最低GB": round(disk_min, 1) if disk_min is not None else None, "最後幾行": list(tail)}
+        try:   # 每一支都記一行，之後才有實測數字（10-01：不用再靠推論）
+            path = part_log_path(workdir)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({k: v for k, v in rec.items() if k != "最後幾行"}, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        top = rec["記憶體高峰GB"] if rec["記憶體高峰GB"] is not None else rec["從外面看到的最高記憶體GB"]
+        say(f"[AI 執行] {label}：結束（{rec['秒']:.0f} 秒"
+            + (f"，記憶體高峰 {top:.1f} GB" if top is not None else "")
+            + (f"，swap 最高 {swap_max:.1f} GB" if swap_max is not None else "") + "）")
+        return rec
+
+    def run_one(workdir: Path, label: str, args: list[str], report: Callable) -> None:
+        for n in (1, 2):
+            guard(workdir)
+            rec = run_child(workdir, label, args)
+            report(rec=rec)
+            rc = rec["結束碼"]
+            if rc == 0:
+                return
+            if rc == PART_STOPPED:
+                raise StopRequested(stop_reason())
+            if rec["被系統結束"]:
+                if stop_requested(workdir):   # 停止中被結束的：照停止處理
+                    raise StopRequested(stop_reason())
+                if n == 1:
+                    say(f"[AI 執行] ⚠️ {label}：程式被系統結束、沒有留下錯誤訊息，可能是記憶體不夠，程式被系統結束。"
+                        f"等 {opts.retry_wait_s:.0f} 秒重試一次（做好的留在快取，不重做）")
+                    wait(workdir, opts.retry_wait_s)
+                    continue
+                raise PartFailed(f"{label}：程式被系統結束、沒有留下錯誤訊息，可能是記憶體不夠，程式被系統結束；"
+                                 "重試一次還是一樣。關掉瀏覽器其他分頁與用不到的程式（或重開機）後，"
+                                 "再按「開始執行」會接著做（做好的留在快取，不重做）")
+            raise PartFailed(f"{label} 出錯（結束碼 {rc}）。最後幾行：\n" + "\n".join(rec["最後幾行"][-8:]))
+
+    def runner(key: str) -> Callable:
+        def run(workdir: Path, ctx: dict) -> None:
+            report = ctx.get("回報") or (lambda *a, **k: None)
+            parts = planners[key](workdir, ctx)
+            if not parts:
+                say(f"[AI 執行] {key}：沒有要開的程式")
+                return
+            say(f"[AI 執行] {key}：分成 {len(parts)} 支程式跑（一支只載入一個模型，做完就結束）")
+            for i, (label, args) in enumerate(parts, 1):
+                report(f"第 {i}/{len(parts)} 支程式：{label}")
+                run_one(workdir, label, args, report)
+        return run
+
+    return {k: runner(k) for k, _ in STEPS}
+
+
+def run_part(workdir: str | Path, step: str, phase: str | None = None, *, voice: str | None = None,
+             who: str | None = None, start: float | None = None, end: float | None = None,
+             methods: list[str] | None = None, tag: str | None = None, log: Callable[[str], None] = print) -> int:
+    """`bookclub run part`（第 4 步內部用）：一支程式只做一段。回傳結束碼：0 做完、PART_STOPPED 按了停止；
+    出錯直接丟出去（Python 印錯誤訊息、結束碼 1，母程式抓最後幾行）。結束前印這支程式的記憶體高峰。"""
+    from bookclub.tts import StopRequested
+
+    workdir = Path(workdir).expanduser()
+    try:
+        if step == "老師名字":
+            from bookclub import nameplan, tts
+
+            tts.generate_teacher(workdir, nameplan.sentences_path(workdir), phase=phase, log=log)
+        elif step == "學員重念":
+            from bookclub import students, tts
+
+            align = tts.lazy_aligner(log, "學員聲音") if phase == "停頓" else None   # 全部聲線共用，只載入一次
+            students.generate_students(workdir, start=start, end=end, only_ref=voice, phase=phase, align=align, log=log)
+        elif step == "保留原聲學員名字":
+            from bookclub import studentgen, tts
+
+            align = tts.lazy_aligner(log, studentgen.TAG) if phase == "停頓" else None
+            studentgen.generate(workdir, only_who=who, phase=phase, align=align, log=log)
+        elif step == "組裝":
+            from bookclub.render import render_video
+
+            render_video(workdir, start, end, methods=methods or default_methods(), tag=tag or tag_for(start, end))
+        else:
+            raise ValueError(f"沒有這一步：{step}")
+        return 0
+    except StopRequested as e:
+        log(f"[AI 執行] {e}")
+        return PART_STOPPED
+    finally:
+        peak = peak_rss_gb()
+        if peak is not None:
+            log(f"{PEAK_PREFIX} {peak:.2f} GB")
+
+
 def keep_awake(log: Callable[[str], None] = print):
     """第 4 步掛著跑的時候不讓電腦睡著（09-30）。macOS 用內建的 `caffeinate`（螢幕可以關，電腦不睡）；
     其他系統不處理（Windows／WSL 照 README 設電源選項）。回傳要在結束時呼叫的函式。"""
@@ -444,9 +817,20 @@ def keep_awake(log: Callable[[str], None] = print):
 def run_execute(workdir: str | Path, *, start: float | None = None, end: float | None = None,
                 methods: list[str] | None = None, redo: bool = False, only_steps: list[str] | None = None,
                 runners: dict | None = None, checks: dict | None = None, skip_precheck: bool = False,
-                log: Callable[[str], None] = print) -> dict:
-    """依序跑第 4 步。runners／checks 可以從外面傳（測試用假的，不載入模型）。回傳進度。"""
+                parts: PartOptions | None = None, log: Callable[[str], None] = print) -> dict:
+    """依序跑第 4 步。回傳進度。
+
+    10-01：每一步、每一個聲線各自開一支程式跑（`_part_runners`，見上面「每一步、每一個聲線各自一支程式跑」）；
+    parts 可以從外面傳假的子程式指令、假的硬碟／swap 數字（測試用）。
+    runners／checks 從外面傳的話（測試用假的，不載入模型）照舊在同一支程式裡跑。"""
     workdir = Path(workdir).expanduser()
+    lock = threading.Lock()
+    raw_log = log
+
+    def log(s: str) -> None:   # 子程式的輸出由另一個執行緒送進來，一次印一行
+        with lock:
+            raw_log(s)
+
     if not skip_precheck:
         pre = precheck(workdir)
         if not pre["可以開始"]:
@@ -470,7 +854,8 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
         raise ValueError("不知道影片多長，用 --end 指定到幾分幾秒")
     ctx = {"範圍": [a, b], "輸出做法": list(methods or default_methods()), "標記": tag_for(a, b)}
     runners_given = bool(runners)
-    runners = {**_default_runners(), **(runners or {})}
+    opts = parts or PartOptions()
+    runners = {**(_default_runners() if runners_given else _part_runners(opts, log)), **(runners or {})}
     checks = {**_default_checks(), **(checks or {})}
     prog = {"開始時間": _now(), "結束時間": None, "範圍": ctx["範圍"], "輸出做法": ctx["輸出做法"],
             "步驟": {k: {"說明": desc, "狀態": "等待"} for k, desc in STEPS}, "錯誤": None}
@@ -482,7 +867,7 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
 
     _clear_stop(workdir)   # 上次按的停止不算這一次
     save()
-    awake_off = (lambda: None) if runners_given else keep_awake(log)   # 測試用假步驟時不用
+    awake_off = keep_awake(log) if not runners_given and opts.keep_awake else (lambda: None)   # 測試用假步驟時不用
     try:
         for key, _desc in STEPS:
             st = prog["步驟"][key]
@@ -502,6 +887,16 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
             st.update({"狀態": "進行中", "開始": _now(), "訊息": why})
             save()
             log(f"[AI 執行] {key}：開始（{why}）")
+
+            def report(msg: str | None = None, rec: dict | None = None, st=st, why=why) -> None:
+                """分開程式跑時：目前跑到第幾支（網頁「說明」欄）、每一支的結束碼與記憶體高峰。"""
+                if msg:
+                    st["訊息"] = f"{why}｜{msg}"
+                if rec:
+                    st.setdefault("子程式", []).append({k: v for k, v in rec.items() if k not in ("參數", "最後幾行")})
+                save()
+
+            ctx["回報"] = report
             try:
                 runners[key](workdir, ctx)
             except StopRequested as e:
@@ -513,7 +908,8 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
                 save()
                 log(traceback.format_exc(limit=3))
                 raise
-            st.update({"狀態": "做完", "結束": _now()})
+            ctx.pop("回報", None)
+            st.update({"狀態": "做完", "結束": _now(), "訊息": why if "子程式" not in st else f"{why}｜{len(st['子程式'])} 支程式做完"})
             save()
             log(f"[AI 執行] {key}：做完")
         prog["結束時間"] = _now()
@@ -528,6 +924,7 @@ def _stopped(prog: dict, st: dict, e: Exception, save: Callable[[], None], log: 
     """按了停止：這一步標「停止」、整份標停止，不算失敗。"""
     st.update({"狀態": "停止", "結束": _now(), "訊息": str(e)})
     prog["停止"] = True
+    prog["停止原因"] = str(e)
     prog["結束時間"] = _now()
     save()
     log(f"[AI 執行] {e}")

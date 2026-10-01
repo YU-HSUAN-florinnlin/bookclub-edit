@@ -126,9 +126,30 @@ def pick_ref(workdir: Path, who: str, turns: list[dict], sentences: dict, blocke
 
 # ---------- 生成 ----------
 
+def pending(workdir: str | Path) -> list[str]:
+    """第 4 步分開程式跑（10-01）：還有句子要生成的學員（照名稱排，跟 generate 的順序一樣）。不載入模型。
+    判斷跟 `execute.stunames_done` 一樣：退回直接消音的不算，生成紀錄對得上的不算。"""
+    from bookclub import studentnames, tts
+
+    workdir = Path(workdir).expanduser()
+    sp = studentnames.plan(workdir)
+    rec = wd.read_json(log_path(workdir), default=None) or {}
+    recs = {r["id"]: r for r in rec.get("句子", [])}
+    back = rec.get("退回直接消音") or {}
+    table = tts.load_pron_table()
+    left = {g["學員"] for g in sp["生成"] if g["id"] not in back
+            and (not (recs.get(g["id"]) or {}).get("放回時間格")
+                 or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]},
+                                     recs[g["id"]].get("參考音")))}
+    return sorted(left)
+
+
 def generate(workdir: str | Path, *, synth_factory=None, hear=None, align=None, check_content: bool = True,
-             use_pauses: bool = True, log: Callable[[str], None] = print) -> dict:
-    """`bookclub gen stunames`：選了「換成代號」的保留原聲學員名字，用各自的聲音生成代號短句。"""
+             use_pauses: bool = True, only_who: str | None = None, phase: str | None = None,
+             log: Callable[[str], None] = print) -> dict:
+    """`bookclub gen stunames`：選了「換成代號」的保留原聲學員名字，用各自的聲音生成代號短句。
+
+    10-01 第 4 步分開程式跑：only_who＝只做這一位學員；phase＝只做「生成」「停頓」「收尾」其中一段（見 `tts.run_generation`）。"""
     from bookclub import studentnames, tts
     from bookclub import turns as turns_mod
     from bookclub.config import load_settings
@@ -139,7 +160,9 @@ def generate(workdir: str | Path, *, synth_factory=None, hear=None, align=None, 
     lp = log_path(workdir)
     record = wd.read_json(lp, default=None) or {}
     done = {r["id"]: r for r in record.get("句子", [])}
-    fallback = {}
+    ids = {it["id"] for it in items}
+    # 10-01：一位一支程式跑時，別位的退回、參考音紀錄要留著（以前每次整份重寫）
+    fallback = {k: v for k, v in (record.get("退回直接消音") or {}).items() if k in ids}
     if not items:
         log(f"[{TAG}] 沒有選「換成代號」的學員名字，不用生成。")
         wd.write_json(lp, {**record, "句子": [], "退回直接消音": {}})
@@ -155,7 +178,7 @@ def generate(workdir: str | Path, *, synth_factory=None, hear=None, align=None, 
     tolerance = load_settings().thresholds.length_tolerance
     od = out_dir(workdir)
     od.mkdir(parents=True, exist_ok=True)
-    refs = {}
+    refs = dict(record.get("參考音") or {})
     load_total = 0.0
 
     def save() -> None:
@@ -164,9 +187,13 @@ def generate(workdir: str | Path, *, synth_factory=None, hear=None, align=None, 
                            "句子": sents, "退回直接消音": fallback, "載入模型秒": round(load_total, 1)})
 
     for who in sorted({it["學員"] for it in items}):
+        if only_who and who != only_who:
+            continue
         ref = pick_ref(workdir, who, tdata.get("段落", []), sentences, blocked)
         refs[who] = {k: v for k, v in ref.items() if k in ("wav", "長度秒", "分數", "原因", "沿用")}
         group = [it for it in items if it["學員"] == who]
+        for it in group:
+            fallback.pop(it["id"], None)
         if not ref["ok"]:
             for it in group:
                 fallback[it["id"]] = ref["原因"]
@@ -193,9 +220,9 @@ def generate(workdir: str | Path, *, synth_factory=None, hear=None, align=None, 
         load_total += tts.run_generation(workdir, todo, od, Path(ref["wav"]), ref["text"], tolerance, save=save_group,
                                           done=done, role="學員", tag=TAG, check_content=check_content,
                                           check_similarity=False, use_pauses=use_pauses, synth=synth, hear=hear,
-                                          align=align, log=log)
-        log(f"[{TAG}] {who} 完成，{time.time() - t:.0f} 秒")
-    save()
+                                          align=align, phase=phase, log=log)
+        log(f"[{TAG}] {who} {'這一支程式（' + phase + '）做完' if phase in ('生成', '停頓') else '完成'}，{time.time() - t:.0f} 秒")
+    save()   # 生成、停頓這兩段 done 沒變，寫的是原本的句子＋這次的參考音、退回直接消音
     return wd.read_json(lp)
 
 

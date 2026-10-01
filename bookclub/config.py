@@ -55,6 +55,10 @@ class Thresholds:
     length_tolerance: float = 0.15  # 生成的聲音比原本時間格長多少比例以內，用微調語速處理
     echo_overlap_max_s: float = 0.5  # 重疊在這秒數以內、且是「嗯、對、好」這類附和詞才自動過濾
     name_match_relaxed: bool = True  # 名字比對要不要放寬（同音字也算候選）
+    # 10-01：第 4 步「AI 執行」硬碟、記憶體不夠就停（預設值是 10-01 夜間第一堂試跑時用的門檻）
+    execute_min_disk_gb_start: float = 5.0  # 開始前硬碟可用空間至少這麼多 GB
+    execute_min_disk_gb: float = 2.5        # 跑的過程中硬碟可用低於這麼多 GB 就停
+    execute_max_swap_gb: float = 8.5        # 跑的過程中 swap（記憶體不夠、系統拿硬碟頂替）超過這麼多 GB 就停（只有 Mac 讀得到）
 
 
 @dataclass
@@ -128,6 +132,9 @@ def load_settings() -> Settings:
             length_tolerance=float(thresholds_raw.get("length_tolerance", 0.15)),
             echo_overlap_max_s=float(thresholds_raw.get("echo_overlap_max_s", 0.5)),
             name_match_relaxed=bool(thresholds_raw.get("name_match_relaxed", True)),
+            execute_min_disk_gb_start=float(thresholds_raw.get("execute_min_disk_gb_start", 5.0)),
+            execute_min_disk_gb=float(thresholds_raw.get("execute_min_disk_gb", 2.5)),
+            execute_max_swap_gb=float(thresholds_raw.get("execute_max_swap_gb", 8.5)),
         ),
         paths=Paths(
             cosyvoice_model_dir=paths_raw.get("cosyvoice_model_dir", DEFAULT_COSYVOICE_MODEL_DIR),

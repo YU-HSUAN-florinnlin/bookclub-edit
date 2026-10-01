@@ -515,23 +515,14 @@ def _people(workdir: Path) -> dict:
 
 # ---------- 入口 ----------
 
-def generate_students(
-    workdir: str | Path, *, start: float | None = None, end: float | None = None, only: list[str] | None = None,
-    refs: dict[str, Path] | None = None, check_content: bool = True, use_pauses: bool = True,
-    pron_table: str | Path | None = None, synth_factory=None, hear=None, align=None, redo: bool = False,
-    include_kept: bool = False,
-    log: Callable[[str], None] = print,
-) -> dict:
-    """`bookclub gen students`。synth_factory(ref_wav, ref_text) 可以從外面傳（測試用假的）。"""
+def _prepare(workdir: Path, start: float | None, end: float | None, only: list[str] | None, refs: dict[str, Path],
+             include_kept: bool, pron_table: str | Path | None, log: Callable[[str], None]) -> list[dict]:
+    """要生成的學員段落，每一段配好聲線（參考音檔）與生成用文字。生成與第 4 步排程式（voice_groups）共用。"""
     from bookclub import tts
-    from bookclub.config import load_settings
 
-    workdir = wd.ensure(workdir)
-    refs = refs or {}   # 指令列 --male／--female：那個性別全部用這一個（測試用）；沒給就每位學員各自的聲線
     items, spans = build_items(workdir, start, end, only, include_kept=include_kept)
     if not items:
-        log("[學員聲音] 範圍內沒有要生成的學員段落。")
-        return {}
+        return []
     people = _people(workdir)
     first = {}
     for it in items:
@@ -546,6 +537,51 @@ def generate_students(
         it["參考音檔"] = str(ref)
         it["聲線名稱"] = voice_name(ref)
         it["生成用文字"], it["發音對照"] = tts.apply_pron(it["text"], table)
+        it["_聲線"] = v
+    return items
+
+
+def voice_groups(workdir: str | Path, start: float | None = None, end: float | None = None,
+                 log: Callable[[str], None] = print) -> list[dict]:
+    """第 4 步分開程式跑（10-01）：範圍內的學員段落依聲線（參考音檔）分組，每組還有幾段要做。不載入模型。
+    回傳 [{參考音, 名稱, 學員[], 段數, 要做}]，照參考音檔排（跟 generate_students 的順序一樣）。"""
+    from bookclub import tts
+
+    workdir = Path(workdir).expanduser()
+    items = _prepare(workdir, start, end, None, {}, False, None, log)
+    record = wd.read_json(log_path(workdir), default=None) or {}
+    done = {r["id"]: r for r in record.get("句子", [])}
+    out = []
+    for ref in sorted({it["參考音檔"] for it in items}):
+        group = [it for it in items if it["參考音檔"] == ref]
+        todo = [it for it in group if tts.record_stale(done.get(it["id"]), it, Path(ref))]
+        out.append({"參考音": ref, "名稱": voice_name(ref), "學員": sorted({it["學員"] for it in group}),
+                    "段數": len(group), "要做": len(todo)})
+    return out
+
+
+def generate_students(
+    workdir: str | Path, *, start: float | None = None, end: float | None = None, only: list[str] | None = None,
+    refs: dict[str, Path] | None = None, check_content: bool = True, use_pauses: bool = True,
+    pron_table: str | Path | None = None, synth_factory=None, hear=None, align=None, redo: bool = False,
+    include_kept: bool = False, only_ref: str | Path | None = None, phase: str | None = None,
+    fresh_pauses: bool = False,
+    log: Callable[[str], None] = print,
+) -> dict:
+    """`bookclub gen students`。synth_factory(ref_wav, ref_text) 可以從外面傳（測試用假的）。
+
+    10-01 第 4 步分開程式跑：only_ref＝只做這一個聲線（參考音檔）；phase＝只做「生成」「停頓」「收尾」其中一段
+    （見 `tts.run_generation`）。停頓那一支一次做全部聲線，從外面傳同一個 align（`tts.lazy_aligner`），對位模型只載入一次。"""
+    from bookclub import tts
+    from bookclub.config import load_settings
+
+    workdir = wd.ensure(workdir)
+    refs = refs or {}   # 指令列 --male／--female：那個性別全部用這一個（測試用）；沒給就每位學員各自的聲線
+    items = _prepare(workdir, start, end, only, refs, include_kept, pron_table, log)
+    if not items:
+        log("[學員聲音] 範圍內沒有要生成的學員段落。")
+        return {}
+    voices = {it["學員"]: it.pop("_聲線") for it in items}
     tolerance = load_settings().thresholds.length_tolerance
 
     lp = log_path(workdir)
@@ -570,6 +606,8 @@ def generate_students(
         return data
 
     for ref_path in sorted({it["參考音檔"] for it in items}):   # 09-30：每位學員各自的聲線，同一個聲線一起生成（只載入一次）
+        if only_ref and Path(ref_path) != Path(only_ref).expanduser():
+            continue
         group = [it for it in items if it["參考音檔"] == ref_path]
         ref_wav = Path(ref_path)
         ref_txt = ref_wav.with_suffix(".txt")
@@ -595,7 +633,10 @@ def generate_students(
         load_total += tts.run_generation(
             workdir, todo, od, ref_wav, ref_text, tolerance, save=save_group, done=done, role="學員",
             tag="學員聲音", check_content=check_content, check_similarity=False, use_pauses=use_pauses,
-            synth=synth, hear=hear, align=align, log=log)
+            synth=synth, hear=hear, align=align, phase=phase, fresh_pauses=fresh_pauses, log=log)
+    if phase in ("生成", "停頓"):   # 10-01：紀錄等收尾那一支才寫（這兩段沒有新的結果，也不動別人的紀錄）
+        log(f"[學員聲音] 這一支程式（{phase}）做完")
+        return record
     data = save()
     st = data["統計"]
     log(f"[學員聲音] 完成：{st['段數']} 段，{st['要人聽']} 段要人聽，平均倍數 {st['平均倍數']}。紀錄：{lp}")

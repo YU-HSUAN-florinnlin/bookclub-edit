@@ -617,18 +617,66 @@ def record_stale(rec: dict | None, it: dict, ref_wav: str | Path | None = None) 
     return ref_wav is not None and not same_ref_file(rec, ref_wav)
 
 
+PHASES = ("生成", "停頓", "收尾")   # 10-01：第 4 步每一段各自一支程式跑（見 run_generation 的 phase）
+PAUSE_CACHE = "_停頓快取.json"     # 10-01：插入停頓那一支程式的結果，收尾那一支讀（不用再載入對位模型）
+
+
+class NotGeneratedYet(RuntimeError):
+    """10-01：插入停頓／收尾那一支程式發現有句子還沒生成過（生成那一支沒做完），不在這裡載入生成模型。"""
+
+
+def lazy_aligner(log: Callable[[str], None] = print, tag: str = "插入停頓") -> Align:
+    """10-01：要用到才載入逐字對位模型；同一支程式裡好幾組（好幾個聲線）共用一個，只載入一次。"""
+    holder: dict = {}
+
+    def align(path, text: str) -> list:
+        if "align" not in holder:
+            log(f"[{tag}] 載入逐字對位模型，照原片停頓插入空白...")
+            from bookclub.pauses import Aligner
+
+            holder["align"] = Aligner().align
+        return holder["align"](path, text)
+
+    return align
+
+
+def _ctx_to_json(ctx: dict) -> dict:
+    return {"chars": [[c.text, c.start, c.end] for c in ctx["chars"]],
+            "pauses": [[i, d] for i, d in sorted(ctx["pauses"].items())], "clip": Path(ctx["clip"]).name}
+
+
+def _ctx_from_json(data: dict, out_dir: Path) -> dict:
+    from bookclub.pauses import Char
+
+    return {"chars": [Char(t, float(a), float(b)) for t, a, b in data["chars"]],
+            "pauses": {int(i): float(d) for i, d in data["pauses"]}, "clip": out_dir / data["clip"]}
+
+
 def run_generation(
     workdir: Path, todo: list[dict], out_dir: Path, ref_wav: Path, ref_text: str, tolerance: float, *,
     save: Callable[[], object], done: dict, role: str = "老師", tag: str = "老師聲音",
     check_content: bool = True, check_similarity: bool = True, use_pauses: bool = True,
     synth: Synth | None = None, hear: Hear | None = None, similar: Similar | None = None,
-    align: Align | None = None, log: Callable[[str], None] = print,
+    align: Align | None = None, phase: str | None = None, fresh_pauses: bool = False,
+    log: Callable[[str], None] = print,
 ) -> float:
     """三階段生成（老師、學員共用）：todo 每一項要先準備好 id／text／生成用文字／發音對照／slot／slot_s／原文。
-    每句做完就放進 done 並呼叫 save()（中斷續跑用）。回傳載入模型花的秒數。"""
+    每句做完就放進 done 並呼叫 save()（中斷續跑用）。回傳載入模型花的秒數。
+
+    phase（10-01，第 4 步分開程式跑用；None＝三個階段在同一支程式裡跑完，跟以前一樣）：
+    - "生成"：只做階段一（只載入生成模型），做完就結束；結果都在 `_嘗試快取.json`
+    - "停頓"：階段一全部從快取沿用（不載入生成模型，快取裡沒有就停下來報錯），只做階段二（只載入對位模型），
+      結果記在 `_停頓快取.json`；fresh_pauses＝已經記過的也重做
+    - "收尾"：階段一從快取沿用、階段二讀 `_停頓快取.json`，做階段三（要改語速重生成才載入生成模型）與放回時間格
+    """
+    if phase not in (None, *PHASES):
+        raise ValueError(f"phase 只能是 {PHASES} 或不給：{phase}")
     load_s = 0.0
     own_synth = synth is None
     own_align = align is None
+    replay = phase in ("停頓", "收尾")   # 階段一只能從快取沿用
+    allow_new = not replay
+    say = (lambda s: None) if replay else log   # 從快取沿用的那幾行不再印一遍
 
     def load_synth() -> Synth:
         nonlocal load_s
@@ -642,8 +690,7 @@ def run_generation(
         hear = make_groq_hear()
         if hear is None:
             log("⚠️ 沒有設定 GROQ_API_KEY，這次不檢查念得對不對，每句都要人聽。")
-    if similar is None and check_similarity:
-        similar = make_similarity(workdir)
+    want_similar = similar is None and check_similarity and phase != "停頓"   # 10-01：要生成時才載入
 
     histories: dict[str, list[Attempt]] = {it["id"]: [] for it in todo}
     paused: dict[str, dict] = {}
@@ -652,12 +699,16 @@ def run_generation(
     cache = wd.read_json(cache_path, default=None) or {}
     ref_fp = ref_fingerprint(ref_wav)
 
+    def akey(it: dict, n: int, seed: int, speed: float) -> str:
+        return f"{it['id']}|{n}|{seed}|{speed}|{it.get('生成用文字') or it['text']}|{ref_wav}#{ref_fp}"
+
     def attempt(it: dict, n: int, seed: int, speed: float) -> Attempt:
         """生成一次；同一句同一種子語速文字已經生成過（上次中斷），直接沿用檔案與檢查結果。"""
-        key = f"{it['id']}|{n}|{seed}|{speed}|{it.get('生成用文字') or it['text']}|{ref_wav}#{ref_fp}"
+        nonlocal synth, similar, want_similar
+        key = akey(it, n, seed, speed)
         hit = cache.get(key)
         if hit and (out_dir / f"{it['id']}_第{n}次.wav").is_file():
-            log(f"  第 {n} 次：沿用上次生成的檔案")
+            say(f"  第 {n} 次：沿用上次生成的檔案")
             att = Attempt(**hit)
             if att.check_failed and hear:   # 上次內容檢查沒做成（網路）：聲音不用重新生成，補檢查就好
                 try:
@@ -670,10 +721,15 @@ def run_generation(
                 except Exception as exc:  # noqa: BLE001
                     log(f"  ⚠️ 補做內容檢查還是沒成（{type(exc).__name__}），維持要人聽")
             return att
+        if not allow_new:
+            raise NotGeneratedYet(f"[{tag}] 第 {it['id']} 句第 {n} 次還沒生成（生成那一支程式沒做完），"
+                                  "這一支不載入生成模型；再按一次「開始執行」會從生成接著做")
         check_stop(workdir)   # 09-30：按了停止就不再開始新的生成（已經生成的都在快取裡）
-        nonlocal synth
         if synth is None:
             synth = load_synth()
+        if want_similar:
+            want_similar = False
+            similar = make_similarity(workdir)
         att = _run_attempt(it, n, seed, speed, out_dir, synth, hear, similar, log)
         cache[key] = att.__dict__.copy()
         wd.write_json(cache_path, cache)
@@ -681,53 +737,108 @@ def run_generation(
 
     # 階段一：生成到內容通過（長度先不管，下一階段插入停頓可能就過了）
     for it in todo:
-        log(f"[{tag}] 第 {it['id']} 句（{len(it['text'])} 字）"
+        say(f"[{tag}] 第 {it['id']} 句（{len(it['text'])} 字）"
             + (f"，發音對照：{'、'.join(it['發音對照'])}" if it["發音對照"] else ""))
         h = histories[it["id"]]
         while (nxt := next_attempt(h, None, tolerance)) is not None:
             h.append(attempt(it, len(h) + 1, *nxt))
+    if phase == "生成":
+        log(f"[{tag}] 這一支程式只生成：{len(todo)} 句做完；插入停頓、放回時間格交給下一支程式")
+        return load_s
 
     # 階段二：插入停頓
     slotted = [it for it in todo if it["slot"] and it.get("原文")]
-    if use_pauses and slotted and (align is not None or wd.audio_path(workdir).is_file()):
-        if own_synth:
-            synth = None
-            _free_memory()
-        if align is None:
-            t = time.time()
-            log(f"[{tag}] 載入逐字對位模型，照原片停頓插入空白...")
-            from bookclub.pauses import Aligner
+    pcache_path = out_dir / PAUSE_CACHE
+    pcache = (wd.read_json(pcache_path, default=None) or {}) if phase else {}
 
-            align = Aligner().align
-            load_s += time.time() - t
-        for it in slotted:
-            sid = it["id"]
-            try:
-                ctx = prepare_original(workdir, it, out_dir, align)
-            except Exception as exc:
-                log(f"  ⚠️ 第 {sid} 句原片停頓分析失敗，不做插入停頓：{exc}")
-                continue
-            if not ctx:
-                continue
-            ctxs[sid] = ctx
-            h = histories[sid]
-            bi = _base_index(h)
-            if not h[bi].content_ok():
-                continue
-            try:
-                dst = out_dir / f"{sid}_第{bi + 1}次_插入停頓.wav"
-                h[bi].paused_s, inserts, lead = _paused_version(
-                    out_dir / f"{sid}_第{bi + 1}次.wav", it["text"], ctx, align, dst)
-                paused[sid] = {"檔案": dst, "插入": inserts, "開頭位移秒": lead}
-                log(f"  第 {sid} 句：原片 {len(ctx['pauses'])} 個停頓，插入 {len(inserts)} 段空白，"
-                    f"長度 {h[bi].audio_s:.1f} → {h[bi].paused_s:.1f} 秒（時間格 {it['slot_s']:.1f} 秒）")
-            except Exception as exc:
-                log(f"  ⚠️ 第 {sid} 句插入停頓失敗：{exc}")
-        if own_align:
-            align = None
-            _free_memory()
+    def pkey(it: dict, bi: int) -> str:
+        a = histories[it["id"]][bi]
+        return f"{akey(it, bi + 1, a.seed, a.speed)}|{it.get('原文')}|{it['slot']}"
+
+    def use_entry(it: dict, ent: dict) -> None:
+        sid = it["id"]
+        h = histories[sid]
+        bi = _base_index(h)
+        if ent.get("ctx"):
+            ctxs[sid] = _ctx_from_json(ent["ctx"], out_dir)
+        p = ent.get("插入停頓")
+        if p and (out_dir / p["檔案"]).is_file():
+            h[bi].paused_s = p["長度秒"]
+            paused[sid] = {"檔案": out_dir / p["檔案"], "插入": [tuple(x) for x in p["插入"]], "開頭位移秒": p["開頭位移秒"]}
+
+    if use_pauses and slotted and (align is not None or wd.audio_path(workdir).is_file()):
+        if phase == "收尾":
+            miss = []
+            for it in slotted:
+                ent = pcache.get(it["id"])
+                if ent and ent.get("鍵") == pkey(it, _base_index(histories[it["id"]])):
+                    use_entry(it, ent)
+                else:
+                    miss.append(it["id"])
+            if miss:
+                raise NotGeneratedYet(f"[{tag}] 第 {'、'.join(miss[:10])} 句還沒做插入停頓（插入停頓那一支程式沒做完）；"
+                                      "再按一次「開始執行」會接著做")
+        else:
+            if own_synth:
+                synth = None
+                _free_memory()
+            real_align = align
+
+            def use_align(path, text):
+                nonlocal real_align, load_s
+                if real_align is None:   # 10-01：要用到才載入（停頓那一支全部沿用的話就不載入）
+                    t = time.time()
+                    log(f"[{tag}] 載入逐字對位模型，照原片停頓插入空白...")
+                    from bookclub.pauses import Aligner
+
+                    real_align = Aligner().align
+                    load_s += time.time() - t
+                return real_align(path, text)
+
+            for it in slotted:
+                sid = it["id"]
+                h = histories[sid]
+                bi = _base_index(h)
+                if phase == "停頓":
+                    check_stop(workdir)   # 10-01：停頓那一支也是做完一句就停
+                    ent = pcache.get(sid)
+                    if not fresh_pauses and ent and ent.get("鍵") == pkey(it, bi):
+                        use_entry(it, ent)
+                        continue
+                ent = {"鍵": pkey(it, bi), "ctx": None, "插入停頓": None}
+                try:
+                    ctx = prepare_original(workdir, it, out_dir, use_align)
+                except Exception as exc:
+                    log(f"  ⚠️ 第 {sid} 句原片停頓分析失敗，不做插入停頓：{exc}")
+                    ctx = None
+                if ctx:
+                    ctxs[sid] = ctx
+                    ent["ctx"] = _ctx_to_json(ctx)
+                    if h[bi].content_ok():
+                        try:
+                            dst = out_dir / f"{sid}_第{bi + 1}次_插入停頓.wav"
+                            h[bi].paused_s, inserts, lead = _paused_version(
+                                out_dir / f"{sid}_第{bi + 1}次.wav", it["text"], ctx, use_align, dst)
+                            paused[sid] = {"檔案": dst, "插入": inserts, "開頭位移秒": lead}
+                            ent["插入停頓"] = {"檔案": dst.name, "插入": [list(x) for x in inserts], "開頭位移秒": lead,
+                                           "長度秒": h[bi].paused_s}
+                            log(f"  第 {sid} 句：原片 {len(ctx['pauses'])} 個停頓，插入 {len(inserts)} 段空白，"
+                                f"長度 {h[bi].audio_s:.1f} → {h[bi].paused_s:.1f} 秒（時間格 {it['slot_s']:.1f} 秒）")
+                        except Exception as exc:
+                            log(f"  ⚠️ 第 {sid} 句插入停頓失敗：{exc}")
+                if phase == "停頓":
+                    pcache[sid] = ent
+                    wd.write_json(pcache_path, pcache)
+            if own_align:
+                real_align = None
+                _free_memory()
+    if phase == "停頓":
+        log(f"[{tag}] 這一支程式只插入停頓：{len(slotted)} 句做完；放回時間格交給下一支程式")
+        return load_s
 
     # 階段三：長度還是不過的才改語速重生成
+    allow_new = True
+    say = log
     retry = [it for it in todo if it["slot_s"]
              and next_attempt(histories[it["id"]], it["slot_s"], tolerance) is not None]
     if retry:
@@ -750,7 +861,8 @@ def generate_teacher(
     check_content: bool = True, check_similarity: bool = True, use_pauses: bool = True, redo: bool = False,
     pron_table: str | Path | None = None,
     synth: Synth | None = None, hear: Hear | None = None, similar: Similar | None = None,
-    align: Align | None = None, log: Callable[[str], None] = print,
+    align: Align | None = None, phase: str | None = None, fresh_pauses: bool = False,
+    log: Callable[[str], None] = print,
 ) -> dict:
     """流程第 5 步（一）的入口：`bookclub gen teacher`。回傳並存下 `生成/老師紀錄.json`。
 
@@ -762,6 +874,7 @@ def generate_teacher(
     3. 生成模型：原始跟插入停頓後長度都不過的句子，才改語速重生成
 
     synth／hear／similar／align 可以從外面傳進來（測試用假的），不傳就載入真的模型。
+    phase（10-01）：第 4 步把三個階段分給三支程式跑（見 `run_generation`）；"生成"、"停頓" 不寫老師紀錄、回傳 {}。
     """
     from bookclub.config import load_settings
 
@@ -813,7 +926,9 @@ def generate_teacher(
             workdir, todo, out_dir, ref_wav, ref_text, tolerance,
             save=lambda: _write_log(log_path, ref_wav, ref_text, items, done, load_s), done=done,
             check_content=check_content, check_similarity=check_similarity, use_pauses=use_pauses,
-            synth=synth, hear=hear, similar=similar, align=align, log=log)
+            synth=synth, hear=hear, similar=similar, align=align, phase=phase, fresh_pauses=fresh_pauses, log=log)
+        if phase in ("生成", "停頓"):
+            return {}
 
     results = [done[it["id"]] for it in items]
     summary = _write_log(log_path, ref_wav, ref_text, items, done, load_s)

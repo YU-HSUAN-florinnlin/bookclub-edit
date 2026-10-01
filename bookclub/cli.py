@@ -1,6 +1,6 @@
 """指令列入口：`bookclub`。
 
-`doctor`、`models download`、`run analyze`、`run turns`、`run execute`、`serve`、`ref`、`gen teacher`、`gen names`、
+`doctor`、`models download`、`run analyze`、`run turns`、`run execute`（10-01 起每一段開一支 `run part` 子程式）、`serve`、`ref`、`gen teacher`、`gen names`、
 `gen students`、`render audio`、`render video`、`redo list`、`review export`／`review import`、`proofread prepare`
 是真的會動的指令；`bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
 功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列第 0～5 步都有頁面。
@@ -77,6 +77,19 @@ def build_parser() -> argparse.ArgumentParser:
     ex_parser.add_argument("--methods", help="組裝的輸出做法（逗號分隔：hw、sw、smart；預設 Mac 用 hw、其他用 sw）")
     ex_parser.add_argument("--only", help="只跑這幾步（逗號分隔：老師名字,學員重念,組裝）")
     ex_parser.add_argument("--redo", action="store_true", help="做過的也重跑（生成本身還是會沿用快取，見 README）")
+
+    part_parser = run_sub.add_parser(
+        "part", help="第 4 步內部用（10-01）：「AI 執行」一支程式只跑一段、只載入一個模型；平常不用自己打，run execute 會開")
+    part_parser.add_argument("workdir", help="工作區路徑")
+    part_parser.add_argument("step", choices=["老師名字", "學員重念", "保留原聲學員名字", "組裝"], help="哪一步")
+    part_parser.add_argument("phase", nargs="?", choices=["生成", "停頓", "收尾"],
+                             help="生成＝只生成（生成模型）；停頓＝只插入停頓（對位模型）；收尾＝改語速重生成（要的話）＋放回時間格")
+    part_parser.add_argument("--voice", help="學員重念：只做這個聲線（參考音檔路徑）")
+    part_parser.add_argument("--who", help="保留原聲學員名字：只做這位學員（學員N）")
+    part_parser.add_argument("--start", type=float, help="範圍開始（秒）")
+    part_parser.add_argument("--end", type=float, help="範圍結束（秒）")
+    part_parser.add_argument("--methods", help="組裝的輸出做法（逗號分隔）")
+    part_parser.add_argument("--tag", help="組裝的輸出檔名標記")
 
     sub.add_parser("export", help="匯出成品（Phase 5 才會做）")
 
@@ -245,8 +258,14 @@ def main(argv: list[str] | None = None) -> int:
 
             suggest_cuts(args.workdir, video=args.video, force=args.force)
             return 0
+        if args.run_command == "part":
+            from bookclub.execute import run_part
+
+            return run_part(args.workdir, args.step, args.phase, voice=args.voice, who=args.who, start=args.start,
+                            end=args.end, tag=args.tag,
+                            methods=[m.strip() for m in args.methods.split(",") if m.strip()] if args.methods else None)
         if args.run_command == "execute":
-            from bookclub.execute import run_execute
+            from bookclub.execute import PartFailed, run_execute
             from bookclub.review import parse_time
 
             try:
@@ -255,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
                             methods=[m.strip() for m in args.methods.split(",") if m.strip()] if args.methods else None,
                             only_steps=[x.strip() for x in args.only.split(",") if x.strip()] if args.only else None,
                             redo=args.redo)
-            except (FileNotFoundError, ValueError) as e:   # 前置檢查沒過：印清楚缺什麼就好，不印程式追蹤
+            except (FileNotFoundError, ValueError, PartFailed) as e:   # 前置檢查沒過、子程式出錯：印清楚就好，不印程式追蹤
                 print(f"⚠️ {e}")
                 return 1
             return 0
