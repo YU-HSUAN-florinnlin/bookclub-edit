@@ -1104,8 +1104,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(409, {"error": str(e), "執行中": True})
         except FileNotFoundError as e:
             self._send_json(404, {"error": str(e)})
-        except (ValueError, KeyError, json.JSONDecodeError) as e:
-            self._send_json(400, {"error": f"{type(e).__name__}：{e}"})
+        except json.JSONDecodeError:
+            self._send_json(400, {"error": "送來的資料格式不對（重新整理網頁再試一次）"})
+        except KeyError as e:
+            arg = str(e.args[0]) if e.args else ""
+            self._send_json(400, {"error": arg if "：" in arg else
+                                  f"少了「{arg}」這一欄，或找不到這一筆（重新整理網頁再試一次）"})
+        except ValueError as e:   # 10-01 走查：畫面上不要出現「ValueError：」
+            self._send_json(400, {"error": str(e)})
         except Exception as e:  # noqa: BLE001
             self._send_json(500, {"error": f"{type(e).__name__}：{e}"})
 

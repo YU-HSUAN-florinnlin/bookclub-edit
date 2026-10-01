@@ -95,5 +95,18 @@ def _run_all() -> int:
     return 1 if failed else 0
 
 
+def test_summary_counts_voices_in_candidate_folder():
+    """10-01 走查：匿名聲線數的是第 4 步真的會用的（候選資料夾裡男 N、女 N，女 5 不用），不是最外層兩個暫定檔。"""
+    d = _dir({})
+    c = d / "聲線" / "候選_0928"
+    c.mkdir(parents=True)
+    for n in ("男1", "男2", "女1", "女5"):
+        (c / f"{n}.wav").write_bytes(b"x")
+        (c / f"{n}.txt").write_text("稿", encoding="utf-8")
+    (d / "聲線" / "男聲_暫定.wav").write_bytes(b"x")
+    s = profile.summary(d)
+    assert s["匿名聲線"]["數量"] == 3 and "男聲 2 個" in s["匿名聲線"]["狀態"], s["匿名聲線"]
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

@@ -587,5 +587,21 @@ def test_item_index_names_and_teacher_whole_retime_aligns_sentences():
     assert r["對齊結果"]["end"] == 119.6 and "句子" in r["對齊結果"]["對齊到"], r
 
 
+def test_export_with_manual_teacher_line():
+    """10-01 走查：有人工新增的「老師這一段用 AI 聲音重念」（id 是 NM001）時，匯出以前整個失敗。"""
+    import json
+    import zipfile
+
+    from bookclub import exchange
+
+    w = _fresh()
+    review.add_teacher_item(w, 10.0, 12.0, "老師的話")
+    r = exchange.export_review(w, out=w.parent / "匯出_人工老師.zip")
+    assert Path(r["檔案"]).is_file()
+    with zipfile.ZipFile(r["檔案"]) as z:
+        res = json.loads(z.read("覆核結果.json").decode("utf-8"))
+    assert any(str(x["候選"]).startswith("NM") for x in res["名字處理"]), res["名字處理"]
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

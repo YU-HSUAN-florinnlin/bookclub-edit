@@ -499,6 +499,25 @@ def test_students_three_programs_per_voice():
         for f in made:
             f.unlink()
 
+def test_time_text_never_shows_60_seconds():
+    """10-01 走查：59.96 秒以前寫成「0:54:60.0」。"""
+    from bookclub import cutsuggest, namespage
+
+    assert execute.t1(3299.96) == "0:55:00.0"
+    assert cutsuggest._hms(59.97) == "0:01:00.0"
+    assert namespage._fmt_hms1(3599.99) == "1:00:00.0"
+
+
+def test_analyze_keeps_elapsed_when_everything_reused():
+    """10-01 走查：接著做、每一步都沿用時，總覽不要寫「影片分析花了 0.1 秒」。"""
+    from bookclub.analyze import keep_elapsed_if_all_reused
+
+    old = {"elapsed": {"1_轉文字": 600.0, "總耗時": 1800.0}}
+    assert keep_elapsed_if_all_reused({"1_轉文字": 0.0, "總耗時": 0.1}, old)["總耗時"] == 1800.0
+    assert keep_elapsed_if_all_reused({"1_轉文字": 300.0, "總耗時": 320.0}, old)["總耗時"] == 320.0
+    assert keep_elapsed_if_all_reused({"1_轉文字": 0.0, "總耗時": 0.1}, None)["總耗時"] == 0.1
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

@@ -173,7 +173,21 @@ function stepDoneFromState(num, state) {
 // 路由
 // ---------------------------------------------------------------------------
 
+// 10-01 走查：很快連點兩個步驟時，慢的那一頁（例如第 4 步）比較晚畫完，會蓋掉後點的那一頁
+// （左邊亮第 2 步、右邊卻是第 4 步）。舊的那一次比新的晚畫完，就照現在的網址再畫一次。
+let renderSeq = 0, renderDone = 0;
+
 async function render() {
+  const my = ++renderSeq;
+  try {
+    await renderRoute();
+  } finally {
+    if (my === renderSeq) renderDone = my;
+    else if (renderDone === renderSeq) render();
+  }
+}
+
+async function renderRoute() {
   await renderSidebar();
   const id = currentRouteId();
   stopStatusPoll();
@@ -333,7 +347,7 @@ async function renderExecuteBody() {
         <label>輸出做法 <select id="exMethod">${["hw", "sw", "smart"].map((m) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${{ hw: "硬體編碼（Mac）", sw: "軟體編碼", smart: "只重做有動到的片段" }[m]}</option>`).join("")}</select></label>
       </div>
       <button id="btnExec" ${running || !pre["可以開始"] || (fc && (!fc["可以開始"] || !fc["看過"])) ? "disabled" : ""}>${running ? "執行中…" : "開始執行"}</button>
-      ${fc && !running && (!fc["可以開始"] || !fc["看過"]) ? `<span class="muted">先處理上面「開始前總檢查」${fc["可以開始"] ? "，按「我看過了」" : "一定要處理的列"}</span>` : ""}
+      ${fc && !running && (!fc["可以開始"] || !fc["看過"]) ? `<span class="muted">先處理上面「開始前總檢查」${[fc["可以開始"] ? "" : "一定要處理的列", fc["看過"] ? "" : "「請看一眼」按「我看過了」"].filter(Boolean).join("，")}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
       <span class="muted" id="execEta">${execEtaText(d)}</span>
       ${!running ? `<p class="muted">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}

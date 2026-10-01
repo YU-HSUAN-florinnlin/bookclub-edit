@@ -198,6 +198,48 @@ def test_pitch_estimated_in_step1_used_without_estimating():
             os.environ["BOOKCLUB_DATA_DIR"] = old
 
 
+def test_voices_compare_by_name_and_reset_restores_auto():
+    """10-01 走查：設定資料夾換了位置（紀錄裡是舊路徑）不重新配、不跟別人撞；改了又改回自動配，回到原本那一個。"""
+    import json
+    import os
+    import tempfile
+
+    old_env = os.environ.get("BOOKCLUB_DATA_DIR")
+    data = Path(tempfile.mkdtemp())
+    w = Path(tempfile.mkdtemp()) / "工作區"
+    w.mkdir()
+    os.environ["BOOKCLUB_DATA_DIR"] = str(data)
+    try:
+        d = data / "聲線" / "候選_0928"
+        d.mkdir(parents=True)
+        for name in ("女1", "女2", "女3", "女4", "女6"):
+            (d / f"{name}.wav").write_bytes(name.encode())
+            (d / f"{name}.txt").write_text("稿", encoding="utf-8")
+        gone = "/別台電腦/讀書會剪輯資料/聲線/候選_0928"
+        (w / "生成").mkdir()
+        table = {"版本": 2, "學員": {"甲": {"檔案": f"{gone}/女1.wav", "名稱": "女1", "性別": "女", "人選的": False},
+                          "乙": {"檔案": f"{gone}/女4.wav", "名稱": "女4", "性別": "女", "人選的": False}}}
+        students.voices_path(w).write_text(json.dumps(table, ensure_ascii=False), encoding="utf-8")
+        people = {"學員1": {"本名": "甲", "第一次": 1.0}, "學員2": {"本名": "乙", "第一次": 2.0},
+                  "學員3": {"本名": "丙", "第一次": 3.0, "性別": "女"}}
+        (w / "校對").mkdir()
+        (w / "校對" / "段落.json").write_text(json.dumps({"學員": people, "段落": []}, ensure_ascii=False), encoding="utf-8")
+        got = students.assign_voices(w, ["學員1", "學員2"], {}, people=people, estimate=False, log=lambda s: None)
+        assert got["學員1"]["名稱"] == "女1" and got["學員2"]["名稱"] == "女4"        # 同一個聲線、換了位置
+        assert Path(got["學員2"]["檔案"]).parent == d
+        students.set_voice_choice(w, "學員2", "女6")
+        assert students.assign_voices(w, ["學員1", "學員2"], {}, people=people, estimate=False,
+                                      log=lambda s: None)["學員2"]["名稱"] == "女6"
+        students.set_voice_choice(w, "學員2", None)                                   # 改回自動配
+        got = students.assign_voices(w, ["學員1", "學員2"], {}, people=people, estimate=False, log=lambda s: None)
+        assert got["學員2"]["名稱"] == "女4" and not got["學員2"]["人選的"]
+    finally:
+        if old_env is None:
+            os.environ.pop("BOOKCLUB_DATA_DIR", None)
+        else:
+            os.environ["BOOKCLUB_DATA_DIR"] = old_env
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

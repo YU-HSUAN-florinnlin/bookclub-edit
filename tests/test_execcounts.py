@@ -97,6 +97,20 @@ def test_broken_kind_does_not_break_others():
         assert len(rows) == 7
 
 
+def test_counts_follow_same_staleness_as_step4():
+    """10-01 走查：逐類統計跟第 4 步「做過沒有」同一個判斷——參考音換過、時間格改了都不算做完。"""
+    items = [{"id": "A", "text": "甲", "生成用文字": "甲", "slot": [1.0, 2.0]},
+             {"id": "B", "text": "乙", "生成用文字": "乙", "slot": [3.0, 4.0]}]
+    log = {"句子": [{"id": "A", "text": "甲", "slot": [1.0, 2.0], "放回時間格": {"檔案": "a.wav"}},
+                    {"id": "B", "text": "乙", "slot": [3.0, 4.6], "放回時間格": {"檔案": "b.wav"}}]}
+    assert execcounts._gen_done(items, log) == 1                  # B 的時間格改了
+    assert execcounts._gen_done(items, log, all_stale=True) == 0  # 老師參考音整份換過
+    cache = {"A|1|42|1.0|甲|參考音#新的": {"elapsed_s": 10.0}, "B|1|42|1.0|乙|/舊路徑/ref.wav#舊的": {"elapsed_s": 10.0}}
+    assert execcounts.cache_progress(cache, items)[0] == 2
+    assert execcounts.cache_progress(cache, items, "#新的")[0] == 1
+    assert execcounts.cache_progress(cache, items, {"A": "#舊的", "B": "#舊的"})[0] == 1
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

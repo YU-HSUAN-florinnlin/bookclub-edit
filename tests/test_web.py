@@ -145,6 +145,29 @@ def test_interface_1001():
     assert '"primary on"' in fcjs and "已退回重做" in fcjs
 
 
+def test_walkthrough_1001():
+    """10-01 網頁走查修的幾處（只擋改版時被拿掉；行為在瀏覽器實際點過）。"""
+    import shutil
+    import subprocess
+
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    fcjs = (WEB / "finalcheck.js").read_text(encoding="utf-8")
+    assert "renderSeq" in app and "renderDone" in app                  # 很快連點兩步，不會停在慢的那一頁
+    assert '["局部消音", "消音"]' in rv and '["改成老師", "改成老師"]' in rv   # 篩選加起來等於全部
+    assert "fmtStamp(" in app and "fmtStamp(" in fcjs                  # 不顯示 2026-10-01T03:16:01
+    assert '"刪除": "剪掉片段（連畫面）"' in fcjs and "刪除點" not in fcjs
+    assert 'it["狀態"] === "還原" ? "不消音"' in rv
+    assert "rvRuleHint(t[\"類型\"], t[\"老師整段\"], true)" in fcjs
+    assert "存逐字稿（音檔不換）" in app and "換成這個候選的新音檔" in app
+    node = shutil.which("node")
+    if node:   # rvFmt 不會出現「:60.0」
+        fn = rv[rv.index("function rvFmt"):rv.index("function rvParseTime")]
+        out = subprocess.run([node, "-e", fn + "console.log(rvFmt(3299.96, 1), rvFmt(59.97, 1), rvFmt(59.97))"],
+                             capture_output=True, text=True, check=True).stdout.split()
+        assert out == ["55:00.0", "1:00.0", "0:59"], out
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

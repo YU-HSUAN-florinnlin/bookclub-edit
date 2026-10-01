@@ -1118,8 +1118,10 @@ function rvPreview(it) {
   if (t === "名字") return (it["整句"] && (it["整句"]["換成代號"] || it["整句"]["原文"])) || it["代號"] || "";
   if (t === "學員名字") return `${rvWho(it["學員"])}講到名字：${it["代號"] || ""}`;
   if (t === "重疊") return `老師：${it["老師文字"] || "—"}／${rvWho(it["學員說話者"])}：${it["學員文字"] || "—"}`;
-  if (t === "刪除段落") return `${rvFmt(it.start)}–${rvFmt(it.end)}（${(it.end - it.start).toFixed(0)} 秒）${it["建議類型"] ? " " + it["建議類型"] : ""}`;
-  return `${rvFmt(it.start)}–${rvFmt(it.end)} ${it["方式"] || ""}`;
+  // 10-01 走查：不到 10 秒的寫到小數一位（以前 0.7 秒的消音寫成「1:05:10–1:05:10」）
+  const d = it.end - it.start, dg = d < 10 ? 1 : 0;
+  if (t === "刪除段落") return `${rvFmt(it.start, dg)}–${rvFmt(it.end, dg)}（${d.toFixed(dg)} 秒）${it["建議類型"] ? " " + it["建議類型"] : ""}`;
+  return `${rvFmt(it.start, dg)}–${rvFmt(it.end, dg)}（${d.toFixed(dg)} 秒）${it["方式"] ? " " + it["方式"] : ""}`;
 }
 
 function rvRenderList() {

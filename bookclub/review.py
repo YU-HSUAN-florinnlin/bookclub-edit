@@ -1004,7 +1004,7 @@ def progress(items: list[dict], dec: dict, duration: float) -> dict:
     for x in items:
         c = by_type.setdefault(x["類型"], [0, 0])
         c[1] += 1
-        c[0] += bool(x.get("已確認") or x.get("不用處理") or x.get("涵蓋"))
+        c[0] += bool((x.get("已確認") or x.get("不用處理") or x.get("涵蓋")) and not x.get("還缺"))   # 10-01 走查：跟總數同一個算法
     return {"已確認": done, "總數": total, "已花秒數": round(spent), "推算全部秒數": round(est) if est else None,
             "各類": {k: {"已確認": v[0], "總數": v[1]} for k, v in by_type.items()}}
 

@@ -80,7 +80,7 @@ def build_result(workdir: str | Path, video: str | Path | None = None) -> dict:
     manual_of = {m["候選"]: m["原因"] for m in plan["要人處理"]}
     names = []
     for it in (x for x in page["項目"] if x["類型"] == "名字"):
-        i = int(it["id"])
+        i = int(it["id"]) if str(it["id"]).isdigit() else it["id"]   # 10-01 走查：人工新增的名字 id 是 NM001，以前這裡整個匯出失敗
         row = {"候選": i, "start": it["start"], "end": it["end"], "做法": it["做法"], "代號": it["代號"],
                "標記": it["tags"], "備註": it["note"], "已確認": it["已確認"]}
         if i in skip_of:
@@ -104,7 +104,9 @@ def build_result(workdir: str | Path, video: str | Path | None = None) -> dict:
     real_names = [f"學員段落 {x['id']}" for x in segments if review.has_real_name(x["校對稿"], words)] + \
         [f"重疊 {x['id']}" for x in overlaps
          if review.has_real_name(x.get("老師文字"), words) or review.has_real_name(x.get("學員文字"), words)]
-    pending = [it for it in page["項目"] if not it.get("已確認") and not it.get("不用處理")]
+    # 10-01 走查：跟第 3 步上面的「幾／幾筆」同一個算法（被別筆涵蓋的算處理好、還缺東西的不算）
+    pending = [it for it in page["項目"]
+               if not ((it.get("已確認") or it.get("不用處理") or it.get("涵蓋")) and not it.get("還缺"))]
     by_type: dict[str, int] = {}
     for it in pending:
         by_type[it["類型"]] = by_type.get(it["類型"], 0) + 1

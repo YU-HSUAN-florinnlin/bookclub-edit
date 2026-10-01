@@ -569,13 +569,19 @@ def redo_list(workdir: str | Path) -> dict:
         keys = {i["鍵"] for i in now}
         items = [i for i in sent["項目"] if i["鍵"] in keys]
         sent = sent if items else None
-    items = items if sent else now
+    if sent:   # 10-01 走查：送回之後才退回的也要列（以前要再按一次送回，第 4 步才看得到）
+        have = {i["鍵"] for i in items}
+        items = items + [i for i in now if i["鍵"] not in have]
+    else:
+        items = now
     if sent:   # 送回之後才在第 5 步改了範圍的，照最新的
         latest = {i["鍵"]: i for i in now}
         items = [{**i, **({"改範圍": latest[i["鍵"]]["改範圍"]} if latest.get(i["鍵"], {}).get("改範圍") else {})} for i in items]
+    index = _index(workdir)
     for it in items:
         it["建議指令"] = suggest_command(workdir, it)
-    label_items(items, _index(workdir))
+        it["做了什麼"] = plain_ids(it.get("做了什麼") or "", index, workdir)   # 10-01 走查：第 4 步也不露內部編號
+    label_items(items, index)
     return {"已送回": bool(sent), "時間": (sent or {}).get("時間"), "項目": items}
 
 

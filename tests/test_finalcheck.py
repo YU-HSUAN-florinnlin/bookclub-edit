@@ -251,6 +251,31 @@ def test_retime_saved_with_redo_and_step4_told():
     assert "改範圍" not in wd.read_json(fc.check_path(w))["逐筆"][k1]
 
 
+def test_plain_ids_hides_internal_ids_and_uses_step3_words():
+    """10-01 走查：第 5 步「做了什麼」不露 T034_15、V0542232、M001，重疊的做法、剪掉用第 3 步的說法。"""
+    index = {"學員段落:T034": {"id": "T034", "名稱": "學員段落 00:43:21"},
+             "局部消音:M001": {"id": "M001", "名稱": "消音 01:28:04"}}
+    t = fc.plain_ids("停格 1.36 秒：T034_01 重念比時間格長 +30%", index)
+    assert t == "停格 1.36 秒：〈學員段落 00:43:21〉裡的一句重念比時間格長 +30%", t
+    assert fc.plain_ids("重疊（只留學員）：整段落在 T047m1_01 的範圍裡", index) == "重疊（生成學員聲音）：整段落在 另一筆 的範圍裡"
+    assert fc.plain_ids("第 3 步標的局部消音 M001（墊環境底噪）", index) == "第 3 步標的局部消音〈消音 01:28:04〉（墊環境底噪）"
+    assert fc.plain_ids("刪除 84.7 秒（聲音畫面一起刪）", {}) == "剪掉 84.7 秒（聲音和畫面都拿掉）"
+    assert fc.plain_ids("學員3 用女聲 AI 重念", index) == "學員3 用女聲 AI 重念"
+
+
+def test_redo_list_includes_items_after_sendback():
+    """10-01 走查：按過「送回 AI 重做」之後才退回的，第 4 步也要列出來。"""
+    if not shutil.which("ffmpeg"):
+        return
+    w = _workdir()
+    k1, k2 = (r["鍵"] for r in fc.page_data(w)["紀錄"])
+    fc.decide_record(w, k1, "退回重做", "第一句")
+    fc.send_back(w)
+    fc.decide_record(w, k2, "退回重做", "送回之後才退回")
+    lst = fc.redo_list(w)
+    assert [x["原因"] for x in lst["項目"]] == ["第一句", "送回之後才退回"], lst["項目"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
