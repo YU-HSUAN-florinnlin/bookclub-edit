@@ -14,7 +14,9 @@ const FC_TYPE = {
 };
 
 // 10-01 走查：類型在畫面上的名稱跟第 3 步一致（存檔的值不變）
-const FC_LABEL = { "刪除": "剪掉片段（連畫面）", "局部消音": "消音（只拿掉聲音）" };
+// 10-01 第三批 7：三頁統一四個名稱「老師重念」「學員重念」「剪掉」「消音」
+const FC_LABEL = { "刪除": "剪掉（連畫面）", "局部消音": "消音（只拿掉聲音）", "名字整句換掉": "老師重念", "換聲音": "老師重念",
+  "名字消音": "消音（名字）", "消音": "消音", "學員名字消音": "消音（學員講到名字）", "學員名字換代號": "學員重念（學員講到名字）" };
 const fcKind = (t) => FC_LABEL[t] || t;
 // 處理紀錄的來源（「render video 試看_1001」是指令名稱）→「成品 試看_1001」
 const fcSourceName = (src) => String(src || "").replace(/^render video\s*/, "成品 ").replace(/^render audio$/, "只換聲音的版本");
@@ -23,6 +25,7 @@ const fcSourceName = (src) => String(src || "").replace(/^render video\s*/, "成
 const FC_MAX_RATE = 2;
 
 const fc = { seen: [], seg: null, data: null, video: null, audio: null, cur: null, mode: "逐筆", sentRanges: "", timer: null, redoOpen: false, lastT: 0 };
+let fcBackKey = null;   // 10-01 第三批 13：從第 3 步按「回第 5 步成品檢查」回來時，回到出發的那一筆（影片跳到那裡、卡片捲進畫面）
 
 function fcFmt(t, d = 1) { return typeof rvFmt === "function" ? rvFmt(t, d) : String(t); }
 function fcRecs() { return fc.data["紀錄"]; }
@@ -63,7 +66,7 @@ async function renderFinal() {
             <select id="fc-rate" aria-label="播放速度"><option value="1">1 倍速</option><option value="1.25">1.25 倍速</option><option value="1.5">1.5 倍速</option><option value="2">2 倍速</option></select></div>
           <div class="rv-tl fc-tl" id="fc-tl" title="點一下或拖拉，跳到那個時間"></div>
           <div class="rv-legend">
-            <span><i class="sw stu"></i>學員重念</span><span><i class="sw name"></i>名字</span><span><i class="sw cut"></i>剪掉的地方</span>
+            <span><i class="sw stu"></i>學員重念</span><span><i class="sw name"></i>老師重念、名字</span><span><i class="sw cut"></i>剪掉</span>
             <span><i class="sw frz"></i>停格</span><span><i class="sw blur"></i>模糊</span><span><i class="sw ov"></i>重疊</span>
             <span><i class="sw bad"></i>沒登記的變動</span><span class="gap"><i class="sw seen"></i>看過的地方</span></div>
           <p class="rv-meta">${esc(fcSourceName(d["來源"]))}　處理紀錄產生於 ${esc(fmtStamp(d["處理紀錄產生時間"]))}</p>
@@ -88,6 +91,13 @@ async function renderFinal() {
   window.addEventListener("resize", fcRenderTimeline);
   fcRenderAll();
   fcStartWatchTracking();
+  if (fcBackKey) {
+    const key = fcBackKey;
+    fcBackKey = null;
+    if (fcRec(key)) { fc.mode = "逐筆"; fcRenderAll(); fcSelect(key); }
+    const card = document.getElementById("fc-right");
+    if (card) card.scrollIntoView({ block: "nearest" });
+  }
 }
 
 // 還沒有成品時：照正式版面擺一份霧化的樣子（假資料、按不下去），讓人先知道之後要做什麼（09-29 宇軒）
@@ -361,7 +371,7 @@ function fcRetimeHint(t) {
 function fcBindRetime(r) {
   const t = r["改範圍"] || {};
   const go = document.getElementById("fc-go3");
-  if (go) go.addEventListener("click", () => rvJump({ key: t["第3步"], back: "step5",
+  if (go) go.addEventListener("click", () => rvJump({ key: t["第3步"], back: "step5", backKey: r["鍵"],
     note: `從第 5 步成品檢查過來：${t["可以"] ? "改這一筆" : t["下一步"] || ""}` }));
   if (!t["可以"] || !document.getElementById("fc-retime")) return;
   const range = t["方式"] === "重念範圍";

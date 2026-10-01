@@ -58,6 +58,29 @@ def default_methods() -> list[str]:
     return ["sw"]
 
 
+_METHODS_CACHE: list | None = None
+
+
+def method_options() -> list[list[str]]:
+    """網頁第 4 步「進階設定」裡的輸出方式（10-01 第三批 8）：標準輸出（軟體編碼，Mac、Windows／WSL 都能跑）一定有；
+    硬體編碼只有 Mac 的 ffmpeg 有 h264_videotoolbox 才列；只重做有動到的片段要 Mac 的 AVFoundation（Windows 接出來的
+    QuickTime 解不了），也只在 Mac 列。回傳 [[值, 畫面上的名稱], ...]。"""
+    global _METHODS_CACHE
+    if _METHODS_CACHE is not None:
+        return _METHODS_CACHE
+    out = [["sw", "標準輸出"]]
+    if sys.platform == "darwin" and shutil.which("ffmpeg"):
+        try:
+            enc = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            enc = ""
+        if "h264_videotoolbox" in enc:
+            out.append(["hw", "快的輸出方式（用這台 Mac 的顯示晶片，只有 Mac 能用）"])
+        out.append(["smart", "只重做有動到的片段（只有 Mac 能用）"])
+    _METHODS_CACHE = out
+    return out
+
+
 def video_duration(workdir: Path) -> float | None:
     analysis = wd.read_json(wd.analysis_result_path(workdir), default={}) or {}
     merged = wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}
@@ -124,7 +147,7 @@ def precheck(workdir: str | Path) -> dict:
     pool = students.voice_pool()   # 09-30：每位學員各自的聲線（候選_0928），沒有候選才用暫定的
     lack = [g for g in ("男", "女") if not pool.get(g)]
     if lack:
-        missing.append(f"找不到學員匿名聲線（{'、'.join(lack)}聲）：{students.voice_dir() / students.CANDIDATE_DIR}"
+        missing.append(f"找不到學員的替代聲音（{'、'.join(lack)}聲）：{students.voice_dir() / students.CANDIDATE_DIR}"
                        f" 或 {'、'.join(str(students.default_refs()[g]) for g in lack)}")
     from bookclub import review
 
@@ -365,7 +388,7 @@ def final_check(workdir: str | Path) -> dict:
             part = "" if whole else (f"這一句 {t1(x['start'])}–{t1(x['end'])} 有一部分已經由"
                                      + ("、".join(f"〈{h['名稱']}〉" for h in hit) or "學員段落") + "處理，這裡只列沒處理的這幾秒；")
             row(must, f"聲紋:{x['id']}" if whole else f"聲紋:{x['id']}:{a:.1f}", a, b,
-                f"聲紋判成不是老師、{b - a:.1f} 秒，不在任何學員段落或處理範圍裡：可能是漏抓的學員發言。{part}"
+                f"聲音特徵判斷不是老師、{b - a:.1f} 秒，不在任何學員段落或處理範圍裡：可能是漏抓的學員發言。{part}"
                 "聽一下：沒有學員的聲音就按「我聽過了」；有的話按「有學員的聲音」選怎麼處理", ack=True,
                 name=f"{t1(a)} 這一句",
                 todo="第 3 步沒有這一句的卡片：有學員的聲音時，用下面「有學員的聲音」帶著這段時間去第 3 步新增或延長",
@@ -389,10 +412,10 @@ def final_check(workdir: str | Path) -> dict:
         if g["slot"][1] - g["slot"][0] > LONG_TEACHER_S:
             nm, k = gen_name(g)
             row(look, f"長句:{g['id']}", g["slot"][0], g["slot"][1],
-                f"〈{nm}〉老師 AI 聲音重念 {g['slot'][1] - g['slot'][0]:.1f} 秒（超過 {LONG_TEACHER_S:.0f} 秒）", name=nm, card=k)
+                f"〈{nm}〉老師重念 {g['slot'][1] - g['slot'][0]:.1f} 秒（超過 {LONG_TEACHER_S:.0f} 秒）", name=nm, card=k)
     if soft:
         row(look, "聲紋:段落是老師", soft[0]["start"], soft[-1]["end"],
-            f"另外 {len(soft)} 句聲紋判成不是老師、但整段的聲音判斷是老師（多半是誤判，例如冥想引導、老師壓低聲音）。"
+            f"另外 {len(soft)} 句聲音特徵判斷不是老師、但整段的聲音判斷是老師（多半是誤判，例如冥想引導、老師壓低聲音）。"
             "時間：" + "、".join(wd.fmt_time(x["start"]) for x in soft[:40]) + ("⋯" if len(soft) > 40 else ""))
     covered = review.covered_overlaps(workdir, dec, turns) if turns else []
     gen_s = sum(g["slot"][1] - g["slot"][0] for g in plan["生成"]) + sum(it["slot_s"] for it in items)
@@ -1073,6 +1096,24 @@ def _stopped(prog: dict, st: dict, e: Exception, save: Callable[[], None], log: 
     return prog
 
 
+def current_steps(workdir: str | Path, a: float | None = None, b: float | None = None,
+                  methods: list[str] | None = None) -> dict:
+    """10-01 第三批 4：第 4 步「執行步驟」表格沒在執行時顯示現在的狀態（以前是上一次執行的結果，跟上面的統計對不起來）。
+    跟按「開始執行」時判斷做過沒有用同一套（`_default_checks`，統計也是同一個判斷）。回傳 {步驟: {做好了, 說明}}；讀不到的給 None。"""
+    workdir = Path(workdir)
+    a = 0.0 if a is None else float(a)
+    b = float(b) if b is not None else float(video_duration(workdir) or 0.0)
+    ctx = {"範圍": [a, b], "輸出做法": list(methods or default_methods()), "標記": tag_for(a, b)}
+    out = {}
+    for key, check in _default_checks().items():
+        try:
+            done, why = check(workdir, ctx)
+            out[key] = {"做好了": bool(done), "說明": why}
+        except Exception as e:  # noqa: BLE001 — 某一步讀不到不影響其他步
+            out[key] = {"做好了": None, "說明": f"讀不到：{e}"}
+    return out
+
+
 def status(workdir: str | Path) -> dict:
     """`GET /api/execute`：前置檢查、上次的進度、第 5 步退回的清單。"""
     from bookclub import finalcheck
@@ -1085,5 +1126,6 @@ def status(workdir: str | Path) -> dict:
     except Exception:  # noqa: BLE001 — 還沒有成品檢查就是沒有退回
         redo = []
     return {"前置檢查": precheck(workdir), "進度": wd.read_json(progress_path(workdir), default=None),
-            "影片長度": video_duration(workdir), "預設輸出做法": default_methods(), "退回清單": redo,
+            "影片長度": video_duration(workdir), "預設輸出做法": default_methods(), "輸出做法選項": method_options(),
+            "退回清單": redo,
             "重做中": doing}

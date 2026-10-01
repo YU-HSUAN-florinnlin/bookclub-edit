@@ -74,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     ex_parser.add_argument("workdir", help="工作區路徑（要先跑過第 1 步轉文字、選定老師參考音）")
     ex_parser.add_argument("--start", help="從幾分幾秒（預設 0:00）")
     ex_parser.add_argument("--end", help="到幾分幾秒（預設影片結尾）")
-    ex_parser.add_argument("--methods", help="組裝的輸出做法（逗號分隔：hw、sw、smart；預設 Mac 用 hw、其他用 sw）")
+    ex_parser.add_argument("--methods", help="組裝的輸出做法（逗號分隔：hw、sw、smart；預設 sw 標準輸出；hw 只有 Mac）")
     ex_parser.add_argument("--only", help="只跑這幾步（逗號分隔：老師名字,學員重念,組裝）")
     ex_parser.add_argument("--redo", action="store_true", help="做過的也重跑（生成本身還是會沿用快取，見 README）")
     ex_parser.add_argument("--redo-returned", action="store_true",

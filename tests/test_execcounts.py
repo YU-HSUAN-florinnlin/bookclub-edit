@@ -31,7 +31,7 @@ def test_every_kind_listed_and_nothing_done_yet():
         assert len(rows) == 7
         assert all(r["總數"] is not None for r in rows.values()), rows
         assert all(r["完成"] == 0 for r in rows.values())
-        assert rows[("學員段落", "匿名聲線重念")]["總數"] > 0
+        assert rows[("學員段落", "學員重念（用替代聲音）")]["總數"] > 0
 
 
 def test_generated_items_count_as_done():
@@ -42,7 +42,7 @@ def test_generated_items_count_as_done():
         items, _ = students.build_items(w)
         first = items[0]
         wd.write_json(students.log_path(w), {"句子": [{"id": first["id"], "text": first["text"], "放回時間格": "x.wav"}]})
-        r = _rows(w)[("學員段落", "匿名聲線重念")]
+        r = _rows(w)[("學員段落", "學員重念（用替代聲音）")]
         assert r["完成"] == 1 and r["總數"] == len(items)
 
 
@@ -61,7 +61,7 @@ def test_cache_counts_generated_before_log_and_eta():
                  f"不在範圍|1|42|1.0|x|ref.wav#x": {"elapsed_s": 50.0}}
         (students.out_dir(w)).mkdir(parents=True, exist_ok=True)
         wd.write_json(students.out_dir(w) / tts.ATTEMPT_CACHE, cache)
-        r = _rows(w)[("學員段落", "匿名聲線重念")]
+        r = _rows(w)[("學員段落", "學員重念（用替代聲音）")]
         assert r["完成"] == 0 and r["已生成"] == 1
         assert r["預估剩餘秒數"] == (len(items) - 1) * 120
         assert execcounts.remaining_seconds(list(_rows(w).values())) >= r["預估剩餘秒數"]
@@ -81,11 +81,11 @@ def test_render_stage_rows_done_only_after_render():
         dec["局部消音"].append({"id": "M902", "start": 150.0, "end": 151.0})
         wd.write_json(review.review_path(w), dec)
         r = _rows(w, a=0.0, b=100.0)
-        assert r[("刪除段落", "剪掉片段：聲音和畫面都拿掉，影片會變短")]["總數"] == 1
-        assert r[("局部消音", "消音：只拿掉聲音，畫面留著")]["總數"] == 1    # 範圍外的那筆不算
-        assert r[("局部消音", "消音：只拿掉聲音，畫面留著")]["完成"] == 0
+        assert r[("剪掉", "聲音和畫面都拿掉，影片會變短")]["總數"] == 1
+        assert r[("消音", "只拿掉聲音，畫面留著")]["總數"] == 1    # 範圍外的那筆不算
+        assert r[("消音", "只拿掉聲音，畫面留著")]["完成"] == 0
         r = _rows(w, a=0.0, b=100.0, render_done=True)
-        assert r[("局部消音", "消音：只拿掉聲音，畫面留著")]["完成"] == 1
+        assert r[("消音", "只拿掉聲音，畫面留著")]["完成"] == 1
 
 
 def test_broken_kind_does_not_break_others():

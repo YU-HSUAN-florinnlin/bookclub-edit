@@ -566,10 +566,10 @@ def item_index(workdir: str | Path, dec: dict | None = None, turns: list[dict] |
             c["start"], c["end"], f"名字:{cid}", "名字", 老師整段=whole)
     for c in dec["刪除段落"]:
         card = f"刪除段落:{c.get('建議id') or c['id']}"
-        put([card, f"刪除段落:{c['id']}"], "刪除段落", c.get("建議id") or c["id"], f"剪掉片段 {wd.fmt_time(c['start'])}",
+        put([card, f"刪除段落:{c['id']}"], "刪除段落", c.get("建議id") or c["id"], f"剪掉 {wd.fmt_time(c['start'])}",
             c["start"], c["end"], card, "刪除段落")
     for sg in load_cut_suggestions(workdir):
-        put([f"刪除段落:{sg['id']}"], "刪除段落", sg["id"], f"剪掉片段 {wd.fmt_time(sg['start'])}", sg["start"], sg["end"],
+        put([f"刪除段落:{sg['id']}"], "刪除段落", sg["id"], f"剪掉 {wd.fmt_time(sg['start'])}", sg["start"], sg["end"],
             f"刪除段落:{sg['id']}", "刪除段落")
     for m in dec["局部消音"]:
         put([f"局部消音:{m['id']}"], "局部消音", m["id"], f"消音 {wd.fmt_time(m['start'])}", m["start"], m["end"],
@@ -585,7 +585,7 @@ def item_name(index: dict[str, dict], key: str) -> str:
     if key in index:
         return index[key]["名稱"]
     kind = key.split(":", 1)[0]
-    return {"名字": "老師提到名字", "刪除段落": "剪掉片段", "局部消音": "消音", "學員名字": "學員提到名字"}.get(kind, kind) \
+    return {"名字": "老師提到名字", "刪除段落": "剪掉", "局部消音": "消音", "學員名字": "學員提到名字"}.get(kind, kind) \
         + "（第 3 步現在找不到這一筆）"
 
 
@@ -833,7 +833,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                               "原文": t.get("原文", ""), "校對稿": t.get("校對稿", ""), "說話者": "老師",
                               "已確認": False, "人工新增": bool(t.get("人工新增")), **_align_info(t),
                               "建議": {"做法": "保留老師原聲", "原因": "你把這一段改成老師：照原聲留著。要改回學員、改時間、"
-                                                            "或改成老師 AI 重念，在「改做法」裡選"},
+                                                            "或改成老師重念，在「改做法」裡選"},
                               "不用處理": "改成老師（原聲），不用處理"})
             continue
         draft, changes = (t["校對稿"], []) if t["已確認"] else replace_real_names(t["校對稿"], table)
@@ -865,9 +865,9 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                                                    "省生成時間；要留下在「改做法」選「學員整句生成」"}
     for it in _names_items(workdir, sents):
         cut_hint = f"；第 1 步切點分析建議：{it['建議做法']}" if it.get("建議做法") and it["建議做法"] != nameplan_whole() else ""
-        it["建議"] = {"做法": nameplan_whole(), "原因": "預設整句用老師 AI 聲音重念、名字換成代號" + cut_hint}
+        it["建議"] = {"做法": nameplan_whole(), "原因": "預設整句老師重念、名字換成代號" + cut_hint}
         if it.get("老師整段"):
-            it["建議"]["原因"] = "人工標的老師的話：這一段照上面的字，用老師 AI 聲音重念"
+            it["建議"]["原因"] = "人工標的老師的話：這一段照上面的字老師重念"
         it["不用處理"] = skip_reason(it["start"], it["end"])
         items.append(it)
     # 09-29：保留原聲的學員自己講到名字（設成保留原聲才會列；改回重新生成就不列）
@@ -961,6 +961,15 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     for it in items:   # 10-01 第三批：人工新增的漏抓重疊、老師提到名字、老師這一段 AI 重念，加錯了可以直接刪
         if it["類型"] in ("重疊", "名字") and it.get("人工新增"):
             it["可以刪"] = True
+    try:   # 10-01 第三批 5：第 5 步退回的，卡片上寫「第 5 步退回：原因」（重做完就消失）
+        from bookclub import finalcheck
+
+        back = finalcheck.returned_by_card(workdir, item_index(workdir, dec, turns))
+    except Exception:  # noqa: BLE001 — 讀不到成品檢查不擋第 3 步
+        back = {}
+    for it in items:
+        if back.get(f"{it['類型']}:{it['id']}"):
+            it["第5步退回"] = back[f"{it['類型']}:{it['id']}"]
     items.sort(key=lambda x: (x["start"], x["類型"]))
     restored.sort(key=lambda x: x["start"])
 
@@ -1334,7 +1343,7 @@ def save_cut(workdir: str | Path, fields: dict) -> dict:
     return _upsert_range(Path(workdir), "刪除段落", "D", f, snap=True)
 
 
-DELETABLE = {"刪除段落": "剪掉片段", "局部消音": "消音", "重疊": "漏抓的重疊", "名字": "漏抓的老師提到名字"}   # 人工新增、可以直接刪的
+DELETABLE = {"刪除段落": "剪掉", "局部消音": "消音", "重疊": "漏抓的重疊", "名字": "漏抓的老師提到名字"}   # 人工新增、可以直接刪的
 
 
 def delete_manual(workdir: str | Path, kind: str, iid: str, who: str | None = None) -> dict:

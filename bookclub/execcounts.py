@@ -165,13 +165,21 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
         n = sum(1 for c in dec[key] if c.get("狀態") != "還原" and _in_range(c["start"], c["end"], a, b))
         return n, n if render_done else 0
 
-    add("老師提到名字", "老師 AI 聲音整句重念", "生成", t_gen)
-    add("老師提到名字", "直接消音", "組裝", t_mute)
-    add("學員段落", "匿名聲線重念", "生成", stu)
-    add("保留原聲學員提到名字", "用學員自己的聲音換成代號", "生成", sn_gen)
-    add("保留原聲學員提到名字", "直接消音", "組裝", sn_mute)
-    add("刪除段落", "剪掉片段：聲音和畫面都拿掉，影片會變短", "組裝", lambda: ranged("刪除段落"))
-    add("局部消音", "消音：只拿掉聲音，畫面留著", "組裝", lambda: ranged("局部消音"))
+    add("老師提到名字", "老師重念（整句、名字換成代號）", "生成", t_gen)   # 10-01 第三批 7：統一叫法
+    try:   # 10-01 第三批 6：落在剪掉的片段裡的名字不生成、不算；寫出來，第 3 步的「已剪掉」對得起來
+        from bookclub import nameplan
+
+        n_cut = sum(1 for x in tplan().get("略過", []) if x.get("原因") == nameplan.CUT_SKIP)
+        if n_cut and rows and rows[-1]["類型"] == "老師提到名字":
+            rows[-1]["另外"] = f"另外 {n_cut} 個名字落在剪掉的片段裡，不生成、不算"
+    except Exception:  # noqa: BLE001
+        pass
+    add("老師提到名字", "消音（直接消掉名字）", "組裝", t_mute)
+    add("學員段落", "學員重念（用替代聲音）", "生成", stu)
+    add("保留原聲學員提到名字", "學員重念（用他自己的聲音，名字換成代號）", "生成", sn_gen)
+    add("保留原聲學員提到名字", "消音（直接消掉名字）", "組裝", sn_mute)
+    add("剪掉", "聲音和畫面都拿掉，影片會變短", "組裝", lambda: ranged("刪除段落"))
+    add("消音", "只拿掉聲音，畫面留著", "組裝", lambda: ranged("局部消音"))
     return rows
 
 

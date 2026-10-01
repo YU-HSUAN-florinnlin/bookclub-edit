@@ -226,8 +226,11 @@ def whole_slot(c: dict, d: dict, group: list[dict], words: list[dict] | None) ->
     return {**out, "start": nr[0], "end": nr[1], "範圍": "自動"}
 
 
+CUT_SKIP = "落在剪掉的片段裡（聲音和畫面都拿掉，不用處理）"
+
+
 def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dict],
-               default_how: str = WHOLE, words: list[dict] | None = None) -> dict:
+               default_how: str = WHOLE, words: list[dict] | None = None, cut: set | None = None) -> dict:
     """純函式：候選＋覆核決定＋句子（id → {start, end, text}）→ 處理計畫。
 
     做法：覆核決定的 `做法` 優先；沒有就用 default_how（09-25 宇軒定案：預設整句換掉；
@@ -238,6 +241,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
     每一筆都帶 `候選` 編號（1 起算，跟覆核決定的 id 一致）。
     `words`（逐字時間）給了的話，整句太長時只重念名字所在的那一小句（`whole_slot`，10-01），
     這種項目帶 `範圍`（自動／人選）與 `整句`（原本整句的起訖），文字照範圍裡逐字稿的字。
+    `cut`（10-01 第三批）：落在剪掉的片段裡的候選編號（字串）→ 放進略過，不生成、不消音（剪掉的地方本來就沒有聲音）。
     """
     gen, mutes, skipped, manual = [], [], [], []
     ranged: list[dict] = []       # 縮小範圍的（範圍疊在一起的名字併成一筆）
@@ -249,6 +253,9 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         i = c.get("id", i)             # 人工補的名字（覆核工作台「新增修改」）自己帶 id（NM001…）
         d = decisions.get(str(i), {}) or {}
         tags = set(d.get("tags", []))
+        if cut and str(i) in cut:
+            skipped.append({"候選": i, "原因": CUT_SKIP})
+            continue
         if tags & SKIP_TAGS:
             skipped.append({"候選": i, "原因": "、".join(sorted(tags & SKIP_TAGS))})
             continue
@@ -497,9 +504,13 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
             if i not in keep:
                 decisions[str(i)] = {"tags": ["不是名字"]}  # 只在計算時略過，不寫回覆核決定
     words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words") or []
-    plan = build_plan(candidates, decisions, sentences, words=words)
+    # 10-01 第三批：名字落在剪掉的片段裡 → 不生成（以前照樣生成、第 4 步也算進去；跟第 3 步「已剪掉」同一個判斷）。
+    # 剪掉的片段還原，下一次排計畫就回到要生成
+    cuts = [(c["start"], c["end"]) for c in review.load_decisions(workdir)["刪除段落"] if c.get("狀態") != "還原"]
+    cut = {str(c.get("id") or i) for i, c in enumerate(candidates, start=1) if review._in_ranges(c["start"], c["end"], cuts)}
+    plan = build_plan(candidates, decisions, sentences, words=words, cut=cut)
     if not only:   # 09-30：重疊選「生成老師聲音」的，老師整句一起排進生成清單
-        choices = review.overlap_choices(workdir)
+        choices = [o for o in review.overlap_choices(workdir) if not review._in_ranges(o["start"], o["end"], cuts)]
         picks = [o for o in choices if o["做法"] == "只留老師"]
         add_stacked_items(plan, choices)
         if picks:

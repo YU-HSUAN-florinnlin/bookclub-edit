@@ -158,7 +158,7 @@ def test_walkthrough_1001():
     assert "renderSeq" in app and "renderDone" in app                  # 很快連點兩步，不會停在慢的那一頁
     assert '["局部消音", "消音"]' in rv and '["改成老師", "改成老師"]' in rv   # 篩選加起來等於全部
     assert "fmtStamp(" in app and "fmtStamp(" in fcjs                  # 不顯示 2026-10-01T03:16:01
-    assert '"刪除": "剪掉片段（連畫面）"' in fcjs and "刪除點" not in fcjs
+    assert '"刪除": "剪掉（連畫面）"' in fcjs and "刪除點" not in fcjs
     assert 'it["狀態"] === "還原" ? "不消音"' in rv
     assert "rvRuleHint(t[\"類型\"], t[\"老師整段\"], true)" in fcjs
     assert "存逐字稿（音檔不換）" in app and "換成這個候選的新音檔" in app
@@ -168,6 +168,26 @@ def test_walkthrough_1001():
         out = subprocess.run([node, "-e", fn + "console.log(rvFmt(3299.96, 1), rvFmt(59.97, 1), rvFmt(59.97))"],
                              capture_output=True, text=True, check=True).stdout.split()
         assert out == ["55:00.0", "1:00.0", "0:59"], out
+
+
+def test_third_batch_1001():
+    """10-01 第三批：畫面上的字與新按鈕（不出現專有名詞、內部編號、終端機指令）。"""
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    fcj = (WEB / "finalcheck.js").read_text(encoding="utf-8")
+    assert "重新分析（做完的會跳過）" in app                                     # 10
+    assert "進階設定" in app and "伺服器埠號" not in app and "<b>settings.toml</b>" not in app   # 8
+    assert "硬體編碼（Mac）" not in app and "軟體編碼" not in app and "輸出做法選項" in app
+    assert "<b>匿名聲線</b>" not in app and "替代聲音" in app
+    assert "聲紋分出來" not in rv and "匿名聲線" not in rv and '"霧化": "聲音霧化"' in rv
+    assert "execGoCheck" in rv and "execGoCheck" in app                          # 9：帶去第 4 步的總檢查
+    assert "第 5 步退回：" in rv                                                   # 5
+    assert "現在狀態" in app and "上次執行：" in app                               # 4
+    assert "不會像第 3 步那樣自動對齊到句子的開頭、結尾，切點要自己聽準" in fcj        # 11
+    assert "已還原的（" in rv and "刪掉這一筆" in rv and "刪掉的紀錄（" in rv       # 第三批 3
+    assert "會換掉的範圍" in rv and "裡面老師的聲音都不保留" in rv                   # 第三批 1
+    for old in ("老師整句生成", "學員整句生成（", "老師 AI 重念：", "剪掉片段（連畫面）"):
+        assert f'"{old}' not in rv and f">{old}" not in rv, old                   # 7：統一叫法
 
 
 if __name__ == "__main__":

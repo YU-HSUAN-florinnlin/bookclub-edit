@@ -652,3 +652,10 @@ table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg)
 .rv2 button.primary.on { box-shadow: 0 0 0 3px var(--rv-stu); }
 .rv2 button.ghost.on { font-weight: 600; }
 .fc-retime { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rv-line); }
+
+/* 10-01 第三批 */
+tr.fc-back td { background: var(--warn-bg); }   /* 從第 3 步回來：出發的那一列 */
+details.adv { margin-top: 10px; }
+details.adv summary { cursor: pointer; color: var(--muted); }
+.muted.small, div.small { font-size: 12px; }
+.rv-gennote { margin-top: 6px; }

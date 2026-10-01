@@ -239,6 +239,8 @@ function renderNotYet(def) {
 // ---------------------------------------------------------------------------
 
 let execPollTimer = null;
+let execGoCheck = null;
+let execBackRow = null;   // 10-01 第三批 13：從第 3 步按「回第 4 步總檢查」回來時，捲到出發的那一列（那一列處理好消失了就捲到總檢查開頭）   // 10-01 第三批 9：從第 3 步「全部通過，開始 AI 修改」帶過來時，捲到總檢查、上面寫一行說明
 
 async function renderExecute() {
   contentEl.innerHTML = "<p>載入中…</p>";
@@ -262,7 +264,7 @@ function finalCheckHtml(fc) {
   const row = (r) => {
     const i = fcRowsCache.push(r) - 1;
     const paths = r["有學員聲音"] || [];
-    return `<tr><td class="nowrap">${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}</td>
+    return `<tr data-fckey="${esc(r.key)}"><td class="nowrap">${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}</td>
     <td>${esc(r["說明"])}${r["去改"] ? `<div class="muted fc-todo">怎麼改：${esc(r["去改"])}</div>` : ""}</td>
     <td class="fc-acts"><button class="secondary small" data-fcplay="${r.start}|${r.end}">跳過去聽</button>
     ${r["第3步"] ? `<button class="secondary small" data-fcgo="${i}">去第 3 步改這一筆</button>` : ""}
@@ -272,7 +274,7 @@ function finalCheckHtml(fc) {
   };
   const m = fc["摘要"] || {};
   const must = fc["一定要處理"] || [], look = fc["請看一眼"] || [];
-  return `<h2>開始前總檢查</h2>
+  return `<h2 id="fcCheckTitle">開始前總檢查</h2>${execGoCheck ? `<p class="hint" id="fcGoNote">${esc(execGoCheck)}</p>` : ""}
     <div class="card">
       <p><b>一定要處理</b>（有任何一列還沒處理就不能開始）：${must.length ? `${fc["還要處理"]} 列還沒處理` : "沒有"}</p>
       ${must.length ? `<table class="kv fc-check">${must.map(row).join("")}</table>
@@ -297,14 +299,14 @@ function bindFinalCheck(reload) {
   // 10-01 1-2：直接跳到第 3 步那一張卡片（重疊打開「改做法」，看得到學員是誰的選單）
   document.querySelectorAll("[data-fcgo]").forEach((b) => b.addEventListener("click", () => {
     const r = fcRowsCache[Number(b.dataset.fcgo)];
-    rvJump({ key: r["第3步"], openMore: r["第3步"].startsWith("重疊:"), note: `從開始前總檢查過來：${r["去改"] || r["說明"]}` });
+    rvJump({ key: r["第3步"], openMore: r["第3步"].startsWith("重疊:"), note: `從開始前總檢查過來：${r["去改"] || r["說明"]}`, backKey: r.key });
   }));
   // 10-01 1-3：聽了有學員的聲音 → 帶著這段時間去第 3 步新增，或把旁邊那一筆的起訖改大
   document.querySelectorAll("[data-fcpath]").forEach((b) => b.addEventListener("click", () => {
     const [i, j] = b.dataset.fcpath.split("|").map(Number);
     const r = fcRowsCache[i], p = r["有學員聲音"][j];
     const edit = p["改時間"] || p["新增"];
-    rvJump({ key: p["第3步"] || null, edit, note: `從開始前總檢查過來：${p["文字"]}（${fcTime(r.start)}–${fcTime(r.end)}）。下面的起訖已經填好，聽過沒問題按「${p["改時間"] ? "儲存修改" : "新增"}」` });
+    rvJump({ key: p["第3步"] || null, edit, note: `從開始前總檢查過來：${p["文字"]}（${fcTime(r.start)}–${fcTime(r.end)}）。下面的起訖已經填好，聽過沒問題按「${p["改時間"] ? "儲存修改" : "新增"}」`, backKey: r.key });
   }));
   document.querySelectorAll("[data-fcheard]").forEach((c) => c.addEventListener("change", async () => {
     await apiPost("/api/execute/finalcheck", { key: c.dataset.fcheard, "聽過": c.checked }); await reload();
@@ -328,25 +330,29 @@ async function renderExecuteBody() {
     <p class="muted">依序跑四步：老師提到名字 → 學員重念 → 保留原聲學員講到名字 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
     <div class="hint">從第 4 步直接開始（例如老師已經自己看完全片、挑好參考聲音）：<b>第 1 步轉文字還是要跑</b>（學員的話要照逐字稿重念，電腦自動）；
       <b>第 2 步的老師參考音也要選好</b>，會出現的名字都要有英文代號（沒有的按下面「幫還沒代號的自動配」）。
-      能省掉的是第 3 步逐筆覆核的人工：沒覆核的話，照第 1 步的建議做（名字整句換掉、學員全部重念、建議刪除的段落不刪）。</div>
+      能省掉的是第 3 步逐筆覆核的人工：沒覆核的話，照第 1 步的建議做（名字的那一句老師重念、學員段落全部學員重念、建議剪掉的段落不剪）。</div>
     ${pre["缺"].length ? `<div class="card"><b>還不能開始：</b><ul>${pre["缺"].map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
       ${pre["缺代號"] ? `<button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">配常用英文名，之後在第 3 步 ②③ 可以改</span>` : ""}</div>` : ""}
     ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
     <h2>要修改的項目</h2>
     <div class="card" id="execStats">${execStatsHtml(d)}</div>
     ${fc ? finalCheckHtml(fc) : ""}
-    <h2>執行步驟</h2>
+    <h2>執行步驟${running ? "" : "（現在的狀態）"}</h2>
     <div class="card"><table class="kv exec">
       <thead><tr><th style="text-align:left">步驟</th><th style="text-align:left">狀態</th><th style="text-align:left">說明</th></tr></thead>
       <tbody id="execSteps">${rows}</tbody></table>
-      ${prog["開始時間"] ? `<p class="muted">上次：${esc(fmtStamp(prog["開始時間"]))} 開始${prog["結束時間"] ? `，${esc(fmtStamp(prog["結束時間"]))} 結束` : ""}；範圍 ${esc(fmtRange(prog["範圍"]))}</p>` : ""}
+      ${prog["開始時間"] ? `<p class="muted small">上次執行：${esc(fmtStamp(prog["開始時間"]))} 開始${prog["結束時間"] ? `，${esc(fmtStamp(prog["結束時間"]))} 結束` : ""}；範圍 ${esc(fmtRange(prog["範圍"]))}</p>` : ""}
     </div>
     <div class="card">
       <div class="exec-opts">
         <label>從 <input type="text" id="exStart" class="short" placeholder="0:00"></label>
         <label>到 <input type="text" id="exEnd" class="short" placeholder="${esc(d["影片長度"] ? fmtRange([0, d["影片長度"]]).split("–")[1] : "結尾")}"></label>
-        <label>輸出做法 <select id="exMethod">${["hw", "sw", "smart"].map((m) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${{ hw: "硬體編碼（Mac）", sw: "軟體編碼", smart: "只重做有動到的片段" }[m]}</option>`).join("")}</select></label>
       </div>
+      <p class="muted">輸出方式：${esc(execMethodName(d, (d["預設輸出做法"] || ["sw"])[0]))}（Mac、Windows 都一樣）</p>
+      <details class="adv"><summary>進階設定</summary>
+        <label>輸出方式 <select id="exMethod">${(d["輸出做法選項"] || [["sw", "標準輸出"]]).map(([m, label]) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
+        <p class="muted">一般用標準輸出就好。其他方式只有這台電腦支援時才會列出來。</p>
+      </details>
       <button id="btnExec" ${running || !pre["可以開始"] || (fc && (!fc["可以開始"] || !fc["看過"])) ? "disabled" : ""}>${running ? "執行中…" : "開始執行"}</button>
       ${fc && !running && (!fc["可以開始"] || !fc["看過"]) ? `<span class="muted">先處理上面「開始前總檢查」${[fc["可以開始"] ? "" : "一定要處理的列", fc["看過"] ? "" : "「請看一眼」按「我看過了」"].filter(Boolean).join("，")}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
@@ -368,6 +374,15 @@ async function renderExecuteBody() {
         <td>${esc(it["原因"])}${it["改範圍"] ? `<div class="muted">範圍改了${it["改範圍"]["原本"] ? `：${esc(fmtRange(it["改範圍"]["原本"]))} → ${esc(fmtRange(it["改範圍"]["改成"]))}` : ""}（存在第 3 步〈${esc(it["改範圍"]["名稱"] || "")}〉）</div>` : ""}
           <div class="muted">按下去會：${esc(it["說明"] || "")}</div></td></tr>`).join("")}</table></div>` : ""}`;
   bindFinalCheck(renderExecuteBody);
+  if (execGoCheck || execBackRow) {
+    const key = execBackRow;
+    execGoCheck = null;
+    execBackRow = null;
+    const row = key ? [...document.querySelectorAll("tr[data-fckey]")].find((tr) => tr.dataset.fckey === key) : null;
+    const t = document.getElementById("fcCheckTitle");
+    if (row) { row.scrollIntoView({ block: "center" }); row.classList.add("fc-back"); }
+    else if (t) t.scrollIntoView({ block: "start" });
+  }
   const redoBtn = document.getElementById("btnRedo");   // 10-01 第三批：只重做退回的（整支影片的範圍）
   if (redoBtn) redoBtn.addEventListener("click", async () => {
     if (!confirm(`只重做第 5 步退回的 ${redo.length} 筆，再重新組裝？\n要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。`)) return;
@@ -399,12 +414,25 @@ async function renderExecuteBody() {
   if (running) startExecPoll();
 }
 
+const EXEC_STEP_NAMES = [["老師名字", "老師提到名字：老師重念（名字換成代號）"], ["學員重念", "學員段落：學員重念（用替代聲音）"],
+  ["保留原聲學員名字", "保留原聲的學員講到名字：選了換成代號的，用他自己的聲音重念"], ["組裝", "換聲音＋剪掉＋停格，輸出成品影片"]];
+
+// 10-01 第三批 8：輸出方式的名稱（「硬體編碼」這類說法收進進階設定）
+function execMethodName(d, m) { return ((d["輸出做法選項"] || []).find((x) => x[0] === m) || [m, "標準輸出"])[1]; }
+
 function execStepRows(d) {
   const steps = (d["進度"] || {})["步驟"] || {};
-  const names = [["老師名字", "老師提到名字：用老師 AI 聲音整句重念"], ["學員重念", "學員段落：匿名聲線重念"],
-    ["保留原聲學員名字", "保留原聲的學員講到名字：選了換成代號的，用他自己的聲音生成"], ["組裝", "換聲音＋刪除＋停格，輸出成品影片"]];
+  const now = d["現在狀態"];   // 10-01 第三批 4：沒在執行時顯示現在的狀態（跟上面的統計同一個判斷），不是上一次執行的結果
+  if (!d.running && now) return EXEC_STEP_NAMES.map(([k, desc]) => {
+    const x = now[k] || {};
+    const st = x["做好了"] == null ? "讀不到" : x["做好了"] ? "做好了" : "還沒做";
+    const last = (steps[k] || {})["狀態"];
+    return `<tr><td><b>${esc(k)}</b><div class="muted">${esc(desc)}</div></td>
+      <td><span class="badge ${x["做好了"] ? "done" : ""}">${esc(st)}</span>${last ? `<div class="muted small">上次執行：${esc(last)}</div>` : ""}</td>
+      <td class="muted">${esc(x["說明"] || "")}</td></tr>`;
+  }).join("");
   const badge = (st) => ({ "做完": "done", "跳過": "done", "進行中": "running", "失敗": "error", "中斷": "error" }[st] || "");
-  return names.map(([k, desc]) => {
+  return EXEC_STEP_NAMES.map(([k, desc]) => {
     const st = (steps[k] || {})["狀態"] || "還沒跑";
     return `<tr><td><b>${esc(k)}</b><div class="muted">${esc(desc)}</div></td>
       <td><span class="badge ${badge(st)}">${esc(st)}</span></td><td class="muted">${esc((steps[k] || {})["訊息"] || "")}</td></tr>`;
@@ -432,7 +460,7 @@ function execStatsHtml(d) {
     if (r["總數"] == null) return `<tr><td><b>${esc(r["類型"])}</b><div class="muted">${esc(r["做法"])}</div></td><td class="num muted" colspan="2">讀不到</td></tr>`;
     const p = pct(r["完成"], r["總數"]);
     const made = r["已生成"] != null && r["已生成"] > r["完成"] ? `<div class="muted">已生成 ${r["已生成"]}／${r["總數"]} 句</div>` : "";
-    return `<tr class="${r["總數"] ? "" : "zero"}"><td><b>${esc(r["類型"])}</b><div class="muted">${esc(r["做法"])}${r["階段"] === "組裝" ? "（組裝時處理）" : ""}</div></td>
+    return `<tr class="${r["總數"] ? "" : "zero"}"><td><b>${esc(r["類型"])}</b><div class="muted">${esc(r["做法"])}${r["階段"] === "組裝" ? "（組裝時處理）" : ""}</div>${r["另外"] ? `<div class="muted">${esc(r["另外"])}</div>` : ""}</td>
       <td class="num"><b>${r["完成"]}</b>／${r["總數"]}${made}</td>
       <td>${r["總數"] ? `<span class="bar" role="progressbar" aria-valuenow="${p}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(r["類型"])} ${esc(r["做法"])}"><i style="width:${p}%"></i></span>` : `<span class="muted">沒有</span>`}</td></tr>`;
   }).join("");
@@ -492,12 +520,15 @@ async function renderProfile() {
     <div class="card"><table class="kv prof">
       <thead><tr><th style="text-align:left">項目</th><th style="text-align:left">筆數</th><th style="text-align:left">最後修改</th></tr></thead>
       <tbody>${rows}
-        <tr><td><b>settings.toml</b><div class="muted">伺服器埠號、Claude 模型、門檻值</div></td><td>${st["有檔案"] ? "有" : "沒有（用內建預設值）"}</td><td>${esc(st["最後修改"] || "—")}</td></tr>
-        <tr><td><b>匿名聲線</b><div class="muted">學員重念用的 AI 聲音素材（可商用的開放授權）</div></td><td>${esc(d["匿名聲線"]["狀態"])}</td><td>—</td></tr>
-      </tbody></table></div>
+        <tr><td><b>替代聲音</b><div class="muted">學員重念用的 AI 聲音素材（可商用的開放授權）</div></td><td>${esc(d["匿名聲線"]["狀態"])}</td><td>—</td></tr>
+      </tbody></table>
+      <details class="adv"><summary>進階設定</summary>
+        <p class="muted">程式本身的設定（網頁開在哪個位址、用哪個 AI 模型、各種判斷的標準），平常不用改。
+          ${st["有檔案"] ? `有自己的設定檔（最後修改 ${esc(st["最後修改"] || "—")}）` : "沒有自己的設定檔，用內建的預設值"}；要改請找 Claude。</p>
+      </details></div>
     <h2>設定包（給協作夥伴）</h2>
     <div class="card">
-      <p>匯出：名冊、敏感詞、名字排除清單、發音對照表、settings.toml 打包成一個 zip。名冊含學員本名，只傳給協作夥伴。</p>
+      <p>匯出：名冊、敏感詞、名字排除清單、發音對照表、進階設定打包成一個 zip。名冊含學員本名，只傳給協作夥伴。</p>
       <p><a href="/api/profile/export.zip"><button>匯出設定包</button></a></p>
       <p style="margin-top:18px">匯入：每個清單以第一欄當鑰匙，新的加進去、已經有的不動；同一鑰匙內容不同，保留這台電腦的並列出衝突。</p>
       <p><input type="file" id="profFile" accept=".zip"> <button id="profImport" class="secondary">匯入設定包</button></p>
@@ -649,6 +680,7 @@ async function renderStep1Body() {
   }).join("");
 
   const running = status && status.running;
+  const allDone = order.every(([k]) => (sub[k] || {}).done);   // 10-01 第三批 10：分析做完了，按鈕改「重新分析（做完的會跳過）」
   const errorMsg = status && status.error;
   const messages = (status && status.messages) || [];
 
@@ -662,7 +694,8 @@ async function renderStep1Body() {
       </table>
     </div>
     <div class="card">
-      <button id="btnAnalyze" ${running ? "disabled" : ""}>${running ? "分析執行中…" : "開始分析"}</button>
+      <button id="btnAnalyze" ${running ? "disabled" : ""}>${running ? "分析執行中…" : allDone ? "重新分析（做完的會跳過）" : "開始分析"}</button>
+      ${!running && allDone ? `<span class="muted">每一步都做完了；再按一次只會補做沒做完的，做完的直接沿用</span>` : ""}
       ${errorMsg ? `<p><span class="badge error">失敗</span> ${esc(errorMsg)}</p>` : ""}
       <div class="log" id="runLog">${messages.map(esc).join("\n") || "（還沒有訊息）"}</div>
     </div>

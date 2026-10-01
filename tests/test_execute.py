@@ -148,13 +148,13 @@ def test_only_steps_and_range():
 def test_precheck_lists_what_is_missing():
     w = _fresh()
     pre = execute.precheck(w)
-    assert not pre["可以開始"] and any("匿名聲線" in x for x in pre["缺"])
+    assert not pre["可以開始"] and any("替代聲音" in x for x in pre["缺"])
     assert any("第 3 步還沒覆核" in x for x in pre["提醒"])
     try:
         execute.run_execute(w, log=lambda s: None)
         raise AssertionError("缺東西應該擋下來")
     except FileNotFoundError as e:
-        assert "匿名聲線" in str(e)
+        assert "替代聲音" in str(e)
     voices = _DATA / "聲線"
     voices.mkdir(exist_ok=True)
     for sex in ("男", "女"):
@@ -650,6 +650,20 @@ def test_redo_planner_opens_only_cleared_voice():
     finally:
         for f in made:
             f.unlink()
+
+
+def test_current_steps_and_output_methods():
+    """10-01 第三批 4：執行步驟表格沒在執行時顯示現在的狀態（跟做過沒有同一個判斷）；
+    8：輸出方式標準輸出（軟體編碼）一定有、排第一個，其他只在這台電腦支援時才列。"""
+    w = _fresh()
+    now = execute.current_steps(w)
+    assert set(now) == {k for k, _ in execute.STEPS} and all("說明" in v for v in now.values())
+    assert now["組裝"]["做好了"] is False and now["組裝"]["說明"] == "還沒組裝"
+    opts = execute.method_options()
+    assert opts[0] == ["sw", "標準輸出"] and execute.default_methods() == ["sw"]
+    if sys.platform != "darwin":
+        assert [m for m, _ in opts] == ["sw"]
+    assert not any("編碼" in label for _, label in opts)     # 畫面上不用「硬體編碼／軟體編碼」
 
 
 if __name__ == "__main__":

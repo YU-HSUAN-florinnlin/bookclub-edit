@@ -699,5 +699,42 @@ def test_restored_hidden_and_manual_items_deletable():
             pass
 
 
+def test_name_in_cut_not_generated_and_back_when_restored():
+    """10-01 第三批 6：名字落在剪掉的片段裡 → 不生成、第 4 步不算；剪掉還原 → 自動回到要生成。"""
+    from bookclub import execcounts, nameplan
+
+    w = _fresh()
+    before = nameplan.compute_plan(w)
+    assert any(2 in g["候選"] for g in before["生成"])                     # 阿明（120 秒）整句換掉
+    cut = review.manual_edit(w, {"類型": "刪除段落", "start": 116.0, "end": 124.0})["id"]
+    plan = nameplan.compute_plan(w)
+    assert not any(2 in g["候選"] for g in plan["生成"]) and any(x["候選"] == 2 and x["原因"] == nameplan.CUT_SKIP for x in plan["略過"])
+    card = next(x for x in review.page_data(w)["項目"] if x["類型"] == "名字" and x["id"] == "2")
+    assert "剪掉" in (card["不用處理"] or "")                                  # 第 3 步同一個判斷
+    row = next(r for r in execcounts.counts(w) if r["類型"] == "老師提到名字" and r["階段"] == "生成")
+    assert row["總數"] == len(plan["生成"]) and "1 個名字落在剪掉的片段裡" in row["另外"]
+    review.save_cut(w, {"id": cut, "狀態": "還原"})
+    assert any(2 in g["候選"] for g in nameplan.compute_plan(w)["生成"])
+
+
+def test_step5_return_reason_shown_on_step3_card():
+    """10-01 第三批 5：第 5 步退回的，第 3 步那一張卡片看得到原因；改成通過（或重做完）就消失。"""
+    from bookclub import finalcheck, proclog
+    from bookclub import workdir as wd
+
+    w = _fresh()
+    log = {"產生時間": "t1", "片段": None, "紀錄": [
+        {"類型": "學員重念", "原片": [40.0, 48.0], "成品": [40.0, 48.0], "做了什麼": "x", "檔案": "a.wav",
+         "覆核項目": ["學員段落:T003"], "文字": "y"}]}
+    wd.write_json(proclog.log_path(w), log)
+    key = finalcheck.record_key(log["紀錄"][0])
+    finalcheck.decide_record(w, key, "退回重做", "結尾念錯")
+    card = next(x for x in review.page_data(w)["項目"] if x["類型"] == "學員段落" and x["id"] == "T003")
+    assert card["第5步退回"] == ["結尾念錯"]
+    finalcheck.decide_record(w, key, "通過")
+    card = next(x for x in review.page_data(w)["項目"] if x["類型"] == "學員段落" and x["id"] == "T003")
+    assert not card.get("第5步退回")
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

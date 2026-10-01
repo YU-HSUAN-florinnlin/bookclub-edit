@@ -260,9 +260,12 @@ def test_plain_ids_hides_internal_ids_and_uses_step3_words():
     t = fc.plain_ids("停格 1.36 秒：T034_01 重念比時間格長 +30%", index)
     assert t == "停格 1.36 秒：〈學員段落 00:43:21〉裡的一句重念比時間格長 +30%", t
     assert fc.plain_ids("重疊（只留學員）：整段落在 T047m1_01 的範圍裡", index) == "重疊（生成學員聲音）：整段落在 另一筆 的範圍裡"
-    assert fc.plain_ids("第 3 步標的局部消音 M001（墊環境底噪）", index) == "第 3 步標的局部消音〈消音 01:28:04〉（墊環境底噪）"
+    assert fc.plain_ids("第 3 步標的局部消音 M001（墊環境底噪）", index) == "第 3 步標的消音〈消音 01:28:04〉（墊環境底噪）"
     assert fc.plain_ids("刪除 84.7 秒（聲音畫面一起刪）", {}) == "剪掉 84.7 秒（聲音和畫面都拿掉）"
-    assert fc.plain_ids("學員3 用女聲 AI 重念", index) == "學員3 用女聲 AI 重念"
+    # 10-01 第三批 7、8：統一叫法、「霧化」寫成「聲音霧化」（只改顯示）
+    assert fc.plain_ids("學員3 用女聲 AI 重念；比時間格長，加快 15%", index) == "學員重念：學員3（女聲的替代聲音）；比時間格長，加快 15%"
+    assert fc.plain_ids("老師提到名字：整句用老師 AI 聲音重念、名字換成代號", index) == "老師重念：整句重念、名字換成代號"
+    assert fc.plain_ids("第 3 步標的局部消音 M001（墊環境底噪；選的是霧化，霧化還沒做，先墊底噪）", index).count("聲音霧化") == 2
 
 
 def test_redo_list_includes_items_after_sendback():

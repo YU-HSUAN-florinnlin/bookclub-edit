@@ -277,6 +277,14 @@ def plain_words(text: str) -> str:
     from bookclub.review import OVERLAP_LABEL
 
     text = re.sub(r"^刪除 ([\d.]+) 秒（聲音畫面一起刪）", r"剪掉 \1 秒（聲音和畫面都拿掉）", text)
+    # 10-01 第三批 7、8：統一叫「老師重念」「學員重念」「消音」，「霧化」寫成「聲音霧化」（只改顯示，紀錄檔不改，
+    # 不然處理紀錄的內容指紋會變、第 5 步已經通過的全部要重看）
+    text = text.replace("老師提到名字：整句用老師 AI 聲音重念、名字換成代號", "老師重念：整句重念、名字換成代號")
+    text = text.replace("老師提到名字：用老師 AI 聲音重念、名字換成代號", "老師重念：名字換成代號")
+    text = text.replace("老師整句用 AI 聲音重念", "老師整句老師重念")
+    text = re.sub(r"^(.*?) 用(男|女)?聲 AI 重念", lambda m: f"學員重念：{m.group(1)}" + (f"（{m.group(2)}聲的替代聲音）" if m.group(2) else "（替代聲音）"), text)
+    text = text.replace("第 3 步標的局部消音", "第 3 步標的消音").replace("局部消音", "消音")
+    text = re.sub(r"(?<!聲音)霧化", "聲音霧化", text)
     for raw in sorted(OVERLAP_LABEL, key=len, reverse=True):
         text = text.replace(f"重疊（{raw}）", f"重疊（{OVERLAP_LABEL[raw]}）").replace(f"做法：{raw}）", f"做法：{OVERLAP_LABEL[raw]}）")
     return text
@@ -776,6 +784,23 @@ def finish_redo(workdir: str | Path) -> dict | None:
         check["重做過"] = {"時間": _now(), "處理紀錄產生時間": (log or {}).get("產生時間"), "項目": doing["項目"]}
         _save(workdir, check)
     return check["重做過"]
+
+
+def returned_by_card(workdir: str | Path, index: dict) -> dict[str, list[str]]:
+    """10-01 第三批 5：第 5 步退回（還沒重做好）的，對到第 3 步哪一張卡片 → 退回的原因。只讀，不寫檔。
+    重做完（第 4 步組裝做完、回到還沒看）就不在退回清單裡，卡片上的那一行跟著消失。"""
+    log = proclog.load(Path(workdir))
+    if not log:
+        return {}
+    check = refresh(load_check(Path(workdir)), log)
+    out: dict[str, list[str]] = {}
+    for it in redo_items(log, check):
+        for k in it.get("覆核項目") or []:
+            card = (index.get(k) or {}).get("第3步")
+            why = (it.get("原因") or "").strip() or "（沒寫原因）"
+            if card and why not in out.setdefault(card, []):
+                out[card].append(why)
+    return out
 
 
 def redone_info(rec: dict, check: dict, log: dict | None) -> dict | None:

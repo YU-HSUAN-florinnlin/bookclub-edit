@@ -838,6 +838,10 @@ class BookclubServer(ThreadingHTTPServer):
         done = ((prog.get("步驟") or {}).get("組裝") or {}).get("狀態") in ("做完", "跳過")
         st["統計"] = execcounts.counts(self.workdir, rng[0], rng[1], render_done=done)
         st["預估剩餘秒數"] = execcounts.remaining_seconds(st["統計"]) if state.get("running") else None
+        if not state.get("running"):   # 10-01 第三批 4：執行步驟表格顯示現在的狀態（跟統計同一個判斷）
+            from bookclub.execute import current_steps
+
+            st["現在狀態"] = current_steps(self.workdir, rng[0], rng[1], prog.get("輸出做法"))
         from bookclub.execute import stop_requested
 
         st["停止中"] = bool(state.get("running")) and stop_requested(self.workdir)
