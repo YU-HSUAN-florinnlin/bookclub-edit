@@ -938,8 +938,13 @@ def keep_awake(log: Callable[[str], None] = print):
 def run_execute(workdir: str | Path, *, start: float | None = None, end: float | None = None,
                 methods: list[str] | None = None, redo: bool = False, only_steps: list[str] | None = None,
                 runners: dict | None = None, checks: dict | None = None, skip_precheck: bool = False,
-                parts: PartOptions | None = None, log: Callable[[str], None] = print) -> dict:
+                parts: PartOptions | None = None, redo_returned: bool = False,
+                log: Callable[[str], None] = print) -> dict:
     """依序跑第 4 步。回傳進度。
+
+    redo_returned（10-01 第三批）：第 5 步退回的那幾筆一起重做——開始前先清掉那幾句的生成結果
+    （`finalcheck.prepare_redo`），之後照常一步一步跑（只有清掉的會重新生成），組裝一定重做；
+    組裝做完，那幾筆在第 5 步回到「還沒看」、標「重做過」（`finalcheck.finish_redo`）。
 
     10-01：每一步、每一個聲線各自開一支程式跑（`_part_runners`，見上面「每一步、每一個聲線各自一支程式跑」）；
     parts 可以從外面傳假的子程式指令、假的硬碟／swap 數字（測試用）。
@@ -974,6 +979,13 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     if b <= a:
         raise ValueError("不知道影片多長，用 --end 指定到幾分幾秒")
     ctx = {"範圍": [a, b], "輸出做法": list(methods or default_methods()), "標記": tag_for(a, b)}
+    from bookclub import finalcheck
+
+    redoing = None
+    if redo_returned:
+        redoing = finalcheck.prepare_redo(workdir, a, b, log=log)
+    if not redoing and (finalcheck.load_check(workdir).get("重做中") or {}).get("項目"):
+        redoing = {"接著做": True}   # 上次重做退回的沒做完（停止、失敗）：這次組裝做完一樣收尾
     runners_given = bool(runners)
     opts = parts or PartOptions()
     runners = {**(_default_runners() if runners_given else _part_runners(opts, log)), **(runners or {})}
@@ -1000,6 +1012,8 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
             except StopRequested as e:
                 return _stopped(prog, st, e, save, log)
             done, why = checks[key](workdir, ctx)
+            if done and redoing and key == "組裝":   # 退回的只要重新組裝（剪掉、消音⋯）也要真的組一次
+                done, why = False, "第 5 步退回的要重新組裝"
             if done and not redo:
                 st.update({"狀態": "跳過", "訊息": f"做過了：{why}"})
                 log(f"[AI 執行] {key}：做過了，跳過（{why}）")
@@ -1033,6 +1047,13 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
             st.update({"狀態": "做完", "結束": _now(), "訊息": why if "子程式" not in st else f"{why}｜{len(st['子程式'])} 支程式做完"})
             save()
             log(f"[AI 執行] {key}：做完")
+            if key == "組裝" and redoing:
+                try:
+                    back = finalcheck.finish_redo(workdir)
+                    if back:
+                        log(f"[AI 執行] 第 5 步退回的 {len(back['項目'])} 筆重做好了：到第 5 步重新看這幾筆")
+                except Exception as e:  # noqa: BLE001 — 收尾失敗不算這次執行失敗（第 5 步照樣看得到新成品）
+                    log(f"[AI 執行] ⚠️ 第 5 步退回的那幾筆沒標成「重做過」：{e}")
         prog["結束時間"] = _now()
         save()
         log("[AI 執行] 全部做完。下一步：網頁第 5 步「成品檢查」")
@@ -1057,10 +1078,12 @@ def status(workdir: str | Path) -> dict:
     from bookclub import finalcheck
 
     workdir = Path(workdir)
-    redo = []
+    redo, doing = [], False
     try:
-        redo = finalcheck.redo_list(workdir)["項目"]
+        r = finalcheck.redo_list(workdir)
+        redo, doing = r["項目"], r.get("重做中", False)
     except Exception:  # noqa: BLE001 — 還沒有成品檢查就是沒有退回
         redo = []
     return {"前置檢查": precheck(workdir), "進度": wd.read_json(progress_path(workdir), default=None),
-            "影片長度": video_duration(workdir), "預設輸出做法": default_methods(), "退回清單": redo}
+            "影片長度": video_duration(workdir), "預設輸出做法": default_methods(), "退回清單": redo,
+            "重做中": doing}

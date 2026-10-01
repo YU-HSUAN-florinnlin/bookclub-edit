@@ -121,8 +121,10 @@ def test_cut_snaps_to_quiet_and_mute():
     assert m["方式"] == "墊底噪" and m["start"] == 44.5                                    # 消音不對齊
     review.save_mute(w, {"id": m["id"], "方式": "霧化"})
     assert review.load_decisions(w)["局部消音"][0]["方式"] == "霧化"
-    p = review.page_data(w)["進度"]
-    assert p["各類"]["刪除段落"] == {"已確認": 1, "總數": 3}          # 手動 1 筆＋建議 2 筆（還沒決定）
+    d = review.page_data(w)
+    # 10-01 第三批：還原的手動剪掉不列、不算筆數，收在「已還原」；只剩建議的 2 筆（還沒決定）
+    assert d["進度"]["各類"]["刪除段落"] == {"已確認": 0, "總數": 2}
+    assert [x["id"] for x in d["已還原"]] == ["D001"] and d["已還原"][0]["可以刪"]
 
 
 def test_progress_estimate():
@@ -237,7 +239,8 @@ def test_prep_and_cut_suggestions_mark_items_not_needed():
     assert [c["建議id"] for c in dec["刪除段落"]] == ["S2"] and dec["刪除建議"]["S1"]["決定"] == "不刪"
     d = review.page_data(w)
     cuts = [x for x in d["項目"] if x["類型"] == "刪除段落"]
-    assert len(cuts) == 2 and all(x["已確認"] for x in cuts)                   # 建議那一筆就代表刪除段落，不重複列
+    assert len(cuts) == 1 and all(x["已確認"] for x in cuts)                   # 建議那一筆就代表刪除段落，不重複列
+    assert [x["id"] for x in d["已還原"]] == ["S1"]                             # 10-01 第三批：選了不剪的收到「已還原」
     review.decide_cut_suggestion(w, "S2", "不刪")
     assert review.load_decisions(w)["刪除段落"][0]["狀態"] == "還原"
     # 刪除 40–72 秒：學員1 的段落、69.6 秒的重疊都落在裡面 → 不用處理
@@ -601,6 +604,99 @@ def test_export_with_manual_teacher_line():
     with zipfile.ZipFile(r["檔案"]) as z:
         res = json.loads(z.read("覆核結果.json").decode("utf-8"))
     assert any(str(x["候選"]).startswith("NM") for x in res["名字處理"]), res["名字處理"]
+
+
+def test_overlap_student_gen_slot_is_whole_student_sentence():
+    """10-01 第三批：重疊選「生成學員聲音」、不在學員段落裡 → 時間格＝學員那一整句（以前只換重疊那一小段）；
+    卡片上寫會換掉哪幾秒、裡面老師的話怎樣；人改過的範圍照人改的。"""
+    from bookclub import finalcheck, students
+
+    w = _fresh()
+    oid = review.manual_edit(w, {"類型": "重疊", "start": 165.0, "end": 165.5})["id"]   # 藏在老師段落裡的學員那一句（164.0–167.6）
+    oid = review.load_decisions(w)["人工重疊"][0]["id"]
+    review.save_overlap(w, oid, {"做法": "只留學員", "學員說話者": "學員2", "學員文字": "這是藏起來的學員發言", "已確認": True})
+    items, _ = students.build_items(w)
+    mine = [it for it in items if it.get("重疊") == oid]
+    assert len(mine) == 1 and mine[0]["slot"] == [164.0, 167.6], mine
+    card = next(x for x in review.page_data(w)["項目"] if x["id"] == oid)
+    g = card["生成範圍"]
+    assert (g["start"], g["end"], g["來源"]) == (164.0, 167.6, "學員整句") and g["老師"] == [] and g["疊到"] == []
+    # 卡片上改大到老師那一句裡：照填的；老師那一句一部分在範圍外會寫出來
+    review.save_overlap(w, oid, {"學員起訖": [163.0, 167.6]})
+    g = next(x for x in review.page_data(w)["項目"] if x["id"] == oid)["生成範圍"]
+    assert g["來源"] == "你改過的範圍" and g["start"] == 163.0
+    assert len(g["老師"]) == 1 and g["老師"][0]["start"] == 160.0 and g["老師"][0]["範圍外"] == [[160.0, 163.0]]
+    assert [it["slot"] for it in students.build_items(w)[0] if it.get("重疊") == oid] == [[163.0, 167.6]]
+    # 第 5 步改範圍改的是這個範圍（不是重疊本身）
+    idx = review.item_index(w)
+    t = finalcheck.retime_target({"類型": "學員重念", "原片": [163.0, 167.6], "覆核項目": [f"學員段落:{oid}"]}, idx)
+    assert t["可以"] and t["方式"] == "學員起訖" and (t["start"], t["end"]) == (163.0, 167.6), t
+    review.save_overlap(w, oid, {"回到預設範圍": True})
+    g = next(x for x in review.page_data(w)["項目"] if x["id"] == oid)["生成範圍"]
+    assert (g["start"], g["end"], g["來源"]) == (164.0, 167.6, "學員整句")
+    # 選回別的做法：沒有生成範圍
+    review.save_overlap(w, oid, {"做法": "不用改"})
+    assert next(x for x in review.page_data(w)["項目"] if x["id"] == oid)["生成範圍"] is None
+
+
+def test_student_gen_slot_respects_shrunk_old_retime():
+    """舊資料：以前用「改時間」改過重疊的起訖（改過的起訖）。改小的照改的、不自動放大；改大或跟原本一樣的照預設（學員整句）。"""
+    sents = [{"start": 10.0, "end": 14.0, "text": "學員的一整句", "label": "不是老師"}]
+    orig = [11.0, 11.5]
+    base = {"原本起訖": orig}
+    whole = review.student_gen_slot({"start": 11.0, "end": 11.5}, {}, sents, [])
+    assert (whole["start"], whole["end"], whole["來源"]) == (10.0, 14.0, "學員整句")
+    same = review.student_gen_slot({"start": 11.0, "end": 11.5, **base}, {}, sents, [])     # 打開改時間、沒改就存
+    assert (same["start"], same["end"]) == (10.0, 14.0)
+    wider = review.student_gen_slot({"start": 10.8, "end": 12.2, **base}, {}, sents, [])    # 改大（第一堂 01:17:24 那一筆）
+    assert (wider["start"], wider["end"]) == (10.0, 14.0)
+    beyond = review.student_gen_slot({"start": 9.0, "end": 12.0, **base}, {}, sents, [])    # 改大到整句外面：包住改的
+    assert (beyond["start"], beyond["end"]) == (9.0, 14.0)
+    shrunk = review.student_gen_slot({"start": 11.1, "end": 11.5, **base}, {}, sents, [])   # 改小：照改的
+    assert (shrunk["start"], shrunk["end"], shrunk["來源"]) == (11.1, 11.5, "你改小的重疊時間")
+    mine = review.student_gen_slot({"start": 11.0, "end": 11.5}, {"學員起訖": [10.5, 12.0]}, sents, [])
+    assert (mine["start"], mine["end"], mine["來源"]) == (10.5, 12.0, "你改過的範圍")
+
+
+def test_restored_hidden_and_manual_items_deletable():
+    """10-01 第三批：還原的剪掉、消音不列在清單、不算筆數（收在「已還原」，救得回來）；人工新增的可以刪、留紀錄。"""
+    w = _fresh()
+    cut = review.manual_edit(w, {"類型": "刪除段落", "start": 31.3, "end": 35.9})["id"]
+    mute = review.manual_edit(w, {"類型": "局部消音", "start": 44.5, "end": 46.5})["id"]
+    ov = review.manual_edit(w, {"類型": "重疊", "start": 80.2, "end": 81.0})["id"]
+    nm = review.add_teacher_item(w, 112.1, 115.5, "老師的話")
+    review.save_name(w, nm, {"改稿": "老師改過的話"})
+    d = review.page_data(w)
+    n0 = len(d["項目"])
+    assert all(next(x for x in d["項目"] if x["id"] == i)["可以刪"] for i in (cut, mute, ov, nm))
+    assert not any(x.get("可以刪") for x in d["項目"] if x["類型"] == "刪除段落" and x["來源"] == "建議")
+    review.save_cut(w, {"id": cut, "狀態": "還原"})
+    review.save_mute(w, {"id": mute, "狀態": "還原"})
+    review.decide_cut_suggestion(w, "S1", "不刪")
+    d = review.page_data(w)
+    assert len(d["項目"]) == n0 - 3 and {x["id"] for x in d["已還原"]} == {cut, mute, "S1"}
+    assert d["進度"]["總數"] == len(d["項目"])
+    review.save_cut(w, {"id": cut, "狀態": "刪除"})                       # 救回
+    assert any(x["id"] == cut for x in review.page_data(w)["項目"])
+    for kind, i in (("刪除段落", cut), ("局部消音", mute), ("重疊", ov), ("名字", nm)):
+        r = review.delete_manual(w, kind, i, who="測試")
+        assert r["已刪除"]["id"] == i and r["已刪除"]["誰"] == "測試" and r["已刪除"]["start"] is not None
+    dec = review.load_decisions(w)
+    assert [x["id"] for x in dec["已刪除"]] == [cut, mute, ov, nm] and all(x["刪除時間"] for x in dec["已刪除"])
+    assert dec["已刪除"][3]["決定"]["改稿"] == "老師改過的話"                 # 卡片上的決定一起收進紀錄
+    assert not dec["人工名字"] and not dec["人工重疊"] and not dec["局部消音"]
+    import json
+    assert nm not in json.loads((w / "名字覆核決定.json").read_text(encoding="utf-8"))
+    d = review.page_data(w)
+    assert not any(x["id"] in (cut, mute, ov, nm) for x in d["項目"] + d["已還原"]) and len(d["已刪除"]) == 4
+    review.decide_cut_suggestion(w, "S2", "刪除")
+    sid = next(c["id"] for c in review.load_decisions(w)["刪除段落"] if c.get("建議id") == "S2")
+    for kind, i in (("刪除段落", sid), ("學員段落", "T003"), ("名字", "1")):
+        try:
+            review.delete_manual(w, kind, i)
+            raise AssertionError(f"{kind} {i} 不該能刪")
+        except (ValueError, KeyError):
+            pass
 
 
 if __name__ == "__main__":

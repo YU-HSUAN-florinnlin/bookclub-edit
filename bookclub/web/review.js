@@ -590,6 +590,7 @@ function rvRenderCard() {
         ${it["類型"] === "名字" ? `<button class="${rvNotName(it) ? "primary" : "ghost"}" id="rv-notname" aria-pressed="${rvNotName(it)}" title="抓錯了，這裡其實沒有人名：照原音不改，這個寫法以後也不會再抓（已選的再按一次取消）">${rvNotName(it) ? "✓ " : ""}${it["老師整段"] ? "不用改，保留老師原聲" : "不是名字，不用改"}</button>` : ""}
         ${it["類型"] === "學員段落" ? `<button class="ghost" id="rv-isteacher" title="聲音辨識判錯：這一段其實是老師在講話">這段其實是老師</button>` : ""}
         ${it["類型"] === "改成老師" ? `<button class="ghost" id="rv-tai" title="這一段用老師的 AI 聲音照打的字重念（例如裡面有名字）">改成老師 AI 重念</button>` : ""}
+        ${it["可以刪"] ? `<button class="ghost" id="rv-del" title="人工新增的加錯了：整筆刪掉（會留一筆紀錄，在「設定」看得到）">刪掉這一筆</button>` : ""}
         <span class="spacer"></span>
         <button class="ghost" id="rv-prev" aria-label="上一筆">上一筆</button>
         <button class="ghost" id="rv-next" aria-label="下一筆">下一筆</button>
@@ -599,7 +600,16 @@ function rvRenderCard() {
   document.getElementById("rv-pass").addEventListener("click", () => rvPass());
   document.getElementById("rv-change").addEventListener("click", rvToggleMore);
   const retime = document.getElementById("rv-retime");
-  if (retime) retime.addEventListener("click", () => rvOpenEditor(it));
+  if (retime) retime.addEventListener("click", () => {
+    // 10-01 第三批：重疊選生成學員聲音（自己生成）：要改的是「會換掉的範圍」，打開改做法裡的那一格
+    if (it["類型"] === "重疊" && it["生成範圍"] && rvChosen(it) === "只留學員") {
+      if (!rv.open) rvToggleMore();
+      const box = document.getElementById("rv-genbox");
+      if (box) { box.scrollIntoView({ block: "nearest" }); const f = box.querySelector("input"); if (f) f.focus({ preventScroll: true }); }
+      return;
+    }
+    rvOpenEditor(it);
+  });
   const notName = document.getElementById("rv-notname");
   if (notName) notName.addEventListener("click", async () => {
     const off = rvNotName(it);
@@ -643,6 +653,8 @@ function rvRenderCard() {
     try { await apiPost("/api/review/manual", { "類型": "學員發言", start: it.start, end: it.end, "說話者": "老師" }); } catch (err) { alert(err.message); return; }
     await rvReload();
   });
+  const del = document.getElementById("rv-del");
+  if (del) del.addEventListener("click", () => rvDeleteManual(it));
   document.getElementById("rv-prev").addEventListener("click", () => rvStep(-1));
   document.getElementById("rv-next").addEventListener("click", () => rvStep(1));
   rvBindBody(it);
@@ -713,6 +725,42 @@ function rvSidesHtml(it) {   // 10-01 B 方案：兩邊各自的起訖＋兩列�
       ${rvTimeRows("sd", [["老師起訖:0", "老師 起點", T[0]], ["老師起訖:1", "老師 終點", T[1]], ["學員起訖:0", "學員 起點", S[0]], ["學員起訖:1", "學員 終點", S[1]]])}</div>`;
 }
 
+// 10-01 第三批：重疊選「生成學員聲音」、不在學員段落裡：寫清楚會換掉哪幾秒、這幾秒裡老師的話會怎樣
+const RV_GEN_SRC = { "學員整句": "學員那一整句", "你改過的範圍": "你改過的範圍", "你改小的重疊時間": "照你之前改小的重疊時間" };
+
+function rvGenNoteHtml(it) {
+  const g = it["生成範圍"];
+  if (!g) return "";
+  const who = it["學員已選"] ? rvWho(it["學員說話者"]) : "選的那位學員";
+  const short = (s) => (s.length > 40 ? `${s.slice(0, 40)}⋯` : s);
+  let html = `<p class="rv-note rv-gennote"><b>會換掉 ${esc(rvFmt(g.start, 1))}–${esc(rvFmt(g.end, 1))}</b>（${(g.end - g.start).toFixed(1)} 秒，${esc(RV_GEN_SRC[g["來源"]] || "")}）：
+    這幾秒整段換成${esc(who)}的生成聲音，<b>裡面老師的聲音都不保留</b>。</p>`;
+  const ts = g["老師"] || [];
+  if (!ts.length) {
+    html += `<p class="rv-meta">這幾秒裡沒有整句是老師的話；重疊那一小段老師的聲音${it["老師文字"] ? `（${esc(short(it["老師文字"]))}）` : ""}會跟著不見。</p>`;
+  }
+  for (const s of ts) {
+    const outs = s["範圍外"] || [];
+    html += outs.length
+      ? `<p class="rv-warnline">老師 ${esc(rvFmt(s.start, 1))}–${esc(rvFmt(s.end, 1))} 這一句（${esc(short(s.text || ""))}）只有一部分在範圍裡：範圍裡的會不見，
+          範圍外的 ${outs.map((x) => `${esc(rvFmt(x[0], 1))}–${esc(rvFmt(x[1], 1))}`).join("、")} 照原聲留著，會聽到老師的話從中間斷掉或接上。
+          要整句都換掉：把範圍改大，或改選「生成老師聲音」。</p>`
+      : `<p class="rv-meta">老師 ${esc(rvFmt(s.start, 1))}–${esc(rvFmt(s.end, 1))} 這一句整句在範圍裡，會不見（${esc(short(s.text || ""))}）。</p>`;
+  }
+  if ((g["疊到"] || []).length) html += `<p class="rv-warnline">範圍跟${g["疊到"].map((n) => `〈${esc(n)}〉`).join("、")}疊到：組裝時比較長的那一筆優先，另一筆會被蓋掉。</p>`;
+  return html + `<p class="rv-meta">要改範圍：按「改時間」。</p>`;
+}
+
+function rvGenBoxHtml(it) {
+  const g = it["生成範圍"];
+  if (!g) return "";
+  return `<div class="rv-edrow"><b>會換掉的範圍</b><span class="rv-meta">${esc(RV_GEN_SRC[g["來源"]] || "")}</span>
+      <button class="ghost small" id="rv-genplay">播這一段</button>
+      ${g["來源"] !== "學員整句" ? `<button class="ghost small" id="rv-genreset">回到預設（學員那一整句）</button>` : ""}</div>
+    ${rvTimeRows("gs", [["0", "起點", g.start], ["1", "終點", g.end]])}
+    <p class="rv-meta">照你填的時間存，不會自動對齊。這段時間整段換成學員的生成聲音，裡面老師的聲音不保留。</p>`;
+}
+
 function rvMarkChanges(text, changes) {
   // 標出自動換成代號的字（位置是新文字裡的索引）
   let out = "", i = 0;
@@ -771,7 +819,8 @@ function rvBodyHtml(it) {
     const who = it["學員已選"] ? rvWho(it["學員說話者"]) : "學員（還沒選是誰）";   // 10-01 1-1：沒人選過不顯示猜的
     return `<dl class="rv-pair"><dt>老師</dt><dd>${esc(it["老師文字"] || "（聽不出來）")}</dd>
       <dt>${esc(who)}</dt><dd>${esc(it["學員文字"] || "（聽不出來）")}</dd></dl>
-      <p class="rv-meta">重疊 ${Number(it.length || it.end - it.start).toFixed(1)} 秒</p>`;
+      <p class="rv-meta">重疊 ${Number(it.length || it.end - it.start).toFixed(1)} 秒</p>
+      ${rvChosen(it) === "只留學員" && !it["涵蓋"] ? rvGenNoteHtml(it) : ""}`;
   }
   if (t === "刪除段落") {
     return `<p class="rv-quote">${esc(rvFmt(it.start, 1))} 到 ${esc(rvFmt(it.end, 1))}，共 ${(it.end - it.start).toFixed(1)} 秒剪掉：聲音和畫面都拿掉，影片會變短（只想拿掉聲音，改用消音）</p>
@@ -874,12 +923,13 @@ function rvMoreHtml(it) {
     const w = it["老師整句"];
     return `<div class="rv-field rv-choices">${rvRadios("rv-ovhow", hows, how, "rv-ovhow")}</div>
       <p class="rv-warnline" id="rv-keepwarn" ${how === "不用改" ? "" : "hidden"}>「不用改」會把這一小段的學員原聲留在成品：學員只是短短附和（嗯、對），或這位學員同意保留原聲才選這個。</p>
-      <p class="rv-meta">不用改＝照原樣。生成老師聲音＝老師這一整句用 AI 聲音重念，學員疊在上面的聲音跟著拿掉。生成學員聲音＝重疊落在學員段落裡時跟著整段重念；不在學員段落裡時，照下面「學員說的」、用選的那一位學員的聲線生成（一定要選學員是誰）。兩邊都重新生成（照原本的時間）＝學員那句用匿名聲線、老師那句用老師 AI 聲音，各自放回原本的時間，疊到的地方混在一起。消音＝這一小段靜音，老師的聲音跟著斷零點幾秒。</p>
+      <p class="rv-meta">不用改＝照原樣。生成老師聲音＝老師這一整句用 AI 聲音重念，學員疊在上面的聲音跟著拿掉。生成學員聲音＝重疊落在學員段落裡時跟著整段重念；不在學員段落裡時，照下面「學員說的」、用選的那一位學員的聲線生成（一定要選學員是誰），換掉學員那一整句的時間，裡面老師的聲音不保留。兩邊都重新生成（照原本的時間）＝學員那句用匿名聲線、老師那句用老師 AI 聲音，各自放回原本的時間，疊到的地方混在一起。消音＝這一小段靜音，老師的聲音跟著斷零點幾秒。</p>
       <div class="rv-field" id="rv-tsay-box" ${how === "只留老師" ? "" : "hidden"}>${w
         ? `<label>老師整句（${esc(rvFmt(w.start, 1))}–${esc(rvFmt(w.end, 1))}），會用老師的 AI 聲音重念這一句。重疊的地方逐字稿常常混到學員的話，請對照聲音改好：
             <textarea id="rv-tsay" rows="2">${esc(w["改稿"] || w["原文"])}</textarea></label>
             <span class="rv-meta" id="rv-tsay-st">${w["改稿"] ? RV_ST_EDITED : RV_ST_AUTO}</span>`
         : `<p class="rv-warnline">找不到這一處老師的句子，沒辦法重念；選了會照消音處理。</p>`}</div>
+      <div class="rv-field" id="rv-genbox" ${how === "只留學員" && it["生成範圍"] ? "" : "hidden"}>${rvGenBoxHtml(it)}</div>
       <div id="rv-sidesbox" ${how === "兩邊都重生成" ? "" : "hidden"}>${rvSidesHtml(it)}</div>
       <div class="rv-field rv-two"><label>老師說的<textarea id="rv-tt" rows="2">${esc(it["老師文字"])}</textarea></label>
         <label>學員說的（學員是誰 <select id="rv-ovwho">${whoOpts}</select>${guess}）<textarea id="rv-st" rows="2">${esc(it["學員文字"])}</textarea></label></div>
@@ -893,7 +943,8 @@ function rvMoreHtml(it) {
   const isCut = t === "刪除段落";
   const off = it["狀態"] === "還原";
   return `${isCut ? "" : `<div class="rv-field rv-choices">${rvRadios("rv-muteway", opts["消音"], it["方式"], "rv-muteway")}</div>`}
-    <div class="rv-field"><button class="ghost" id="rv-toggle">${off ? (isCut ? "改回剪掉" : "改回消音") : isCut ? "還原（不剪）" : "還原（不消音）"}</button></div>
+    <div class="rv-field"><button class="ghost" id="rv-toggle">${off ? (isCut ? "改回剪掉" : "改回消音") : isCut ? "還原（不剪）" : "還原（不消音）"}</button>
+      <span class="rv-meta">還原的會從清單收起來，放到「設定」→「已還原的」，要的話從那裡救回</span></div>
     <div class="rv-field"><input id="rv-note" placeholder="備註（選填）" value="${esc(it["備註"] || "")}"></div>`;
 }
 
@@ -910,7 +961,7 @@ function rvBindMore(it) {
   const cutThis = document.getElementById("rv-cutthis");   // 09-29 宇軒：改做法裡直接刪掉這一段
   if (cutThis) cutThis.addEventListener("click", async () => {
     const [a, b] = rvCutRange(it);
-    if (!confirm(`剪掉 ${rvFmt(a, 1)}–${rvFmt(b, 1)}？聲音和畫面都拿掉（影片會變短），這段就不用生成。\n只想拿掉聲音、畫面留著：用「新增修改」→ 消音。\n之後要救回：在清單找這筆「剪掉片段」改成「還原」。`)) return;
+    if (!confirm(`剪掉 ${rvFmt(a, 1)}–${rvFmt(b, 1)}？聲音和畫面都拿掉（影片會變短），這段就不用生成。\n只想拿掉聲音、畫面留著：用「新增修改」→ 消音。\n之後不剪了：在清單找這筆「剪掉片段」按「還原」。`)) return;
     await apiPost("/api/review/cut", { start: a, end: b, "備註": `從「${it["類型"]}」這一筆刪除` });
     await rvReload();
   });
@@ -960,12 +1011,31 @@ function rvBindMore(it) {
     q("rv-note").addEventListener("change", (e) => rvSaveName(it, { note: e.target.value }));
   } else if (t === "重疊") {
     document.querySelectorAll(".rv-ovhow").forEach((el) => el.addEventListener("change", async () => {
+      const was = rvChosen(it);
       q("rv-keepwarn").hidden = el.value !== "不用改";
       q("rv-sidesbox").hidden = el.value !== "兩邊都重生成";
       q("rv-tsay-box").hidden = el.value !== "只留老師";
       // 10-01：兩邊都重新生成只做「照原本的時間」（前後排開不做）
       await rvSaveOverlap(it, el.value === "兩邊都重生成" ? { "做法": el.value, "排法": "照原位置疊著" } : { "做法": el.value });
+      // 10-01 第三批：選了（或取消）生成學員聲音，會換掉的範圍要後端重算
+      if (el.value === "只留學員" || was === "只留學員") await rvReload();
     }));
+    if (q("rv-genbox") && it["生成範圍"]) {
+      const g = it["生成範圍"];
+      const cur = { 0: g.start, 1: g.end };
+      rvBindTimeRows("gs", (k) => cur[k], async (k, t) => {
+        cur[k] = t;
+        if (cur[1] - cur[0] < 0.1) { alert("結束要晚於開始"); return; }
+        await rvSaveOverlap(it, { "學員起訖": [cur[0], cur[1]] });
+        await rvReload();
+      });
+      q("rv-genplay")?.addEventListener("click", () => { rv.stopAt = g.end; rvSeek(g.start, true); });
+      q("rv-genreset")?.addEventListener("click", async () => {
+        if (!confirm("會換掉的範圍回到預設（學員那一整句）？")) return;
+        await rvSaveOverlap(it, { "回到預設範圍": true });
+        await rvReload();
+      });
+    }
     const tsay = q("rv-tsay");   // 09-30：選「生成老師聲音」時要重念的老師整句
     if (tsay) tsay.addEventListener("change", async () => {
       const txt = tsay.value.trim() === it["老師整句"]["原文"] ? "" : tsay.value.trim();
@@ -1038,6 +1108,20 @@ async function rvSaveOverlap(it, fields) {
     Object.assign(it, res["決定"]);
     rvRefreshSug();
   } catch (err) { alert(err.message); }
+}
+
+// 10-01 第三批：人工新增的（剪掉、消音、漏抓的重疊、漏抓的名字、老師這一段 AI 重念）加錯了可以刪；刪掉的留一筆紀錄
+function rvDeleteName(it) {
+  const t = it["類型"];
+  const label = t === "名字" && it["老師整段"] ? "老師這一段用 AI 重念" : t === "名字" ? "漏抓的老師提到名字" : t === "重疊" ? "漏抓的重疊"
+    : (RV_TYPE[t] || {}).label || t;
+  return `${label} ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)}`;
+}
+
+async function rvDeleteManual(it) {
+  if (!confirm(`刪掉這一筆人工新增的「${rvDeleteName(it)}」？\n刪掉之後清單裡不會再有它，成品也不會照它處理；會留一筆紀錄（在「設定」→「刪掉的紀錄」看得到），但不能救回，要的話重新新增。`)) return;
+  try { await apiPost("/api/review/delete", { "類型": it["類型"], id: it.id }); } catch (err) { alert(err.message); return; }
+  await rvReload();
 }
 
 function rvRefreshSug() {   // 改了做法：只更新建議框下面的「改成」那一行，不重畫整張卡（展開的選項保持開著）
@@ -1523,7 +1607,8 @@ function rvAlignLine(it) {   // 「你標的 → 對齊後」（人工新增、�
   const m = it["標的起訖"];
   if (!m) return "";
   const ok = it["對齊"] || [];
-  const note = ok[0] && ok[1] ? `對齊${it["對齊到"] || ""}` : !ok[0] && !ok[1] ? "沒對齊，保留你標的時間" : `${ok[0] ? "終點" : "起點"}沒對齊`;
+  const note = it["對齊到"] === "照填的時間" ? "照你填的時間，沒有自動對齊"   // 10-01 第三批：第 5 步改的
+    : ok[0] && ok[1] ? `對齊${it["對齊到"] || ""}` : !ok[0] && !ok[1] ? "沒對齊，保留你標的時間" : `${ok[0] ? "終點" : "起點"}沒對齊`;
   return `<p class="rv-meta">你標的 ${esc(rvFmt(m[0], 2))}–${esc(rvFmt(m[1], 2))} → ${esc(rvFmt(it.start, 2))}–${esc(rvFmt(it.end, 2))}（${esc(note)}）</p>`;
 }
 
@@ -1732,7 +1817,22 @@ function rvEdSet(which, t) { teSet(rvEdCtx, which, t); }
 function rvRenderSettings() {
   const el = document.getElementById("rv-settings");
   const list = rv.data["已自動跳過的重疊"] || [];
+  // 10-01 第三批：還原的剪掉、消音收在這裡（不在清單、不算筆數），可以救回；人工新增的也可以從這裡刪
+  const back = rv.data["已還原"] || [];
+  const gone = rv.data["已刪除"] || [];
+  const backName = (x) => `${x["類型"] === "刪除段落" ? "剪掉" : "消音"}${x["來源"] === "建議" ? `（影片分析建議的${x["建議類型"] ? "：" + x["建議類型"] : ""}）` : "（人工新增）"}`;
+  const dg = (x) => (x.end - x.start < 10 ? 1 : 0);
   el.innerHTML = `
+    <section><h3>已還原的（${back.length} 筆）</h3>
+      <p class="rv-meta">還原的剪掉、消音不會處理，也不算在清單的筆數裡。要再處理按「救回」，回到清單。</p>
+      ${back.length ? `<ul class="rv-skips">${back.map((x, i) => `<li><span class="tm">${esc(rvFmt(x.start, dg(x)))}–${esc(rvFmt(x.end, dg(x)))}</span>
+        ${esc(backName(x))}　${(x.end - x.start).toFixed(1)} 秒
+        <button class="ghost small rv-segplay" data-t="${x.start}">試聽</button> <button class="ghost small rv-unrestore" data-i="${i}">救回</button>
+        ${x["可以刪"] ? `<button class="ghost small rv-backdel" data-i="${i}">刪掉</button>` : ""}</li>`).join("")}</ul>` : `<p class="rv-meta">沒有。</p>`}</section>
+    <section><h3>刪掉的紀錄（${gone.length} 筆）</h3>
+      <p class="rv-meta">人工新增、後來按「刪掉」的。只是紀錄，不會處理。</p>
+      ${gone.length ? `<ul class="rv-skips">${gone.map((x) => `<li>${esc(x["名稱"] || x["類型"])}（${esc(rvFmt(x.start, 1))}–${esc(rvFmt(x.end, 1))}）
+        <span class="rv-meta">${esc(fmtStamp(x["刪除時間"]))} 刪的${x["誰"] ? `，${esc(x["誰"])}` : ""}</span></li>`).join("")}</ul>` : `<p class="rv-meta">沒有。</p>`}</section>
     <section><h3>學員聲音一鍵全部切換</h3>
       <button class="ghost small rv-voice-all" data-v="重新生成">全部重新生成</button>
       <button class="ghost small rv-voice-all" data-v="保留原聲">全部保留原聲</button>
@@ -1742,6 +1842,13 @@ function rvRenderSettings() {
       <ul class="rv-skips">${list.map((o) => `<li><span class="tm">${esc(rvFmt(o.start, 1))}</span> ${o.length.toFixed(2)} 秒　${esc(o["原因"] || "")}
         <button class="ghost small rv-segplay" data-t="${o.start - 2}">試聽</button> <button class="ghost small rv-rescue" data-id="${esc(o.id)}">救回</button></li>`).join("")}</ul></section>`;
   el.querySelectorAll(".rv-segplay").forEach((b) => b.addEventListener("click", () => rvSeek(Number(b.dataset.t), true)));
+  el.querySelectorAll(".rv-unrestore").forEach((b) => b.addEventListener("click", async () => {
+    const x = back[Number(b.dataset.i)];
+    if (x["來源"] === "建議") await apiPost("/api/review/cutsuggest", { id: x.id, "決定": "刪除" });
+    else await apiPost(x["類型"] === "刪除段落" ? "/api/review/cut" : "/api/review/mute", { id: x.id, "狀態": x["類型"] === "刪除段落" ? "刪除" : "消音" });
+    await rvReload();
+  }));
+  el.querySelectorAll(".rv-backdel").forEach((b) => b.addEventListener("click", () => rvDeleteManual(back[Number(b.dataset.i)])));
   el.querySelectorAll(".rv-rescue").forEach((b) => b.addEventListener("click", async () => {
     await apiPost("/api/review/overlap", { id: b.dataset.id, "救回": true }); await rvReload();
   }));

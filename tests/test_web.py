@@ -110,7 +110,9 @@ def test_no_promises_of_unbuilt_redo():
     # 09-30：第 5 步退回、第 4 步「從這裡開始」的說明要跟實際一致（一鍵只重做還沒做好；第 2 步參考音要選好）
     fc = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
-    assert "第 4 步會照這份清單只重做這幾筆" not in fc and "手動重做" in fc
+    # 10-01 第三批：一鍵只重做做好了；畫面上不再叫人照指令手動重做、也不出現指令
+    assert "手動重做" not in fc and "只重做退回的這幾筆" in fc and "只重做退回的這幾筆" in app
+    assert "bookclub gen" not in app and "<code>${esc(it[\"建議指令\"])}" not in app
     assert "能省掉的是第 2、3 步的人工" not in app and 'id="btnAutoCode"' in app
     skill = (REPO_ROOT / "skills" / "bookclub-edit" / "SKILL.md").read_text(encoding="utf-8")
     assert "0.1.1" not in skill and "總覽選影片" in skill

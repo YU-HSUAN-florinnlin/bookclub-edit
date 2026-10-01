@@ -161,7 +161,9 @@ function fcRenderTop() {
   ex.title = st["可以輸出"] ? "全部通過、整片看過 100%：可以輸出" : st["還不能輸出的原因"].join("；");
   const msg = document.getElementById("fc-msg");
   if (fc.data["輸出成品"]) msg.innerHTML = `<span class="badge done">已輸出</span> <code>${esc(fc.data["輸出成品"]["檔案"])}</code>（${esc(fmtStamp(fc.data["輸出成品"]["時間"]))}）`;
-  else if (fc.data["送回AI重做"]) msg.innerHTML = `已送回 AI 重做 ${fc.data["送回AI重做"]["項目"].length} 筆（${esc(fmtStamp(fc.data["送回AI重做"]["時間"]))}）：到第 4 步看清單重做。`;
+  else if (fc.data["重做中"]) msg.innerHTML = `第 4 步正在重做退回的 ${fc.data["重做中"]["項目"].length} 筆（或上次沒做完）：做完會重新組裝，這幾筆回到「還沒看」。`;
+  else if (fc.data["送回AI重做"]) msg.innerHTML = `已送回 AI 重做 ${fc.data["送回AI重做"]["項目"].length} 筆（${esc(fmtStamp(fc.data["送回AI重做"]["時間"]))}）：到 <a href="#step4">第 4 步</a> 按「只重做退回的這幾筆」。`;
+  else if (fc.data["重做過"]) msg.innerHTML = `上一次重做了 ${fc.data["重做過"]["項目"].length} 筆（${esc(fmtStamp(fc.data["重做過"]["時間"]))}）：清單上標「重做過」的要重新看。`;
   else if (!st["可以輸出"]) msg.innerHTML = `<span class="rv-meta">還不能輸出：${esc(st["還不能輸出的原因"].join("；"))}（最後一定要有人完整看過整支）</span>`;
   else msg.innerHTML = "";
 }
@@ -276,6 +278,7 @@ function fcRenderRight() {
         <button class="ghost small" data-ab="前">處理前</button><button class="ghost small" data-ab="後" ${p && p[0] != null ? "" : "disabled"}>處理後</button>
         <button class="ghost small" id="fc-ab-stop">停</button></div>` : ""}
       ${state ? `<div class="rv-statebox">${state}</div>` : ""}
+      ${fcRedoneHtml(r)}
       <div class="rv-actions">
         <button class="${r["結果"] === "通過" ? "primary on" : r["結果"] ? "ghost" : "primary"}" id="fc-pass" aria-pressed="${r["結果"] === "通過"}">${r["結果"] === "通過" ? "✓ 已通過（再按取消）" : "通過"}</button>
         <button class="ghost${r["結果"] === "退回重做" ? " on" : ""}" id="fc-redo" aria-pressed="${r["結果"] === "退回重做"}" aria-expanded="${fc.redoOpen}">${r["結果"] === "退回重做" ? "✓ 已退回重做（再按可改）" : "退回重做"}</button>
@@ -303,6 +306,17 @@ function fcRenderRight() {
   const undo = document.getElementById("fc-redo-undo");
   if (undo) undo.addEventListener("click", () => fcDecide(r, null));
   fcBindRetime(r);
+}
+
+// 10-01 第三批：第 4 步「只重做退回的」重做過的這一筆：看得出是重做過的新版本、上一次退回的原因
+function fcRedoneHtml(r) {
+  const x = r["重做過"];
+  if (!x) return "";
+  const what = x["做法"] === "重新生成"
+    ? (x["新版本"] === false ? "重新生成過，但聲音跟上一版一樣（文字和範圍沒改，生成的規則一樣）" : "這一版是重新生成的新聲音")
+    : "這一筆沒有聲音要重新生成，只重新組裝過";
+  return `<div class="rv-statebox"><span class="rv-tag">重做過</span> <span class="rv-meta">${esc(fmtStamp(x["時間"]))}：${esc(what)}。
+    上一次退回的原因：${esc(x["原因"] || "（沒寫）")}</span></div>`;
 }
 
 // ---------- 10-01 2-4：退回重做時直接調整這一筆的時間範圍（用第 3 步同一套起訖編輯器，存到第 3 步同一個地方） ----------
@@ -333,6 +347,17 @@ function fcRetimeHtml(r) {
       <div id="fc-retime"></div>${go}</div>`;
 }
 
+// 10-01 第三批 11：第 5 步改學員段落照填的時間、不對齊（以前對齊句子邊界，+0.1 秒這種小調整會被縮回）
+function fcRawTime(t) { return t["方式"] === "改時間" && t["類型"] === "學員發言"; }
+
+// 面板上的提醒跟實際行為一致（哪幾種對齊、哪幾種照填的時間，見回報的表）
+function fcRetimeHint(t) {
+  if (t["方式"] === "重念範圍") return "照你填的時間存，不會自動對齊；要包住名字，切點要自己聽準";
+  if (t["方式"] === "學員起訖") return "照你填的時間存，不會自動對齊；這段時間整段換成學員的生成聲音（裡面老師的聲音不保留），切點要自己聽準";
+  if (fcRawTime(t)) return "照你填的時間存，不會像第 3 步那樣自動對齊到句子的開頭、結尾，切點要自己聽準";
+  return `${rvRuleHint(t["類型"], t["老師整段"], true)}（跟第 3 步一樣）`;
+}
+
 function fcBindRetime(r) {
   const t = r["改範圍"] || {};
   const go = document.getElementById("fc-go3");
@@ -340,20 +365,23 @@ function fcBindRetime(r) {
     note: `從第 5 步成品檢查過來：${t["可以"] ? "改這一筆" : t["下一步"] || ""}` }));
   if (!t["可以"] || !document.getElementById("fc-retime")) return;
   const range = t["方式"] === "重念範圍";
+  const gen = t["方式"] === "學員起訖";   // 10-01 第三批：重疊的「生成學員聲音」會換掉的範圍
+  const raw = fcRawTime(t);              // 照填的時間、不對齊（見 fcRawTime）
   const before = [t.start, t.end];
   const ctx = {
     host: "fc-retime",
     st: { kind: t["類型"], id: t.id, a: t.start, b: t.end, busy: false, result: fc.retimeResult || null },
     o: {
       aria: "調整時間範圍",
-      head: () => `<span class="rv-meta">〈${esc(t["名稱"])}〉${range ? "的重念範圍" : ""}</span>`,
-      hint: () => (range ? "重念範圍照你填的時間（不自動對齊），要包住名字" : rvRuleHint(t["類型"], t["老師整段"], true)),
+      head: () => `<span class="rv-meta">〈${esc(t["名稱"])}〉${range ? "的重念範圍" : gen ? "會換成學員生成聲音的範圍" : ""}</span>`,
+      hint: () => fcRetimeHint(t),
       now: () => (fc.video ? Math.round(fcSrcTime(fc.video.currentTime) * 100) / 100 : null),
       nowLabel: "用影片目前位置（換成原片時間）",
       play: (a, b) => { fc.video.pause(); fc.audio.src = `/api/audio?start=${a.toFixed(2)}&end=${b.toFixed(2)}`; fc.audio.play().catch(() => {}); },
-      api: range ? "/api/review/name" : "/api/review/manual",
-      body: (st) => (range ? { id: t.id, "整句起訖": [st.a, st.b] } : { "類型": t["類型"], id: t.id, start: st.a, end: st.b }),
-      toResult: (res, st) => (range ? { "不對齊": true, start: st.a, end: st.b } : { ...res["對齊結果"], "新增": false }),
+      api: range ? "/api/review/name" : gen ? "/api/review/overlap" : "/api/review/manual",
+      body: (st) => (range ? { id: t.id, "整句起訖": [st.a, st.b] } : gen ? { id: t.id, "學員起訖": [st.a, st.b] }
+        : { "類型": t["類型"], id: t.id, start: st.a, end: st.b, ...(raw ? { "不對齊": true } : {}) }),
+      toResult: (res, st) => (range || gen ? { "不對齊": true, start: st.a, end: st.b } : { ...res["對齊結果"], "新增": false, ...(raw ? { "不對齊": true } : {}) }),
       saved: async (res, out) => {
         if (Math.abs(out.start - before[0]) < 0.01 && Math.abs(out.end - before[1]) < 0.01) {
           // 10-01 走查：對齊之後跟原本一樣，以前還是寫「範圍改了：A → A」、標成要重做
@@ -463,7 +491,7 @@ function fcRenderLower() {
   const rows = fcRecs().map((r) => `<li data-key="${esc(r["鍵"])}" class="${r["鍵"] === fc.cur ? "cur" : ""} ${r["結果"] ? "done" : ""}">
       <span class="tm">${fcHasTime(r) ? esc(fcFmt(r["成品"][0])) : "—"}</span>
       <span class="ty"><span class="rv-chip fc-${FC_TYPE[r["類型"]] || "ov"}"><i></i>${esc(fcKind(r["類型"]))}</span></span>
-      <span class="tx">${esc(r["做了什麼"])}</span>
+      <span class="tx">${r["重做過"] ? `<span class="rv-tag">重做過</span>` : ""}${esc(r["做了什麼"])}</span>
       <span class="sg">${esc((r["覆核名稱"] || []).join("、"))}</span>
       <span class="st ${r["結果"] === "通過" ? "ok" : ""}">${r["結果"] === "通過" ? "✓ 通過" : r["結果"] === "退回重做" ? "退回" : "—"}</span></li>`).join("");
   lower.innerHTML = `${unHtml}<h2 class="fc-h2">處理紀錄（${fcRecs().length} 筆，成品時間）</h2>
@@ -541,7 +569,7 @@ function fcStartWatchTracking() {
 
 async function fcSendBack() {
   const n = fc.data["狀態"]["退回數"];
-  if (!confirm(`把 ${n} 筆退回的送回 AI 重做？\n會寫進重做清單；「一鍵只重做這幾筆」還沒做好，目前要照第 4 步頁面每一筆的指令手動重做，再按「開始執行」重新組裝。`)) return;
+  if (!confirm(`把 ${n} 筆退回的送回 AI 重做？\n到第 4 步按「只重做退回的這幾筆」（或「開始執行」），會只重做這幾筆、再重新組裝。`)) return;
   try { await apiPost("/api/final/sendback", {}); } catch (e) { alert(e.message); return; }
   await fcReload();
 }

@@ -518,6 +518,140 @@ def test_analyze_keeps_elapsed_when_everything_reused():
     assert keep_elapsed_if_all_reused({"1_轉文字": 0.0, "總耗時": 0.1}, None)["總耗時"] == 0.1
 
 
+def _all_generated(w: Path) -> list[dict]:
+    """假的學員紀錄：每一段都生成好了，快取、聲音檔各一份（不載入模型）。"""
+    items, _ = students.build_items(w)
+    od = students.out_dir(w)
+    od.mkdir(parents=True, exist_ok=True)
+    cache, recs = {}, []
+    for it in items:
+        (od / f"{it['id']}_第1次.wav").write_bytes(b"RIFF")
+        cache[f"{it['id']}|1|42|1.0|{it['text']}|參考音#abc"] = {"seed": 42}
+        recs.append({"id": it["id"], "text": it["text"], "生成用文字": it["text"], "slot": it["slot"], "段落": it["段落"],
+                     "學員": it["學員"], "放回時間格": {"檔案": f"{it['id']}_放回時間格.wav"}})
+    wd.write_json(od / tts.ATTEMPT_CACHE, cache)
+    wd.write_json(students.log_path(w), {"句子": recs})
+    return items
+
+
+def test_redo_returned_regenerates_only_returned_then_step5_unseen():
+    """10-01 第三批：第 4 步一鍵只重做第 5 步退回的：退回的那一段清掉重新生成（舊檔搬走、別段不動），
+    剪掉這種沒有聲音要生成的只重新組裝；組裝一定重做；做完那幾筆在第 5 步回到還沒看、標重做過。"""
+    from bookclub import finalcheck, proclog
+
+    w = _fresh()
+    items = _all_generated(w)
+    target, other = items[0], items[1]
+    log = {"產生時間": "t1", "片段": None, "紀錄": [
+        {"類型": "學員重念", "原片": list(target["slot"]), "成品": list(target["slot"]), "做了什麼": "學員1 用女聲 AI 重念",
+         "檔案": "a.wav", "覆核項目": [f"學員段落:{target['段落']}"], "文字": target["text"]},
+        {"類型": "刪除", "原片": [0.0, 3.6], "成品": [0.0, 0.0], "做了什麼": "刪除 3.6 秒（聲音畫面一起刪）", "檔案": None,
+         "覆核項目": ["刪除段落:S1"]}]}
+    wd.write_json(proclog.log_path(w), log)
+    k1, k2 = (finalcheck.record_key(r) for r in log["紀錄"])
+    finalcheck.decide_record(w, k1, "退回重做", "念錯字")
+    finalcheck.decide_record(w, k2, "退回重做", "剪太多")
+    plan = finalcheck.redo_plan(w)
+    assert [e["做法"] for e in plan] == ["重新生成", "重新組裝"] and [u["id"] for u in plan[0]["生成"]] == [target["id"]]
+    regen, rendered = [], []
+
+    def stu(wk, ctx):   # 假的學員重念：紀錄裡沒有的才生成（跟真的生成程式同一個規則）
+        rec = wd.read_json(students.log_path(wk))
+        have = {r["id"] for r in rec["句子"]}
+        for it in students.build_items(wk)[0]:
+            if it["id"] not in have:
+                regen.append(it["id"])
+                rec["句子"].append({"id": it["id"], "text": it["text"], "slot": it["slot"], "放回時間格": {"檔案": "新.wav"}})
+        wd.write_json(students.log_path(wk), rec)
+
+    def render(wk, ctx):
+        rendered.append(1)
+        wd.write_json(proclog.log_path(wk), {**log, "產生時間": "t2", "紀錄": [{**log["紀錄"][0], "檔案": "b.wav"}, log["紀錄"][1]]})
+
+    def done_students(wk, ctx):
+        have = {r["id"] for r in wd.read_json(students.log_path(wk))["句子"]}
+        return all(it["id"] in have for it in students.build_items(wk)[0]), "假的"
+
+    runners = {"老師名字": lambda wk, c: None, "學員重念": stu, "保留原聲學員名字": lambda wk, c: None, "組裝": render}
+    checks = {"老師名字": lambda wk, c: (True, "假的"), "學員重念": done_students,
+              "保留原聲學員名字": lambda wk, c: (True, "假的"), "組裝": lambda wk, c: (True, "假的：成品比較新")}
+    prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, redo_returned=True, log=lambda s: None)
+    assert regen == [target["id"]] and rendered == [1]                    # 只重新生成退回的那一段；組裝一定重做
+    assert prog["步驟"]["組裝"]["狀態"] == "做完" and prog["步驟"]["老師名字"]["狀態"] == "跳過"
+    od = students.out_dir(w)
+    assert not (od / f"{target['id']}_第1次.wav").exists() and (od / f"{other['id']}_第1次.wav").exists()
+    assert list(od.glob(f"重做前_*/{target['id']}_第1次.wav"))             # 舊的聲音檔搬到備份，沒有刪
+    cache = wd.read_json(od / tts.ATTEMPT_CACHE)
+    assert not any(k.startswith(target["id"] + "|") for k in cache) and any(k.startswith(other["id"] + "|") for k in cache)
+    chk = wd.read_json(finalcheck.check_path(w))
+    assert k1 not in chk["逐筆"] and k2 not in chk["逐筆"] and "重做中" not in chk and len(chk["重做過"]["項目"]) == 2
+    d = finalcheck.page_data(w)
+    got = {r["鍵"]: r["重做過"] for r in d["紀錄"]}
+    assert got[k1]["做法"] == "重新生成" and got[k1]["新版本"] is True and got[k1]["原因"] == "念錯字"
+    assert got[k2]["做法"] == "重新組裝" and got[k2]["新版本"] is False
+    assert all(r["結果"] is None for r in d["紀錄"]) and not finalcheck.redo_list(w)["項目"]
+    # 沒有退回的時候照常（不清任何東西、組裝做過就跳過）
+    prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, redo_returned=True, log=lambda s: None)
+    assert prog["步驟"]["組裝"]["狀態"] == "跳過" and rendered == [1]
+
+
+def test_redo_stopped_midway_finishes_on_next_run():
+    """重做到一半按停止：清掉的那幾句下次接著生成；下一次組裝做完一樣收尾（回到還沒看）。"""
+    from bookclub import finalcheck, proclog
+
+    w = _fresh()
+    items = _all_generated(w)
+    log = {"產生時間": "t1", "片段": None, "紀錄": [
+        {"類型": "學員重念", "原片": list(items[0]["slot"]), "成品": list(items[0]["slot"]), "做了什麼": "x",
+         "檔案": "a.wav", "覆核項目": [f"學員段落:{items[0]['段落']}"], "文字": "y"}]}
+    wd.write_json(proclog.log_path(w), log)
+    k1 = finalcheck.record_key(log["紀錄"][0])
+    finalcheck.decide_record(w, k1, "退回重做", "念錯字")
+    calls: list = []
+    runners, checks = _fake(calls, {"失敗": "學員重念"})
+    try:
+        execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, redo_returned=True, log=lambda s: None)
+        raise AssertionError("應該失敗")
+    except RuntimeError:
+        pass
+    assert wd.read_json(finalcheck.check_path(w))["重做中"]["項目"][0]["鍵"] == k1
+    runners, checks = _fake(calls)
+    execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, log=lambda s: None)   # 一般的開始執行
+    chk = wd.read_json(finalcheck.check_path(w))
+    assert "重做中" not in chk and k1 not in chk["逐筆"] and chk["重做過"]["項目"][0]["鍵"] == k1
+
+
+def test_redo_planner_opens_only_cleared_voice():
+    """分開程式跑（一步一支程式）：清掉一段之後，學員重念只開那一個聲線的生成、停頓、收尾。"""
+    from bookclub import finalcheck
+
+    w = _fresh()
+    voices = _DATA / "聲線"
+    voices.mkdir(exist_ok=True)
+    made = []
+    for sex in ("男", "女"):
+        for ext, data in ((".wav", b"RIFF"), (".txt", "假的".encode())):
+            f = voices / f"{sex}聲_暫定{ext}"
+            f.write_bytes(data)
+            made.append(f)
+    try:
+        ctx = {"範圍": [0.0, 180.0], "輸出做法": ["sw"], "標記": "0-3"}
+        groups = students.voice_groups(w, 0.0, 180.0, log=lambda s: None)
+        items, _ = students.build_items(w)
+        ref = {it["id"]: next(g["參考音"] for g in groups if it["學員"] in g["學員"]) for it in items}
+        wd.write_json(students.log_path(w), {"句子": [
+            {"id": it["id"], "text": it["text"], "生成用文字": it["text"], "slot": it["slot"], "參考音": ref[it["id"]],
+             "參考音指紋": tts.ref_fingerprint(ref[it["id"]]), "放回時間格": {"檔案": "y.wav"}} for it in items]})
+        assert execute._plan_students(w, ctx) == []
+        finalcheck.clear_generated(w, "學員", [items[0]["id"]], "2026-10-01T23:00:00")
+        parts = execute._plan_students(w, ctx)
+        assert [a[1] for _, a in parts] == ["生成", "停頓", "收尾"] and parts[0][1][3] == ref[items[0]["id"]]
+        assert "（1 段）" in parts[0][0]
+    finally:
+        for f in made:
+            f.unlink()
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

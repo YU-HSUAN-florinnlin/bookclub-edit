@@ -812,7 +812,8 @@ class BookclubServer(ThreadingHTTPServer):
             with contextlib.redirect_stdout(tee):
                 prog = run_execute(self.workdir, start=parse_time(opts["start"]) if opts.get("start") else None,
                                    end=parse_time(opts["end"]) if opts.get("end") else None,
-                                   methods=opts.get("methods") or None, skip_precheck=True)
+                                   methods=opts.get("methods") or None, skip_precheck=True,
+                                   redo_returned=True)   # 10-01 第三批：第 5 步退回的一起重做（沒有退回的就照常）
             with self.run_lock:
                 self.exec_state["stopped"] = bool((prog or {}).get("停止"))
         except Exception as e:  # noqa: BLE001 — 背景執行緒要把失敗記下來給網頁看
@@ -1222,6 +1223,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, rv.save_cut(server.workdir, body))
             elif path == "/api/review/mute":
                 self._send_json(200, rv.save_mute(server.workdir, body))
+            elif path == "/api/review/delete":   # 10-01 第三批：人工新增的加錯了可以直接刪（留紀錄）
+                self._send_json(200, rv.delete_manual(server.workdir, str(body["類型"]), str(body["id"])))
             elif path == "/api/review/manual":
                 self._send_json(200, rv.manual_edit(server.workdir, body))
             elif path == "/api/review/voice":

@@ -291,7 +291,8 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
 def overlap_items(workdir: Path, turn_items: list[dict], spans: dict, kept: set, cuts: list, table: list,
                   lo: float, hi: float, only: list[str] | None) -> list[dict]:
     """重疊卡片要自己生成的學員那一句（10-01）：
-    - 選「生成學員聲音」、又不在任何學員重念的時間格裡 → 用卡片上「學員說的」、重疊的起訖
+    - 選「生成學員聲音」、又不在任何學員重念的時間格裡 → 用卡片上「學員說的」；時間格＝學員那一整句
+      （10-01 第三批：以前只換重疊那一小段，整句擠進去、前後還留學員原聲；見 `review.student_gen_slot`）
     - 選「兩邊都重新生成（照原本的時間）」→ 用「學員說的」、學員那邊的起訖，帶 `疊放`（組裝時跟老師那一句混在一起）
     沒選學員是誰、文字是空的，就不生成（覆核時擋通過、開始前總檢查會列出來；組裝時照消音）。"""
     from bookclub import review
@@ -305,7 +306,7 @@ def overlap_items(workdir: Path, turn_items: list[dict], spans: dict, kept: set,
         who = o["學員"]
         if who in kept or (only and o["id"] not in only):
             continue
-        a, b = o["學員起訖"] if stacked else (o["start"], o["end"])
+        a, b = o["學員起訖"] if stacked else o["學員生成起訖"]
         if b <= lo or a >= hi:
             continue
         a, b = clip_slot(max(a, lo), min(b, hi), cuts)

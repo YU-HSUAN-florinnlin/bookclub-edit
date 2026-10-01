@@ -203,6 +203,10 @@ def retime_target(rec: dict, index: dict) -> dict:
         info = editable(names[0]) if len(names) == 1 else None
         return yes(info) if info else no("對不到第 3 步的名字卡片", go)
     target = editable(first)
+    if kind == "學員重念" and target and target.get("學員生成"):
+        # 10-01 第三批：重疊選生成學員聲音（不在學員段落裡）：改的是「會換掉的範圍」（學員那一整句），不是重疊本身
+        a, b = target["學員生成"]
+        return yes(target, "學員起訖", a, b)
     if kind in ("學員重念", "局部消音", "刪除", "重疊") and target:
         if kind == "刪除":
             o = rec.get("原片") or [target["start"], target["end"]]
@@ -408,7 +412,8 @@ def page_data(workdir: str | Path) -> dict:
         recs.append({**r, "鍵": record_key(r), "結果": d.get("結果"), "原因": d.get("原因", ""),
                      "做了什麼": plain_ids(r.get("做了什麼") or "", index, workdir),
                      "覆核名稱": [review_name(index, k) for k in r.get("覆核項目") or []],
-                     "改範圍": tgt, "已改範圍": done})
+                     "改範圍": tgt, "已改範圍": done,
+                     "重做過": redone_info(r, check, log)})   # 10-01 第三批：上一次「只重做退回的」重做過的
     flags = label_items([dict(x) for x in check["整片退回"]], index)
     un = []
     for u in (log or {}).get("未登記的變動", []):
@@ -422,6 +427,8 @@ def page_data(workdir: str | Path) -> dict:
         "影片網址": "/api/final/video" if check["成品影片"] else None,
         "紀錄": recs, "未登記的變動": un, "整片退回": flags, "看過區段": check["看過區段"], "片段": plist,
         "送回AI重做": check.get("送回AI重做"), "輸出成品": check.get("輸出成品"),
+        "重做中": check.get("重做中"),   # 10-01 第三批：第 4 步正在（或上次沒做完）重做退回的
+        "重做過": check.get("重做過") if (check.get("重做過") or {}).get("處理紀錄產生時間") == (log or {}).get("產生時間") else None,
         "狀態": status(log, check),
     }
 
@@ -578,30 +585,221 @@ def redo_list(workdir: str | Path) -> dict:
         latest = {i["鍵"]: i for i in now}
         items = [{**i, **({"改範圍": latest[i["鍵"]]["改範圍"]} if latest.get(i["鍵"], {}).get("改範圍") else {})} for i in items]
     index = _index(workdir)
+    ctx = _redo_ctx(workdir) if items else {}
     for it in items:
         it["建議指令"] = suggest_command(workdir, it)
         it["做了什麼"] = plain_ids(it.get("做了什麼") or "", index, workdir)   # 10-01 走查：第 4 步也不露內部編號
+        # 10-01 第三批：按「開始執行」這一筆會怎麼重做（重新生成哪幾句，或只重新組裝）
+        it["生成"] = redo_units(it, ctx)
+        it["做法"] = "重新生成" if it["生成"] else "重新組裝"
+        it["說明"] = (f"重新生成這一筆的 {len(it['生成'])} 句聲音，再重新組裝" if it["生成"]
+                    else "只重新組裝：這一筆沒有聲音要重新生成；要改的地方先到第 3 步改好")
     label_items(items, index)
-    return {"已送回": bool(sent), "時間": (sent or {}).get("時間"), "項目": items}
+    doing = check.get("重做中")
+    return {"已送回": bool(sent), "時間": (sent or {}).get("時間"), "項目": items,
+            "重做中": bool(doing), "重做中時間": (doing or {}).get("時間")}
+
+
+# ---------- 10-01 第三批：第 4 步一鍵只重做退回的這幾筆 ----------
+#
+# 照 docs/之後要做.md「做法 B」（09-29 宇軒定的方向）：
+#   1. 每一筆退回用 `覆核項目`、原片時間找到要重新生成的那幾句（學員重念的那一段、老師重念的那一句、保留原聲學員的代號短句）
+#   2. 只清掉那幾句的生成紀錄與生成快取（舊的聲音檔搬到 `重做前_<時間>/`，不刪），其他的不動
+#   3. 走第 4 步原本的跑法（`execute.run_execute`，一步一支程式）：只有清掉的那幾句會重新生成，接著重新組裝
+#   4. 組裝做完：那幾筆在第 5 步回到「還沒看」，標「重做過」
+# 退回的原因目前只給人看、沒有交給生成程式（做法 B 第 3 步「把原因交給 AI」還沒做）；重新生成照原本的規則
+# 從種子 42 開始（`tts.next_attempt`），文字、範圍沒改的話，聲音很可能跟上一版一樣。
+
+REDO_FILE_DIR = "重做前"
+
+
+def _redo_ctx(workdir: Path) -> dict:
+    """要重新生成的東西現在排出來的樣子（不載入模型）：學員重念的每一段、老師重念的每一句、保留原聲學員的代號短句。"""
+    from bookclub import nameplan, students, studentnames
+
+    ctx = {"學員": [], "老師": [], "保留原聲學員": []}
+    try:
+        ctx["學員"], _ = students.build_items(workdir)
+    except FileNotFoundError:
+        pass
+    try:
+        if wd.read_json(wd.names_path(workdir), default=None):
+            ctx["老師"] = nameplan.compute_plan(workdir)["生成"]
+    except Exception:  # noqa: BLE001 — 排不出老師的計畫：老師那邊不重做
+        pass
+    try:
+        ctx["保留原聲學員"] = studentnames.plan(workdir)["生成"]
+    except Exception:  # noqa: BLE001
+        pass
+    return ctx
+
+
+def redo_units(it: dict, ctx: dict) -> list[dict]:
+    """一筆退回 → 要重新生成哪幾句（純函式）：[{角色, id, slot}]。沒有聲音要生成的（剪掉、消音、重疊標記、沒登記的變動⋯）回空的，只重新組裝。"""
+    kind = it.get("類型")
+    keys = it.get("覆核項目") or []
+    src = it.get("原片") or [None, None]
+    turns = {k.split(":", 1)[1] for k in keys if k.startswith("學員段落:")}
+    ovs = {k.split(":", 1)[1] for k in keys if k.startswith("重疊:")}
+    names = {k.split(":", 1)[1] for k in keys if k.startswith("名字:")}
+    stunames = {k.split(":", 1)[1] for k in keys if k.startswith("學員名字:")}
+
+    def same(slot, tol=0.05) -> bool:
+        return src[0] is not None and abs(slot[0] - src[0]) <= tol and abs(slot[1] - src[1]) <= tol
+
+    def near(slot, pad=1.0) -> bool:
+        return src[0] is not None and slot[0] - pad <= src[1] and src[0] <= slot[1] + pad
+
+    stu = [s for s in ctx["學員"] if s.get("段落") in turns or s.get("重疊") in turns | ovs]
+    tea = [g for g in ctx["老師"] if names & {str(c) for c in g.get("候選", [])} or ovs & set(g.get("重疊項目") or [])]
+    sn = [g for g in ctx["保留原聲學員"] if stunames & {str(c) for c in g.get("候選", [])}]
+    pick: list[tuple[str, dict]] = []
+    if kind == "學員重念":
+        hit = [s for s in stu if same(s["slot"])] or [s for s in stu if near(s["slot"], 0.0)]
+        pick = [("學員", s) for s in hit]
+    elif kind == "停格":   # 學員重念比時間格長、結尾停格：重做那一段（停格接在那一段的結尾）
+        hit = [s for s in stu if abs(s["slot"][1] - src[0]) <= 0.1] if src[0] is not None else []
+        pick = [("學員", s) for s in hit]
+    elif kind in ("名字整句換掉", "換聲音"):
+        hit = [g for g in ctx["老師"] if same(g["slot"])] or tea
+        pick = [("老師", g) for g in hit]
+    elif kind == "學員名字換代號":
+        pick = [("保留原聲學員", g) for g in sn]
+    elif it.get("來源") == "整片看":   # 整片看時標的：附近（前後 1 秒）跟這幾筆有關的那幾句
+        pick = [("學員", s) for s in stu if near(s["slot"])] + [("老師", g) for g in tea if near(g["slot"])] \
+            + [("保留原聲學員", g) for g in sn if near(g["slot"])]
+    out, seen = [], set()
+    for role, x in pick:
+        if (role, x["id"]) not in seen:
+            seen.add((role, x["id"]))
+            out.append({"角色": role, "id": x["id"], "slot": [round(x["slot"][0], 3), round(x["slot"][1], 3)]})
+    return out
+
+
+def _role_paths(workdir: Path, role: str) -> tuple[Path, Path]:
+    from bookclub import studentgen, students, tts
+
+    return {"老師": (tts.teacher_log_path(workdir), tts.teacher_out_dir(workdir)),
+            "學員": (students.log_path(workdir), students.out_dir(workdir)),
+            "保留原聲學員": (studentgen.log_path(workdir), studentgen.out_dir(workdir))}[role]
+
+
+def clear_generated(workdir: Path, role: str, ids: list[str], stamp: str) -> dict:
+    """清掉這幾句的生成結果，下一次第 4 步會重新生成（不動別句）：生成紀錄裡那幾句、`_嘗試快取.json` 裡那幾句每一次的結果、
+    `_停頓快取.json` 裡那幾句；舊的聲音檔（`<id>_*`）搬到 `重做前_<時間>/`（不刪，要比對可以聽）。回傳 {紀錄, 快取, 檔案} 各清了幾筆。"""
+    from bookclub import tts
+
+    log_path, od = _role_paths(workdir, role)
+    ids = set(ids)
+    n = {"紀錄": 0, "快取": 0, "檔案": 0}
+    rec = wd.read_json(log_path, default=None)
+    if rec and rec.get("句子"):
+        keep = [r for r in rec["句子"] if r.get("id") not in ids]
+        n["紀錄"] = len(rec["句子"]) - len(keep)
+        if n["紀錄"]:
+            wd.write_json(log_path, {**rec, "句子": keep})
+    for name in (tts.ATTEMPT_CACHE, tts.PAUSE_CACHE):
+        cache = wd.read_json(od / name, default=None)
+        if not cache:
+            continue
+        keep = {k: v for k, v in cache.items() if k.split("|", 1)[0] not in ids}
+        if len(keep) != len(cache):
+            n["快取"] += len(cache) - len(keep)
+            wd.write_json(od / name, keep)
+    if od.is_dir():
+        dst = od / f"{REDO_FILE_DIR}_{stamp.replace(':', '').replace('-', '')}"
+        for i in ids:
+            for f in od.glob(f"{i}_*"):
+                if f.is_file():
+                    dst.mkdir(parents=True, exist_ok=True)
+                    f.rename(dst / f.name)
+                    n["檔案"] += 1
+    return n
+
+
+def redo_plan(workdir: str | Path, a: float | None = None, b: float | None = None) -> list[dict]:
+    """第 4 步按「開始執行」時，退回的每一筆要怎麼重做（不寫檔）：
+    [{鍵, 來源, 類型, 原片, 覆核項目, 覆核名稱, 原因, 指紋, 做法（重新生成／重新組裝）, 生成[{角色, id, slot}], 說明}]。
+    a、b：這次執行的範圍，原片時間不在範圍裡的不算。"""
+    workdir = Path(workdir)
+    lst = redo_list(workdir)["項目"]
+    if not lst:
+        return []
+    _log, check = _current(workdir)
+    out = []
+    for it in lst:
+        o = it.get("原片")
+        if o and o[0] is not None and ((a is not None and o[1] < a) or (b is not None and o[0] > b)):
+            continue
+        e = {k: it.get(k) for k in ("鍵", "來源", "類型", "原片", "覆核項目", "覆核名稱", "原因", "生成", "做法", "說明")}
+        e["指紋"] = (check["逐筆"].get(it["鍵"]) or {}).get("指紋")
+        out.append(e)
+    return out
+
+
+def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = None,
+                 log=print) -> dict | None:
+    """第 4 步開始之前：把退回的那幾句清掉（見 clear_generated），記在 `覆核/成品檢查.json` 的 `重做中`。沒有退回的回傳 None。"""
+    workdir = Path(workdir)
+    plan = redo_plan(workdir, a, b)
+    if not plan:
+        return None
+    stamp = _now()
+    by_role: dict[str, list[str]] = {}
+    for e in plan:
+        for u in e["生成"]:
+            by_role.setdefault(u["角色"], []).append(u["id"])
+    cleared = {role: clear_generated(workdir, role, ids, stamp) for role, ids in by_role.items()}
+    with _lock:
+        _log, check = _current(workdir)
+        old = check.get("重做中") or {}
+        have = {e["鍵"] for e in plan}
+        check["重做中"] = {"時間": stamp, "項目": [e for e in old.get("項目", []) if e["鍵"] not in have] + plan}
+        _save(workdir, check)
+    n = sum(len(v) for v in by_role.values())
+    log(f"[AI 執行] 第 5 步退回的 {len(plan)} 筆：{n} 句清掉舊的、等一下重新生成；全部做完會重新組裝")
+    return {"項目": plan, "清掉": cleared}
+
+
+def finish_redo(workdir: str | Path) -> dict | None:
+    """組裝做完之後：`重做中` 的那幾筆在第 5 步回到「還沒看」，記成 `重做過`（第 5 步看得出是重做過的新版本）。"""
+    workdir = Path(workdir)
+    with _lock:
+        log, check = _current(workdir)
+        doing = check.pop("重做中", None)
+        if not doing:
+            return None
+        for e in doing["項目"]:
+            check["逐筆"].pop(e["鍵"], None)
+            check["未登記確認"].pop(e["鍵"], None)
+        check.pop("送回AI重做", None)
+        check["重做過"] = {"時間": _now(), "處理紀錄產生時間": (log or {}).get("產生時間"), "項目": doing["項目"]}
+        _save(workdir, check)
+    return check["重做過"]
+
+
+def redone_info(rec: dict, check: dict, log: dict | None) -> dict | None:
+    """這一筆是不是上一次「只重做退回的」重做過的（純函式）：同一個鍵，或對到同樣的第 3 步項目、時間也接近。"""
+    done = check.get("重做過")
+    if not done or done.get("處理紀錄產生時間") != (log or {}).get("產生時間"):
+        return None
+    key = record_key(rec)
+    keys = set(rec.get("覆核項目") or [])
+    o = rec.get("原片") or [None, None]
+    for e in done.get("項目", []):
+        eo = e.get("原片") or [None, None]
+        close = o[0] is not None and eo[0] is not None and eo[0] - 1.0 <= o[1] and o[0] <= eo[1] + 1.0
+        if e.get("鍵") == key or (keys & set(e.get("覆核項目") or []) and close):
+            return {"時間": done["時間"], "原因": e.get("原因", ""), "做法": e.get("做法"),
+                    "新版本": (record_print(rec) != e["指紋"]) if e.get("指紋") else None}
+    return None
 
 
 def suggest_command(workdir: Path, it: dict) -> str:
-    """每一筆退回要怎麼重做（09-29 宇軒：先給指令手動做；之後改一鍵只重做這幾筆，方向見 docs/之後要做.md）。
-
-    TODO（09-29）：真的只重做這幾筆，要（1）清掉那一段的生成快取（`生成/學員/_嘗試快取.json` 那一段、
-    `生成/老師紀錄.json` 那一句），不然重跑會沿用舊的結果；（2）把退回原因交給 AI（例如改稿子、換種子、改停頓）；
-    （3）重跑 `render video` 同一個範圍。宇軒本機同時在改 tts／students／render，等那邊定案再串。"""
-    if it.get("改範圍"):   # 10-01 2-4：範圍改過了，第 4 步的「做過沒有」會看出這一筆的時間格變了
-        return f"（範圍已經改了：第 4 步按「開始執行」會{it['改範圍'].get('重做') or '重新組裝'}，其他做好的不重做）"
-    stu = sorted({k.split(":", 1)[1] for k in it.get("覆核項目", []) if k.startswith("學員段落:")})
-    names = sorted({k.split(":", 1)[1] for k in it.get("覆核項目", []) if k.startswith("名字:")})
-    w = str(workdir)
-    if stu:
-        return f"bookclub gen students {w} --only {','.join(stu)}"
-    if names:
-        nums = [n for n in names if n.isdigit()]
-        return f"bookclub gen names {w} --only {','.join(nums)}" if nums else f"bookclub gen names {w}"
-    return "（這一筆要人看原因決定怎麼改，例如回第 3 步調整刪除段落或重疊的做法）"
+    """終端機（`bookclub redo list`）上給的指令。10-01 第三批：一鍵只重做做好了，一律給 `run execute --redo-returned`
+    （以前給 `gen students --only`、`gen names --only`：文字、範圍沒改的話什麼都不會重做；`gen names --only` 還會把
+    名字處理計畫整份換成只有那幾筆，下一次組裝只換那幾個名字）。"""
+    return f"bookclub run execute {workdir} --redo-returned"
 
 
 def clip(workdir: str | Path, which: str, key: str) -> Path:

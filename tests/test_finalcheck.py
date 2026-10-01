@@ -153,7 +153,9 @@ def test_save_flow_sendback_and_export():
     saved = wd.read_json(fc.check_path(w))
     assert [x["原因"] for x in saved["送回AI重做"]["項目"]] == ["第二句念錯", "聲音突然變小"]
     lst = fc.redo_list(w)
-    assert lst["已送回"] and lst["項目"][0]["建議指令"].startswith("bookclub gen students") and "T003" in lst["項目"][0]["建議指令"]
+    # 10-01 第三批：一鍵只重做：終端機的指令是 run execute --redo-returned；每一筆寫按下去會怎麼重做
+    assert lst["已送回"] and lst["項目"][0]["建議指令"].endswith("--redo-returned")
+    assert lst["項目"][0]["做法"] == "重新組裝" and lst["項目"][0]["說明"]   # 假工作區沒有學員段落可以重新生成
     # 還不能輸出：有退回、沒看完
     try:
         fc.export_final(w)
@@ -245,7 +247,7 @@ def test_retime_saved_with_redo_and_step4_told():
     rec = next(r for r in fc.page_data(w)["紀錄"] if r["鍵"] == k1)
     assert rec["已改範圍"]["改成"] == [10.0, 20.0]
     item = fc.redo_list(w)["項目"][0]
-    assert item["改範圍"]["改成"] == [10.0, 20.0] and "開始執行" in item["建議指令"] and "T003" not in item["建議指令"]
+    assert item["改範圍"]["改成"] == [10.0, 20.0] and "T003" not in item["建議指令"] and "T003" not in item["說明"]
     assert item["覆核名稱"] and "T003" not in "".join(item["覆核名稱"])
     fc.decide_record(w, k1, "通過")                    # 改成通過：改範圍的紀錄拿掉
     assert "改範圍" not in wd.read_json(fc.check_path(w))["逐筆"][k1]
@@ -274,6 +276,26 @@ def test_redo_list_includes_items_after_sendback():
     fc.decide_record(w, k2, "退回重做", "送回之後才退回")
     lst = fc.redo_list(w)
     assert [x["原因"] for x in lst["項目"]] == ["第一句", "送回之後才退回"], lst["項目"]
+
+
+def test_redo_units_per_kind():
+    """10-01 第三批：每一種退回要重新生成哪幾句（純函式）；剪掉、消音、沒登記的變動只重新組裝。"""
+    ctx = {"學員": [{"id": "T003_01", "段落": "T003", "slot": [10.0, 18.0]}, {"id": "T003_02", "段落": "T003", "slot": [18.4, 26.0]},
+                   {"id": "O80.00_學員", "段落": "O80.00", "重疊": "O80.00", "slot": [79.0, 82.0]}],
+           "老師": [{"id": "S002", "候選": [2], "slot": [75.0, 78.0]}, {"id": "V0009000", "候選": [], "重疊項目": ["O90.00"], "slot": [89.0, 92.0]}],
+           "保留原聲學員": [{"id": "SS3", "候選": ["3"], "slot": [150.0, 151.0]}]}
+    ids = lambda it: [u["id"] for u in fc.redo_units(it, ctx)]  # noqa: E731
+    assert ids({"類型": "學員重念", "原片": [18.4, 26.0], "覆核項目": ["學員段落:T003"]}) == ["T003_02"]
+    assert ids({"類型": "學員重念", "原片": [79.0, 82.0], "覆核項目": ["學員段落:O80.00"]}) == ["O80.00_學員"]
+    assert ids({"類型": "停格", "原片": [18.0, 18.0], "覆核項目": ["學員段落:T003"]}) == ["T003_01"]
+    assert ids({"類型": "名字整句換掉", "原片": [75.0, 78.0], "覆核項目": ["名字:2"]}) == ["S002"]
+    assert ids({"類型": "名字整句換掉", "原片": [74.0, 78.0], "覆核項目": ["名字:2"]}) == ["S002"]     # 範圍改過：照名字找
+    assert ids({"類型": "名字整句換掉", "原片": [89.0, 92.0], "覆核項目": ["重疊:O90.00"]}) == ["V0009000"]
+    assert ids({"類型": "學員名字換代號", "原片": [150.0, 151.0], "覆核項目": ["學員名字:3"]}) == ["SS3"]
+    assert ids({"來源": "整片看", "類型": "整片看時標的", "原片": [19.0, 19.0], "覆核項目": ["學員段落:T003"]}) == ["T003_01", "T003_02"]
+    for kind, keys in (("刪除", ["刪除段落:S1"]), ("局部消音", ["局部消音:M001"]), ("名字消音", ["名字:1"]),
+                       ("沒登記的變動", []), ("重疊", ["重疊:O80.00"])):
+        assert ids({"類型": kind, "原片": [10.0, 12.0], "覆核項目": keys}) == [], kind
 
 
 if __name__ == "__main__":

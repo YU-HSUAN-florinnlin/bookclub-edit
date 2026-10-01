@@ -322,6 +322,7 @@ async function renderExecuteBody() {
   const rows = execStepRows(d);
   const running = d.running;
   const redo = d["退回清單"] || [];
+  const execBlocked = running || !pre["可以開始"] || (fc && (!fc["可以開始"] || !fc["看過"]));
   contentEl.innerHTML = `
     <h1>4　AI 執行</h1>
     <p class="muted">依序跑四步：老師提到名字 → 學員重念 → 保留原聲學員講到名字 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
@@ -359,11 +360,21 @@ async function renderExecuteBody() {
       <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
     </div>
     ${redo.length ? `<h2>第 5 步退回重做的（${redo.length} 筆）</h2>
-      <div class="card"><p class="muted">在第 5 步改了時間範圍的，按「開始執行」就會只重做那一筆、再重新組裝。其他的「一鍵只重做這幾筆」還沒做好：要照下面的指令，在終端機一筆一筆重做，再按「開始執行」重新組裝。</p>
-      <table class="kv">${redo.map((it) => `<tr><td>${esc(it["類型"])}　${esc((it["覆核名稱"] || []).join("、") || "—")}</td>
-        <td>${esc(it["原因"])}${it["改範圍"] ? `<div class="muted">範圍改了${it["改範圍"]["原本"] ? `：${esc(fmtRange(it["改範圍"]["原本"]))} → ${esc(fmtRange(it["改範圍"]["改成"]))}` : ""}（存在第 3 步〈${esc(it["改範圍"]["名稱"] || "")}〉）；按「開始執行」會${esc(it["改範圍"]["重做"] || "重新組裝")}</div>`
-          : `<div class="muted"><code>${esc(it["建議指令"])}</code></div>`}</td></tr>`).join("")}</table></div>` : ""}`;
+      <div class="card"><p class="muted">按「開始執行」或下面這顆，會只重做退回的這幾筆：要重新生成的那幾句先清掉、重新生成（其他做好的不重做），最後重新組裝。
+        做完到第 5 步，這幾筆會回到「還沒看」、標「重做過」。${d["重做中"] ? "<b>上次重做還沒做完</b>，再按一次會接著做。" : ""}</p>
+      <p><button id="btnRedo" ${execBlocked ? "disabled" : ""}>只重做退回的這幾筆（${redo.length} 筆）</button>
+        ${execBlocked && !running ? `<span class="muted">要先能按「開始執行」（見上面）</span>` : ""}</p>
+      <table class="kv">${redo.map((it, i) => `<tr><td>${esc(it["類型"])}　${esc((it["覆核名稱"] || []).join("、") || "—")}</td>
+        <td>${esc(it["原因"])}${it["改範圍"] ? `<div class="muted">範圍改了${it["改範圍"]["原本"] ? `：${esc(fmtRange(it["改範圍"]["原本"]))} → ${esc(fmtRange(it["改範圍"]["改成"]))}` : ""}（存在第 3 步〈${esc(it["改範圍"]["名稱"] || "")}〉）</div>` : ""}
+          <div class="muted">按下去會：${esc(it["說明"] || "")}</div></td></tr>`).join("")}</table></div>` : ""}`;
   bindFinalCheck(renderExecuteBody);
+  const redoBtn = document.getElementById("btnRedo");   // 10-01 第三批：只重做退回的（整支影片的範圍）
+  if (redoBtn) redoBtn.addEventListener("click", async () => {
+    if (!confirm(`只重做第 5 步退回的 ${redo.length} 筆，再重新組裝？\n要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。`)) return;
+    try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value] }, { quiet: true }); }
+    catch (e) { alert(`無法開始：${e.message}`); return; }
+    await renderExecuteBody();
+  });
   document.getElementById("btnExec").addEventListener("click", async () => {
     const body = { start: document.getElementById("exStart").value.trim() || null, end: document.getElementById("exEnd").value.trim() || null,
       methods: [document.getElementById("exMethod").value] };
