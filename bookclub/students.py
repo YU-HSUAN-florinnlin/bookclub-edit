@@ -664,5 +664,5 @@ def generate_students(
         return record
     data = save()
     st = data["統計"]
-    log(f"[學員聲音] 完成：{st['段數']} 段，{st['要人聽']} 段要人聽，平均倍數 {st['平均倍數']}。紀錄：{lp}")
+    log(f"[學員聲音] 完成：{st['段數']} 段，{st['要人聽']} 段要人聽，平均 1 秒聲音花 {st['平均倍數']} 秒生成。紀錄：{lp}")
     return data

@@ -540,6 +540,25 @@ def final_check(workdir: str | Path) -> dict:
             nm, k = gen_name(g)
             row(look, f"長句:{g['id']}", g["slot"][0], g["slot"][1],
                 f"〈{nm}〉老師重念 {g['slot'][1] - g['slot'][0]:.1f} 秒（超過 {LONG_TEACHER_S:.0f} 秒）", name=nm, card=k)
+    # 10-02 第六批：老師重念範圍開頭或結尾有一段沒有人講話 → 提醒＋建議範圍（不自動改，見 bookclub/silentedge.py）
+    try:
+        from bookclub import silentedge
+
+        edge = silentedge.hints(workdir, plan)
+    except Exception:  # noqa: BLE001 — 算不出來不擋總檢查
+        edge = {}
+    gens = {g.get("id"): g for g in plan["生成"]}
+    for h in edge.values():
+        g = gens.get(h["生成編號"])
+        if not g:
+            continue
+        nm, k = gen_name(g)
+        a, b = h["範圍"]
+        row(look, f"前後沒聲音:{h['生成編號']}", a, b,
+            f"〈{nm}〉老師重念 {t1(a)}–{t1(b)}：{h['說明']}。"
+            + ("按「照建議縮小」會把重念範圍改成建議的範圍（這一句要重新生成）" if h["可以縮"] else h["原因"]),
+            name=nm, card=k)
+        look[-1]["縮小"] = h
     if soft:
         row(look, "聲紋:段落是老師", soft[0]["start"], soft[-1]["end"],
             f"另外 {len(soft)} 句聲音特徵判斷不是老師、但整段的聲音判斷是老師（多半是誤判，例如冥想引導、老師壓低聲音）。"
@@ -552,6 +571,18 @@ def final_check(workdir: str | Path) -> dict:
                "要生成秒數": round(gen_s), "預估秒數": round(gen_s * GEN_SPEED + ASSEMBLE_S), "硬碟可用GB": round(free, 1),
                "記憶體": memory_status(),   # 10-02 第五批：開始前就提醒記憶體偏滿
                "提醒": "執行期間關掉其他程式（Zoom、瀏覽器分頁）；接上電源、筆電不要闔上（螢幕可以關）"}
+    # 10-02 第六批：已經組裝過的話，每一列附上成品時間（還沒有成品時只列原片）
+    try:
+        from bookclub import timemap
+
+        tm = timemap.load(workdir)
+    except Exception:  # noqa: BLE001
+        tm = None
+    if tm:
+        for r in must + look:
+            oa, ob = timemap.to_output(r["start"], tm), timemap.to_output(r["end"], tm)
+            if oa is not None or ob is not None:
+                r["成品起訖"] = [round(oa if oa is not None else ob, 3), round(ob if ob is not None else oa, 3)]
     left = [r for r in must if not r.get("已按聽過")]
     seen, new_keys = seen_state(dec.get("總檢查") or {}, look, dec)
     for r in look:

@@ -1,0 +1,648 @@
+"""安全查詢指令 `bookclub inspect <工作區> <主題>`（10-02 第六批）。
+
+為什麼要有：AI 助手查工作區狀態時，自己讀 JSON 沒濾乾淨，兩天內四次把逐字稿、名字、退回原因印到工具輸出
+（其中一次含學員身心狀況的字眼）。靠提醒擋不住，改成從工具下手：這支指令只印時間、編號、數字、狀態。
+
+做法是「白名單」：
+- 數字、是／否：照印（時間欄位印成 0:42:59.8）
+- 字串只有三種會印出值：
+  1. 欄位在 `ENUM_KEYS`，而且值在 `VOCAB`（程式自己定的固定說法，例如 通過、補靜音、整句換掉）
+  2. 欄位在 `ID_KEYS`，而且值長得像編號（T003、00_012、名字:3、學員重念@10.00⋯⋯，見 `safe_id`）
+  3. 欄位在 `SPEAKER_KEYS`，而且值是「老師」或「學員N」這種代號（是本名的話照樣遮掉）
+  另外 `STAMP_KEYS` 的值是「2026-10-02T18:34:00」這種時間戳才印
+- 其他字串一律只印 `<文字 87 字>`／`<空>`，不印內容；不認得的新欄位也一樣（不是用黑名單濾已知的文字欄位）
+- 清單只印數字清單與編號清單，其他印 `<清單 N 筆>`；巢狀的物件印 `<N 個欄位>`，不展開（鍵可能是本名）
+
+這支指令不寫任何檔：算總檢查、前後沒聲音時會用到跟網頁一樣的函式，那幾個函式偶爾會順手整理存檔，
+這裡執行期間把 `workdir.write_json` 換成不寫的版本。
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from collections import Counter
+from contextlib import contextmanager
+from pathlib import Path
+
+from bookclub import timemap
+from bookclub import workdir as wd
+
+# ---------- 白名單 ----------
+
+VOCAB = {
+    # 處理類型（處理紀錄、剪輯決策、第 3 步卡片）
+    "學員重念", "名字整句換掉", "名字消音", "局部消音", "學員名字消音", "學員名字換代號", "刪除", "停格", "換聲音", "消音",
+    "模糊示範", "重疊", "名字要人處理", "整片看時標的", "沒登記的變動", "學員段落", "名字", "刪除段落", "改成老師", "學員名字",
+    # 建議刪除的類型
+    "開頭空白", "結尾道別", "直播互動", "小組討論前後", "技術問題",
+    # 做法、排法、方式、聲音
+    "不用改", "兩邊都重生成", "只留老師", "只留老師原聲學員消音", "只留學員", "兩邊都不留", "生成老師聲音", "生成學員聲音",
+    "兩邊都重新生成", "前後排開", "照原位置疊著", "整句換掉", "只換名字", "直接消音", "換成代號", "墊底噪", "霧化",
+    "重新生成", "保留原聲", "不是名字", "是地名", "切點削到旁邊的字",
+    # 狀態、結果
+    "等待", "進行中", "做完", "跳過", "略過", "失敗", "中斷", "停止", "還原", "通過", "退回重做", "沒問題", "不刪",
+    # 放回時間格
+    "補靜音", "微調語速", "標紅", "插入停頓", "改語速重生成", "拉長",
+    # 內容類型、說話者判斷、信心
+    "冥想引導", "導讀", "講解", "提問與回應", "學員分享", "其他", "老師", "學員", "不是老師", "不確定", "太短",
+    "高", "中", "低", "人工", "精確", "A1", "A2", "句首", "句中", "句尾", "句首句尾", "雙邊乾淨", "單邊乾淨", "都不乾淨",
+    "男", "女", "建議稿", "校對稿", "逐筆", "整片看", "人工新增", "建議", "手動", "聲紋", "文字：冥想引導", "文字：導讀",
+    "安靜處", "逐字稿的字", "句子邊界", "照填的時間", "逐字",
+    # 段落外的答案
+    "老師不用處理", "老師重念", "還是學員", "好幾個人",
+    # 總檢查的列
+    "段落是老師",
+    # 前後沒聲音（第六批）
+    "重念範圍", "老師整段", "老師起訖",
+}
+ENUM_KEYS = {"狀態", "類型", "做法", "排法", "放回做法", "版本", "建議做法", "結果", "方式", "內容類型", "信心", "label", "role",
+             "文字判斷", "聲音判斷", "比對層級", "位置", "切點信心", "聲線", "角色", "文字來源", "來源", "判斷依據", "建議類型",
+             "決定", "對齊到", "答案", "段落外答案", "tags", "聲音", "改法", "範圍類型"}
+ID_KEYS = {"id", "鍵", "key", "段落", "sentence_id", "區域", "候選", "覆核項目", "句子", "重疊項目", "生成編號", "建議id",
+           "來源段落", "edit", "第3步", "生成", "聽過", "編號"}
+SPEAKER_KEYS = {"說話者", "學員", "學員說話者", "文字學員編號", "學員猜的"}
+STAMP_KEYS = {"更新時間", "建立時間", "時間", "產生時間", "開始", "結束", "看過時間", "處理紀錄產生時間", "開始時間", "結束時間",
+              "重做時間"}
+TIME_KEYS = {"start", "end", "slot", "原片", "成品", "at", "標的起訖", "改過的起訖", "整句起訖", "老師起訖", "學員起訖",
+             "原本起訖", "src", "成品秒", "原片秒", "範圍", "句子外面", "段落外起訖", "建議", "原本", "改成", "前後"}
+
+ID_PREFIXES = VOCAB | {"段落外", "剪掉", "名字消音", "長句", "字太少", "聲紋", "前後沒聲音", "學員段落", "名字", "重疊",
+                       "刪除段落", "局部消音", "改成老師", "學員名字"}
+_ID_BODY = r"(?:[A-Za-z]{0,4}\d+(?:[._m]\d+)*|\d+\.\d+)"
+_ID_RE = re.compile(rf"^{_ID_BODY}$")
+_SPK_RE = re.compile(r"^(老師|學員\d+|學員\?)$")
+_STAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T[\d:.]+)?$")
+_VOICE_RE = re.compile(r"^(男|女)\d{1,2}$")
+
+
+def safe_id(s: str) -> bool:
+    """編號長得像編號才印：T003、00_012、V0542232、O69.60、NM001、12；或「前綴:編號」「類型@秒數」，
+    前綴只能是程式自己的固定說法（ID_PREFIXES），中間可以有好幾段（段落外:T003:123.4）。"""
+    if not isinstance(s, str) or not s or len(s) > 40:
+        return False
+    if _ID_RE.match(s):
+        return True
+    parts = re.split(r"[:@#]", s)
+    if len(parts) < 2 or parts[0] not in ID_PREFIXES:
+        return False
+    return all(_ID_RE.match(p) or p in VOCAB for p in parts[1:])
+
+
+def mask(s) -> str:
+    s = str(s)
+    return "<空>" if not s.strip() else f"<文字 {len(s)} 字>"
+
+
+def _num(v: float) -> str:
+    return str(v) if isinstance(v, int) else f"{v:.3f}".rstrip("0").rstrip(".")
+
+
+def val(key: str, v) -> str:
+    """一個欄位的值 → 可以印的字（白名單，見檔案開頭）。"""
+    k = key.split(".")[-1]
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return "是" if v else "否"
+    if isinstance(v, (int, float)):
+        return timemap.t1(v) if k in TIME_KEYS else _num(v)
+    if isinstance(v, str):
+        if k in ENUM_KEYS and v in VOCAB:
+            return v
+        if k in ENUM_KEYS and k == "聲線" and _VOICE_RE.match(v):
+            return v
+        if k in ID_KEYS and safe_id(v):
+            return v
+        if k in SPEAKER_KEYS and _SPK_RE.match(v):
+            return v
+        if k in STAMP_KEYS and _STAMP_RE.match(v):
+            return v
+        return mask(v)
+    if isinstance(v, (list, tuple)):
+        if not v:
+            return "[]"
+        if all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v):
+            if len(v) > 6:
+                return f"<數字 {len(v)} 個>"
+            if k in TIME_KEYS and len(v) == 2:
+                return f"{timemap.t1(v[0])}–{timemap.t1(v[1])}"
+            return "[" + ", ".join(val(k, x) for x in v) + "]"
+        if all(isinstance(x, str) for x in v) and k in (ID_KEYS | ENUM_KEYS | SPEAKER_KEYS):
+            shown = [val(k, x) for x in v[:10]]
+            return "[" + ", ".join(shown) + (f", ⋯共 {len(v)} 個" if len(v) > 10 else "") + "]"
+        return f"<清單 {len(v)} 筆>"
+    if isinstance(v, dict):
+        return f"<{len(v)} 個欄位>"
+    return mask(v)
+
+
+def flat(d: dict, prefix: str) -> dict:
+    """巢狀物件的第一層攤開成「prefix.欄位」（決定、放回時間格這種固定格式的物件）。"""
+    return {f"{prefix}.{k}": v for k, v in (d or {}).items()} if isinstance(d, dict) else {prefix: d}
+
+
+def fmt_row(row: dict, first: tuple = ()) -> str:
+    keys = [k for k in first if k in row] + [k for k in row if k not in first]
+    return "  ".join(f"{k}={val(k, row[k])}" for k in keys)
+
+
+# ---------- 篩選 ----------
+
+def _row_range(row: dict) -> tuple[float, float] | None:
+    for a, b in (("start", "end"),):
+        if isinstance(row.get(a), (int, float)) and isinstance(row.get(b), (int, float)):
+            return float(row[a]), float(row[b])
+    for k in ("slot", "原片", "範圍"):
+        v = row.get(k)
+        if isinstance(v, (list, tuple)) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
+            return float(v[0]), float(v[1])
+    if isinstance(row.get("at"), (int, float)):
+        return float(row["at"]), float(row["at"])
+    return None
+
+
+class Filter:
+    def __init__(self, a: float | None = None, b: float | None = None, ids: list[str] | None = None):
+        self.a, self.b, self.ids = a, b, [x for x in (ids or []) if x]
+
+    def ok(self, row: dict) -> bool:
+        if self.ids:
+            got = {str(row.get(k)) for k in ("id", "鍵", "key", "段落", "生成編號") if row.get(k) is not None}
+            got |= {str(x) for x in row.get("覆核項目") or []}
+            if not any(i == g or g.endswith(":" + i) or g.startswith(i) for i in self.ids for g in got):
+                return False
+        if self.a is None and self.b is None:
+            return True
+        r = _row_range(row)
+        if r is None:
+            return False
+        lo = self.a if self.a is not None else -1e18
+        hi = self.b if self.b is not None else 1e18
+        return r[0] <= hi and lo <= r[1]
+
+
+# ---------- 不寫檔 ----------
+
+@contextmanager
+def read_only():
+    """這支指令執行期間 `workdir.write_json` 不寫檔（算總檢查時呼叫的函式偶爾會順手整理存檔）。"""
+    orig = wd.write_json
+    wd.write_json = lambda path, data: None
+    try:
+        yield
+    finally:
+        wd.write_json = orig
+
+
+# ---------- 主題 ----------
+
+def _read(path: Path):
+    return wd.read_json(path, default=None)
+
+
+def topic_files(w: Path, f: Filter, out: list[str]) -> None:
+    """工作區有哪些資料檔（只列檔名、大小、修改時間）。"""
+    import datetime
+
+    names = ["transcript/merged.json", "說話者判斷.json", "重疊.json", "名字候選.json", "名字覆核決定.json", "分析結果.json",
+             "校對/段落.json", "校對/刪除建議.json", "覆核/覆核決定.json", "覆核/成品檢查.json", "生成/名字處理計畫.json",
+             "生成/老師紀錄.json", "生成/學員紀錄.json", "生成/保留原聲學員紀錄.json", "生成/處理紀錄.json",
+             "生成/執行進度.json", "生成/子程式紀錄.jsonl", "生成/剪輯決策.json", "參考音/底噪.json"]
+    for n in names:
+        p = w / n
+        if p.is_file():
+            st = p.stat()
+            out.append(f"{n}  {st.st_size} 位元組  改於 {datetime.datetime.fromtimestamp(st.st_mtime):%Y-%m-%d %H:%M:%S}")
+        else:
+            out.append(f"{n}  沒有")
+    outd = w / "輸出"
+    if outd.is_dir():
+        for p in sorted(outd.glob("剪輯決策_*.json")):
+            out.append(f"輸出/{p.name}  {p.stat().st_size} 位元組")
+
+
+def topic_turns(w: Path, f: Filter, out: list[str]) -> None:
+    data = _read(w / "校對" / "段落.json") or {}
+    rows = [t for t in data.get("段落", []) if f.ok(t)]
+    out.append(f"段落 {len(data.get('段落', []))} 段（符合條件 {len(rows)} 段）")
+    for t in rows:
+        out.append(fmt_row(t, ("id", "start", "end", "說話者", "內容類型", "已確認")))
+    people = data.get("學員") or {}
+    if people and not f.ids and f.a is None and f.b is None:
+        out.append("學員：")
+        for k, p in people.items():
+            name = k if _SPK_RE.match(str(k)) else mask(k)
+            out.append(f"  {name}  " + fmt_row(p if isinstance(p, dict) else {"值": p}, ("秒數", "段數")))
+
+
+def topic_sentences(w: Path, f: Filter, out: list[str]) -> None:
+    data = _read(wd.speakers_path(w)) or {}
+    sents = data.get("sentences", [])
+    rows = [s for s in sents if f.ok(s)]
+    out.append(f"句子 {len(sents)} 句（符合條件 {len(rows)} 句）；各判斷句數：" +
+               "、".join(f"{val('label', k)} {n}" for k, n in Counter(s.get("label") for s in sents).items()))
+    for s in rows:
+        out.append(fmt_row(s, ("id", "start", "end", "label", "sim")))
+
+
+def topic_words(w: Path, f: Filter, out: list[str], limit: int) -> None:
+    """逐字稿的字：只印時間，不印字。"""
+    words = (_read(wd.merged_transcript_path(w)) or {}).get("words") or []
+    rows = [x for x in words if f.ok({"start": x.get("start"), "end": x.get("end")})]
+    out.append(f"字 {len(words)} 個（符合條件 {len(rows)} 個）")
+    if rows:
+        out.append(f"第一個字從 {timemap.t1(rows[0]['start'])} 開始，最後一個字到 {timemap.t1(rows[-1]['end'])}")
+        gaps = [(rows[i]["end"], rows[i + 1]["start"]) for i in range(len(rows) - 1) if rows[i + 1]["start"] - rows[i]["end"] >= 0.5]
+        if gaps:
+            out.append("字跟字之間空超過 0.5 秒的地方：" + "、".join(f"{timemap.t1(a)}–{timemap.t1(b)}（{b - a:.1f} 秒）" for a, b in gaps[:30]))
+    for i, x in enumerate(rows[:limit], 1):
+        out.append(f"#{i}  {timemap.t1(x['start'])}–{timemap.t1(x['end'])}  <字 {len(str(x.get('word', '')))} 個字元>")
+    if len(rows) > limit:
+        out.append(f"⋯另外 {len(rows) - limit} 個沒列（用 --limit 調）")
+
+
+def topic_overlaps(w: Path, f: Filter, out: list[str]) -> None:
+    from bookclub import review
+
+    ov = _read(wd.overlap_path(w)) or {"overlaps": []}
+    dec = review.load_decisions(w)
+    rows = review.effective_overlaps(w, ov.get("overlaps", []), dec)
+    out.append(f"重疊 {len(rows)} 處（含人工補的）")
+    for o in rows:
+        oid = review.overlap_id(o)
+        row = {"id": oid, **{k: v for k, v in o.items() if k not in ("id", "speakers")},
+               "角色": [s.get("role") for s in o.get("speakers", [])], **flat(dec["重疊"].get(oid, {}), "決定")}
+        if f.ok(row):
+            out.append(fmt_row(row, ("id", "start", "end", "length", "已自動跳過", "決定.做法", "決定.已確認")))
+
+
+def _name_rows(w: Path) -> list[dict]:
+    from bookclub import review
+
+    cands = (_read(wd.names_path(w)) or {}).get("candidates", [])
+    decisions = _read(review.name_decisions_path(w)) or {}
+    rows = []
+    for i, c in enumerate(review.effective_name_candidates(w, cands, decisions), start=1):
+        cid = str(c.get("id") or i)
+        row = {"id": cid, **{k: v for k, v in c.items() if k != "id"}, **flat(decisions.get(cid) or {}, "決定")}
+        rows.append(row)
+    return rows
+
+
+def topic_names(w: Path, f: Filter, out: list[str]) -> None:
+    rows = _name_rows(w)
+    out.append(f"名字候選 {len(rows)} 筆（含人工補的）")
+    for row in rows:
+        if f.ok(row):
+            out.append(fmt_row(row, ("id", "start", "end", "決定.做法", "決定.已確認", "決定.tags", "老師整段", "建議做法")))
+    plan = _read(w / "生成" / "名字處理計畫.json")
+    if plan:
+        out.append(f"名字處理計畫（上次排的）：生成 {len(plan.get('生成', []))} 段、消音 {len(plan.get('消音', []))} 段、"
+                   f"略過 {len(plan.get('略過', []))} 筆、要人處理 {len(plan.get('要人處理', []))} 筆")
+        for g in plan.get("生成", []):
+            row = {"生成編號": g.get("id"), **{k: v for k, v in g.items() if k != "id"}}
+            if f.ok(row):
+                out.append("  生成 " + fmt_row(row, ("生成編號", "slot", "候選", "重疊項目", "疊放")))
+
+
+def topic_cuts(w: Path, f: Filter, out: list[str]) -> None:
+    from bookclub import review
+
+    dec = review.load_decisions(w)
+    out.append(f"局部消音 {len(dec['局部消音'])} 筆")
+    for m in dec["局部消音"]:
+        if f.ok(m):
+            out.append(fmt_row(m, ("id", "start", "end", "方式", "狀態")))
+    out.append(f"剪掉（刪除段落） {len(dec['刪除段落'])} 筆")
+    for c in dec["刪除段落"]:
+        if f.ok(c):
+            out.append(fmt_row(c, ("id", "start", "end", "狀態", "建議id")))
+    sug = (_read(w / "校對" / "刪除建議.json") or {}).get("建議", [])
+    out.append(f"建議剪掉 {len(sug)} 筆")
+    for s in sug:
+        row = {**s, **flat(dec["刪除建議"].get(s.get("id"), {}), "決定")}
+        if f.ok(row):
+            out.append(fmt_row(row, ("id", "start", "end", "類型", "決定.決定")))
+
+
+def topic_final_check(w: Path, f: Filter, out: list[str]) -> None:
+    from bookclub import execute
+
+    fc = execute.final_check(w)
+    m = timemap.load(w)
+    out.append(f"一定要處理 {len(fc['一定要處理'])} 列（還要處理 {fc['還要處理']}、已確認 {fc['已確認']}）；"
+               f"請看一眼 {len(fc['請看一眼'])} 列；可以開始={val('', fc['可以開始'])}；我看過了={val('', fc['看過'])}；"
+               f"看過後新增 {fc['看過後新增']} 列")
+    for part in ("一定要處理", "請看一眼"):
+        for r in fc[part]:
+            row = {k: v for k, v in r.items() if k not in ("有學員聲音",)}
+            if f.ok(row):
+                both = timemap.both(r["start"], r["end"], m) if m else None
+                out.append(f"[{part}] " + fmt_row(row, ("key", "start", "end", "已按聽過", "新的", "第3步"))
+                           + (f"  （{both}）" if both else "") + (f"  有學員聲音的路 {len(r['有學員聲音'])} 條" if r.get("有學員聲音") else ""))
+    s = fc.get("摘要") or {}
+    out.append(f"摘要：自動算處理好 {len(s.get('自動算處理好') or [])} 筆、要生成 {s.get('要生成秒數')} 秒、預估 {s.get('預估秒數')} 秒、"
+               f"硬碟可用 {s.get('硬碟可用GB')} GB")
+
+
+def _gen_logs(w: Path) -> dict[str, Path]:
+    from bookclub import studentgen, students, tts
+
+    return {"老師": tts.teacher_log_path(w), "學員": students.log_path(w), "保留原聲": studentgen.log_path(w)}
+
+
+def topic_generation(w: Path, f: Filter, out: list[str], who: str | None) -> None:
+    from bookclub import studentgen, students, tts
+
+    dirs = {"老師": tts.teacher_out_dir(w), "學員": students.out_dir(w), "保留原聲": studentgen.out_dir(w)}
+    for role, path in _gen_logs(w).items():
+        if who and who != role:
+            continue
+        data = _read(path)
+        if not data:
+            out.append(f"【{role}】沒有生成紀錄")
+            continue
+        recs = data.get("句子", [])
+        st = data.get("統計") or {}
+        out.append(f"【{role}】{len(recs)} 句；統計：" + "  ".join(f"{k}={val(k, v)}" for k, v in st.items()))
+        versions = _read(dirs[role] / tts.REDO_VERSIONS) or {}
+        for r in recs:
+            row = {"id": r.get("id"), **{k: v for k, v in r.items() if k not in ("id", "嘗試", "放回時間格", "候選做法", "以前的版本")},
+                   **flat(r.get("放回時間格") or {}, "放回時間格")}
+            if not f.ok(row):
+                continue
+            out.append(fmt_row(row, ("id", "段落", "學員", "slot", "slot_s", "選定", "要人聽", "建議做法", "放回時間格.放回做法",
+                                     "放回時間格.差異比例", "第幾版")))
+            for a in r.get("嘗試") or []:
+                out.append("    嘗試 " + fmt_row(a, ("第幾次", "種子", "語速", "長度秒", "插入停頓後長度秒", "內容相似度", "內容通過",
+                                                    "長度通過", "聲紋相似度", "耗時秒")))
+            for v in r.get("以前的版本") or []:
+                out.append("    以前的版本 " + fmt_row({k: x for k, x in v.items() if k != "嘗試"}, ("第幾版", "種子", "試過的種子", "選定")))
+            ent = versions.get(str(r.get("id"))) if isinstance(versions, dict) else None
+            if isinstance(ent, dict):
+                out.append(f"    重新生成版本：避開的念法（種子）{val('種子', ent.get('避開') or [])}、以前的版本 {len(ent.get('以前的版本') or [])} 個")
+
+
+_PART_LABEL_RE = re.compile(r"^(老師聲音|學員聲音|保留原聲學員名字|組裝成品)(\s(男|女)\d{1,2}|\s學員\d+)?(：(生成|插入停頓|收尾|停頓)"
+                            r"(（(\d+ 段|\d+ 個聲線一起|\d+ 位一起)）)?)?$")
+
+
+def topic_parts(w: Path, f: Filter, out: list[str]) -> None:
+    from bookclub import execute
+
+    p = execute.part_log_path(w)
+    if not p.is_file():
+        out.append("沒有子程式紀錄")
+        return
+    lines = [x for x in p.read_text(encoding="utf-8").splitlines() if x.strip()]
+    out.append(f"子程式紀錄 {len(lines)} 支")
+    for i, line in enumerate(lines, 1):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            out.append(f"#{i}  （這一行讀不懂）")
+            continue
+        label = rec.get("名稱")
+        shown = label if isinstance(label, str) and _PART_LABEL_RE.match(label) else mask(label or "")
+        row = {k: v for k, v in rec.items() if k not in ("名稱", "參數")}
+        row["參數"] = f"<{len(rec.get('參數') or [])} 個>"
+        out.append(f"#{i}  名稱={shown}  " + "  ".join(f"{k}={v if k == '參數' else val(k, rec[k])}" for k, v in row.items()))
+
+
+def topic_finalcheck(w: Path, f: Filter, out: list[str], only_flagged: bool = False) -> None:
+    from bookclub import finalcheck, proclog
+
+    log = proclog.load(w)
+    if not log:
+        out.append("沒有處理紀錄（第 4 步還沒組裝）")
+        return
+    check = finalcheck.refresh(finalcheck.load_check(w), log)
+    st = finalcheck.status(log, check)
+    out.append(f"處理紀錄 {val('產生時間', log.get('產生時間'))}，範圍 {val('範圍', log.get('範圍'))}，"
+               f"片段 {len(log.get('片段') or [])} 段；成品影片 {mask(check.get('成品影片') or '')}")
+    out.append(f"逐筆 通過 {st['逐筆']['通過']}／退回 {st['逐筆']['退回']}／共 {st['逐筆']['總數']}；沒登記的變動 "
+               f"{st['未登記']['沒問題']}／{st['未登記']['總數']} 確認；看過 {st['看過比例'] * 100:.1f}%；可以輸出={val('', st['可以輸出'])}")
+    n_flag = 0
+    for r in log.get("紀錄", []):
+        d = check["逐筆"].get(finalcheck.record_key(r), {})
+        flagged = bool(r.get("要人聽"))
+        n_flag += flagged
+        if only_flagged and not flagged:
+            continue
+        row = {"鍵": finalcheck.record_key(r), "編號": r.get("編號"), "類型": r.get("類型"), "原片": r.get("原片"),
+               "成品": r.get("成品"), "覆核項目": r.get("覆核項目"), "要人聽": r.get("要人聽"), "動到聲音": r.get("動到聲音"),
+               "結果": d.get("結果"), "有原因": bool(d.get("原因")),
+               "改範圍.改成": (d.get("改範圍") or {}).get("改成")}
+        extra = {k: v for k, v in r.items() if k not in row and k not in ("做了什麼", "文字", "檔案")}
+        row.update(extra)
+        if f.ok(row):
+            out.append(fmt_row(row, ("編號", "鍵", "類型", "原片", "成品", "結果", "有原因", "要人聽")))
+    out.append(f"要人聽的 {n_flag} 筆")
+    for u in log.get("未登記的變動", []):
+        d = check["未登記確認"].get(finalcheck.unlogged_key(u), {})
+        row = {"鍵": finalcheck.unlogged_key(u), "原片": u.get("原片"), "長度秒": u.get("長度秒"), "結果": d.get("結果"),
+               "有原因": bool(d.get("原因"))}
+        if f.ok(row):
+            out.append("沒登記的變動 " + fmt_row(row))
+    for x in check.get("整片退回", []):
+        row = {"id": x.get("id"), "成品秒": x.get("成品秒"), "原片秒": x.get("原片秒"), "覆核項目": x.get("覆核項目"),
+               "有原因": bool(x.get("原因"))}
+        out.append("整片退回 " + fmt_row(row))
+
+
+WARN_KINDS = (("段落改過、舊的重念不用", ("舊的重念不用", "這一筆舊的重念不用")), ("時間格改過、還沒重新生成", ("時間格改過",)),
+              ("跟別筆重疊、被較長的蓋過", ("被較長的那筆蓋過",)), ("跟別筆重疊、以那一筆為準", ("以那一筆為準",)),
+              ("還沒生成", ("還沒生成",)), ("局部消音落在剪掉的地方", ("整段落在刪除段落裡",)))
+
+
+def warn_kind(text: str) -> str:
+    for name, keys in WARN_KINDS:
+        if any(k in str(text) for k in keys):
+            return name
+    return "其他"
+
+
+def topic_decisions(w: Path, f: Filter, out: list[str], tag: str | None) -> None:
+    outd = w / "輸出"
+    files = sorted(outd.glob("剪輯決策_*.json"), key=lambda p: p.stat().st_mtime, reverse=True) if outd.is_dir() else []
+    if tag:
+        path = outd / f"剪輯決策_{tag}.json"
+    elif files:
+        path = files[0]
+    else:
+        path = w / "生成" / "剪輯決策.json"
+    out.append("有的剪輯決策：" + ("、".join(p.stem.removeprefix("剪輯決策_") for p in files) or "（輸出/ 底下沒有）"))
+    d = _read(path)
+    if not d:
+        out.append(f"{path.name} 沒有")
+        return
+    out.append(f"讀的是 {path.relative_to(w)}；範圍 {val('範圍', d.get('範圍'))}")
+    acts = d.get("動作") or d.get("edits") or []
+    out.append("動作 " + str(len(acts)) + " 筆：" + "、".join(f"{val('類型', k)} {n}" for k, n in Counter(a.get("類型") for a in acts).items()))
+    for a in acts:
+        row = {k: v for k, v in a.items() if k not in ("text", "生成用文字", "轉回文字", "檔案", "來源檔案")}
+        if f.ok(row):
+            out.append("  動作 " + fmt_row(row, ("類型", "id", "start", "end", "放回做法", "要人聽", "加快", "停格秒", "疊放")))
+    cuts = d.get("刪除") or []
+    out.append(f"剪掉 {len(cuts)} 段：" + "、".join(val("範圍", c) for c in cuts[:40]))
+    fz = d.get("停格") or []
+    out.append(f"停格 {len(fz)} 個：" + "、".join(f"{timemap.t1(x.get('at'))}（{_num(x.get('dur', 0))} 秒）" for x in fz[:40]))
+    marks = d.get("標記") or []
+    out.append("標記 " + str(len(marks)) + " 筆：" + "、".join(f"{val('類型', k)} {n}" for k, n in Counter(m.get("類型") for m in marks).items()))
+    for m in marks:
+        row = {k: v for k, v in m.items() if k not in ("原因",)}
+        if f.ok(row):
+            out.append("  標記 " + fmt_row(row, ("類型", "id", "start", "end", "做法")))
+    warns = d.get("警告") or []
+    out.append("警告 " + str(len(warns)) + " 筆：" + ("、".join(f"{k} {n}" for k, n in Counter(warn_kind(x) for x in warns).items()) or "沒有"))
+    plist = d.get("片段")
+    if plist:
+        from bookclub.render import output_length
+
+        out.append(f"片段 {len(plist)} 段、成品長度 {timemap.t1(output_length(plist))}、停格合計 {sum(p.get('freeze', 0) for p in plist):.2f} 秒")
+
+
+def topic_convert(w: Path, out: list[str], src: list[float], dst: list[float], tag: str | None) -> None:
+    m = timemap.load(w, tag)
+    if not m:
+        out.append("沒有片段表（第 4 步還沒組裝，或找不到那一份剪輯決策）：還沒有成品時間")
+        return
+    plist = m.get("片段")
+    out.append(f"用的片段表：{m['來源']}；範圍 {val('範圍', m.get('範圍'))}；"
+               + ("只換聲音，成品時間＝原片時間" if plist is None else f"{len(plist)} 段、停格合計 {sum(p.get('freeze', 0) for p in plist):.2f} 秒"))
+    for t in src:
+        o = timemap.to_output(t, m)
+        out.append(f"原片 {timemap.t1(t)} → 成品 {timemap.t1(o) if o is not None else '（剪掉了或不在範圍裡）'}")
+    for t in dst:
+        s = timemap.to_source(t, m)
+        out.append(f"成品 {timemap.t1(t)} → 原片 {timemap.t1(s)}")
+
+
+def topic_silent_edges(w: Path, f: Filter, out: list[str]) -> None:
+    from bookclub import silentedge
+
+    hints = silentedge.hints(w)
+    out.append(f"老師重念範圍前後沒有人講話（超過 {silentedge.EDGE_SILENT_S} 秒）：{len(hints)} 筆")
+    for key, h in hints.items():
+        row = {"鍵": key, "生成編號": h["生成編號"], "slot": h["範圍"], "前面沒聲音秒": h["前"], "後面沒聲音秒": h["後"],
+               "建議": h["建議"], "可以縮": h["可以縮"], "改法": h.get("改法")}
+        if f.ok(row):
+            out.append(fmt_row(row))
+
+
+def topic_room(w: Path, f: Filter, out: list[str]) -> None:
+    from bookclub import roomtone
+
+    info = roomtone.load_info(w)
+    if not info:
+        out.append("還沒挑全片底噪（第 2 步或第 4 步會自動挑）")
+        return
+    row = {k: v for k, v in info.items() if k != "候選"}
+    out.append("全片底噪 " + fmt_row(row, ("start", "end", "dBFS", "已確認")))
+    for i, c in enumerate(info.get("候選") or [], 1):
+        out.append(f"  候選 {i} " + fmt_row(c, ("start", "end", "dBFS")))
+
+
+TOPICS = {
+    "檔案": "工作區有哪些資料檔、大小、修改時間",
+    "段落": "學員／老師段落（校對/段落.json）：編號、起訖、說話者代號、內容類型、已確認",
+    "句子": "說話者判斷的每一句：編號、起訖、判斷（老師／不是老師⋯）、聲紋分數",
+    "字": "逐字稿的字：只印每個字的時間（不印字），以及字跟字之間空超過 0.5 秒的地方",
+    "重疊": "重疊（含人工補的）與第 3 步的決定（做法、已確認）",
+    "名字": "名字候選與名字決定（做法、已確認、標記），以及上次排的名字處理計畫",
+    "消音": "局部消音、剪掉的片段、建議剪掉（第 3 步的決定）",
+    "總檢查": "第 4 步開始前總檢查的每一列（鍵、起訖、已按聽過、新的）；有成品時附成品時間",
+    "生成": "生成紀錄（老師／學員／保留原聲）：每一句的時間格、選定、放回做法，每次嘗試的長度、語速、分數、種子、第幾版",
+    "子程式": "第 4 步每一支子程式：秒數、結束碼、記憶體高峰",
+    "成品檢查": "第 5 步：處理紀錄每一筆的通過／退回狀態（不印原因文字）、沒登記的變動、整片退回",
+    "剪輯決策": "組裝排出的動作、剪掉、停格、標記、警告（類型與筆數）",
+    "換算": "原片時間 ↔ 成品時間（--原片 42:59.8 或 --成品 38:26.4，可以給好幾個）",
+    "前後沒聲音": "老師重念範圍開頭或結尾有一段沒有字（第六批）：建議範圍、能不能一鍵縮小",
+    "底噪": "全片底噪（第六批第五件）：挑到哪一段、音量、確認了沒有、候選",
+}
+ALIASES = {"files": "檔案", "turns": "段落", "sentences": "句子", "words": "字", "overlaps": "重疊", "names": "名字",
+           "mutes": "消音", "cuts": "消音", "剪掉": "消音", "finalcheck": "總檢查", "gen": "生成", "parts": "子程式",
+           "final": "成品檢查", "第5步": "成品檢查", "decisions": "剪輯決策", "convert": "換算", "time": "換算",
+           "edges": "前後沒聲音", "room": "底噪"}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="bookclub inspect", description="安全查詢工作區（只印時間、編號、數字、狀態）")
+    p.add_argument("workdir", help="工作區路徑")
+    p.add_argument("topic", nargs="?", help="主題：" + "、".join(TOPICS))
+    p.add_argument("--from", dest="a", help="原片時間從（例如 42:00）")
+    p.add_argument("--to", dest="b", help="原片時間到（例如 44:00）")
+    p.add_argument("--id", action="append", help="只看這個編號（可以給好幾次；T003、名字:3、S003⋯）")
+    p.add_argument("--who", choices=["老師", "學員", "保留原聲"], help="生成：只看哪一種")
+    p.add_argument("--tag", help="剪輯決策／換算：用 輸出/剪輯決策_<tag>.json（不給用最新的處理紀錄）")
+    p.add_argument("--原片", dest="src", action="append", default=[], help="換算：原片時間")
+    p.add_argument("--成品", dest="dst", action="append", default=[], help="換算：成品時間")
+    p.add_argument("--要人聽", dest="flagged", action="store_true", help="成品檢查：只列要人聽的")
+    p.add_argument("--limit", type=int, default=300, help="字：最多列幾個（預設 300）")
+    return p
+
+
+def run(argv: list[str]) -> list[str]:
+    from bookclub.review import parse_time
+
+    args = build_parser().parse_args(argv)
+    w = Path(args.workdir).expanduser()
+    out: list[str] = []
+    topic = ALIASES.get(args.topic or "", args.topic)
+    if not topic or topic not in TOPICS:
+        out.append(("看不懂的主題：" + mask(args.topic) + "。" if args.topic else "") + "可以查的主題：")
+        out += [f"  {k}：{v}" for k, v in TOPICS.items()]
+        return out
+    if not w.is_dir():
+        return [f"找不到工作區資料夾（{mask(str(w))}）"]
+    f = Filter(parse_time(args.a) if args.a else None, parse_time(args.b) if args.b else None, args.id)
+    with read_only():
+        if topic == "檔案":
+            topic_files(w, f, out)
+        elif topic == "段落":
+            topic_turns(w, f, out)
+        elif topic == "句子":
+            topic_sentences(w, f, out)
+        elif topic == "字":
+            topic_words(w, f, out, args.limit)
+        elif topic == "重疊":
+            topic_overlaps(w, f, out)
+        elif topic == "名字":
+            topic_names(w, f, out)
+        elif topic == "消音":
+            topic_cuts(w, f, out)
+        elif topic == "總檢查":
+            topic_final_check(w, f, out)
+        elif topic == "生成":
+            topic_generation(w, f, out, args.who)
+        elif topic == "子程式":
+            topic_parts(w, f, out)
+        elif topic == "成品檢查":
+            topic_finalcheck(w, f, out, args.flagged)
+        elif topic == "剪輯決策":
+            topic_decisions(w, f, out, args.tag)
+        elif topic == "換算":
+            topic_convert(w, out, [parse_time(x) for x in args.src], [parse_time(x) for x in args.dst], args.tag)
+        elif topic == "前後沒聲音":
+            topic_silent_edges(w, f, out)
+        elif topic == "底噪":
+            topic_room(w, f, out)
+    return out
+
+
+def main(argv: list[str]) -> int:
+    import io
+    import sys
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf):   # 呼叫到的函式自己印的東西（可能含文字）不放出去
+            lines = run(argv)
+    except Exception as e:  # noqa: BLE001 — 錯誤訊息可能帶到資料內容，只印錯誤種類
+        print(f"查詢失敗：{type(e).__name__}（錯誤訊息不印，可能含資料內容）")
+        return 1
+    sys.stdout.write("\n".join(lines) + "\n")
+    return 0

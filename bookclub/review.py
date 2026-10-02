@@ -963,6 +963,15 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     for it in items:
         if back.get(f"{it['類型']}:{it['id']}"):
             it["第5步退回"] = back[f"{it['類型']}:{it['id']}"]
+    try:   # 10-02 第六批：老師重念範圍前後沒有人講話 → 卡片上提醒＋「照建議縮小」（不自動改）
+        from bookclub import silentedge
+
+        edge = silentedge.hints(workdir)
+    except Exception:  # noqa: BLE001 — 算不出來不擋第 3 步
+        edge = {}
+    for it in items:
+        if edge.get(f"{it['類型']}:{it['id']}"):
+            it["前後沒聲音"] = edge[f"{it['類型']}:{it['id']}"]
     try:   # 10-01 第三批 14：學員段落切短後，句子切在外面、沒被處理蓋到的幾秒：卡片上問是誰的聲音
         from bookclub import execute
 

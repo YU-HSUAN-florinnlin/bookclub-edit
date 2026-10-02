@@ -110,6 +110,12 @@ def to_output_time(t: float, plist: list[dict] | None) -> float | None:
     return f(t, plist)
 
 
+def needs_look(r: dict, d: dict | None = None) -> bool:
+    """第 5 步「只看要人聽的」（10-02 第六批）：生成檢查沒過、放不進時間格（標紅）——處理紀錄的 `要人聽` 就是這兩種；
+    另外「名字要人處理」（原片沒動）本來就要人看。"""
+    return bool(r.get("要人聽")) or r.get("類型") == "名字要人處理"
+
+
 def status(log: dict | None, check: dict, total: float | None = None) -> dict:
     """進度、退回清單、能不能輸出（純函式）。"""
     recs = (log or {}).get("紀錄", [])
@@ -410,6 +416,12 @@ def page_data(workdir: str | Path) -> dict:
         _save(workdir, check)
     plist = (log or {}).get("片段")
     index = _index(workdir)
+    try:   # 10-02 第六批：老師重念範圍前後沒有人講話的那幾筆，卡片上提醒＋「照建議縮小」
+        from bookclub import silentedge
+
+        edge = silentedge.hints(workdir) if log else {}
+    except Exception:  # noqa: BLE001 — 算不出來不擋第 5 步
+        edge = {}
     recs = []
     for r in (log or {}).get("紀錄", []):
         d = check["逐筆"].get(record_key(r), {})
@@ -422,6 +434,10 @@ def page_data(workdir: str | Path) -> dict:
                      "覆核名稱": [review_name(index, k) for k in r.get("覆核項目") or []],
                      "改範圍": tgt, "已改範圍": done,
                      "重做過": redone_info(r, check, log)})   # 10-01 第三批：上一次「只重做退回的」重做過的
+        hit = next((edge[k] for k in r.get("覆核項目") or [] if k in edge), None) if r["類型"] in ("名字整句換掉", "換聲音") else None
+        if hit:
+            recs[-1]["前後沒聲音"] = hit
+        recs[-1]["要人看"] = needs_look(r, d)   # 10-02 第六批：「只看要人聽的」篩選
     flags = label_items([dict(x) for x in check["整片退回"]], index)
     un = []
     for u in (log or {}).get("未登記的變動", []):

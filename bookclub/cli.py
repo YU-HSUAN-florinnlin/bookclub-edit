@@ -1,6 +1,6 @@
 """指令列入口：`bookclub`。
 
-`doctor`、`models download`、`run analyze`、`run turns`、`run execute`（10-01 起每一段開一支 `run part` 子程式）、`serve`、`ref`、`gen teacher`、`gen names`、
+`doctor`、`inspect`（10-02 第六批：安全查詢工作區）、`models download`、`run analyze`、`run turns`、`run execute`（10-01 起每一段開一支 `run part` 子程式）、`serve`、`ref`、`gen teacher`、`gen names`、
 `gen students`、`render audio`、`render video`、`redo list`、`review export`／`review import`、`proofread prepare`
 是真的會動的指令；`bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
 功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列第 0～5 步都有頁面。
@@ -25,6 +25,10 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument(
         "rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS,
     )  # --smoke／--claude／--help 都交給 bookclub.doctor 自己的 argparse 處理
+
+    inspect_parser = sub.add_parser(
+        "inspect", help="安全查詢工作區：只印時間、編號、數字、狀態（給 AI 助手用，10-02 第六批）", add_help=False)
+    inspect_parser.add_argument("rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)   # 交給 bookclub.safeview
 
     models_parser = sub.add_parser("models", help="模型相關指令")
     models_sub = models_parser.add_subparsers(dest="models_command")
@@ -227,6 +231,11 @@ def main(argv: list[str] | None = None) -> int:
         from bookclub.doctor import main as doctor_main
 
         return doctor_main(args.rest)
+
+    if args.command == "inspect":
+        from bookclub.safeview import main as inspect_main
+
+        return inspect_main(args.rest)
 
     if args.command == "models":
         if args.models_command == "download":

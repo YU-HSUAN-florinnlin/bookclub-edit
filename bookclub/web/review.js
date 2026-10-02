@@ -583,7 +583,7 @@ function rvRenderCard() {
   const lack = it["還缺"] ? `<p class="rv-warnline rv-lack">還缺：${esc(it["還缺"])}。${it["已確認"] ? "（之前按過通過，但補好之前第 4 步不能開始）" : ""}按「改做法」補好。</p>` : "";
   // 10-01 第三批 5：第 5 步退回的，卡片上寫原因（重做完就消失）
   const back = it["第5步退回"] ? `<p class="rv-warnline rv-back5">第 5 步退回：${esc(it["第5步退回"].join("；"))}</p>` : "";
-  const coverNote = back + lack + (it["涵蓋消失"] ? `<p class="rv-warnline">原本由〈${esc(it["涵蓋消失"]["名稱"] || it["涵蓋消失"].id)}〉涵蓋，現在沒有了（那一筆改了時間、做法或被還原），請重新看。</p>`
+  const coverNote = back + lack + rvEdgeHtml(it) + (it["涵蓋消失"] ? `<p class="rv-warnline">原本由〈${esc(it["涵蓋消失"]["名稱"] || it["涵蓋消失"].id)}〉涵蓋，現在沒有了（那一筆改了時間、做法或被還原），請重新看。</p>`
     : it["涵蓋待通過"] ? `<p class="rv-note">這一處整個落在〈${esc(it["涵蓋待通過"]["名稱"])}〉裡；那一筆通過之後，這一處就自動算處理好。</p>` : "");
   box.innerHTML = `
     <article class="rv-card" data-key="${esc(rv.cur)}">
@@ -673,10 +673,28 @@ function rvRenderCard() {
   if (del) del.addEventListener("click", () => rvDeleteManual(it));
   document.getElementById("rv-prev").addEventListener("click", () => rvStep(-1));
   document.getElementById("rv-next").addEventListener("click", () => rvStep(1));
+  const shrink = document.getElementById("rv-shrink");
+  if (shrink) shrink.addEventListener("click", () => rvShrink(it));
   rvBindBody(it);
   rvBindOutQ(it);
   rvBindMore(it);
   rvRenderTimeline();
+}
+
+// 10-02 第六批：老師重念範圍開頭或結尾有一段沒有人講話：提醒＋「照建議縮小」（不自動改；改了這一句要重新生成）
+function rvEdgeHtml(it) {
+  const h = it["前後沒聲音"];
+  if (!h) return "";
+  return `<div class="rv-note rv-edge" id="rv-edge"><p>${esc(h["說明"])}。</p>
+    ${h["可以縮"] ? `<button class="ghost small" id="rv-shrink">照建議縮小</button> <span class="rv-meta">按了會把重念範圍改成建議的範圍；這一句之後要重新生成</span>`
+      : `<p class="rv-meta">${esc(h["原因"] || "")}</p>`}</div>`;
+}
+
+async function rvShrink(it) {
+  const h = it["前後沒聲音"];
+  if (!confirm(`把重念範圍改成 ${rvFmt(h["建議"][0], 1)}–${rvFmt(h["建議"][1], 1)}？\n這一句之後要重新生成。`)) return;
+  try { await apiPost("/api/review/shrink", { "鍵": h["鍵"] }); } catch (err) { alert(err.message); return; }
+  await rvReload();
 }
 
 // 10-01 宇軒：逐字稿框下面的狀態（「人改過」看不懂）

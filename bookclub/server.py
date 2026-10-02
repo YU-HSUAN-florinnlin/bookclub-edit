@@ -1242,6 +1242,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, rv.delete_manual(server.workdir, str(body["類型"]), str(body["id"])))
             elif path == "/api/review/manual":
                 self._send_json(200, rv.manual_edit(server.workdir, body))
+            elif path == "/api/review/shrink":   # 10-02 第六批：老師重念範圍「照建議縮小」（第 3、4、5 步共用）
+                from bookclub import silentedge
+
+                self._send_json(200, silentedge.apply(server.workdir, str(body["鍵"]), body.get("第5步鍵") or None))
             elif path == "/api/review/voice":
                 self._send_json(200, rv.set_voice(server.workdir, body.get("學員"), str(body["聲音"])))
             elif path == "/api/review/prep":

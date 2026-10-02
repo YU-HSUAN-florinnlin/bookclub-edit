@@ -456,23 +456,41 @@ def _run_attempt(
             heard = hear(path)
         except Exception as exc:  # noqa: BLE001 — 重試完還是連不上：不要讓整晚的生成停在這裡，這一句標要人聽
             check_failed = True
-            log(f"  ⚠️ 內容檢查沒做成（{type(exc).__name__}），這一句先標要人聽，生成照常往下")
+            log(f"  ⚠️ 念對沒有的檢查沒做成（{type(exc).__name__}，多半是網路），這一句先標要人聽，生成照常往下")
     att = Attempt(seed, speed, audio_s, elapsed, heard, content_score(text, heard) if heard is not None else None,
                   check_failed=check_failed)
     if similar:
         try:
             att.similarity = similar(path)
         except Exception as exc:  # 聲紋只是參考，算不出來不擋生成
-            log(f"  ⚠️ 聲紋相似度算不出來：{exc}")
-    parts = [f"  第 {n} 次：種子 {seed}、語速 {speed}，聲音 {audio_s:.1f} 秒，花 {elapsed:.0f} 秒（{elapsed / audio_s:.1f} 倍）"]
-    if att.content is not None:
-        parts.append(f"內容 {att.content:.2f}{'' if att.content_ok() else '（不過）'}")
-    if slot_s:
-        parts.append(f"長度差 {audio_s / slot_s - 1:+.0%}")
-    if att.similarity is not None:
-        parts.append(f"聲紋 {att.similarity:.2f}")
-    log("，".join(parts))
+            log(f"  ⚠️ 像不像老師聲音算不出來（只記錄用，不影響）：{type(exc).__name__}")
+    log(attempt_line(n, seed, speed, audio_s, elapsed, att.content, att.content_ok(), slot_s, att.similarity))
     return att
+
+
+def way_number(seed: int) -> int:
+    """種子 → 畫面上的「第幾種念法」（照 seed_order 的順序：42 是第 1 種、1 是第 2 種、2026 是第 3 種，之後往上加）。"""
+    if seed in SEEDS:
+        return SEEDS.index(seed) + 1
+    if seed > SEEDS[-1]:
+        return len(SEEDS) + seed - SEEDS[-1]
+    return len(SEEDS) + 1
+
+
+def attempt_line(n: int, seed: int, speed: float, audio_s: float, elapsed: float, content: float | None,
+                 content_ok: bool, slot_s: float | None, similarity: float | None) -> str:
+    """第 4 步執行訊息裡每一次生成的那一行（10-02 第六批：使用者看得到，「種子」「內容分數」「長度差」改成白話；
+    紀錄檔的欄位不變）。例：「第 2 次生成：第 2 種念法、正常速度，聲音 2.9 秒（花 41 秒）；念的字對了 92%；比原本的時間短 61%」"""
+    pace = "正常速度" if abs(speed - 1.0) < 1e-6 else (f"念快一點（{speed:.2f} 倍）" if speed > 1 else f"念慢一點（{speed:.2f} 倍）")
+    parts = [f"  第 {n} 次生成：第 {way_number(seed)} 種念法、{pace}，聲音 {audio_s:.1f} 秒（花 {elapsed:.0f} 秒）"]
+    if content is not None:
+        parts.append(f"念的字對了 {content:.0%}" + ("" if content_ok else f"（不到 {CONTENT_MIN:.0%}，換一種念法再試）"))
+    if slot_s:
+        d = audio_s / slot_s - 1
+        parts.append("跟原本的時間差不多" if abs(d) < 0.005 else f"比原本的時間{'長' if d > 0 else '短'} {abs(d):.0%}")
+    if similarity is not None:
+        parts.append(f"像老師聲音的程度 {similarity:.2f}（只記錄，不影響）")
+    return "；".join(parts)
 
 
 def _base_index(history: list[Attempt]) -> int:
@@ -571,9 +589,11 @@ def _finalize(
     record["候選做法"] = variants
     record["建議做法"] = rec["版本"]
     record["放回時間格"] = {**rec, "檔案": str((out_dir / f"{sid}_放回時間格.wav").relative_to(workdir))}
-    summary = "、".join("{} {:+.0%}".format(v["版本"], v["差異比例"]) for v in variants)
-    log(f"[{tag}] 第 {sid} 句放回時間格：{summary} → 建議「{rec['版本']}」"
-        + ("（都超過容許範圍，要人聽）" if not ok else ""))
+    # 10-02 第六批：白話（「+12%」→「長 12%」）
+    summary = "、".join(f"{v['版本']}（{'跟原本差不多' if abs(v['差異比例']) < 0.005 else ('長' if v['差異比例'] > 0 else '短') + format(abs(v['差異比例']), '.0%')}）"
+                        for v in variants)
+    log(f"[{tag}] 第 {sid} 句放回原本的時間：{summary} → 用「{rec['版本']}」"
+        + ("（每一種都差太多，標成要人聽）" if not ok else ""))
     return record
 
 
@@ -807,7 +827,7 @@ def run_generation(
         nonlocal synth, similar, want_similar
         key, hit = cache_hit(akey(it, n, seed, speed), akey(it, n, seed, speed, legacy=True))
         if hit and (out_dir / f"{it['id']}_第{n}次.wav").is_file():
-            say(f"  第 {n} 次：沿用上次生成的檔案")
+            say(f"  第 {n} 次生成：沿用上次生成好的聲音")
             att = Attempt(**hit)
             if att.check_failed and hear:   # 上次內容檢查沒做成（網路）：聲音不用重新生成，補檢查就好
                 try:
@@ -816,9 +836,9 @@ def run_generation(
                     att.check_failed = False
                     cache[key] = att.__dict__.copy()
                     wd.write_json(cache_path, cache)
-                    log(f"  第 {n} 次：補做內容檢查，內容 {att.content:.2f}")
+                    log(f"  第 {n} 次生成：補做念對沒有的檢查，念的字對了 {att.content:.0%}")
                 except Exception as exc:  # noqa: BLE001
-                    log(f"  ⚠️ 補做內容檢查還是沒成（{type(exc).__name__}），維持要人聽")
+                    log(f"  ⚠️ 補做念對沒有的檢查還是沒成（{type(exc).__name__}），維持要人聽")
             return att
         if not allow_new:
             raise NotGeneratedYet(f"[{tag}] 第 {it['id']} 句第 {n} 次還沒生成（生成那一支程式沒做完），"
@@ -949,7 +969,7 @@ def run_generation(
              and next_attempt(histories[it["id"]], it["slot_s"], tolerance, avoid[it["id"]]) is not None]
     if retry:
         for it in retry:
-            log(f"[{tag}] 第 {it['id']} 句長度差太多，改語速重生成")
+            log(f"[{tag}] 第 {it['id']} 句長度跟原本差太多，調整說話快慢再念一次")
             h = histories[it["id"]]
             while (nxt := next_attempt(h, it["slot_s"], tolerance, avoid[it["id"]])) is not None:
                 h.append(attempt(it, len(h) + 1, *nxt))

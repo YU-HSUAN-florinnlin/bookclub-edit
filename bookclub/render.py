@@ -746,7 +746,10 @@ def build_marks(d: dict, plist: list[dict], precision: dict | None = None) -> li
 
 
 def _t(x: float | None) -> str:
-    return "—" if x is None else wd.fmt_time(x)
+    # 10-02 第六批：到零點一秒（跟第 4、5 步畫面一樣，例如 0:42:59.8）
+    from bookclub.timemap import t1
+
+    return t1(x)
 
 
 HEADER = ("**只處理了 {rng}；範圍內沒列在這裡的地方＝原片沒動。**\n\n"
@@ -758,8 +761,9 @@ HEADER = ("**只處理了 {rng}；範圍內沒列在這裡的地方＝原片沒�
 def marks_md(rows: list[dict], rng: str, extra: list[str]) -> str:
     out = [f"# 處理標記清單（{rng}）", "", HEADER.format(rng=rng), ""] + extra + [""]
     for i, r in enumerate(rows, 1):
-        out.append(f"## {i}. 成品 {_t(r['成品'][0] if r.get('成品') else None)}–{_t(r['成品'][1] if r.get('成品') else None)}"
-                   f"　（原片 {_t(r['原片'][0] if r.get('原片') else None)}–{_t(r['原片'][1] if r.get('原片') else None)}）")
+        # 10-02 第六批：時間同時列原片與成品（「原片 0:42:59.8–⋯／成品 0:38:26.4–⋯」）
+        out.append(f"## {i}. 原片 {_t(r['原片'][0] if r.get('原片') else None)}–{_t(r['原片'][1] if r.get('原片') else None)}"
+                   f"／成品 {_t(r['成品'][0] if r.get('成品') else None)}–{_t(r['成品'][1] if r.get('成品') else None)}")
         out.append(f"- 做了什麼：{r['做了什麼']}" + (f"（{r['id']}）" if r.get("id") else ""))
         if r.get("生成秒數"):
             out.append(f"- 生成秒數：{r['生成秒數']:.1f}　放回做法：{r.get('放回做法') or '—'}"
@@ -793,8 +797,8 @@ def marks_html(rows: list[dict], rng: str, extra: list[str]) -> str:
         p = r.get("精準度") or {}
         trs.append(
             f"<tr class='{'flag' if r['要人聽'] else ''}'><td>{i}</td>"
-            f"<td>{_t(r['成品'][0] if r.get('成品') else None)}<br><small>{_t(r['成品'][1] if r.get('成品') else None)}</small></td>"
             f"<td>{_t(r['原片'][0] if r.get('原片') else None)}<br><small>{_t(r['原片'][1] if r.get('原片') else None)}</small></td>"
+            f"<td>{_t(r['成品'][0] if r.get('成品') else None)}<br><small>{_t(r['成品'][1] if r.get('成品') else None)}</small></td>"
             f"<td><b>{html.escape(r['類型'])}</b> {html.escape(r['做了什麼'])}"
             + (f" <small>({html.escape(r['id'])})</small>" if r.get("id") else "")
             + (f"<br><small>生成 {r['生成秒數']:.1f} 秒・{html.escape(r.get('放回做法') or '')}"
@@ -815,7 +819,7 @@ def marks_html(rows: list[dict], rng: str, extra: list[str]) -> str:
             f"<title>處理標記清單</title><style>{css}</style><h1>處理標記清單（{html.escape(rng)}）</h1>"
             f"<div class=top>{'<br>'.join(html.escape(x) for x in head.split(chr(10)) if x)}</div>"
             + "".join(f"<p><small>{html.escape(x)}</small></p>" for x in extra)
-            + "<div class=wrap><table><tr><th>#</th><th>成品時間</th><th>原片時間</th><th>做了什麼</th><th>要人聽</th></tr>"
+            + "<div class=wrap><table><tr><th>#</th><th>原片時間</th><th>成品時間</th><th>做了什麼</th><th>要人聽</th></tr>"
             + "".join(trs) + "</table></div></html>")
 
 
