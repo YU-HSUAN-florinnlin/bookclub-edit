@@ -63,16 +63,9 @@ def build_edl(plan: dict, teacher_log: dict | None) -> tuple[list[dict], list[st
     for m in plan.get("消音", []):
         edits.append({"類型": "消音", "start": m["start"], "end": m["end"], "候選": [m["候選"]]})
 
-    # 重疊：長的優先（B 方案兩邊都生成的那一對不算搶，見 stackable）
-    edits.sort(key=lambda e: -(e["end"] - e["start"]))
-    kept: list[dict] = []
-    for e in edits:
-        if any(e["start"] < k["end"] and k["start"] < e["end"] and not stackable(e, k) for k in kept):
-            warnings.append(f"候選 {e['候選']} 跟別筆重疊，被較長的那筆蓋過")
-            continue
-        kept.append(e)
-    kept.sort(key=lambda e: e["start"])
-    return kept, warnings
+    # 重疊：長的優先（B 方案兩邊都生成的那一對不算搶，見 stackable）；10-02 第七批：短的只扣掉疊到的部分
+    kept, w = resolve_overlaps(edits, label=lambda e: f"候選 {e['候選']}")
+    return kept, warnings + w
 
 
 def stackable(e: dict, k: dict) -> bool:
@@ -82,6 +75,84 @@ def stackable(e: dict, k: dict) -> bool:
 
 MUTE_KINDS = ("消音", "名字消音", "局部消音", "學員名字消音")   # 墊環境底噪的動作（其他是換聲音）
 SWAP_KINDS = ("換聲音", "學員重念", "名字整句換掉")
+# 10-02 第七批（A2）：換聲音被較長的那筆蓋過一部分時，沒蓋到的部分改成哪一種消音
+SWAP_TO_MUTE = {"換聲音": "消音", "名字整句換掉": "名字消音", "學員重念": "局部消音", "學員名字換代號": "學員名字消音"}
+NAME_LEFT_TOL_S = 0.05   # 名字還有超過這個秒數沒被任何動作蓋到 → 不輸出成品
+
+
+def _as_mute(e: dict, s: float, t: float) -> dict:
+    """換聲音那一筆沒被蓋到的 [s, t]，改成消音（只留編號、候選、學員，不帶生成檔）。"""
+    kind = SWAP_TO_MUTE.get(e["類型"], "局部消音")
+    out = {k: e[k] for k in ("id", "候選", "學員", "生成編號") if k in e}
+    out.update({"類型": kind, "start": s, "end": t, "被蓋過改消音": e["類型"]})
+    out.setdefault("候選", [])
+    if kind == "局部消音":
+        out.setdefault("id", e.get("生成編號") or e["類型"])
+        out.update({"方式": "墊底噪", "霧化": False})
+    return out
+
+
+def resolve_overlaps(edits: list[dict], kept: list[dict] | None = None, *, longest_first: bool = True,
+                     label=None) -> tuple[list[dict], list[str]]:
+    """兩筆動作疊到時怎麼辦（純函式，10-02 第七批 A2）。以前疊到一點點，短的那筆整筆丟掉，名字會留在成品。
+
+    - `kept` 是已經排好、優先的動作；`edits` 一筆一筆加進去（longest_first：長的先加）。
+    - 疊到的（`stackable` 的那一對不算）：消音類只扣掉疊到的部分，剩下的照做；換聲音類不能只放一半，
+      沒被蓋到的部分改成消音（`_as_mute`）。整筆都被蓋到的不重複處理。
+    回傳（依時間排序的動作、警告）。"""
+    label = label or (lambda e: str(e.get("id") or e.get("生成編號") or e["類型"]))
+    out, warnings = list(kept or []), []
+    todo = sorted(edits, key=lambda e: -(e["end"] - e["start"])) if longest_first else list(edits)
+    for e in todo:
+        block = [(k["start"], k["end"]) for k in out
+                 if e["start"] < k["end"] and k["start"] < e["end"] and not stackable(e, k)]
+        if not block:
+            out.append(e)
+            continue
+        parts = subtract(e["start"], e["end"], block)
+        if not parts:
+            warnings.append(f"{label(e)} 整筆落在別筆的範圍裡，跟著那一筆處理")
+            continue
+        left = sum(t - s for s, t in parts)
+        if e["類型"] in SWAP_KINDS or e["類型"] in SWAP_TO_MUTE:
+            out += [_as_mute(e, s, t) for s, t in parts]
+            warnings.append(f"{label(e)} 跟別筆重疊，疊到的部分以那一筆為準，沒蓋到的 {left:.2f} 秒改成消音")
+        else:
+            out += [{**e, "start": s, "end": t} for s, t in parts]
+            warnings.append(f"{label(e)} 跟別筆重疊，疊到的部分以那一筆為準，其餘 {left:.2f} 秒照做")
+    out.sort(key=lambda e: e["start"])
+    return out, warnings
+
+
+def names_left(ranges: list[dict], edits: list[dict], cuts: list[tuple[float, float]] = (),
+               a: float = 0.0, b: float = 1e12, tol: float = NAME_LEFT_TOL_S) -> list[dict]:
+    """名字還有沒有地方沒被任何動作蓋到（純函式，10-02 第七批 A2 最後一道檢查）。
+    `ranges`：[{候選, start, end}]（名字處理計畫裡每一筆的範圍）；換聲音、消音、剪掉都算蓋到。
+    回傳沒蓋到超過 tol 秒的：[{候選, start, end, 沒處理秒, 沒處理的範圍}]。"""
+    cover = [(e["start"], e["end"]) for e in edits] + list(cuts)
+    out = []
+    for r in ranges:
+        x, y = max(r["start"], a), min(r["end"], b)
+        if y <= x:
+            continue
+        rest = subtract(x, y, cover)
+        sec = sum(t - s for s, t in rest)
+        if sec > tol:
+            out.append({**r, "沒處理秒": round(sec, 3), "沒處理的範圍": [[round(s, 3), round(t, 3)] for s, t in rest]})
+    return out
+
+
+def plan_name_ranges(plan: dict, stu_plan: dict | None = None) -> list[dict]:
+    """名字處理計畫（老師）與保留原聲學員講到名字的計畫 → 每一筆名字要被處理的範圍。"""
+    out = [{"候選": m["候選"], "start": m["start"], "end": m["end"]} for m in plan.get("消音", [])]
+    out += [{"候選": g.get("候選"), "start": g["slot"][0], "end": g["slot"][1], "生成編號": g.get("id")}
+            for g in plan.get("生成", [])]
+    for m in (stu_plan or {}).get("消音", []):
+        out.append({"候選": m["id"], "start": m["start"], "end": m["end"], "學員": m.get("學員")})
+    for g in (stu_plan or {}).get("生成", []):
+        out.append({"候選": g.get("候選"), "start": g["slot"][0], "end": g["slot"][1], "生成編號": g.get("id"),
+                    "學員": g.get("學員")})
+    return out
 
 
 def subtract(a: float, b: float, blockers: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -213,16 +284,9 @@ def add_student_name_edits(edits: list[dict], workdir: Path, a: float = 0.0, b: 
 
     sp = studentnames.plan(workdir)
     new = [e for e in student_name_edits(sp) + studentgen.swap_edits(workdir, sp) if e["start"] < b and a < e["end"]]
-    out, warnings = list(edits), []
-    for e in new:
-        if any(x <= e["start"] and e["end"] <= y for x, y in cuts):
-            continue
-        if any(e["start"] < k["end"] and k["start"] < e["end"] for k in out):
-            warnings.append(f"{e['類型']} {e['id']} 跟別筆重疊，以那一筆為準")
-            continue
-        out.append(e)
-    out.sort(key=lambda e: e["start"])
-    return out, warnings
+    new = [e for e in new if not any(x <= e["start"] and e["end"] <= y for x, y in cuts)]
+    # 10-02 第七批（A2）：跟既有動作疊到時以既有那筆為準，但只扣掉疊到的部分（以前整筆丟掉，名字會留著）
+    return resolve_overlaps(new, edits, longest_first=False, label=lambda e: f"{e['類型']} {e['id']}")
 
 
 # ---------- 聲音處理（純函式） ----------

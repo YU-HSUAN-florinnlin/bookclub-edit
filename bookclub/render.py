@@ -209,15 +209,12 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
                             f"加快 {e.get('加快', 1.0) - 1:.0%} 後還多出來的停格補長",
                             "edit": e["id"]})
 
-    # 重疊的動作：長的優先（跟 assemble 一樣）
-    edits.sort(key=lambda e: -(e["end"] - e["start"]))
-    kept = []
-    for e in edits:
-        if any(_in(e["start"], e["end"], k["start"], k["end"]) and not assemble.stackable(e, k) for k in kept):
-            warnings.append(f"{e['id'] if 'id' in e else e['類型']} 跟別筆重疊，被較長的那筆蓋過")
-            continue
-        kept.append(e)
-    kept.sort(key=lambda e: e["start"])
+    # 重疊的動作：長的優先（跟 assemble 一樣）；10-02 第七批（A2）：短的只扣掉疊到的部分，
+    # 換聲音沒被蓋到的部分改成消音（以前整筆丟掉，名字消音跟學員時間格疊 0.05 秒 → 名字留在成品）
+    kept, w = assemble.resolve_overlaps(edits, label=lambda e: str(e["id"]) if "id" in e else e["類型"])
+    warnings += w
+    swapped = {e["id"] for e in kept if "id" in e and e["類型"] in assemble.SWAP_KINDS}
+    freezes = [f for f in freezes if not f.get("edit") or f["edit"] in swapped]   # 被蓋過的那筆不停格
     # 落在刪除範圍裡的換聲音不用做；頭尾碰到刪除範圍（剪點對齊畫面格後差幾毫秒）的推到邊界
     kept = [e for e in kept if not any(x <= e["start"] and e["end"] <= y for x, y in cuts)]
     for e in kept:
@@ -246,9 +243,18 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
             m["涵蓋"] = res["涵蓋"]
         if res["沒處理秒"]:
             left.append({"id": m["id"], "start": m["start"], "end": m["end"], "做法": m["做法"], "沒處理秒": res["沒處理秒"]})
+    # 10-02 第七批（A2）最後一道檢查：計畫裡每一筆名字（老師、保留原聲的學員）都要被某個動作蓋到
+    from bookclub import studentnames
+
+    try:
+        stu_plan = studentnames.plan(workdir)
+    except FileNotFoundError:
+        stu_plan = {}
+    name_left = assemble.names_left(assemble.plan_name_ranges(plan, stu_plan), kept, cuts, a, b)
     blur = pick_blur(kept, cuts, a, b) if demo_blur else None   # 09-29：模糊只有測試示範才做，正式成品不模糊
     return {"範圍": [a, b], "刪除": cuts, "動作": kept, "停格": sorted(freezes, key=lambda f: f["at"]),
-            "模糊": blur, "標記": marks, "警告": warnings, "學員聲線": voices, "重疊沒處理": left}
+            "模糊": blur, "標記": marks, "警告": warnings, "學員聲線": voices, "重疊沒處理": left,
+            "名字沒處理": name_left}
 
 
 def clip_to_cuts(a: float, b: float, cuts: list[tuple[float, float]]) -> tuple[float, float]:
@@ -1041,6 +1047,12 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     if d["重疊沒處理"]:   # 09-30：重疊處還留著學員原聲就不輸出（隱私），先擋下來
         where = "、".join(f"{wd.fmt_time(x['start'])}（{x['做法']}，{x['沒處理秒']:.2f} 秒）" for x in d["重疊沒處理"])
         raise RuntimeError(f"有 {len(d['重疊沒處理'])} 處聲音重疊還留著原聲，沒有輸出成品：{where}")
+    if d.get("名字沒處理"):   # 10-02 第七批（A2）：名字還有地方沒被任何動作蓋到就不輸出
+        where = "、".join(f"候選 {x['候選']} {_t(x['start'])}–{_t(x['end'])}（沒處理 "
+                         + "、".join(f"{_t(s)}–{_t(t)}" for s, t in x["沒處理的範圍"])
+                         + f"，共 {x['沒處理秒']:.2f} 秒）" for x in d["名字沒處理"])
+        raise RuntimeError(f"有 {len(d['名字沒處理'])} 筆名字還有地方沒有消音或換掉，沒有輸出成品：{where}"
+                           "（老師名字還沒生成的，先在第 4 步按「開始執行」把它做完）")
     t = time.time()
     au = build_audio(workdir, video, d, out, tag)
     audio_s = time.time() - t

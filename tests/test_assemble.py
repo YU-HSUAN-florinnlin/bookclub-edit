@@ -362,7 +362,9 @@ def test_stacked_pair_both_kept_in_edl():
                    {"id": "S1", "text": "別句", "slot": [10.5, 12.0], "候選": [1]}], "消音": []}
     log = {"句子": [{"id": "W1", "放回時間格": {"檔案": "a.wav"}}, {"id": "S1", "放回時間格": {"檔案": "b.wav"}}]}
     edl, warn = assemble.build_edl(plan, log)
-    assert [e["生成編號"] for e in edl] == ["S1"] and warn          # 不是同一對的照舊長的優先
+    # 不是同一對的照舊長的優先；10-02 第七批：短的沒被蓋到的 10.0–10.5 改成消音（以前整筆丟掉）
+    assert [(e["類型"], e["生成編號"], e["start"], e["end"]) for e in edl] == \
+        [("消音", "W1", 10.0, 10.5), ("換聲音", "S1", 10.5, 12.0)] and warn
     a = {"疊放": True, "重疊": "O1", "start": 0, "end": 1}
     assert assemble.stackable(a, {**a}) and not assemble.stackable(a, {**a, "重疊": "O2"})
 
@@ -384,6 +386,38 @@ def test_overlap_outcome_stacked_pair_not_counted_as_mute():
              {"類型": "名字整句換掉", "id": "W1", "start": 10.2, "end": 11.0, "疊放": True, "重疊": "O1"}]
     r = assemble.overlap_outcome(o, edits)
     assert r["沒處理秒"] == 0 and "照原本的時間疊著" in r["處理"] and "消音" not in r["處理"], r
+
+
+def test_short_mute_overlapping_slot_keeps_the_rest():
+    """10-02 第七批（A2）：名字消音 39.35–40.05 跟學員時間格 40.0–51.6 疊 0.05 秒 →
+    39.35–40.0 照樣消音（以前整筆丟掉，名字留在成品）。"""
+    slot = {"類型": "學員重念", "id": "S1", "start": 40.0, "end": 51.6}
+    mute = {"類型": "名字消音", "start": 39.35, "end": 40.05, "候選": [1]}
+    kept, warn = assemble.resolve_overlaps([slot, mute])
+    assert [(e["類型"], e["start"], e["end"]) for e in kept] == [("名字消音", 39.35, 40.0), ("學員重念", 40.0, 51.6)]
+    assert warn and not assemble.names_left([{"候選": 1, "start": 39.35, "end": 40.05}], kept)
+    # 整筆被涵蓋的：不重複處理
+    kept, _ = assemble.resolve_overlaps([slot, {**mute, "start": 41.0, "end": 41.5}])
+    assert [e["類型"] for e in kept] == ["學員重念"]
+    # 換聲音被較長的蓋過一部分：沒蓋到的部分至少消音
+    swap = {"類型": "名字整句換掉", "id": "N001", "start": 38.0, "end": 41.0, "候選": [1], "檔案": "x.wav"}
+    kept, _ = assemble.resolve_overlaps([slot, swap])
+    assert [(e["類型"], e["start"], e["end"]) for e in kept] == [("名字消音", 38.0, 40.0), ("學員重念", 40.0, 51.6)]
+    assert "檔案" not in kept[0] and kept[0]["被蓋過改消音"] == "名字整句換掉"
+    # 學員講到名字（以既有那筆為準，但只扣掉疊到的）
+    stu = {"類型": "學員名字消音", "id": "SN1", "學員": "學員1", "start": 51.5, "end": 52.0, "候選": ["SN1"]}
+    kept2, _ = assemble.resolve_overlaps([stu], kept, longest_first=False)
+    assert ("學員名字消音", 51.6, 52.0) in [(e["類型"], e["start"], e["end"]) for e in kept2]
+
+
+def test_names_left_blocks_uncovered_name():
+    """10-02 第七批（A2）：名字還有超過 0.05 秒沒被任何動作（或剪掉）蓋到 → 列出來（組裝看到就不輸出）。"""
+    names = [{"候選": 1, "start": 10.0, "end": 11.0}, {"候選": 2, "start": 20.0, "end": 20.5}]
+    edits = [{"類型": "名字消音", "start": 10.0, "end": 10.97}]
+    left = assemble.names_left(names, edits, cuts=[(19.0, 20.3)])
+    assert [x["候選"] for x in left] == [2] and left[0]["沒處理的範圍"] == [[20.3, 20.5]]
+    assert not assemble.names_left(names, edits, cuts=[(19.0, 21.0)])
+    assert not assemble.names_left(names, edits, a=0.0, b=15.0)   # 範圍外的不算
 
 
 def _run_all() -> int:

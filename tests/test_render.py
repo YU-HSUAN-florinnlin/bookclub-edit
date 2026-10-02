@@ -223,6 +223,67 @@ def test_build_decisions_ignores_outdated_student_records():
                 os.environ["BOOKCLUB_DATA_DIR"] = old
 
 
+def test_build_decisions_name_mute_touching_student_slot_and_uncovered_name_blocks():
+    """10-02 第七批（A2）：老師在學員開口前叫名字、選直接消音（前後各 0.05 秒緩衝）→ 跟學員時間格疊 0.05 秒，
+    以前整筆消音不做。現在沒疊到的部分照樣消音；名字還有地方沒蓋到（老師句子還沒生成）→ 不輸出成品。"""
+    import json
+    import os
+    import tempfile
+
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    import fake_workdir
+    from bookclub import nameplan, students
+    from bookclub import workdir as wdmod
+
+    with tempfile.TemporaryDirectory() as root:
+        old = os.environ.get("BOOKCLUB_DATA_DIR")
+        data = Path(root) / "資料"
+        data.mkdir()
+        (data / "名冊.csv").write_text("中文名,其他寫法,英文代號,聲線,性別\n小美,,Amy,,女\n阿明,,Tom,,男\n", encoding="utf-8")
+        os.environ["BOOKCLUB_DATA_DIR"] = str(data)
+        try:
+            w = fake_workdir.make(Path(root) / "base")
+            items, _ = students.build_items(w)
+            first = sorted(items, key=lambda it: it["slot"][0])[0]
+            s0 = first["slot"][0]
+            recs = [{"id": it["id"], "段落": it["段落"], "學員": it["學員"], "text": it["text"], "slot": it["slot"],
+                     "嘗試": [], "選定": 1,
+                     "放回時間格": {"檔案": f"生成/學員/{it['id']}_放回時間格.wav", "放回做法": "補靜音", "差異比例": 0.0}}
+                    for it in items]
+            wdmod.write_json(students.log_path(w), {"句子": recs, "學員聲線": {}})
+            names = wdmod.read_json(wdmod.names_path(w))
+            c = names["candidates"][0]
+            c["start"], c["end"] = round(s0 - 0.6, 3), round(s0, 3)      # 名字剛好在學員開口前講完
+            wdmod.write_json(wdmod.names_path(w), names)
+            (w / nameplan.DECISIONS_FILE_NAME).write_text(json.dumps(
+                {"1": {"做法": nameplan.MUTE}, "2": {"tags": ["不是名字"]}}, ensure_ascii=False), encoding="utf-8")
+            plan = nameplan.make_plan(w)
+            m = plan["消音"][0]
+            assert m["end"] > s0   # 緩衝讓消音跟學員時間格疊到
+            d = render.build_decisions(w, 0.0, 180.0)
+            got = [(e["start"], e["end"]) for e in d["動作"] if e["類型"] == "名字消音"]
+            assert got == [(m["start"], s0)], got
+            assert d["名字沒處理"] == []
+
+            # 另一筆整句重念、老師句子還沒生成 → 名字沒被蓋到，組裝擋下
+            (w / nameplan.DECISIONS_FILE_NAME).write_text(json.dumps(
+                {"1": {"tags": ["不是名字"]}}, ensure_ascii=False), encoding="utf-8")
+            plan = nameplan.make_plan(w)
+            assert plan["生成"] and not plan["消音"]
+            d = render.build_decisions(w, 0.0, 180.0)
+            assert [x["候選"] for x in d["名字沒處理"]] == [plan["生成"][0]["候選"]]
+            try:
+                render.render_video(w, 0.0, 180.0)
+                raise AssertionError("名字沒蓋到還輸出了")
+            except RuntimeError as e:
+                assert "名字還有地方沒有消音或換掉" in str(e) and "沒處理" in str(e)
+        finally:
+            if old is None:
+                os.environ.pop("BOOKCLUB_DATA_DIR", None)
+            else:
+                os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
