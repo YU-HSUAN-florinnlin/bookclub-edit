@@ -403,9 +403,30 @@ def _current(workdir: Path) -> tuple[dict | None, dict]:
     if check.get("成品影片") not in prods:
         check["成品影片"] = prods[0] if prods else None
         check["看過區段"] = []
-    if check["成品影片"] and not check.get("成品長度"):
-        check["成品長度"] = round(probe_duration(Path(workdir) / check["成品影片"]), 3)
+    if check["成品影片"]:
+        # 10-02 第七批（C2）：重新組裝後檔名一樣、長度變了 → 成品檔換新（大小或修改時間不同）或處理紀錄換新就重新量；
+        # 看過的區段超出新長度的截掉（以前只在沒量過時量一次，「整片看過幾 %」一直用舊長度算）
+        fp = product_print(Path(workdir) / check["成品影片"])
+        stamp = (log or {}).get("產生時間")
+        if not check.get("成品長度") or check.get("成品檔指紋") != fp or check.get("量長度時的處理紀錄") != stamp:
+            length = round(probe_duration(Path(workdir) / check["成品影片"]), 3)
+            check.update({"成品長度": length, "成品檔指紋": fp, "量長度時的處理紀錄": stamp})
+            check["看過區段"] = clip_ranges(check["看過區段"], length)
     return log, check
+
+
+def product_print(path: Path) -> list | None:
+    """成品檔的指紋：[大小, 修改時間（奈秒）]；讀不到回 None。"""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return [st.st_size, st.st_mtime_ns]
+
+
+def clip_ranges(ranges: list, total: float) -> list:
+    """看過的區段截到 [0, total]（純函式）：整段超出的拿掉、跨過的截掉。"""
+    return [[a, min(b, total)] for a, b in ranges if a < total and total > 0]
 
 
 def page_data(workdir: str | Path) -> dict:
@@ -464,7 +485,8 @@ def choose_product(workdir: str | Path, rel: str) -> dict:
     with _lock:
         log, check = _current(workdir)
         if check["成品影片"] != rel:
-            check.update({"成品影片": rel, "看過區段": [], "成品長度": round(probe_duration(workdir / rel), 3)})
+            check.update({"成品影片": rel, "看過區段": [], "成品長度": round(probe_duration(workdir / rel), 3),
+                          "成品檔指紋": product_print(workdir / rel), "量長度時的處理紀錄": (log or {}).get("產生時間")})
         _save(workdir, check)
     return {"ok": True}
 

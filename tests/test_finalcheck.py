@@ -301,6 +301,41 @@ def test_redo_units_per_kind():
         assert ids({"類型": kind, "原片": [10.0, 12.0], "覆核項目": keys}) == [], kind
 
 
+def _remake_product(w: Path, seconds: int) -> None:
+    """同一個檔名換成另一支長度的成品（重新組裝後的樣子），修改時間一定不一樣。"""
+    import os
+    import time as _time
+
+    dst = w / "輸出" / "成品_0-0_sw.mp4"
+    tmp = w / "輸出" / "_新成品.mp4"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                    f"testsrc=duration={seconds}:size=160x90:rate=10", "-f", "lavfi", "-i", f"sine=duration={seconds}",
+                    "-shortest", "-c:v", "libx264", "-preset", "ultrafast", str(tmp)], check=True)
+    tmp.replace(dst)
+    t = _time.time() + 5
+    os.utime(dst, (t, t))
+
+
+def test_rerender_updates_product_length():
+    """10-02 第七批（C2）：重新組裝後成品檔名一樣、長度變了 → 重新量長度，看過的區段截到新長度。
+    10 秒換成 7 秒 → 看完整支是 100%；7 秒換成 10 秒 → 只看過前 7 秒不是 100%。"""
+    if not shutil.which("ffmpeg"):
+        print("（沒有 ffmpeg，跳過）")
+        return
+    w = _workdir()
+    st = fc.add_watched(w, [[0, 10]])
+    assert st["看過比例"] == 1.0
+    _remake_product(w, 7)
+    d = fc.page_data(w)
+    assert abs(d["成品長度"] - 7.0) < 0.3 and d["狀態"]["看過比例"] == 1.0, (d["成品長度"], d["狀態"]["看過比例"])
+    assert all(b <= d["成品長度"] for _a, b in d["看過區段"])
+    fc.add_watched(w, [])   # 存一次（網頁播放時會一直送）
+    _remake_product(w, 10)
+    d = fc.page_data(w)
+    assert abs(d["成品長度"] - 10.0) < 0.3 and d["狀態"]["看過比例"] < 1.0, (d["成品長度"], d["狀態"]["看過比例"])
+    assert not d["狀態"]["可以輸出"] and any("只看過" in x for x in d["狀態"]["還不能輸出的原因"])
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
