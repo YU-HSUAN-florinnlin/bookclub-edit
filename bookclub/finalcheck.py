@@ -603,10 +603,16 @@ def redo_list(workdir: str | Path) -> dict:
         it["做法"] = "重新生成" if it["生成"] else "重新組裝"
         it["說明"] = (f"重新生成這一筆的 {len(it['生成'])} 句聲音，再重新組裝" if it["生成"]
                     else "只重新組裝：這一筆沒有聲音要重新生成；要改的地方先到第 3 步改好")
-        # 10-02：文字和範圍都沒改的，生成規則一樣（從同一個種子開始），重新生成的聲音多半跟上一版一樣；畫面上寫清楚
+        # 10-02 第四批：文字和範圍都沒改的，換一種念法重新生成（避開以前用過的種子，見 note_versions、tts.redo_avoid）；
+        # 上一版的聲音留著備份。畫面上寫會是第幾版
         it["沒改"] = bool(it["生成"]) and all(_same_as_last(workdir, u, ctx, logs) for u in it["生成"])
+        if it["生成"]:
+            it["第幾版"] = max(int((_last_rec(workdir, u, logs) or {}).get("第幾版") or 1) for u in it["生成"]) + 1
         if it["沒改"]:
-            it["說明"] += "。注意：文字和範圍都沒改，重新生成的聲音多半會跟上一版一樣；要不一樣，先到第 3 步改要念的字或範圍"
+            it["說明"] = (f"文字和範圍都沒改：換一種念法重新生成這一筆的 {len(it['生成'])} 句聲音（會是第 {it['第幾版']} 版），再重新組裝。"
+                        "上一版的聲音留著備份")
+        elif it["生成"]:
+            it["說明"] += f"（會是第 {it['第幾版']} 版；要念的字或範圍改過的，照改過的內容重新生成）"
     label_items(items, index)
     doing = check.get("重做中")
     return {"已送回": bool(sent), "時間": (sent or {}).get("時間"), "項目": items,
@@ -620,8 +626,9 @@ def redo_list(workdir: str | Path) -> dict:
 #   2. 只清掉那幾句的生成紀錄與生成快取（舊的聲音檔搬到 `重做前_<時間>/`，不刪），其他的不動
 #   3. 走第 4 步原本的跑法（`execute.run_execute`，一步一支程式）：只有清掉的那幾句會重新生成，接著重新組裝
 #   4. 組裝做完：那幾筆在第 5 步回到「還沒看」，標「重做過」
-# 退回的原因目前只給人看、沒有交給生成程式（做法 B 第 3 步「把原因交給 AI」還沒做）；重新生成照原本的規則
-# 從種子 42 開始（`tts.next_attempt`），文字、範圍沒改的話，聲音很可能跟上一版一樣。
+# 退回的原因目前只給人看、沒有交給生成程式（做法 B 第 3 步「把原因交給 AI」還沒做）。
+# 10-02 第四批：文字、範圍沒改的句子，重新生成時避開以前版本用過的種子（照 `tts.next_attempt` 同樣的順序往下換），
+# 每一次退回都換一個沒用過的；以前的版本記在生成資料夾的 `_重新生成版本.json`，新的一版記「第幾版」「以前的版本」。
 
 REDO_FILE_DIR = "重做前"
 
@@ -689,13 +696,19 @@ def redo_units(it: dict, ctx: dict) -> list[dict]:
     return out
 
 
-def _same_as_last(workdir: Path, unit: dict, ctx: dict, logs: dict) -> bool:
-    """這一句現在要念的字、時間格跟上一次生成的一樣嗎（一樣的話重新生成多半是同一個聲音）。讀不到就當作有改。"""
+def _last_rec(workdir: Path, unit: dict, logs: dict) -> dict | None:
+    """這一句上一次生成的紀錄（logs 是快取：{角色: {id: 紀錄}}）。"""
     role = unit["角色"]
     if role not in logs:
         rec = wd.read_json(_role_paths(Path(workdir), role)[0], default=None) or {}
         logs[role] = {r.get("id"): r for r in rec.get("句子") or []}
-    last = logs[role].get(unit["id"])
+    return logs[role].get(unit["id"])
+
+
+def _same_as_last(workdir: Path, unit: dict, ctx: dict, logs: dict) -> bool:
+    """這一句現在要念的字、時間格跟上一次生成的一樣嗎（一樣的話重新生成多半是同一個聲音）。讀不到就當作有改。"""
+    role = unit["角色"]
+    last = _last_rec(workdir, unit, logs)
     now = next((x for x in ctx.get(role, []) if x.get("id") == unit["id"]), None)
     if not last or not now:
         return False
@@ -710,6 +723,49 @@ def _role_paths(workdir: Path, role: str) -> tuple[Path, Path]:
     return {"老師": (tts.teacher_log_path(workdir), tts.teacher_out_dir(workdir)),
             "學員": (students.log_path(workdir), students.out_dir(workdir)),
             "保留原聲學員": (studentgen.log_path(workdir), studentgen.out_dir(workdir))}[role]
+
+
+def redo_folder(stamp: str) -> str:
+    """舊的聲音檔搬去的資料夾名稱（生成資料夾底下）。"""
+    return f"{REDO_FILE_DIR}_{stamp.replace(':', '').replace('-', '')}"
+
+
+def note_versions(workdir: Path, role: str, ids: list[str], stamp: str, reasons: dict | None = None) -> dict[str, dict]:
+    """10-02 第四批：清掉之前，把這幾句現在的版本記進生成資料夾的 `_重新生成版本.json`（`tts.REDO_VERSIONS`）：
+    - 以前的版本：加一筆（第幾版、選定的種子、試過的種子、每一次的結果、聲音檔搬去哪個資料夾、退回原因）
+    - 避開：上一版的文字、範圍跟再上一版一樣的話，接著累加；不一樣就從上一版用過的重新算
+      重新生成時，文字和範圍都沒改的才真的避開（`tts.redo_avoid`），換一種念法；有改的照原本的規則
+    回傳 {id: {第幾版（這次會生成的）, 換一種念法（目前文字範圍沒改＝會避開）}}；沒生成過的句子不記。"""
+    from bookclub import tts
+
+    log_path, od = _role_paths(workdir, role)
+    recs = {r.get("id"): r for r in (wd.read_json(log_path, default=None) or {}).get("句子") or []}
+    path = od / tts.REDO_VERSIONS
+    data = wd.read_json(path, default=None) or {}
+    folder = str((od / redo_folder(stamp)).relative_to(workdir))
+    out: dict[str, dict] = {}
+    for i in ids:
+        r = recs.get(i)
+        if not r:
+            continue
+        ent = data.get(i) or {}
+        tries = [a for a in r.get("嘗試") or [] if a.get("種子") is not None]
+        sel = r.get("選定")
+        chosen = tries[sel - 1]["種子"] if isinstance(sel, int) and 0 < sel <= len(tries) else None
+        olds = list(ent.get("以前的版本") or [])
+        n = int(r.get("第幾版") or len(olds) + 1)
+        olds.append({"第幾版": n, "種子": chosen, "試過的種子": sorted({int(a["種子"]) for a in tries}),
+                     "嘗試": r.get("嘗試") or [], "選定": sel, "備份資料夾": folder, "重做時間": stamp,
+                     "退回原因": (reasons or {}).get(i, "")})
+        keep = set(ent.get("避開") or []) if ent and tts.same_content(ent, r) else set()   # 上一版跟再上一版文字範圍一樣：接著累加
+        avoid = sorted(keep | {int(a["種子"]) for a in tries})
+        data[i] = {"text": r.get("text"), "生成用文字": r.get("生成用文字", r.get("text")), "slot": r.get("slot"),
+                   "避開": avoid, "以前的版本": olds}
+        out[i] = {"第幾版": n + 1}
+    if out:
+        od.mkdir(parents=True, exist_ok=True)
+        wd.write_json(path, data)
+    return out
 
 
 def clear_generated(workdir: Path, role: str, ids: list[str], stamp: str) -> dict:
@@ -735,9 +791,10 @@ def clear_generated(workdir: Path, role: str, ids: list[str], stamp: str) -> dic
             n["快取"] += len(cache) - len(keep)
             wd.write_json(od / name, keep)
     if od.is_dir():
-        dst = od / f"{REDO_FILE_DIR}_{stamp.replace(':', '').replace('-', '')}"
+        dst = od / redo_folder(stamp)
         for i in ids:
-            for f in od.glob(f"{i}_*"):
+            # 10-02 第四批：選定的那一個（`<id>.wav`）也一起搬，以前的版本才聽得到
+            for f in [*od.glob(f"{i}_*"), od / f"{i}.wav"]:
                 if f.is_file():
                     dst.mkdir(parents=True, exist_ok=True)
                     f.rename(dst / f.name)
@@ -759,7 +816,7 @@ def redo_plan(workdir: str | Path, a: float | None = None, b: float | None = Non
         o = it.get("原片")
         if o and o[0] is not None and ((a is not None and o[1] < a) or (b is not None and o[0] > b)):
             continue
-        e = {k: it.get(k) for k in ("鍵", "來源", "類型", "原片", "覆核項目", "覆核名稱", "原因", "生成", "做法", "說明")}
+        e = {k: it.get(k) for k in ("鍵", "來源", "類型", "原片", "覆核項目", "覆核名稱", "原因", "生成", "做法", "說明", "沒改")}
         e["指紋"] = (check["逐筆"].get(it["鍵"]) or {}).get("指紋")
         out.append(e)
     return out
@@ -774,9 +831,19 @@ def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = 
         return None
     stamp = _now()
     by_role: dict[str, list[str]] = {}
+    reasons: dict[tuple, str] = {}
     for e in plan:
         for u in e["生成"]:
             by_role.setdefault(u["角色"], []).append(u["id"])
+            reasons.setdefault((u["角色"], u["id"]), e.get("原因") or "")
+    # 10-02 第四批：清掉之前先記下現在的版本；文字和範圍都沒改的，重新生成時換一種念法（避開用過的種子）
+    vers = {role: note_versions(workdir, role, ids, stamp, {i: reasons.get((role, i), "") for i in ids})
+            for role, ids in by_role.items()}
+    for e in plan:
+        ns = [vers.get(u["角色"], {}).get(u["id"], {}).get("第幾版") for u in e["生成"]]
+        ns = [x for x in ns if x]
+        if ns:
+            e["第幾版"] = max(ns)
     cleared = {role: clear_generated(workdir, role, ids, stamp) for role, ids in by_role.items()}
     with _lock:
         _log, check = _current(workdir)
@@ -836,6 +903,7 @@ def redone_info(rec: dict, check: dict, log: dict | None) -> dict | None:
         close = o[0] is not None and eo[0] is not None and eo[0] - 1.0 <= o[1] and o[0] <= eo[1] + 1.0
         if e.get("鍵") == key or (keys & set(e.get("覆核項目") or []) and close):
             return {"時間": done["時間"], "原因": e.get("原因", ""), "做法": e.get("做法"),
+                    "第幾版": e.get("第幾版"), "換一種念法": bool(e.get("沒改")),   # 10-02 第四批
                     "新版本": (record_print(rec) != e["指紋"]) if e.get("指紋") else None}
     return None
 

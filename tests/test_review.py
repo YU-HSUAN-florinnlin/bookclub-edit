@@ -365,8 +365,11 @@ def test_final_check_rows_and_ack():
     execute.ack_final(w, out["key"])
     execute.ack_final(w, seen=True)
     fc = execute.final_check(w)
-    # 10-01 第三批 14：「我聽過了」＝第 3 步答「老師的話，不用處理」：不再列，第 3 步看得到這個答案
-    assert not any(r["key"] == out["key"] for r in fc["一定要處理"]) and fc["看過"]
+    # 10-01 第三批 14：「我聽過了」＝第 3 步答「老師的話，不用處理」，第 3 步看得到這個答案
+    # 10-02 第四批：那一列留著（確認過、不算還要處理），看得到當時的答案
+    done = next(r for r in fc["一定要處理"] if r["key"] == out["key"])
+    assert done["已按聽過"] and done["段落外答案"] == execute.OUT_A and fc["看過"] and fc["已確認"] == 1
+    assert fc["還要處理"] == sum(1 for r in fc["一定要處理"] if not r.get("已按聽過"))
     q = execute.outside_questions(w)[t["id"]][0]
     assert q["鍵"] == out["key"] and q["答案"] == execute.OUT_A
     assert not fc["可以開始"]                     # 重疊那一列不能按聽過
@@ -759,13 +762,14 @@ def test_outside_seconds_asked_and_answers_drive_final_check():
         execute.answer_outside(w, q["鍵"], q["start"], q["end"], ans)
         assert row() and "第 3 步答了" in row()["說明"], ans
     execute.answer_outside(w, q["鍵"], q["start"], q["end"], execute.OUT_A)
-    assert row() is None                                                          # 老師的話、不用處理：不列
+    assert row()["已按聽過"] and row()["段落外答案"] == execute.OUT_A               # 老師的話、不用處理：確認過（10-02 第四批：留著不消失）
+    assert "已確認" in row()["說明"] and row()["段落外起訖"] == [q["start"], q["end"]]
     dec = review.load_decisions(w)
     assert q["鍵"] in dec["總檢查"]["聽過"] and dec["段落外答案"][q["鍵"]]["答案"] == execute.OUT_A and dec["段落外答案"][q["鍵"]]["時間"]
     execute.ack_final(w, q["鍵"], heard=False)                                     # 第 4 步取消「我聽過了」＝答案拿掉
     assert row() and execute.outside_questions(w)[t["id"]][0]["答案"] is None
     execute.ack_final(w, q["鍵"], heard=True)                                      # 第 4 步按「我聽過了」→ 第 3 步看得到答案
-    assert execute.outside_questions(w)[t["id"]][0]["答案"] == execute.OUT_A and row() is None
+    assert execute.outside_questions(w)[t["id"]][0]["答案"] == execute.OUT_A and row()["已按聽過"]
     # 範圍變了（再切短 0.5 秒）：舊答案不算，重新問、第 4 步重新列
     review.retime_turn(w, t["id"], t["start"] + 1.5, t["end"])
     q2 = execute.outside_questions(w)[t["id"]][0]
@@ -797,7 +801,8 @@ def test_outside_whole_sentence_given_to_teacher_is_asked():
     assert not any(r["key"].startswith("聲紋:00_010") for r in fc)                 # 同一句不重複列
     execute.answer_outside(w, qs[0]["鍵"], qs[0]["start"], qs[0]["end"], execute.OUT_A)
     fc = execute.final_check(w)["一定要處理"]
-    assert not any(r["key"] == qs[0]["鍵"] or r["key"].startswith("聲紋:00_010") for r in fc)
+    assert not any(r["key"].startswith("聲紋:00_010") for r in fc)
+    assert [r["已按聽過"] for r in fc if r["key"] == qs[0]["鍵"]] == [True]          # 10-02 第四批：留著、確認過
     review.retime_turn(w, t["id"], 40.0, t["end"])                                 # 改回去包住
     assert t["id"] not in execute.outside_questions(w)
     assert "切到外面" not in next(x for x in review.page_data(w)["項目"] if x["id"] == t["id"])

@@ -761,7 +761,7 @@ function rvOutQHtml(it, q, i) {
       : q["答案"] === "好幾個人"
         ? `<p class="rv-warnline">要再切開：一個人一段。<button class="ghost small rv-outgo" data-i="${i}" data-go="split">切出其中一段（帶去新增修改，起訖先填成這幾秒）</button>
             把起點或終點縮到只有一個人講話的那一段再新增；剩下沒處理的幾秒會再問一次。</p>`
-        : q["答案"] === "老師不用處理" ? `<p class="rv-meta">照原聲留著；第 4 步總檢查不會再問這幾秒。</p>`
+        : q["答案"] === "老師不用處理" ? `<p class="rv-meta">照原聲留著；第 4 步總檢查會列成「已確認」（灰色），不用再處理，要改答案在那裡也能改。</p>`
           : `<p class="rv-meta">先不回答的話，第 4 步總檢查會列出這幾秒。</p>`;
   return `<div class="rv-field rv-outq"><p><b>切在段落外面的 ${esc(rvFmt(q.start, 1))}–${esc(rvFmt(q.end, 1))}（${d.toFixed(1)} 秒）是誰的聲音？</b>
       <button class="ghost small rv-outplay" data-i="${i}">試聽這幾秒</button></p>

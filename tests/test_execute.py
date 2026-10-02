@@ -596,7 +596,7 @@ def test_redo_returned_regenerates_only_returned_then_step5_unseen():
 
 
 def test_redo_list_warns_when_text_and_range_unchanged():
-    """10-02：退回的那一句文字、範圍都沒改：第 4 步寫清楚重新生成多半跟上一版一樣；改了字就不寫。"""
+    """10-02：退回的那一句文字、範圍都沒改：第 4 步寫清楚會換一種念法重新生成、是第幾版；改了字就照改過的。"""
     from bookclub import finalcheck, proclog
 
     w = _fresh()
@@ -608,12 +608,104 @@ def test_redo_list_warns_when_text_and_range_unchanged():
     wd.write_json(proclog.log_path(w), log)
     finalcheck.decide_record(w, finalcheck.record_key(log["紀錄"][0]), "退回重做", "念錯字")
     it = finalcheck.redo_list(w)["項目"][0]
-    assert it["沒改"] and "多半會跟上一版一樣" in it["說明"]
+    assert it["沒改"] and "換一種念法" in it["說明"] and "第 2 版" in it["說明"] and it["第幾版"] == 2
+    assert "種子" not in it["說明"] and "多半" not in it["說明"]
     rec = wd.read_json(students.log_path(w))
     rec["句子"][0]["text"] = "上一次念的字"                                    # 這次要念的字跟上一次不一樣
     wd.write_json(students.log_path(w), rec)
     it = finalcheck.redo_list(w)["項目"][0]
-    assert not it["沒改"] and "上一版" not in it["說明"]
+    assert not it["沒改"] and "換一種念法" not in it["說明"] and "照改過的內容" in it["說明"]
+
+
+def test_redo_unchanged_regenerates_with_next_seed_and_keeps_old_versions():
+    """10-02 第四批：第 5 步退回、文字和範圍都沒改的，重做時換一種念法：用還沒用過的下一個種子（照重試的順序），
+    舊的那一版留在紀錄裡（聲音檔搬到備份資料夾），新的成為選定的版本、記第幾版；同一筆再退回再換下一個，不回到用過的。
+    學員重念用假的生成程式、照第 4 步一步一支程式（生成、停頓、收尾各跑一次）走真的 run_generation。"""
+    import numpy as np
+
+    from bookclub import finalcheck, proclog
+
+    w = _fresh()
+    items, _ = students.build_items(w)
+    target = items[0]
+    od = students.out_dir(w)
+    od.mkdir(parents=True, exist_ok=True)
+    ref = w / "假聲線.wav"
+    ref.write_bytes(b"RIFF-fake")
+    seeds: list = []
+
+    def synth(text, seed, speed):
+        seeds.append(seed)
+        return np.zeros(int(24000 * 1.0), dtype=np.float32) + 0.01, 24000
+
+    def prep(it):
+        return {**it, "slot": list(it["slot"]), "slot_s": it["slot"][1] - it["slot"][0], "生成用文字": it["text"],
+                "發音對照": []}
+
+    def gen(wk, ctx=None):   # 假的學員重念：紀錄裡沒有的（被清掉的）才生成；跟第 4 步一樣分三支程式跑
+        rec = wd.read_json(students.log_path(wk), default=None) or {"句子": []}
+        done = {r["id"]: r for r in rec["句子"]}
+        todo = [prep(it) for it in students.build_items(wk)[0] if it["id"] not in done]
+        if not todo:
+            return
+        save = lambda: wd.write_json(students.log_path(wk), {"句子": list(done.values())})   # noqa: E731
+        texts = {it["id"]: it["text"] for it in todo}
+        for phase in tts.PHASES:
+            tts.run_generation(wk, todo, od, ref, "假的", 0.15, save=save, done=done, role="學員", tag="學員聲音",
+                               check_content=True, check_similarity=False, use_pauses=False,
+                               synth=synth if phase != "停頓" else None, hear=lambda path: texts[Path(path).name.split("_第")[0]],
+                               phase=phase, log=lambda s: None)
+
+    gen(w)                                                       # 第一次：每一段都從 42 開始
+    assert set(seeds) == {42}
+    rec0 = {r["id"]: r for r in wd.read_json(students.log_path(w))["句子"]}
+    assert rec0[target["id"]]["嘗試"][0]["種子"] == 42 and "第幾版" not in rec0[target["id"]]
+
+    log = {"產生時間": "t1", "片段": None, "紀錄": [
+        {"類型": "學員重念", "原片": list(target["slot"]), "成品": list(target["slot"]), "做了什麼": "x", "檔案": "a.wav",
+         "覆核項目": [f"學員段落:{target['段落']}"], "文字": target["text"]}]}
+    renders = []
+
+    def render(wk, ctx):
+        renders.append(1)
+        wd.write_json(proclog.log_path(wk), {**log, "產生時間": f"t{len(renders) + 1}",
+                                             "紀錄": [{**log["紀錄"][0], "檔案": f"b{len(renders)}.wav"}]})
+
+    runners = {"老師名字": lambda wk, c: None, "學員重念": gen, "保留原聲學員名字": lambda wk, c: None, "組裝": render}
+    checks = {"老師名字": lambda wk, c: (True, "假的"),
+              "學員重念": lambda wk, c: (all(i["id"] in {r["id"] for r in wd.read_json(students.log_path(wk))["句子"]}
+                                         for i in students.build_items(wk)[0]), "假的"),
+              "保留原聲學員名字": lambda wk, c: (True, "假的"), "組裝": lambda wk, c: (True, "假的")}
+    want = [1, 2026, 2027]   # 照重試的順序（42、1、2026），用完了接著往下
+    for rnd, seed in enumerate(want, start=2):
+        wd.write_json(proclog.log_path(w), {**log, "產生時間": wd.read_json(proclog.log_path(w))["產生時間"]}
+                      if proclog.log_path(w).exists() else log)
+        cur = wd.read_json(proclog.log_path(w))
+        key = finalcheck.record_key(cur["紀錄"][0])
+        finalcheck.decide_record(w, key, "退回重做", f"音質不好 {rnd}")
+        it = finalcheck.redo_list(w)["項目"][0]
+        assert it["沒改"] and it["第幾版"] == rnd and "換一種念法" in it["說明"]
+        seeds.clear()
+        execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, redo_returned=True, log=lambda s: None)
+        assert seeds and set(seeds) == {seed}, (rnd, seeds)      # 只重新生成退回的那一段，換下一個沒用過的（長度不合改語速是同一個）
+        r = {x["id"]: x for x in wd.read_json(students.log_path(w))["句子"]}[target["id"]]
+        assert r["第幾版"] == rnd and r["換一種念法"] and r["嘗試"][r["選定"] - 1]["種子"] == seed
+        assert [v["第幾版"] for v in r["以前的版本"]] == list(range(1, rnd))      # 舊的那幾版留在紀錄裡
+        assert [v["種子"] for v in r["以前的版本"]] == [42, *want][:rnd - 1]
+        last_old = r["以前的版本"][-1]
+        assert (w / last_old["備份資料夾"] / f"{target['id']}.wav").is_file()      # 上一版的聲音檔留著備份
+        assert last_old["退回原因"] == f"音質不好 {rnd}"
+        others = {x["id"]: x for x in wd.read_json(students.log_path(w))["句子"]}
+        assert all("第幾版" not in others[i["id"]] for i in items[1:])            # 別段不動
+        d = finalcheck.page_data(w)
+        got = d["紀錄"][0]["重做過"]
+        assert got["第幾版"] == rnd and got["換一種念法"] and got["做法"] == "重新生成"   # 第 5 步看得出是第幾版
+    # 文字或範圍改了：照原本的規則（不避開，從 42 開始）
+    entry = wd.read_json(od / tts.REDO_VERSIONS)[target["id"]]
+    assert entry["避開"] == [1, 42, 2026]                                          # 第 4 版生成時避開的（前三版用過的）
+    assert tts.redo_avoid(entry, {**prep(target), "text": "改過的字"}) == []
+    assert tts.redo_avoid(entry, {**prep(target), "slot": [target["slot"][0] + 0.5, target["slot"][1]]}) == []
+    assert tts.redo_avoid(entry, prep(target)) == [1, 42, 2026]
 
 
 def test_redo_stopped_midway_finishes_on_next_run():

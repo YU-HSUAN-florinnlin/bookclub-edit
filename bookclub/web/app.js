@@ -259,26 +259,47 @@ function fcTime(t) { t = Math.round(t * 10) / 10; const m = Math.floor(t / 60), 
 
 let fcRowsCache = [];   // 總檢查每一列（按鈕用編號找回那一列）
 
+// 10-02 第四批：確認過的列（勾了「我聽過了」、第 3 步答了「老師的話，不用處理」）留在清單裡顯示成灰色；
+// 「把確認好的收合起來」這個開關記在 localStorage（讀不到、私密視窗丟例外時一律當作不收合）
+const FC_FOLD_KEY = "fc-fold-done";
+function fcFoldDone() { try { return localStorage.getItem(FC_FOLD_KEY) === "1"; } catch (e) { return false; } }
+function fcSetFoldDone(on) { try { localStorage.setItem(FC_FOLD_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係，只是下次不記得 */ } }
+// 切在段落外面的幾秒：在第 4 步也能改答案（跟第 3 步卡片上的選項一樣）
+const FC_OUT = [["老師不用處理", "老師的話，不用處理"], ["老師重念", "老師的話，要用老師聲音重念"],
+  ["還是學員", "還是學員的聲音"], ["好幾個人", "還有好幾個人的聲音"], ["", "先不回答"]];
+
 function finalCheckHtml(fc) {
   fcRowsCache = [];
   const row = (r) => {
     const i = fcRowsCache.push(r) - 1;
     const paths = r["有學員聲音"] || [];
-    return `<tr data-fckey="${esc(r.key)}"><td class="nowrap">${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}</td>
-    <td>${esc(r["說明"])}${r["去改"] ? `<div class="muted fc-todo">怎麼改：${esc(r["去改"])}</div>` : ""}</td>
+    const done = !!r["已按聽過"];
+    const isOut = String(r.key).startsWith("段落外:");
+    const outNow = r["段落外答案"] || "";
+    const outPick = isOut ? `<details class="fc-paths fc-outans"><summary>改答案</summary><p class="muted">這幾秒是誰的聲音？（跟第 3 步卡片上的問題同一題，改這裡兩邊一起改）</p>
+      <ul>${FC_OUT.map(([v, label]) => `<li><button class="${outNow === v ? "" : "secondary "}small" data-fcout="${i}|${esc(v)}" aria-pressed="${outNow === v}">${esc(label)}</button></li>`).join("")}</ul></details>` : "";
+    return `<tr data-fckey="${esc(r.key)}" class="${done ? "fc-done" : ""}"><td class="nowrap">${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}
+      ${done ? `<div><span class="badge fc-donetag">已確認</span></div>` : ""}</td>
+    <td>${esc(r["說明"])}${r["去改"] ? `<div class="muted fc-todo">${done ? "" : "怎麼改："}${esc(r["去改"])}</div>` : ""}</td>
     <td class="fc-acts"><button class="secondary small" data-fcplay="${r.start}|${r.end}">跳過去聽</button>
     ${r["第3步"] ? `<button class="secondary small" data-fcgo="${i}">去第 3 步改這一筆</button>` : ""}
-    ${r["可以按聽過"] ? `<label class="nowrap"><input type="checkbox" data-fcheard="${esc(r.key)}" ${r["已按聽過"] ? "checked" : ""}> 我聽過了，這裡沒有學員的聲音</label>` : ""}
+    ${r["可以按聽過"] ? `<label class="nowrap"><input type="checkbox" data-fcheard="${esc(r.key)}" ${done ? "checked" : ""}> 我聽過了，這裡沒有學員的聲音</label>` : ""}
+    ${outPick}
     ${paths.length ? `<details class="fc-paths"><summary>有學員的聲音</summary><p class="muted">選一個，會帶著這段時間到第 3 步（起訖先填好，按「新增」或「儲存修改」才會存）：</p>
       <ul>${paths.map((p, j) => `<li><button class="secondary small" data-fcpath="${i}|${j}">${esc(p["文字"])}</button></li>`).join("")}</ul></details>` : ""}</td></tr>`;
   };
   const m = fc["摘要"] || {};
   const must = fc["一定要處理"] || [], look = fc["請看一眼"] || [];
+  const doneN = must.filter((r) => r["已按聽過"]).length;
+  const fold = fcFoldDone() && doneN > 0;
+  const shown = fold ? must.filter((r) => !r["已按聽過"]) : must;
   return `<h2 id="fcCheckTitle">開始前總檢查</h2>${execGoCheck ? `<p class="hint" id="fcGoNote">${esc(execGoCheck)}</p>` : ""}
     <div class="card">
-      <p><b>一定要處理</b>（有任何一列還沒處理就不能開始）：${must.length ? `${fc["還要處理"]} 列還沒處理` : "沒有"}</p>
-      ${must.length ? `<table class="kv fc-check">${must.map(row).join("")}</table>
-        <p class="muted">要改的按「去第 3 步改這一筆」；改完回這一頁會重算。</p>` : ""}
+      <p><b>一定要處理</b>（有任何一列還沒處理就不能開始）：${must.length ? `${fc["還要處理"]} 列還沒處理` : "沒有"}${doneN ? `，已確認 ${doneN} 列` : ""}</p>
+      ${doneN ? `<label class="nowrap muted"><input type="checkbox" id="fcFold" ${fold ? "checked" : ""}> 把確認好的收合起來</label>` : ""}
+      ${must.length ? `${shown.length ? `<table class="kv fc-check">${shown.map(row).join("")}</table>` : ""}
+        ${fold ? `<p><button class="ghost small" id="fcUnfold">已確認 ${doneN} 列（點了展開）</button></p>` : ""}
+        <p class="muted">要改的按「去第 3 步改這一筆」；改完回這一頁會重算。確認過的列顯示成灰色，取消勾「我聽過了」或改答案就會回到還要處理。</p>` : ""}
       <p><b>請看一眼</b>（不擋，但要按一次「我看過了」）</p>
       ${look.length ? `<table class="kv fc-check">${look.map(row).join("")}</table>` : "<p class=\"muted\">沒有剪掉、消音、超過 10 秒的老師重念。</p>"}
       <p class="muted">自動算處理好的（被別筆涵蓋）：${(m["自動算處理好"] || []).length} 筆
@@ -311,6 +332,19 @@ function bindFinalCheck(reload) {
   document.querySelectorAll("[data-fcheard]").forEach((c) => c.addEventListener("change", async () => {
     await apiPost("/api/execute/finalcheck", { key: c.dataset.fcheard, "聽過": c.checked }); await reload();
   }));
+  // 10-02 第四批：切在段落外面的幾秒，在這裡直接改答案（存到第 3 步同一個地方）
+  document.querySelectorAll("[data-fcout]").forEach((b) => b.addEventListener("click", async () => {
+    const [i, v] = b.dataset.fcout.split("|");
+    const r = fcRowsCache[Number(i)];
+    const [a, e] = r["段落外起訖"] || [r.start, r.end];
+    try { await apiPost("/api/review/outside", { "鍵": r.key, start: a, end: e, "答案": v || null }); }
+    catch (err) { alert(err.message); return; }
+    await reload();
+  }));
+  const fold = document.getElementById("fcFold");
+  if (fold) fold.addEventListener("change", async () => { fcSetFoldDone(fold.checked); await reload(); });
+  const unfold = document.getElementById("fcUnfold");
+  if (unfold) unfold.addEventListener("click", async () => { fcSetFoldDone(false); await reload(); });
   const seen = document.getElementById("fcSeen");
   if (seen) seen.addEventListener("change", async () => { await apiPost("/api/execute/finalcheck", { "看過": seen.checked }); await reload(); });
 }
@@ -367,6 +401,7 @@ async function renderExecuteBody() {
     </div>
     ${redo.length ? `<h2>第 5 步退回重做的（${redo.length} 筆）</h2>
       <div class="card"><p class="muted">按「開始執行」或下面這顆，會只重做退回的這幾筆：要重新生成的那幾句先清掉、重新生成（其他做好的不重做），最後重新組裝。
+        要念的字和範圍都沒改的，會換一種念法重新生成，每退回一次換一次，不會回到用過的念法；上一版的聲音留著備份。
         做完到第 5 步，這幾筆會回到「還沒看」、標「重做過」。${d["重做中"] ? "<b>上次重做還沒做完</b>，再按一次會接著做。" : ""}</p>
       <p><button id="btnRedo" ${execBlocked ? "disabled" : ""}>只重做退回的這幾筆（${redo.length} 筆）</button>
         ${execBlocked && !running ? `<span class="muted">要先能按「開始執行」（見上面）</span>` : ""}</p>

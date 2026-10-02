@@ -644,6 +644,10 @@ table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg)
 .fc-check td { vertical-align: top; }
 .fc-acts { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; min-width: 220px; }
 .fc-todo { margin-top: 4px; }
+.fc-check tr.fc-done td { color: var(--muted); background: var(--bg-soft); }
+.fc-check tr.fc-done td:first-child, .fc-check tr.fc-done td:nth-child(2) { opacity: .55; }   /* 10-02 第四批：確認過的列顯示成灰色 */
+.fc-check tr.fc-done td.fc-acts { opacity: .8; }
+.fc-donetag { margin-top: 4px; }
 .fc-paths summary { cursor: pointer; color: var(--warn); font-size: 14px; }
 .fc-paths ul { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
 .rv-gonote { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--rv-sug-bg); color: var(--rv-sug-fg); font-size: 14px; }

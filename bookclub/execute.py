@@ -433,15 +433,14 @@ def final_check(workdir: str | Path) -> dict:
 
     # 1. 學員的話落在段落外面（人改過段落的開頭或結尾，句子的一部分在外面、又沒被別的處理蓋到）
     #    10-01 1-4：只列沒被蓋到的那幾秒；鍵照沒被蓋到的那一段的起點（整段都沒蓋到時跟以前一樣，之前按過的「聽過」照算）
-    #    10-01 第三批 14：第 3 步切的當下問過「外面這幾秒是誰的聲音」：答「老師的話，不用處理」（＝這裡的「我聽過了」）不列；
+    #    10-01 第三批 14：第 3 步切的當下問過「外面這幾秒是誰的聲音」：答「老師的話，不用處理」（＝這裡的「我聽過了」）算確認過；
     #    其他答案照樣看有沒有處理（處理了就被蓋到、不會列），沒處理的說明寫上答了什麼、還差什麼
+    #    10-02 第四批：確認過的那一列不再拿掉（已按聽過＝True，不算還要處理），網頁上顯示成灰色、可以取消或改答案
     gaps = outside_gaps(turns, by_id, named, kept)
     for g in gaps:
         t, a, b, s0, e = g["段落"], g["a"], g["b"], g["start"], g["end"]
         key = g["鍵"]
         ans = outside_answer(answers, heard, key, s0, e)
-        if ans == OUT_A:
-            continue
         tname = review.item_name(index, f"學員段落:{t['id']}")
         hit = g["蓋到"]
         done = "、".join(f"〈{h['名稱']}〉" for h in hit)
@@ -452,12 +451,16 @@ def final_check(workdir: str | Path) -> dict:
             (f"〈{tname}〉（{t1(t['start'])}–{t1(t['end'])}）切短的時候，原本屬於這一段的一句（{t1(a)}–{t1(b)}，{b - a:.1f} 秒）"
              f"整句落在段落外面；{part}" if g.get("整句") else
              f"〈{tname}〉（{t1(t['start'])}–{t1(t['end'])}）的句子有 {b - a:.1f} 秒在段落外面（{t1(a)}–{t1(b)}）；{part}")
-            + (said or "這幾秒會是學員原聲。聽一下：真的有學員的聲音，按「有學員的聲音」選怎麼處理；"
-                        "外面那一段不是學員（例如是老師接話），按「我聽過了」"), ack=True,
+            + ("已確認是老師的話，不用處理（照原聲留著）。" if ans == OUT_A else
+               said or "這幾秒會是學員原聲。聽一下：真的有學員的聲音，按「有學員的聲音」選怎麼處理；"
+                       "外面那一段不是學員（例如是老師接話），按「我聽過了」"), ack=True,
             name=tname, card=f"學員段落:{t['id']}",
-            todo=(OUT_GO[ans].format(name=tname) if ans in OUT_GO else
+            todo=("要改的話：取消勾「我聽過了」，或在「改答案」選別的" if ans == OUT_A else
+                  OUT_GO[ans].format(name=tname) if ans in OUT_GO else
                   f"到第 3 步〈{tname}〉回答「切在外面的這幾秒是誰的聲音」，或按「改時間」把起訖改大包住 {t1(s0)}–{t1(e)}"),
-            paths=_fix_paths(s0, e, near(s0, e), index, turn=t), heard_now=False)   # 答過「不用處理」的上面已經跳過
+            paths=_fix_paths(s0, e, near(s0, e), index, turn=t), heard_now=ans == OUT_A)
+        # 10-02 第四批：答過「老師的話，不用處理」（或這裡勾了「我聽過了」）的不再拿掉，留著顯示成確認過、可以在這裡改答案
+        must[-1].update({"段落外答案": ans, "段落外起訖": [round(s0, 3), round(e, 3)]})
     # 2. 名字換不了代號
     for m in plan.get("要人處理", []):
         k = f"名字:{m['候選']}"
@@ -489,7 +492,7 @@ def final_check(workdir: str | Path) -> dict:
     #    10-01：句子只有一部分被處理蓋到的，沒蓋到的部分（至少 0.3 秒）照樣列（以前整句跳過，例如重疊只蓋到 0.7 秒、
     #    句子其他 2.8 秒的學員原聲沒人處理）；已經列在「段落外」的那幾秒不重複列
     stu_turns = [t for t in turns if t.get("說話者") not in (None, "老師")]
-    # 10-02：「段落外」那幾秒不管答了沒有都不在這裡重複列（答「老師的話，不用處理」的上面不列，這裡也不能冒出來）
+    # 10-02：「段落外」那幾秒不管答了沒有都不在這裡重複列（答「老師的話，不用處理」的上面已經列成確認過，這裡不能再冒出來）
     blockers = handled + [(t["start"], t["end"]) for t in stu_turns] + [(g["start"], g["end"]) for g in gaps]
     soft = []
     for x in sents:
@@ -550,7 +553,7 @@ def final_check(workdir: str | Path) -> dict:
                "提醒": "執行期間關掉其他程式（Zoom、瀏覽器分頁）；接上電源、筆電不要闔上（螢幕可以關）"}
     left = [r for r in must if not r.get("已按聽過")]
     return {"一定要處理": sorted(must, key=lambda r: r["start"]), "請看一眼": sorted(look, key=lambda r: r["start"]),
-            "摘要": summary, "可以開始": not left, "還要處理": len(left),
+            "摘要": summary, "可以開始": not left, "還要處理": len(left), "已確認": len(must) - len(left),
             "看過": bool((dec.get("總檢查") or {}).get("看過"))}
 
 

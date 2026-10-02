@@ -190,6 +190,25 @@ def test_third_batch_1001():
         assert f'"{old}' not in rv and f">{old}" not in rv, old                   # 7：統一叫法
 
 
+def test_fourth_batch_1002():
+    """10-02 第四批：總檢查確認過的列留著（灰色、可以取消或改答案、可以收合且記得）；退回重做換一種念法、看得出第幾版。
+    畫面上不出現「種子」。"""
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    fcj = (WEB / "finalcheck.js").read_text(encoding="utf-8")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "fc-done" in app and "tr.fc-done" in css and "已確認" in app
+    assert "把確認好的收合起來" in app and "（點了展開）" in app and "FC_FOLD_KEY" in app
+    assert "data-fcout" in app and "/api/review/outside" in app and "改答案" in app
+    assert "換一種念法" in app and "換一種念法" in fcj and "版" in fcj
+    assert "多半會跟上一版一樣" not in app and "生成的規則一樣" not in fcj
+    assert "第 4 步總檢查不會再問這幾秒" not in rv
+    for js in (app, rv, fcj):   # 畫面上的字不用「種子」
+        for line in js.splitlines():
+            code = line.split("//")[0]
+            assert "種子" not in code, line.strip()
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

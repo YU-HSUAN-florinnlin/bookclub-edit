@@ -322,10 +322,14 @@ function fcRenderRight() {
 function fcRedoneHtml(r) {
   const x = r["重做過"];
   if (!x) return "";
+  // 10-02 第四批：文字和範圍沒改的，重做時換一種念法重新生成；看得出現在是第幾版（上一版的聲音留著備份）
+  const ver = x["第幾版"] ? `第 ${x["第幾版"]} 版` : "";
   const what = x["做法"] === "重新生成"
-    ? (x["新版本"] === false ? "重新生成過，但聲音跟上一版一樣（文字和範圍沒改，生成的規則一樣）" : "這一版是重新生成的新聲音")
+    ? (x["新版本"] === false ? "重新生成過，但這一筆的聲音跟上一版一樣"
+      : x["換一種念法"] ? `這是換一種念法重新生成的${ver || "新版本"}（文字和範圍沒改，上一版的聲音留著備份）`
+        : `這一版是照改過的內容重新生成的${ver ? `（${ver}）` : "新聲音"}`)
     : "這一筆沒有聲音要重新生成，只重新組裝過";
-  return `<div class="rv-statebox"><span class="rv-tag">重做過</span> <span class="rv-meta">${esc(fmtStamp(x["時間"]))}：${esc(what)}。
+  return `<div class="rv-statebox"><span class="rv-tag">重做過${ver && x["做法"] === "重新生成" ? `・${esc(ver)}` : ""}</span> <span class="rv-meta">${esc(fmtStamp(x["時間"]))}：${esc(what)}。
     上一次退回的原因：${esc(x["原因"] || "（沒寫）")}</span></div>`;
 }
 
@@ -501,7 +505,7 @@ function fcRenderLower() {
   const rows = fcRecs().map((r) => `<li data-key="${esc(r["鍵"])}" class="${r["鍵"] === fc.cur ? "cur" : ""} ${r["結果"] ? "done" : ""}">
       <span class="tm">${fcHasTime(r) ? esc(fcFmt(r["成品"][0])) : "—"}</span>
       <span class="ty"><span class="rv-chip fc-${FC_TYPE[r["類型"]] || "ov"}"><i></i>${esc(fcKind(r["類型"]))}</span></span>
-      <span class="tx">${r["重做過"] ? `<span class="rv-tag">重做過</span>` : ""}${esc(r["做了什麼"])}</span>
+      <span class="tx">${r["重做過"] ? `<span class="rv-tag">重做過${r["重做過"]["第幾版"] && r["重做過"]["做法"] === "重新生成" ? `・第 ${r["重做過"]["第幾版"]} 版` : ""}</span>` : ""}${esc(r["做了什麼"])}</span>
       <span class="sg">${esc((r["覆核名稱"] || []).join("、"))}</span>
       <span class="st ${r["結果"] === "通過" ? "ok" : ""}">${r["結果"] === "通過" ? "✓ 通過" : r["結果"] === "退回重做" ? "退回" : "—"}</span></li>`).join("");
   lower.innerHTML = `${unHtml}<h2 class="fc-h2">處理紀錄（${fcRecs().length} 筆，成品時間）</h2>

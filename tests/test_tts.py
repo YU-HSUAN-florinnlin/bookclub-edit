@@ -23,6 +23,7 @@ import numpy as np
 import soundfile as sf
 
 from bookclub import fit, pauses, tts
+from bookclub import workdir as wd
 
 SR = 24000
 TOL = 0.15
@@ -130,6 +131,89 @@ def test_next_attempt_stops_when_pass_or_max():
     assert tts.next_attempt([_att(42, 1.0, 5.0, 0.95)], 5.0, TOL) is None
     three = [_att(42, 1.0, 5.0, 0.1), _att(1, 1.0, 5.0, 0.1), _att(2026, 1.0, 5.0, 0.1)]
     assert tts.next_attempt(three, None, TOL) is None
+
+
+def test_next_attempt_avoids_used_seeds_in_same_order():
+    """10-02 第四批：退回重做、文字範圍沒改的，從還沒用過的下一個種子開始；念錯再換也不回到用過的；SEEDS 用完接著往下。"""
+    assert tts.next_attempt([], None, TOL, [42]) == (1, 1.0)
+    assert tts.next_attempt([_att(1, 1.0, 5.0, 0.5)], None, TOL, [42]) == (2026, 1.0)
+    assert tts.next_attempt([], None, TOL, [42, 1, 2026]) == (2027, 1.0)
+    assert tts.next_attempt([_att(2027, 1.0, 5.0, 0.5)], None, TOL, [42, 1, 2026]) == (2028, 1.0)
+    seed, speed = tts.next_attempt([_att(1, 1.0, 6.0, 0.95)], 5.0, TOL, [42])   # 長度不合：同一個種子改語速
+    assert seed == 1 and abs(speed - 1.2) < 1e-6
+    assert tts.next_attempt([], None, TOL, []) == (42, 1.0) and tts.seed_order([]) == tts.SEEDS
+
+
+def _redo_round(work: Path, role: str, ids: list[str], stamp: str) -> dict:
+    from bookclub import finalcheck
+
+    got = finalcheck.note_versions(work, role, ids, stamp, {i: "音質" for i in ids})
+    finalcheck.clear_generated(work, role, ids, stamp)
+    return got
+
+
+def test_teacher_and_kept_student_redo_change_seed_keep_old_version():
+    """10-02 第四批：老師重念、保留原聲學員名字跟學員重念一樣：退回重做、文字和範圍沒改 → 換下一個種子；
+    舊的那一版留在紀錄裡、聲音檔在備份資料夾；再退回再換；字改了照原本的規則。老師照第 4 步分三支程式跑。"""
+    from bookclub import studentgen
+
+    texts = {"A": "好，那我們來聽聽看大家這週的練習。", "B": "這個是我們今天課程的重點之一。", "N1": "好，謝謝你的分享。"}
+    hear_ok = lambda p: texts[Path(p).name.split("_")[0]]  # noqa: E731
+    with tempfile.TemporaryDirectory() as d:
+        work = Path(d)
+        ref = work / "參考音"
+        ref.mkdir()
+        sf.write(str(ref / "ref.wav"), np.zeros(SR, dtype=np.float32), SR)
+        (ref / "ref.txt").write_text("參考音逐字稿", encoding="utf-8")
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": hear_ok("A_")}, {"id": "B", "text": hear_ok("B_")}],
+                                 ensure_ascii=False), encoding="utf-8")
+
+        def run_all(synth):
+            for phase in tts.PHASES:
+                out = tts.generate_teacher(work, sp, synth=synth if phase != "停頓" else _never, hear=hear_ok,
+                                           check_similarity=False, use_pauses=False, phase=phase, log=lambda s: None)
+            return {r["id"]: r for r in out["句子"]}
+
+        synth = FakeSynth()
+        recs = run_all(synth)
+        assert [c[1] for c in synth.calls] == [42, 42]
+        for n, want in ((2, 1), (3, 2026), (4, 2027)):
+            assert _redo_round(work, "老師", ["B"], f"2026-10-02T10:0{n}:00") == {"B": {"第幾版": n}}
+            synth = FakeSynth()
+            recs = run_all(synth)
+            assert [c[1] for c in synth.calls] == [want]                 # 只有 B 重新生成，換下一個沒用過的
+            b = recs["B"]
+            assert b["第幾版"] == n and b["換一種念法"] and b["嘗試"][b["選定"] - 1]["種子"] == want
+            assert [v["種子"] for v in b["以前的版本"]] == [42, 1, 2026][:n - 1]
+            assert (work / b["以前的版本"][-1]["備份資料夾"] / "B.wav").is_file()
+            assert "第幾版" not in recs["A"]
+        # 字改了：照原本的規則從 42 開始（版本照樣記）
+        _redo_round(work, "老師", ["B"], "2026-10-02T10:09:00")
+        texts["B"] = "這個是我們今天課程的另一個重點。"
+        sp.write_text(json.dumps([{"id": "A", "text": texts["A"]}, {"id": "B", "text": texts["B"]}],
+                                 ensure_ascii=False), encoding="utf-8")
+        synth = FakeSynth()
+        recs = run_all(synth)
+        assert [c[1] for c in synth.calls] == [42] and recs["B"]["第幾版"] == 5 and not recs["B"]["換一種念法"]
+
+        # 保留原聲學員名字：一樣的生成程式（run_generation），紀錄、資料夾不同
+        od = studentgen.out_dir(work)
+        od.mkdir(parents=True)
+        it = {"id": "N1", "text": texts["N1"], "生成用文字": texts["N1"], "發音對照": [], "slot": None, "slot_s": None}
+        done: dict = {}
+        save = lambda: wd.write_json(studentgen.log_path(work), {"句子": list(done.values())})   # noqa: E731
+        for rnd, want in enumerate((42, 1, 2026), start=1):
+            if rnd > 1:
+                assert _redo_round(work, "保留原聲學員", ["N1"], f"2026-10-02T11:0{rnd}:00") == {"N1": {"第幾版": rnd}}
+                done.clear()
+            synth = FakeSynth()
+            tts.run_generation(work, [dict(it)], od, ref / "ref.wav", "參考", TOL, save=save, done=done, role="學員",
+                               check_similarity=False, use_pauses=False, synth=synth, hear=hear_ok,
+                               log=lambda s: None)
+            save()
+            assert [c[1] for c in synth.calls] == [want]
+            assert done["N1"].get("第幾版", 1) == rnd
 
 
 def test_choose_best_prefers_content_pass():

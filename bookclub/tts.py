@@ -54,6 +54,9 @@ SPEED_MIN, SPEED_MAX = 0.85, 1.2  # 改語速重生成時的上下限，再多�
 
 GEN_DIR_NAME = "生成"
 ATTEMPT_CACHE = "_嘗試快取.json"   # 每次生成完就記下來，中斷後重跑同一句同一次不重生成
+# 10-02 第四批：第 5 步退回重做、文字和範圍都沒改的句子，重新生成時避開用過的種子（換一種念法）；
+# 每一句以前的版本也記在這裡（`finalcheck.prepare_redo` 寫、`run_generation` 讀）。格式見 `redo_avoid`。
+REDO_VERSIONS = "_重新生成版本.json"
 
 
 # ---------- 路徑 ----------
@@ -250,22 +253,40 @@ class Attempt:
         }
 
 
-def next_attempt(history: list[Attempt], slot_s: float | None, tolerance: float) -> tuple[int, float] | None:
+def seed_order(avoid=()) -> list[int]:
+    """依序要試的種子：SEEDS；10-02 第四批：有要避開的（退回重做換一種念法）而 SEEDS 不夠用時，
+    接在最後一個後面一個一個往上加（2027、2028⋯），每一次退回都還有沒用過的。"""
+    avoid = set(avoid or ())
+    if not avoid:
+        return list(SEEDS)
+    out, nxt = list(SEEDS), SEEDS[-1] + 1
+    while len([x for x in out if x not in avoid]) < MAX_ATTEMPTS:
+        out.append(nxt)
+        nxt += 1
+    return out
+
+
+def next_attempt(history: list[Attempt], slot_s: float | None, tolerance: float,
+                 avoid=()) -> tuple[int, float] | None:
     """看前幾次的結果，決定下一次用什麼種子、語速；回傳 None 表示不用再試。
 
     - 還沒試過：種子 42、語速 1.0
     - 上一次內容不過：換下一個種子（語速回到 1.0）
     - 內容過、長度不過：同一個種子，語速改成讓長度接近時間格
     - 都過：不用再試
+    avoid（10-02 第四批）：退回重做、文字和範圍都沒改的句子，以前版本用過的種子；照同樣的順序跳過這幾個
+    （第一次就從還沒用過的下一個開始）。
     """
+    order = seed_order(avoid)
+    skip = set(avoid or ())
     if not history:
-        return SEEDS[0], 1.0
+        return next(x for x in order if x not in skip), 1.0
     if len(history) >= MAX_ATTEMPTS:
         return None
     last = history[-1]
     if not last.content_ok():
-        used = {a.seed for a in history}
-        for s in SEEDS:
+        used = {a.seed for a in history} | skip
+        for s in order:
             if s not in used:
                 return s, 1.0
         return None
@@ -676,6 +697,27 @@ def _ctx_from_json(data: dict, out_dir: Path) -> dict:
             "pauses": {int(i): float(d) for i, d in data["pauses"]}, "clip": out_dir / data["clip"]}
 
 
+def redo_avoid(entry: dict | None, it: dict) -> list[int]:
+    """這一句重新生成時要避開的種子（純函式）。entry 是 `REDO_VERSIONS` 裡這一句的那一筆：
+    {text, 生成用文字, slot, 避開: [種子], 以前的版本: [{第幾版, 種子, 試過的種子, 嘗試, 選定, 備份資料夾, 重做時間, 退回原因}]}。
+    要念的字、生成用文字、時間格跟上一版一樣才避開（換一種念法）；有改的照原本的規則（從種子 42 開始）。"""
+    if not entry or not entry.get("避開") or not same_content(entry, it):
+        return []
+    return [int(x) for x in entry["避開"]]
+
+
+def same_content(a: dict, b: dict) -> bool:
+    """兩邊要念的字、生成用文字、時間格是不是一樣（時間格前後差 0.05 秒以內）（純函式）。"""
+    if (a.get("text") or "") != (b.get("text") or ""):
+        return False
+    if (a.get("生成用文字") or a.get("text") or "") != (b.get("生成用文字") or b.get("text") or ""):
+        return False
+    old, new = a.get("slot"), b.get("slot")
+    if bool(old) != bool(new):
+        return False
+    return not (old and new and (abs(old[0] - new[0]) > SLOT_TOLERANCE_S or abs(old[1] - new[1]) > SLOT_TOLERANCE_S))
+
+
 def run_generation(
     workdir: Path, todo: list[dict], out_dir: Path, ref_wav: Path, ref_text: str, tolerance: float, *,
     save: Callable[[], object], done: dict, role: str = "老師", tag: str = "老師聲音",
@@ -717,6 +759,8 @@ def run_generation(
     want_similar = similar is None and check_similarity and phase != "停頓"   # 10-01：要生成時才載入
 
     histories: dict[str, list[Attempt]] = {it["id"]: [] for it in todo}
+    versions = wd.read_json(out_dir / REDO_VERSIONS, default=None) or {}   # 10-02 第四批：退回重做換一種念法
+    avoid = {it["id"]: redo_avoid(versions.get(it["id"]), it) for it in todo}
     paused: dict[str, dict] = {}
     ctxs: dict[str, dict] = {}
     cache_path = out_dir / ATTEMPT_CACHE
@@ -772,7 +816,9 @@ def run_generation(
         say(f"[{tag}] 第 {it['id']} 句（{len(it['text'])} 字）"
             + (f"，發音對照：{'、'.join(it['發音對照'])}" if it["發音對照"] else ""))
         h = histories[it["id"]]
-        while (nxt := next_attempt(h, None, tolerance)) is not None:
+        if avoid[it["id"]] and not h:
+            say(f"  第 {len(versions[it['id']].get('以前的版本') or []) + 1} 版：上一版退回重做、文字和範圍沒改，換一種念法重新生成")
+        while (nxt := next_attempt(h, None, tolerance, avoid[it["id"]])) is not None:
             h.append(attempt(it, len(h) + 1, *nxt))
     if phase == "生成":
         log(f"[{tag}] 這一支程式只生成：{len(todo)} 句做完；插入停頓、放回時間格交給下一支程式")
@@ -876,17 +922,21 @@ def run_generation(
     allow_new = True
     say = log
     retry = [it for it in todo if it["slot_s"]
-             and next_attempt(histories[it["id"]], it["slot_s"], tolerance) is not None]
+             and next_attempt(histories[it["id"]], it["slot_s"], tolerance, avoid[it["id"]]) is not None]
     if retry:
         for it in retry:
             log(f"[{tag}] 第 {it['id']} 句長度差太多，改語速重生成")
             h = histories[it["id"]]
-            while (nxt := next_attempt(h, it["slot_s"], tolerance)) is not None:
+            while (nxt := next_attempt(h, it["slot_s"], tolerance, avoid[it["id"]])) is not None:
                 h.append(attempt(it, len(h) + 1, *nxt))
 
     for it in todo:
         done[it["id"]] = _finalize(it, out_dir, histories[it["id"]], paused.get(it["id"]),
                                    ctxs.get(it["id"]), tolerance, log, role=role, tag=tag)
+        ent = versions.get(it["id"])
+        if ent and ent.get("以前的版本"):   # 10-02 第四批：退回重做過的句子，記第幾版、以前的版本（舊的那幾版留在紀錄裡）
+            done[it["id"]].update({"第幾版": len(ent["以前的版本"]) + 1, "以前的版本": ent["以前的版本"],
+                                   "換一種念法": bool(avoid[it["id"]])})
         save()
     return load_s
 
