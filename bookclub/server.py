@@ -344,7 +344,9 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
 
     video_path = Path(video) if video else None
     if video_path is None and analysis.get("video"):
-        video_path = Path(analysis["video"])
+        from bookclub.workdir import find_video, localize
+
+        video_path = find_video(workdir) or localize(analysis["video"], workdir)   # 10-02 第五批
 
     # 子步驟鍵名沿用 bookclub/analyze.py 的中文命名（1_轉文字…5_找名字），前端
     # 第 1 步頁直接照這個順序顯示；「挑選老師參考聲音片段」（前端第 2 步）另外從
@@ -854,8 +856,12 @@ class BookclubServer(ThreadingHTTPServer):
 
             video = opts.get("video") or (str(self.video) if self.video else None)
             if not video:
-                analysis = read_json(analysis_result_path(self.workdir), default={}) or {}
-                video = analysis.get("video")
+                from bookclub.workdir import find_video, video_candidates, video_missing_message
+
+                found = find_video(self.workdir)   # 10-02 第五批：存下來的路徑照「現在這個工作區」解讀
+                if found is None and video_candidates(self.workdir):
+                    return {"started": False, "error": video_missing_message(self.workdir)}
+                video = str(found) if found else None
             if not video:
                 return {
                     "started": False,
@@ -1277,7 +1283,8 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub.execute import ack_final
 
             self._send_json(200, ack_final(server.workdir, body.get("key"), bool(body.get("聽過", True)),
-                                           body.get("看過") if "看過" in body else None))
+                                           body.get("看過") if "看過" in body else None,
+                                           body.get("看過的列") if isinstance(body.get("看過的列"), list) else None))
         elif path == "/api/execute/start":
             result = server.start_execute(body)
             self._send_json(202 if result.get("started") else 409, result)

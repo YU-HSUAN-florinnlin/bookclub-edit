@@ -808,5 +808,64 @@ def test_outside_whole_sentence_given_to_teacher_is_asked():
     assert "切到外面" not in next(x for x in review.page_data(w)["項目"] if x["id"] == t["id"])
 
 
+def test_seen_resets_when_look_list_grows_or_changes():
+    """10-02 第五批：按過「我看過了」之後，「請看一眼」多了列（新增消音）或某一列時間範圍變了 → 回到沒勾、標出哪幾列是新的；
+    只是少了列不重設。舊資料（只記了看過、看過時間）：按了之後才新增或改過的剪掉／消音算新的，其他不擋。"""
+    from bookclub import execute
+
+    w = _fresh()
+    m1 = review.manual_edit(w, {"類型": "局部消音", "start": 30.0, "end": 31.0})["id"]
+    fc = execute.final_check(w)
+    keys0 = [r["key"] for r in fc["請看一眼"]]
+    assert f"消音:{m1}" in keys0 and not fc["看過"]
+    execute.ack_final(w, seen=True)
+    fc = execute.final_check(w)
+    assert fc["看過"] and fc["看過後新增"] == 0 and not any(r.get("新的") for r in fc["請看一眼"])
+    # 多了一列：回到沒勾，那一列標「新的」
+    m2 = review.manual_edit(w, {"類型": "局部消音", "start": 50.0, "end": 51.0})["id"]
+    fc = execute.final_check(w)
+    assert not fc["看過"] and fc["看過後新增"] == 1
+    assert [r["key"] for r in fc["請看一眼"] if r.get("新的")] == [f"消音:{m2}"]
+    execute.ack_final(w, seen=True, rows=[{"key": r["key"], "start": r["start"], "end": r["end"]} for r in fc["請看一眼"]])
+    assert execute.final_check(w)["看過"]
+    # 某一列的時間範圍變了：回到沒勾
+    review.manual_edit(w, {"類型": "局部消音", "id": m1, "start": 30.0, "end": 32.5})
+    fc = execute.final_check(w)
+    assert not fc["看過"] and [r["key"] for r in fc["請看一眼"] if r.get("新的")] == [f"消音:{m1}"]
+    execute.ack_final(w, seen=True)
+    # 少了列：不重設
+    dec = review.load_decisions(w)
+    for m in dec["局部消音"]:
+        if m["id"] == m2:
+            m["狀態"] = "還原"
+    review._save_decisions(w, dec)
+    fc = execute.final_check(w)
+    assert fc["看過"] and f"消音:{m2}" not in [r["key"] for r in fc["請看一眼"]]
+    # 網頁送來的清單（畫面上看到的）少一列：那一列算新的
+    execute.ack_final(w, seen=True, rows=[])
+    fc = execute.final_check(w)
+    assert not fc["看過"] and fc["看過後新增"] == len(fc["請看一眼"])
+    # 取消勾：清單一起拿掉
+    execute.ack_final(w, seen=False)
+    assert "看過的列" not in review.load_decisions(w)["總檢查"]
+    # 舊資料：只記了看過、看過時間
+    dec = review.load_decisions(w)
+    dec["總檢查"].update({"看過": True, "看過時間": "2000-01-01T00:00:00"})
+    review._save_decisions(w, dec)
+    fc = execute.final_check(w)
+    assert not fc["看過"] and fc["看過後新增"] >= 1                 # 按了之後才新增的消音算新的
+    dec["總檢查"]["看過時間"] = "2999-01-01T00:00:00"
+    review._save_decisions(w, dec)
+    assert execute.final_check(w)["看過"]                            # 沒有比較新的：照算看過，不莫名被擋
+    # 純函式
+    look = [{"key": "a", "start": 1.0, "end": 2.0}, {"key": "b", "start": 3.0, "end": 4.0}]
+    assert execute.seen_state({"看過": True, "看過的列": execute.look_snapshot(look)}, look) == (True, [])
+    assert execute.seen_state({"看過": True, "看過的列": execute.look_snapshot(look[:1])}, look) == (False, ["b"])
+    assert execute.seen_state({"看過": True, "看過的列": execute.look_snapshot(look)}, look[:1]) == (True, [])
+    moved = [look[0], {"key": "b", "start": 3.0, "end": 4.2}]
+    assert execute.seen_state({"看過": True, "看過的列": execute.look_snapshot(look)}, moved) == (False, ["b"])
+    assert execute.seen_state({"看過": False}, look) == (False, [])
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

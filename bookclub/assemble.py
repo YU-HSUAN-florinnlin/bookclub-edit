@@ -341,6 +341,7 @@ def _write_wav(path: Path, x: np.ndarray) -> None:
     import soundfile as sf
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    wd.unlink_if_link(path)   # 10-02 第五批：複製來的工作區裡是連結的話，寫成自己的檔（不順著連結寫回原本的工作區）
     sf.write(str(path), np.clip(x, -1, 1), SR, subtype="PCM_16")
 
 
@@ -369,10 +370,11 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
     for w in warnings:
         print(f"⚠️ {w}")
 
-    if video is None:
-        merged = wd.read_json(wd.merged_transcript_path(workdir)) or {}
-        video = merged.get("source") or (wd.read_json(wd.analysis_result_path(workdir)) or {}).get("video")
-    if not video or not Path(video).is_file():
+    if video is None:   # 10-02 第五批：存下來的路徑照「現在這個工作區」解讀（見 wd.find_video）
+        video = wd.find_video(workdir)
+        if video is None:
+            raise FileNotFoundError(wd.video_missing_message(workdir))
+    if not Path(video).is_file():
         raise FileNotFoundError(f"找不到原片影片：{video}\n→ 用 --video 指定影片路徑。")
 
     out = out_dir(workdir)

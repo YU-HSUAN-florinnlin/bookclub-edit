@@ -368,7 +368,7 @@ def test_parts_swap_high_while_running_asks_stop():
     lines: list = []
     prog = execute.run_execute(w, checks=checks, parts=opts, skip_precheck=True, log=lines.append)
     assert _calls(w) == ["老師名字 生成"] and prog["停止"]
-    assert "swap" in prog["停止原因"] and "9.0 GB" in prog["停止原因"] and "8.5 GB" in prog["停止原因"]
+    assert "系統拿硬碟頂替" in prog["停止原因"] and "swap" not in prog["停止原因"] and "9.0 GB" in prog["停止原因"] and "8.5 GB" in prog["停止原因"]
     assert prog["步驟"]["老師名字"]["子程式"][0]["swap最高GB"] == 9.0
     assert any("已請目前這一支程式做完這一句就停" in x for x in lines)
 
@@ -777,6 +777,188 @@ def test_current_steps_and_output_methods():
     if sys.platform != "darwin":
         assert [m for m, _ in opts] == ["sw"]
     assert not any("編碼" in label for _, label in opts)     # 畫面上不用「硬體編碼／軟體編碼」
+
+
+def _redo_setup(w: Path, n: int = 3):
+    """10-02 第五批：學員重念先全部生成好（假的生成程式，種子 42），再把前 n 段在第 5 步退回（文字、範圍都沒改）。
+    回傳（targets, 假的生成程式工廠, runners 工廠, checks, 生成時念過的句子）。生成照第 4 步一步一支程式（生成、停頓、收尾）。"""
+    import numpy as np
+
+    from bookclub import finalcheck, proclog
+
+    items, _ = students.build_items(w)
+    targets = items[:n]
+    od = students.out_dir(w)
+    od.mkdir(parents=True, exist_ok=True)
+    ref = w / "假聲線.wav"
+    ref.write_bytes(b"RIFF-fake")
+    said: list = []
+
+    def prep(it):
+        return {**it, "slot": list(it["slot"]), "slot_s": it["slot"][1] - it["slot"][0], "生成用文字": it["text"],
+                "發音對照": []}
+
+    def gen_factory(stop_after: int | None = None, per_item: bool = False, stop_after_items: int | None = None):
+        """stop_after：生成到第幾次就按停止（模擬記憶體門檻停下來）；per_item：一段一段做完（做完就寫回紀錄），
+        stop_after_items：做完（寫回）幾段之後按停止。"""
+        def synth(text, seed, speed):
+            said.append((text, seed, speed))
+            if stop_after is not None and len(said) >= stop_after:
+                execute.request_stop(w)
+            return np.zeros(int(24000 * 1.0), dtype=np.float32) + 0.01, 24000
+
+        def gen(wk, ctx=None):
+            rec = wd.read_json(students.log_path(wk), default=None) or {"句子": []}
+            done = {r["id"]: r for r in rec["句子"]}
+            todo = [prep(it) for it in students.build_items(wk)[0] if it["id"] not in done]
+            save = lambda: wd.write_json(students.log_path(wk), {"句子": list(done.values())})   # noqa: E731
+            texts = {it["id"]: it["text"] for it in todo}
+            for gi, group in enumerate([[it] for it in todo] if per_item else [todo] if todo else []):
+                if stop_after_items is not None and gi == stop_after_items:
+                    execute.request_stop(w)
+                for phase in tts.PHASES:
+                    tts.run_generation(wk, group, od, ref, "假的", 0.15, save=save, done=done, role="學員", tag="學員聲音",
+                                       check_content=True, check_similarity=False, use_pauses=False,
+                                       synth=synth if phase != "停頓" else None,
+                                       hear=lambda path: texts[Path(path).name.split("_第")[0]], phase=phase, log=lambda s: None)
+        return gen
+
+    gen_factory()(w)                                            # 第一次：全部生成好（種子 42）
+    log = {"產生時間": "t1", "片段": None, "紀錄": [
+        {"類型": "學員重念", "原片": list(t["slot"]), "成品": list(t["slot"]), "做了什麼": "x", "檔案": "a.wav",
+         "覆核項目": [f"學員段落:{t['段落']}"], "文字": t["text"]} for t in targets]}
+    wd.write_json(proclog.log_path(w), log)
+    for r in log["紀錄"]:
+        finalcheck.decide_record(w, finalcheck.record_key(r), "退回重做", "音質不好")
+    renders: list = []
+
+    def render(wk, ctx):
+        renders.append(1)
+        wd.write_json(proclog.log_path(wk), {**log, "產生時間": "t2"})
+
+    def runners(gen):
+        return {"老師名字": lambda wk, c: None, "學員重念": gen, "保留原聲學員名字": lambda wk, c: None, "組裝": render}
+
+    checks = {"老師名字": lambda wk, c: (True, "假的"),
+              "學員重念": lambda wk, c: execute.students_done(wk, None, None) if False else
+              (all(i["id"] in {r["id"] for r in wd.read_json(students.log_path(wk))["句子"]} for i in students.build_items(wk)[0]),
+               "假的"),
+              "保留原聲學員名字": lambda wk, c: (True, "假的"), "組裝": lambda wk, c: (True, "假的")}
+    said.clear()
+    return targets, gen_factory, runners, checks, said, renders
+
+
+def test_redo_stopped_after_one_generated_resumes_without_redoing_it():
+    """10-02 第五批（預演時遇到的）：退回重做 3 段，第 1 段的新版生成好了、還沒寫回紀錄就停下來（記憶體門檻）。
+    停在一半時：3 段都不在紀錄裡、版本已經記過；第 4 步寫「接著做」、第幾版正確；組裝擋下來（不然這幾段會是原聲）。
+    再按一次「開始執行」：缺的補回來、已經生成好的那一段從快取沿用（不重新生成）、不會多一個以前的版本或跳號、用過的念法紀錄不變。"""
+    from bookclub import finalcheck, render as render_mod
+
+    w = _fresh()
+    targets, gen_factory, runners, checks, said, renders = _redo_setup(w)
+    ids = [t["id"] for t in targets]
+    prog = execute.run_execute(w, runners=runners(gen_factory(stop_after=1)), checks=checks, skip_precheck=True,
+                               redo_returned=True, log=lambda s: None)
+    assert prog.get("停止") and prog["步驟"]["學員重念"]["狀態"] == "停止" and not renders
+    assert len(said) == 1 and said[0][1:] == (1, 1.0)               # 第 1 段換一種念法（種子 1）生成好了
+    od = students.out_dir(w)
+    have = {r["id"] for r in wd.read_json(students.log_path(w))["句子"]}
+    assert not set(ids) & have                                      # 3 段都清掉了、新版還沒寫回
+    vers = wd.read_json(od / tts.REDO_VERSIONS)
+    assert all(len(vers[i]["以前的版本"]) == 1 and vers[i]["避開"] == [42] for i in ids)
+    # 停在一半時的畫面與組裝
+    assert sorted(finalcheck.redo_pending(w)) == sorted(ids)
+    items = finalcheck.redo_list(w)["項目"]
+    assert all(it["接著做"] and it["第幾版"] == 2 and it["沒改"] and "接著做" in it["說明"] for it in items), items
+    st = execute.status(w)
+    assert st["重做中"] and len(st["退回清單"]) == 3
+    assert not execute.students_done(w, None, None)[0]
+    page = finalcheck.page_data(w)                                   # 第 5 步照樣打得開（看的是上一次組好的成品）
+    assert len(page["紀錄"]) == 3
+    try:
+        render_mod.render_video(w, 0.0, 180.0, tag="測試")
+        raise AssertionError("退回重做還沒做完不該組裝")
+    except RuntimeError as e:
+        assert "還沒重新生成" in str(e) and "開始執行" in str(e)
+    except FileNotFoundError:
+        pass                                                         # 沒有 ffmpeg 做不出假影片：找原片那一步就停了
+    # 再按一次「開始執行」
+    said.clear()
+    prog = execute.run_execute(w, runners=runners(gen_factory()), checks=checks, skip_precheck=True,
+                               redo_returned=True, log=lambda s: None)
+    assert not prog.get("停止") and renders == [1]
+    assert (targets[0]["text"], 1, 1.0) not in said                  # 已經生成好的那一段沒有重新生成（長度不合改語速是另一回事）
+    assert {x[0] for x in said if x[2] == 1.0} == {t["text"] for t in targets[1:]} and {x[1] for x in said} == {1}
+    recs = {r["id"]: r for r in wd.read_json(students.log_path(w))["句子"]}
+    for i in ids:
+        r = recs[i]
+        assert r["第幾版"] == 2 and r["換一種念法"] and r["嘗試"][r["選定"] - 1]["種子"] == 1
+        assert [v["第幾版"] for v in r["以前的版本"]] == [1] and r["以前的版本"][0]["種子"] == 42
+    vers = wd.read_json(od / tts.REDO_VERSIONS)
+    assert all(len(vers[i]["以前的版本"]) == 1 and vers[i]["避開"] == [42] for i in ids)
+    assert len(list(od.glob("重做前_*"))) == 1                       # 沒有因為再按一次多搬一份
+    assert (od / f"{ids[0]}_第1次.wav").is_file()
+    chk = wd.read_json(finalcheck.check_path(w))
+    assert "重做中" not in chk and len(chk["重做過"]["項目"]) == 3
+    assert not finalcheck.redo_pending(w)
+
+
+def test_redo_stopped_after_one_written_back_does_not_jump_version():
+    """退回重做 3 段，第 1 段整段做完、已經寫回紀錄（第 2 版）才停下來；再按一次：第 1 段不會被當成「以前的版本」再重做成第 3 版。"""
+    from bookclub import finalcheck
+
+    w = _fresh()
+    targets, gen_factory, runners, checks, said, renders = _redo_setup(w)
+    ids = [t["id"] for t in targets]
+    execute.run_execute(w, runners=runners(gen_factory(per_item=True, stop_after_items=1)), checks=checks, skip_precheck=True,
+                        redo_returned=True, log=lambda s: None)
+    recs = {r["id"]: r for r in wd.read_json(students.log_path(w))["句子"]}
+    assert recs[ids[0]]["第幾版"] == 2 and not set(ids[1:]) & set(recs)
+    assert finalcheck.redo_pending(w) == ids[1:]
+    it0 = next(it for it in finalcheck.redo_list(w)["項目"] if it["生成"][0]["id"] == ids[0])
+    assert it0["第幾版"] == 2 and "都重新生成好了" in it0["說明"]
+    said.clear()
+    execute.run_execute(w, runners=runners(gen_factory(per_item=True)), checks=checks, skip_precheck=True,
+                        redo_returned=True, log=lambda s: None)
+    assert {x[0] for x in said} == {t["text"] for t in targets[1:]}   # 做完寫回的第 1 段完全沒動
+    recs = {r["id"]: r for r in wd.read_json(students.log_path(w))["句子"]}
+    assert all(recs[i]["第幾版"] == 2 and len(recs[i]["以前的版本"]) == 1 for i in ids)
+    vers = wd.read_json(students.out_dir(w) / tts.REDO_VERSIONS)
+    assert all(len(vers[i]["以前的版本"]) == 1 and vers[i]["避開"] == [42] for i in ids)
+
+
+def test_memory_status_warns_before_start_without_changing_threshold():
+    """10-02 第五批：開始前就看記憶體（系統拿硬碟頂替的量）：偏滿就提醒怎麼處理；讀不到（非 macOS）不出錯；門檻照設定。"""
+    ok = execute.memory_status(1.0, 8.5)
+    assert ok["讀得到"] and not ok["偏滿"] and "1.0 GB" in ok["說明"] and "8.5 GB" in ok["說明"] and not ok["怎麼處理"]
+    tight = execute.memory_status(6.2, 8.5)
+    assert tight["偏滿"] and "重開機" in tight["怎麼處理"] and "瀏覽器" in tight["怎麼處理"]
+    none = execute.memory_status(None, 8.5)
+    assert not none["讀得到"] and not none["偏滿"] and "讀不到" in none["說明"]
+    for m in (ok, tight, none):
+        assert "swap" not in m["說明"] + m["怎麼處理"] and "很簡單" not in m["怎麼處理"]
+    assert execute.parse_swapusage("") is None
+    old = sys.platform
+    try:   # 非 macOS：讀不到、不出錯
+        sys.platform = "linux"
+        assert execute.memory_status()["讀得到"] is False
+    finally:
+        sys.platform = old
+    # 總檢查的摘要帶記憶體狀況
+    w = _fresh()
+    assert "記憶體" in execute.final_check(w)["摘要"]
+    # 命令列（不跳過前置檢查）開始時印出來
+    lines: list = []
+    orig, orig_pre = execute.swap_used_gb, execute.precheck
+    try:
+        execute.swap_used_gb = lambda: 7.0
+        execute.precheck = lambda wk: {"可以開始": True, "缺": [], "提醒": []}
+        runners, checks = _fake([])
+        execute.run_execute(w, runners=runners, checks=checks, only_steps=["老師名字"], log=lines.append)
+    finally:
+        execute.swap_used_gb, execute.precheck = orig, orig_pre
+    text = "\n".join(lines)
+    assert "現在 7.0 GB" in text and "偏滿" in text and "重開機" in text and "swap" not in text
 
 
 if __name__ == "__main__":

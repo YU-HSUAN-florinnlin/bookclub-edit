@@ -42,7 +42,11 @@ def current_ref(workdir: Path, who: str, rec: dict | None = None) -> str | None:
     """第 4 步「做過沒有」比的參考音（10-01）：這個工作區裡這位學員的 ref.wav，跟生成程式用的同一個；
     工作區複製到別處時，紀錄記的是舊路徑，比內容指紋就好。還沒挑過參考音才退回紀錄記的路徑。"""
     p = ref_dir(workdir, who) / "ref.wav"
-    return str(p) if p.is_file() else (rec or {}).get("參考音")
+    if p.is_file():
+        return str(p)
+    # 10-02 第五批：紀錄記的路徑如果在別的工作區（被複製來的），換成這個工作區裡的位置，不去讀別的工作區
+    got = wd.localize((rec or {}).get("參考音"), Path(workdir))
+    return str(got) if got else None
 
 
 # ---------- 挑參考音（純函式＋讀音檔） ----------
@@ -122,6 +126,8 @@ def pick_ref(workdir: Path, who: str, turns: list[dict], sentences: dict, blocke
             if sc > best_score:
                 best, best_score, best_x = g, sc, x
     d.mkdir(parents=True, exist_ok=True)
+    for f in ("ref.wav", "ref.txt"):
+        wd.unlink_if_link(d / f)   # 10-02 第五批：不順著連結寫回原本的工作區
     sf.write(str(d / "ref.wav"), best_x, sr)
     text = "".join(g["text"] for g in best).strip()
     (d / "ref.txt").write_text(text + "\n", encoding="utf-8")

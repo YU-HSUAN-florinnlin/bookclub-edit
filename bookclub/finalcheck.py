@@ -568,6 +568,7 @@ def export_final(workdir: str | Path) -> dict:
             raise ValueError("還不能輸出：" + "；".join(st["還不能輸出的原因"]))
         src = workdir / check["成品影片"]
         dst = src.with_name("最終成品_" + src.name.removeprefix("成品_"))
+        wd.unlink_if_link(dst)   # 10-02 第五批
         shutil.copy2(src, dst)
         check["輸出成品"] = {"時間": _now(), "來源": check["成品影片"], "檔案": str(dst.relative_to(workdir))}
         _save(workdir, check)
@@ -595,6 +596,8 @@ def redo_list(workdir: str | Path) -> dict:
     index = _index(workdir)
     ctx = _redo_ctx(workdir) if items else {}
     logs: dict = {}
+    doing_keys = {e["鍵"] for e in (check.get("重做中") or {}).get("項目") or []}
+    pending = set(redo_pending(workdir, ctx=ctx)) if doing_keys else set()
     for it in items:
         it["建議指令"] = suggest_command(workdir, it)
         it["做了什麼"] = plain_ids(it.get("做了什麼") or "", index, workdir)   # 10-01 走查：第 4 步也不露內部編號
@@ -608,6 +611,16 @@ def redo_list(workdir: str | Path) -> dict:
         it["沒改"] = bool(it["生成"]) and all(_same_as_last(workdir, u, ctx, logs) for u in it["生成"])
         if it["生成"]:
             it["第幾版"] = max(int((_last_rec(workdir, u, logs) or {}).get("第幾版") or 1) for u in it["生成"]) + 1
+        if it["生成"] and it["鍵"] in doing_keys:
+            # 10-02 第五批：上次重做到一半停下來的：這一版已經記過（`_重新生成版本.json`），接著做同一版，不會再跳一版
+            it["接著做"] = True
+            it["第幾版"] = max(_doing_version(workdir, u, logs) for u in it["生成"])
+            it["沒改"] = all(_same_as_doing(workdir, u, ctx, logs) for u in it["生成"])
+            left = [u["id"] for u in it["生成"] if u["id"] in pending]
+            it["說明"] = (f"上次重做到一半停下來，接著做（第 {it['第幾版']} 版）：" +
+                        (f"還有 {len(left)}／{len(it['生成'])} 句要重新生成，已經生成好的不重做，" if left else
+                         f"{len(it['生成'])} 句都重新生成好了，") + "再重新組裝")
+            continue
         if it["沒改"]:
             it["說明"] = (f"文字和範圍都沒改：換一種念法重新生成這一筆的 {len(it['生成'])} 句聲音（會是第 {it['第幾版']} 版），再重新組裝。"
                         "上一版的聲音留著備份")
@@ -697,12 +710,46 @@ def redo_units(it: dict, ctx: dict) -> list[dict]:
 
 
 def _last_rec(workdir: Path, unit: dict, logs: dict) -> dict | None:
-    """這一句上一次生成的紀錄（logs 是快取：{角色: {id: 紀錄}}）。"""
+    """這一句上一次生成的紀錄（logs 是快取：{角色: {id: 紀錄}}）。
+    10-02 第五批：重做到一半停下來時，被清掉的那幾句生成紀錄裡沒有了，改用 `_重新生成版本.json` 記的上一版
+    （文字、範圍、第幾版），第 4 步才不會說「改過」「第 2 版」。"""
     role = unit["角色"]
     if role not in logs:
         rec = wd.read_json(_role_paths(Path(workdir), role)[0], default=None) or {}
         logs[role] = {r.get("id"): r for r in rec.get("句子") or []}
-    return logs[role].get(unit["id"])
+    got = logs[role].get(unit["id"])
+    if got is not None:
+        return got
+    ent = _versions(workdir, role, logs).get(unit["id"])
+    if ent and ent.get("以前的版本"):
+        return {"text": ent.get("text"), "生成用文字": ent.get("生成用文字"), "slot": ent.get("slot"),
+                "第幾版": ent["以前的版本"][-1].get("第幾版")}
+    return None
+
+
+def _versions(workdir: Path, role: str, logs: dict) -> dict:
+    """生成資料夾的 `_重新生成版本.json`（logs 一起當快取）。"""
+    from bookclub import tts
+
+    k = ("版本", role)
+    if k not in logs:
+        logs[k] = wd.read_json(_role_paths(Path(workdir), role)[1] / tts.REDO_VERSIONS, default=None) or {}
+    return logs[k]
+
+
+def _doing_version(workdir: Path, unit: dict, logs: dict) -> int:
+    """重做中的這一句正在做第幾版：`_重新生成版本.json` 記了幾個以前的版本＋1（純讀）。"""
+    ent = _versions(workdir, unit["角色"], logs).get(unit["id"]) or {}
+    return len(ent.get("以前的版本") or []) + 1
+
+
+def _same_as_doing(workdir: Path, unit: dict, ctx: dict, logs: dict) -> bool:
+    """重做中的這一句，現在要念的字、範圍跟被退回的那一版一樣嗎（一樣＝這一版是換一種念法）。"""
+    from bookclub import tts
+
+    ent = _versions(workdir, unit["角色"], logs).get(unit["id"])
+    now = next((x for x in ctx.get(unit["角色"], []) if x.get("id") == unit["id"]), None)
+    return bool(ent and now) and tts.same_content(ent, now)
 
 
 def _same_as_last(workdir: Path, unit: dict, ctx: dict, logs: dict) -> bool:
@@ -829,6 +876,18 @@ def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = 
     plan = redo_plan(workdir, a, b)
     if not plan:
         return None
+    # 10-02 第五批：上次重做到一半停下來（停止、記憶體或硬碟門檻、失敗）的那幾筆，清過了、版本也記過了：
+    # 不再清一次（不然已經生成好、還沒寫回紀錄的那一句會被當成沒做，已經寫回的會變成「以前的版本」又跳一版）。
+    # 這次只清新退回的；接著做的那幾筆，生成紀錄裡沒有的會照常生成（已經生成過的從快取沿用）
+    doing = {e["鍵"] for e in (load_check(workdir).get("重做中") or {}).get("項目") or []}
+    resumed = [e for e in plan if e["鍵"] in doing]
+    plan = [e for e in plan if e["鍵"] not in doing]
+    if resumed:
+        left = redo_pending(workdir, a, b)
+        log(f"[AI 執行] 上次重做到一半停下來的 {len(resumed)} 筆接著做：" +
+            (f"還有 {len(left)} 句要重新生成（已經生成好的不重做）" if left else "要生成的都做好了，接著組裝"))
+    if not plan:
+        return {"項目": resumed, "清掉": {}, "接著做": True} if resumed else None
     stamp = _now()
     by_role: dict[str, list[str]] = {}
     reasons: dict[tuple, str] = {}
@@ -854,6 +913,37 @@ def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = 
     n = sum(len(v) for v in by_role.values())
     log(f"[AI 執行] 第 5 步退回的 {len(plan)} 筆：{n} 句清掉舊的、等一下重新生成；全部做完會重新組裝")
     return {"項目": plan, "清掉": cleared}
+
+
+def redo_pending(workdir: str | Path, a: float | None = None, b: float | None = None, *, ctx: dict | None = None) -> list[str]:
+    """10-02 第五批：「重做中」（清掉了、要重新生成）的那幾句，還沒重新生成好的 id（生成紀錄裡沒有、或沒放回時間格）。
+    只算這次範圍（a～b）裡、現在的計畫裡還有的句子（第 3 步改到沒有了的不算）；保留原聲學員退回直接消音的算處理好。
+    組裝前用：還有沒做好的就不組（組進去會是原本的聲音，名字還在）。只讀。"""
+    workdir = Path(workdir)
+    doing = load_check(workdir).get("重做中") or {}
+    units = [u for e in doing.get("項目") or [] for u in e.get("生成") or []]
+    if not units:
+        return []
+    ctx = _redo_ctx(workdir) if ctx is None else ctx
+    alive = {(role, x.get("id")) for role, xs in ctx.items() for x in xs}
+    logs: dict = {}
+    out: list[str] = []
+    for u in units:
+        s0, s1 = (u.get("slot") or [None, None])[:2]
+        if (a is not None and s1 is not None and s1 < a) or (b is not None and s0 is not None and s0 > b):
+            continue
+        role = u["角色"]
+        if (role, u["id"]) not in alive:
+            continue
+        if role not in logs:
+            rec = wd.read_json(_role_paths(workdir, role)[0], default=None) or {}
+            logs[role] = ({r.get("id"): r for r in rec.get("句子") or []}, rec.get("退回直接消音") or {})
+        recs, back = logs[role]
+        if u["id"] in back or (recs.get(u["id"]) or {}).get("放回時間格"):
+            continue
+        if u["id"] not in out:
+            out.append(u["id"])
+    return out
 
 
 def finish_redo(workdir: str | Path) -> dict | None:

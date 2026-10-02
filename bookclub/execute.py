@@ -152,7 +152,7 @@ def precheck(workdir: str | Path) -> dict:
     from bookclub import review
 
     if not review.video_path(workdir):
-        missing.append("找不到原片（分析結果記錄的影片路徑不在了）")
+        missing.append(wd.video_missing_message(workdir))   # 10-02 第五批：寫清楚記的是哪裡、怎麼處理
     from bookclub import epcodes
 
     lack_codes = epcodes.missing(workdir)
@@ -550,18 +550,65 @@ def final_check(workdir: str | Path) -> dict:
     summary = {"自動算處理好": [{"id": x["id"], "start": x["start"], "end": x["end"], "涵蓋": x["涵蓋"]["名稱"],
                              "名稱": review.item_name(index, f"重疊:{x['id']}")} for x in covered],
                "要生成秒數": round(gen_s), "預估秒數": round(gen_s * GEN_SPEED + ASSEMBLE_S), "硬碟可用GB": round(free, 1),
+               "記憶體": memory_status(),   # 10-02 第五批：開始前就提醒記憶體偏滿
                "提醒": "執行期間關掉其他程式（Zoom、瀏覽器分頁）；接上電源、筆電不要闔上（螢幕可以關）"}
     left = [r for r in must if not r.get("已按聽過")]
+    seen, new_keys = seen_state(dec.get("總檢查") or {}, look, dec)
+    for r in look:
+        if r["key"] in new_keys:
+            r["新的"] = True   # 10-02 第五批：按「我看過了」之後才多出來、或時間範圍變了的那幾列
     return {"一定要處理": sorted(must, key=lambda r: r["start"]), "請看一眼": sorted(look, key=lambda r: r["start"]),
             "摘要": summary, "可以開始": not left, "還要處理": len(left), "已確認": len(must) - len(left),
-            "看過": bool((dec.get("總檢查") or {}).get("看過"))}
+            "看過": seen, "看過後新增": len(new_keys)}
 
 
-def ack_final(workdir: str | Path, key: str | None = None, heard: bool = True, seen: bool | None = None) -> dict:
-    """`POST /api/execute/finalcheck`：「一定要處理」裡可以按的那一列按「我聽過了」（key），或整頁「我看過了」（seen）。"""
+LOOK_RANGE_TOL_S = 0.05   # 「請看一眼」某一列的起訖跟按「我看過了」時差超過這麼多秒，算這一列變了
+
+
+def look_snapshot(rows: list[dict]) -> list[dict]:
+    """按「我看過了」時記下的「請看一眼」清單：每一列的鍵與起訖（純函式）。"""
+    return [{"key": r["key"], "start": round(float(r["start"]), 3), "end": round(float(r["end"]), 3)} for r in rows]
+
+
+def seen_state(fc: dict, look: list[dict], dec: dict | None = None) -> tuple[bool, list[str]]:
+    """10-02 第五批：「我看過了」現在還算不算（純函式）。回傳（算不算, 新的列的鍵）。
+    - 按的時候有記清單（`看過的列`）：現在多了列、或某一列的起訖變了 → 不算，那幾列是新的；只是少了列照算
+    - 舊資料（10-02 以前只記了 `看過`、`看過時間`）：剪掉、消音在按「我看過了」之後才新增或改過（建立時間／更新時間比較晚）的
+      算新的；名字消音、超過 10 秒的老師重念沒有時間可比，當作看過了（不讓人莫名被擋）"""
+    if not fc.get("看過"):
+        return False, []
+    snap = fc.get("看過的列")
+    if isinstance(snap, list):
+        old = {x.get("key"): x for x in snap if isinstance(x, dict)}
+        new = [r["key"] for r in look if r["key"] not in old
+               or abs(float(old[r["key"]].get("start", 0)) - r["start"]) > LOOK_RANGE_TOL_S
+               or abs(float(old[r["key"]].get("end", 0)) - r["end"]) > LOOK_RANGE_TOL_S]
+        return not new, new
+    at = fc.get("看過時間") or ""
+    if not at:
+        return True, []
+    stamps: dict[str, str] = {}
+    for kind, prefix in (("刪除段落", "剪掉"), ("局部消音", "消音")):
+        for x in (dec or {}).get(kind) or []:
+            stamps[f"{prefix}:{x.get('id')}"] = max(str(x.get("建立時間") or ""), str(x.get("更新時間") or ""))
+    new = [r["key"] for r in look if stamps.get(r["key"], "") > at]
+    return not new, new
+
+
+def ack_final(workdir: str | Path, key: str | None = None, heard: bool = True, seen: bool | None = None,
+              rows: list[dict] | None = None) -> dict:
+    """`POST /api/execute/finalcheck`：「一定要處理」裡可以按的那一列按「我聽過了」（key），或整頁「我看過了」（seen）。
+    10-02 第五批：按「我看過了」時記下當時「請看一眼」的清單（rows＝網頁上顯示的那幾列；沒給就照現在算的），
+    之後清單多了列或時間範圍變了，「我看過了」就回到沒勾（見 seen_state）。"""
     from bookclub import review
 
     workdir = Path(workdir)
+    snap = None
+    if seen:
+        try:
+            snap = look_snapshot(rows) if rows is not None else look_snapshot(final_check(workdir)["請看一眼"])
+        except (KeyError, TypeError, ValueError):
+            snap = look_snapshot(final_check(workdir)["請看一眼"])
     rng = None
     if key and str(key).startswith("段落外:") and heard:   # 那一列現在的範圍（記答案用）
         g = next((x for qs in outside_questions(workdir).values() for x in qs if x["鍵"] == key), None)
@@ -584,6 +631,10 @@ def ack_final(workdir: str | Path, key: str | None = None, heard: bool = True, s
         if seen is not None:
             fc["看過"] = bool(seen)
             fc["看過時間"] = _now()
+            if seen:
+                fc["看過的列"] = snap
+            else:
+                fc.pop("看過的列", None)
         review._save_decisions(workdir, dec)
     return {"ok": True, "總檢查": fc}
 
@@ -627,7 +678,7 @@ def students_done(workdir: Path, a: float | None, b: float | None) -> tuple[bool
     now = students.current_refs(workdir, items) if recs else {}
     left = [it["id"] for it in items if not (recs.get(it["id"]) or {}).get("放回時間格")
             or tts.record_stale(recs[it["id"]], {**it, "生成用文字": tts.apply_pron(it["text"], table)[0]},
-                                now.get(it["學員"]) or recs[it["id"]].get("參考音"))]
+                                now.get(it["學員"]) or wd.localize(recs[it["id"]].get("參考音"), workdir))]   # 10-02 第五批
     return (not left), (f"{len(items)} 段都生成好了" if not left else f"還有 {len(left)}／{len(items)} 段要生成")
 
 
@@ -781,9 +832,37 @@ def resource_problem(res: dict, limits: dict, *, starting: bool = False) -> str 
                 "處理：清掉用不到的檔案（例如舊的測試工作區、輸出資料夾裡用不到的中間檔），或重開機讓系統收回暫存空間；"
                 "再按一次「開始執行」會接著做（做好的不重做）")
     if swap is not None and swap > limits["swapGB"]:
-        return (f"記憶體不夠，系統拿硬碟頂替的量（swap）到了 {swap:.1f} GB，門檻是 {limits['swapGB']:g} GB。"
+        return (f"記憶體不夠，系統拿硬碟頂替的量到了 {swap:.1f} GB，門檻是 {limits['swapGB']:g} GB。"
                 "處理：關掉瀏覽器其他分頁與用不到的程式，或重開機；再按一次「開始執行」會接著做（做好的不重做）")
     return None
+
+
+# 10-02 第五批：開始前就看一次記憶體（只提醒，不擋；門檻數字與跑的過程中的判斷照舊，見 resource_problem）。
+# 載入模型時「系統拿硬碟頂替的量」大約會多這麼多：10-02 下午預演從 6.2 GB 衝到 13 GB；10-02 凌晨整合測試從低點開始，最高 5.8 GB
+MEM_LOAD_GB = 5.0
+
+
+def memory_status(swap: float | None = ..., limit: float | None = None) -> dict:
+    """{讀得到, 現在GB, 門檻GB, 載入約多GB, 偏滿, 說明, 怎麼處理}。swap 不給就自己讀（讀不到＝None，非 macOS 一律讀不到，不出錯）。
+    偏滿＝現在的量加上載入模型大約會多的量，超過跑的過程中會停下來的門檻。畫面上的字不用「swap」這個詞。"""
+    if swap is ...:
+        swap = swap_used_gb()
+    if limit is None:
+        try:
+            limit = default_limits()["swapGB"]
+        except Exception:  # noqa: BLE001 — 設定讀不到不影響開始前的提醒
+            limit = 8.5
+    if swap is None:
+        return {"讀得到": False, "現在GB": None, "門檻GB": limit, "載入約多GB": MEM_LOAD_GB, "偏滿": False,
+                "說明": "這台電腦讀不到記憶體不夠時系統拿硬碟頂替的量；跑的過程只看硬碟空間", "怎麼處理": ""}
+    tight = swap + MEM_LOAD_GB > limit
+    text = (f"記憶體不夠時系統拿硬碟頂替的量：現在 {swap:.1f} GB；跑的過程中超過 {limit:g} GB 會自動停下來，"
+            f"載入模型通常會再多 {MEM_LOAD_GB:g} GB 左右")
+    tip = ("現在已經偏滿，照這樣開始，可能載入模型就被停下來。開始之前：關掉瀏覽器的其他分頁、其他瀏覽器視窗和用不到的程式"
+           "（Zoom、LINE、Notion、剪輯軟體等），過一兩分鐘再看一次這個數字有沒有降；這個數字常常要重開機才會降下來，"
+           "降不下來就重開機，開機後先不要開別的程式，直接回來開始跑") if tight else ""
+    return {"讀得到": True, "現在GB": round(swap, 1), "門檻GB": limit, "載入約多GB": MEM_LOAD_GB, "偏滿": tight,
+            "說明": text, "怎麼處理": tip}
 
 
 def _child_rss_gb(pid: int) -> float | None:
@@ -990,7 +1069,7 @@ def _part_runners(opts: PartOptions, say: Callable[[str], None]) -> dict[str, Ca
         top = rec["記憶體高峰GB"] if rec["記憶體高峰GB"] is not None else rec["從外面看到的最高記憶體GB"]
         say(f"[AI 執行] {label}：結束（{rec['秒']:.0f} 秒"
             + (f"，記憶體高峰 {top:.1f} GB" if top is not None else "")
-            + (f"，swap 最高 {swap_max:.1f} GB" if swap_max is not None else "") + "）")
+            + (f"，系統拿硬碟頂替最高 {swap_max:.1f} GB" if swap_max is not None else "") + "）")
         return rec
 
     def run_one(workdir: Path, label: str, args: list[str], report: Callable) -> None:
@@ -1123,6 +1202,10 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
             raise FileNotFoundError("還不能開始第 4 步：\n- " + "\n- ".join(pre["缺"]))
         for n in pre["提醒"]:
             log(f"[AI 執行] 提醒：{n}")
+        mem = memory_status()   # 10-02 第五批：命令列也在開始時印記憶體狀況，偏滿的話先提醒（不擋）
+        log(f"[AI 執行] {mem['說明']}")
+        if mem["偏滿"]:
+            log(f"[AI 執行] ⚠️ {mem['怎麼處理']}")
         if not only_steps or "組裝" in only_steps:   # 10-01：要組成品才看總檢查（只生成聲音不影響成品，不擋）
             fc = final_check(workdir)
             if not fc["可以開始"]:

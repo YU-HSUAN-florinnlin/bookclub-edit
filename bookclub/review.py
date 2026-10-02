@@ -99,16 +99,9 @@ def parse_time(text: str) -> float:
 # ---------------------------------------------------------------------------
 
 def video_path(workdir: Path, override: str | Path | None = None) -> Path | None:
-    """原片路徑：伺服器啟動時帶的 --video → `分析結果.json` → 逐字稿記錄的來源。"""
-    cands = [override]
-    analysis = wd.read_json(wd.analysis_result_path(Path(workdir)), default={}) or {}
-    cands.append(analysis.get("video"))
-    merged = wd.read_json(wd.merged_transcript_path(Path(workdir)), default={}) or {}
-    cands.append(merged.get("source"))
-    for c in cands:
-        if c and Path(c).expanduser().is_file():
-            return Path(c).expanduser()
-    return None
+    """原片路徑：伺服器啟動時帶的 --video → `分析結果.json` → 逐字稿記錄的來源。
+    10-02 第五批：存下來的路徑在別的工作區裡（工作區被複製）時，用這個工作區裡的那一份（`wd.find_video`）。"""
+    return wd.find_video(Path(workdir), override)
 
 
 

@@ -1457,14 +1457,22 @@ def finalize_reference(workdir: str | Path, rank: int, transcript_text: str,
     if not replace_audio and record.get("選定名次") != rank:
         raise ValueError(f"現在選定的不是第 {rank} 個，只存逐字稿會讓逐字稿跟音檔對不上")
     if replace_audio:
+        _unlink_if_link(dst_wav)
         shutil.copyfile(src_wav, dst_wav)
+    _unlink_if_link(dst_txt)   # 10-02 第五批：複製來的工作區裡是連結的話，寫成自己的檔（不順著連結寫回原本的工作區）
     dst_txt.write_text(transcript_text, encoding="utf-8")
 
     record["選定名次"] = rank
+    _unlink_if_link(record_path)
     record_path.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
 
     print(f"[完成] 已存成 {dst_txt}" + (f" 與 {dst_wav}" if replace_audio else "（音檔沒換）"))
     return {"ref_wav": str(dst_wav), "ref_txt": str(dst_txt), "rank": rank, "換了音檔": replace_audio}
+
+
+def _unlink_if_link(path: Path) -> None:
+    if path.is_symlink():
+        path.unlink()
 
 
 def same_audio(a: Path, b: Path) -> bool | None:
@@ -1481,12 +1489,18 @@ def same_audio(a: Path, b: Path) -> bool | None:
 # ---------- 舊工作區換成新格式的候選（10-01） ----------
 
 def _recorded_video(workdir: Path, record: dict) -> Path | None:
-    """挑選紀錄.json 或 分析結果.json 記的原片路徑。"""
+    """挑選紀錄.json 或 分析結果.json 記的原片路徑（10-02 第五批：在別的工作區裡的換成這個工作區的位置，見 wd.localize）。"""
+    from bookclub import workdir as wd
+
+    first = None
     for src in (record, _read_json_quiet(workdir / "分析結果.json")):
         v = (src or {}).get("video")
         if v:
-            return Path(v).expanduser()
-    return None
+            p = wd.localize(v, workdir)
+            if p.is_file():
+                return p
+            first = first or p
+    return first
 
 
 def _read_json_quiet(path: Path) -> dict | list | None:
@@ -1591,6 +1605,7 @@ def recut_candidates(workdir: str | Path, video: str | Path | None = None,
         "備份資料夾": backup.name if backup else None,
         "各候選": rows,
     })
+    _unlink_if_link(record_path)
     record_path.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
     if backup:
         print(f"[重切] 舊的候選音檔備份在 {backup}")

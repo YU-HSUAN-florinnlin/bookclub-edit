@@ -381,6 +381,7 @@ def _save_wav(path: Path, wav: np.ndarray, sr: int) -> None:
     import soundfile as sf
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    wd.unlink_if_link(path)   # 10-02 第五批：不順著連結寫回原本的工作區
     sf.write(str(path), wav, sr)
 
 
@@ -407,6 +408,7 @@ def prepare_original(workdir: Path, item: dict, out_dir: Path, align: Align) -> 
         return None
     start, end = item["slot"]
     clip = out_dir / f"{item['id']}_原聲.wav"
+    wd.unlink_if_link(clip)
     subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(audio), str(clip)],
         check=True,
@@ -491,6 +493,7 @@ def _finalize(
     best = choose_best(history, slot_s, tolerance)
     chosen = history[best]
     chosen_path = out_dir / f"{sid}.wav"
+    wd.unlink_if_link(chosen_path)
     shutil.copyfile(out_dir / f"{sid}_第{best + 1}次.wav", chosen_path)
     record = {
         "id": sid, "text": text, "生成用文字": item.get("生成用文字") or text,
@@ -550,6 +553,7 @@ def _finalize(
     if base.audio_s < slot_s * (1 - tolerance):
         factor = max(STRETCH_MIN, base.audio_s / slot_s)
         stretched = out_dir / f"{sid}_拉長.wav"
+        wd.unlink_if_link(stretched)
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-i", str(base_path), "-af", f"atempo={factor:.4f}", str(stretched)],
             check=True,
@@ -562,6 +566,7 @@ def _finalize(
     else:
         rec = min(variants, key=lambda v: abs(v["差異比例"]))
         record["要人聽"] = True
+    wd.unlink_if_link(out_dir / f"{sid}_放回時間格.wav")
     shutil.copyfile(workdir / rec["檔案"], out_dir / f"{sid}_放回時間格.wav")
     record["候選做法"] = variants
     record["建議做法"] = rec["版本"]
@@ -618,7 +623,17 @@ def same_ref_file(rec: dict, ref_wav: str | Path) -> bool:
     fp = rec.get("參考音指紋")
     if fp:
         return fp == ref_fingerprint(ref_wav)
-    return rec.get("參考音") == str(ref_wav)
+    # 10-02 第五批：沒有指紋的舊紀錄，路徑在工作區裡的位置一樣（例如都是 參考音/ref.wav，工作區被複製或搬了）也算同一個
+    return wd.same_stored_file(rec.get("參考音"), ref_wav)
+
+
+_LEGACY_REF_RE = re.compile(r"\|(/[^|]*)#([0-9a-f]{12}|None)(?=\||$)")
+
+
+def normalize_cache_key(key: str) -> str:
+    """10-02 第五批：10-01 以前的快取鍵裡參考音那一段是「完整路徑#指紋」，換成新寫法「參考音#指紋」。
+    工作區被複製、搬家之後，舊鍵裡的路徑是原本的位置；只看指紋（內容一樣）就沿用，不用重新生成。"""
+    return _LEGACY_REF_RE.sub(lambda m: f"|參考音#{m.group(2)}", key)
 
 
 def ref_key(ref_wav: str | Path, ref_fp: str | None = None, legacy: bool = False) -> str:
@@ -770,12 +785,20 @@ def run_generation(
     def akey(it: dict, n: int, seed: int, speed: float, legacy: bool = False) -> str:
         return f"{it['id']}|{n}|{seed}|{speed}|{it.get('生成用文字') or it['text']}|{ref_key(ref_wav, ref_fp, legacy)}"
 
+    legacy_index: dict[str, str] = {}   # 10-02 第五批：舊寫法的鍵（路徑可能是複製前的工作區）→ 換成新寫法後的鍵
+    for k in cache:
+        nk = normalize_cache_key(k)
+        if nk != k:
+            legacy_index.setdefault(nk, k)
+
     def cache_hit(key_new: str, key_old: str) -> tuple[str, dict | None]:
-        """10-01：先找新寫法的鍵，找不到再找舊寫法（路徑#指紋）；找到舊的就搬成新鍵。"""
+        """10-01：先找新寫法的鍵，找不到再找舊寫法（路徑#指紋）；找到舊的就搬成新鍵。
+        10-02 第五批：舊寫法的路徑是別的位置（工作區被複製、搬家）也算，只看指紋。"""
         if key_new in cache:
             return key_new, cache[key_new]
-        if key_old != key_new and key_old in cache:
-            cache[key_new] = cache[key_old]
+        old = key_old if key_old != key_new and key_old in cache else legacy_index.get(key_new)
+        if old is not None and old in cache:
+            cache[key_new] = cache[old]
             return key_new, cache[key_new]
         return key_new, None
 
@@ -835,7 +858,8 @@ def run_generation(
 
     def pkey_ok(ent: dict | None, it: dict, bi: int) -> bool:
         """停頓快取對不對得上（10-01：舊寫法的鍵也算）。"""
-        return bool(ent) and ent.get("鍵") in (pkey(it, bi), pkey(it, bi, legacy=True))
+        return bool(ent) and (ent.get("鍵") in (pkey(it, bi), pkey(it, bi, legacy=True))
+                              or normalize_cache_key(ent.get("鍵") or "") == pkey(it, bi))   # 10-02 第五批：複製來的工作區
 
     def use_entry(it: dict, ent: dict) -> None:
         sid = it["id"]

@@ -1011,11 +1011,21 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     workdir = Path(workdir).expanduser()
     video = Path(video).expanduser() if video else review.video_path(workdir)
     if not video or not video.is_file():
-        raise FileNotFoundError("找不到原片，用 --video 指定。")
+        raise FileNotFoundError(wd.video_missing_message(workdir) if video is None else f"找不到原片：{video}，用 --video 指定。")
     a, b = snap(start), snap(end)
     tag = tag or f"{int(a // 60)}-{int(b // 60)}"
     out = workdir / "輸出"
     out.mkdir(parents=True, exist_ok=True)
+    # 10-02 第五批：複製來的工作區，輸出資料夾裡這次要寫的檔如果是指回原本工作區的連結，先拿掉連結（ffmpeg、寫音檔會順著連結覆蓋原本的）
+    for f in out.iterdir():
+        if f.is_symlink() and f"_{tag}" in f.name:
+            f.unlink()
+    from bookclub import finalcheck
+
+    pending = finalcheck.redo_pending(workdir, a, b)
+    if pending:   # 10-02 第五批：退回重做做到一半，還沒重新生成的那幾句組進去會是原聲（名字還在），不組
+        raise RuntimeError(f"第 5 步退回重做的還有 {len(pending)} 句還沒重新生成（{'、'.join(pending[:10])}），"
+                           "先在第 4 步按「開始執行」把它們做完再組裝；現在組裝的話這幾句會是原本的聲音")
     d = build_decisions(workdir, a, b, demo_freeze=demo_freeze, demo_blur=demo_blur, include_kept=include_kept)
     if d["重疊沒處理"]:   # 09-30：重疊處還留著學員原聲就不輸出（隱私），先擋下來
         where = "、".join(f"{wd.fmt_time(x['start'])}（{x['做法']}，{x['沒處理秒']:.2f} 秒）" for x in d["重疊沒處理"])

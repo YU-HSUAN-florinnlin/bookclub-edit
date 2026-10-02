@@ -77,6 +77,8 @@ def apply_fit(src: str | Path, dst: str | Path, slot_s: float, plan: dict) -> Pa
     """用 ffmpeg 產出剛好等於時間格長度的聲音檔。"""
     dst = Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.is_symlink():   # 10-02 第五批：複製來的工作區裡是連結的話先拿掉，ffmpeg 才不會順著連結覆蓋原本工作區的檔
+        dst.unlink()
     subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-af", fit_filter(plan, slot_s), str(dst)],
         check=True,

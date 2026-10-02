@@ -258,6 +258,7 @@ function fcTime(t) { t = Math.round(t * 10) / 10; const m = Math.floor(t / 60), 
   return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`; }
 
 let fcRowsCache = [];   // 總檢查每一列（按鈕用編號找回那一列）
+let fcLookCache = [];   // 10-02 第五批：「請看一眼」畫面上的那幾列（按「我看過了」時一起送出，之後多了列就回到沒勾）
 
 // 10-02 第四批：確認過的列（勾了「我聽過了」、第 3 步答了「老師的話，不用處理」）留在清單裡顯示成灰色；
 // 「把確認好的收合起來」這個開關記在 localStorage（讀不到、私密視窗丟例外時一律當作不收合）
@@ -278,8 +279,8 @@ function finalCheckHtml(fc) {
     const outNow = r["段落外答案"] || "";
     const outPick = isOut ? `<details class="fc-paths fc-outans"><summary>改答案</summary><p class="muted">這幾秒是誰的聲音？（跟第 3 步卡片上的問題同一題，改這裡兩邊一起改）</p>
       <ul>${FC_OUT.map(([v, label]) => `<li><button class="${outNow === v ? "" : "secondary "}small" data-fcout="${i}|${esc(v)}" aria-pressed="${outNow === v}">${esc(label)}</button></li>`).join("")}</ul></details>` : "";
-    return `<tr data-fckey="${esc(r.key)}" class="${done ? "fc-done" : ""}"><td class="nowrap">${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}
-      ${done ? `<div><span class="badge fc-donetag">已確認</span></div>` : ""}</td>
+    return `<tr data-fckey="${esc(r.key)}" class="${done ? "fc-done" : ""}${r["新的"] ? " fc-new" : ""}"><td class="nowrap">${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}
+      ${done ? `<div><span class="badge fc-donetag">已確認</span></div>` : ""}${r["新的"] ? `<div><span class="badge fc-newtag">新的</span></div>` : ""}</td>
     <td>${esc(r["說明"])}${r["去改"] ? `<div class="muted fc-todo">${done ? "" : "怎麼改："}${esc(r["去改"])}</div>` : ""}</td>
     <td class="fc-acts"><button class="secondary small" data-fcplay="${r.start}|${r.end}">跳過去聽</button>
     ${r["第3步"] ? `<button class="secondary small" data-fcgo="${i}">去第 3 步改這一筆</button>` : ""}
@@ -290,6 +291,9 @@ function finalCheckHtml(fc) {
   };
   const m = fc["摘要"] || {};
   const must = fc["一定要處理"] || [], look = fc["請看一眼"] || [];
+  fcLookCache = look.map((r) => ({ key: r.key, start: r.start, end: r.end }));
+  const mem = m["記憶體"] || null;
+  const newN = fc["看過後新增"] || 0;
   const doneN = must.filter((r) => r["已按聽過"]).length;
   const fold = fcFoldDone() && doneN > 0;
   const shown = fold ? must.filter((r) => !r["已按聽過"]) : must;
@@ -305,6 +309,8 @@ function finalCheckHtml(fc) {
       <p class="muted">自動算處理好的（被別筆涵蓋）：${(m["自動算處理好"] || []).length} 筆
         ${(m["自動算處理好"] || []).length ? `<details><summary>展開</summary>${m["自動算處理好"].map((x) => `${esc(x["名稱"] || fcTime(x.start))} 由〈${esc(x["涵蓋"])}〉涵蓋`).join("<br>")}</details>` : ""}</p>
       <p class="muted">要生成約 ${Math.round((m["要生成秒數"] || 0) / 60)} 分鐘的聲音，預估 ${((m["預估秒數"] || 0) / 3600).toFixed(1)} 小時（含組裝約 21 分鐘）；硬碟可用 ${m["硬碟可用GB"]} GB。${esc(m["提醒"] || "")}</p>
+      ${mem ? `<p class="${mem["偏滿"] ? "hint fc-mem-warn" : "muted"}" id="fcMem">${mem["偏滿"] ? "<b>記憶體偏滿：</b>" : ""}${esc(mem["說明"])}。${mem["偏滿"] ? esc(mem["怎麼處理"]) : ""}</p>` : ""}
+      ${newN && !fc["看過"] ? `<p class="hint" id="fcSeenReset">按「我看過了」之後，「請看一眼」多了 ${newN} 列（標「新的」），看過之後再勾一次「我看過了」。</p>` : ""}
       <label><input type="checkbox" id="fcSeen" ${fc["看過"] ? "checked" : ""}> 我看過了</label>
       <audio id="fcAudio" preload="none"></audio>
     </div>`;
@@ -346,7 +352,7 @@ function bindFinalCheck(reload) {
   const unfold = document.getElementById("fcUnfold");
   if (unfold) unfold.addEventListener("click", async () => { fcSetFoldDone(false); await reload(); });
   const seen = document.getElementById("fcSeen");
-  if (seen) seen.addEventListener("change", async () => { await apiPost("/api/execute/finalcheck", { "看過": seen.checked }); await reload(); });
+  if (seen) seen.addEventListener("change", async () => { await apiPost("/api/execute/finalcheck", { "看過": seen.checked, "看過的列": fcLookCache }); await reload(); });
 }
 
 async function renderExecuteBody() {
@@ -391,10 +397,11 @@ async function renderExecuteBody() {
       ${fc && !running && (!fc["可以開始"] || !fc["看過"]) ? `<span class="muted">先處理上面「開始前總檢查」${[fc["可以開始"] ? "" : "一定要處理的列", fc["看過"] ? "" : "「請看一眼」按「我看過了」"].filter(Boolean).join("，")}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
       <span class="muted" id="execEta">${execEtaText(d)}</span>
+      ${!running && fc && ((fc["摘要"] || {})["記憶體"] || {})["偏滿"] ? `<p class="hint fc-mem-warn" id="execMemWarn"><b>記憶體偏滿，按下去可能跑到一半就被停下來。</b>${esc(fc["摘要"]["記憶體"]["怎麼處理"])}</p>` : ""}
       ${!running ? `<p class="muted">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}
       ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「開始執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
       ${!running && prog["停止"] ? `<p><span class="badge">已停止</span> ${prog["停止原因"] && !prog["停止原因"].startsWith("按了停止")
-        ? esc(prog["停止原因"]) : "上次按了停止；按「開始執行」會接著做（做好的不重做）。"}</p>` : ""}
+        ? esc(prog["停止原因"].replace("（swap）", "")) : "上次按了停止；按「開始執行」會接著做（做好的不重做）。"}</p>` : ""}
       ${!running && prog["中斷"] ? `<p><span class="badge error">中斷</span> 上次跑到一半網頁伺服器被關掉了；按「開始執行」會接著做（做好的不重做）。</p>` : ""}
       ${d.error ? `<p><span class="badge error">失敗</span> ${esc(d.error)}</p>` : ""}
       <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
