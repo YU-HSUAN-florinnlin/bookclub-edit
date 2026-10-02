@@ -269,29 +269,19 @@ def splice(y: np.ndarray, s: int, clip: np.ndarray, sr: int = SR) -> None:
     y[s:s + n] = seg
 
 
-def room_tone(x: np.ndarray, s: int, e: int, n: int, sr: int = SR, avoid: list[tuple[int, int]] = ()) -> np.ndarray:
-    """在 [s, e) 前後 20 秒內找最安靜的 0.5 秒（避開 avoid 區間與 [s, e) 本身），重複鋪到 n 個取樣點。"""
-    win = int(sr * ROOM_WIN_S)
-    lo, hi = max(0, s - int(sr * ROOM_SEARCH_S)), min(len(x), e + int(sr * ROOM_SEARCH_S))
-    blocked = [(s, e), *avoid]
-    best, best_rms = None, None
-    step = win // 2
-    for a in range(lo, max(lo, hi - win) + 1, step):
-        b = a + win
-        if any(a < be and bs < b for bs, be in blocked):
-            continue
-        r = float(np.sqrt(np.mean(x[a:b].astype(np.float64) ** 2)))
-        if best_rms is None or r < best_rms:
-            best, best_rms = a, r
-    if best is None:
-        return np.zeros(n, dtype=np.float32)
-    tile = x[best:best + win].astype(np.float32)
-    reps = int(np.ceil(n / len(tile)))
-    return np.tile(tile, reps)[:n]
+def room_tone(x: np.ndarray, s: int, e: int, n: int, sr: int = SR, avoid: list[tuple[int, int]] = (), bed=None) -> np.ndarray:
+    """[s, e) 要墊的底噪，n 個取樣點。10-02 第六批第五件改挑法（見 `bookclub/roomtone.py`）：前後 20 秒內
+    夠安靜（低於上限）的連續片段，處理過的範圍裡的也可以；附近沒有就用全片底噪（bed）。
+    `avoid` 是舊挑法用的（避開處理過的範圍），現在不用，留著參數讓舊的呼叫照樣能跑。"""
+    from bookclub import roomtone
+
+    if bed is not None:
+        return bed.take(x, s, e, n, sr)
+    return roomtone.pick(x, s, e, n, sr)[0]
 
 
 def render_edit(window: np.ndarray, w0: int, edit: dict, clip: np.ndarray | None,
-                spans: list[tuple[int, int]], sr: int = SR) -> np.ndarray:
+                spans: list[tuple[int, int]], sr: int = SR, bed=None) -> np.ndarray:
     """處理一筆：window 是原聲從第 w0 個取樣點開始的一段（涵蓋這筆前後 20 秒），
     回傳這筆時間範圍 [s, t) 處理後的聲音。spans 是所有筆的範圍（找底噪時避開）。"""
     s, t = int(edit["start"] * sr) - w0, int(edit["end"] * sr) - w0
@@ -303,18 +293,18 @@ def render_edit(window: np.ndarray, w0: int, edit: dict, clip: np.ndarray | None
         new = match_loudness(fit_length(clip, t - s), window[s:t], sr)
     else:
         local = [(a - w0, b - w0) for a, b in spans if (a - w0, b - w0) != (s, t)]
-        new = room_tone(window, s, t, t - s, sr, avoid=local)
+        new = room_tone(window, s, t, t - s, sr, avoid=local, bed=bed)
     splice(y, s, new, sr)
     return y[s:t]
 
 
-def apply_edits(x: np.ndarray, edits: list[dict], clips: dict[int, np.ndarray], sr: int = SR) -> np.ndarray:
+def apply_edits(x: np.ndarray, edits: list[dict], clips: dict[int, np.ndarray], sr: int = SR, bed=None) -> np.ndarray:
     """整條聲音一次處理（測試用；正式組裝走 render_audio 逐段讀寫，不整條放進記憶體）。"""
     y = x.astype(np.float32).copy()
     spans = [(int(e["start"] * sr), int(e["end"] * sr)) for e in edits]
     for i, e in enumerate(edits):
         s = max(0, spans[i][0])
-        seg = render_edit(x, 0, e, clips.get(i), spans, sr)
+        seg = render_edit(x, 0, e, clips.get(i), spans, sr, bed=bed)
         y[s:s + len(seg)] = seg
     return y
 
@@ -385,6 +375,9 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(video), "-vn", "-ac", "1", "-ar", str(SR),
                         "-c:a", "pcm_s16le", str(orig_path)], check=True)
     spans = [(max(0, int(e["start"] * SR)), int(e["end"] * SR)) for e in edits]
+    from bookclub import roomtone
+
+    bed = roomtone.bed_for(workdir, video, SR)   # 10-02 第六批：夠安靜才用、附近沒有用全片底噪
     pad = int((ROOM_SEARCH_S + ROOM_WIN_S) * SR)
     block = SR * 30
     with sf.SoundFile(str(orig_path)) as src, \
@@ -406,7 +399,7 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
             w0 = max(0, s0 - pad)
             window = _read_range(orig_path, w0, t0 + pad)
             clip = _read_audio(workdir / e["檔案"]) if e["類型"] not in MUTE_KINDS else None
-            seg = render_edit(window, w0, e, clip, spans)
+            seg = render_edit(window, w0, e, clip, spans, bed=bed)
             dst.write(np.clip(seg, -1, 1))
             pos = s0 + len(seg)
         copy_until(total)
@@ -430,6 +423,7 @@ def render_audio(workdir: str | Path, video: str | Path | None = None) -> dict:
         "要人處理": len(plan.get("要人處理", [])),
         "警告": warnings,
         "剪輯決策": edits,
+        "底噪挑法": roomtone.METHOD,
     }
     wd.write_json(edl_path(workdir), summary)
     from bookclub import proclog   # 09-29：AI 處理紀錄＋沒登記的變動檢查（生成/處理紀錄.json，第 5 步讀）

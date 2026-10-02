@@ -1026,6 +1026,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, browse((query.get("path") or [None])[0]))
         elif path == "/api/refs":
             self._send_json(200, build_refs(server.workdir))
+        elif path == "/api/roomtone":   # 10-02 第六批第五件：第 2 步「全片底噪」（沒有就自動補挑）
+            from bookclub import roomtone
+
+            self._send_json(200, roomtone.ensure_info(server.workdir) or {"沒有": True})
         elif path == "/api/names":
             self._send_json(200, build_names(server.workdir))
         elif path == "/api/proofread":
@@ -1283,6 +1287,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, fc.export_final(w))
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
+        elif path == "/api/roomtone":   # 10-02 第六批第五件：第 2 步「這段可以」「換一段」
+            from bookclub import roomtone
+
+            self._send_json(200, roomtone.decide(server.workdir, str(body.get("動作", ""))))
         elif path == "/api/execute/finalcheck":   # 10-01：某一列「我聽過了」、整頁「我看過了」
             from bookclub.execute import ack_final
 

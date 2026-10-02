@@ -559,6 +559,21 @@ def final_check(workdir: str | Path) -> dict:
             + ("按「照建議縮小」會把重念範圍改成建議的範圍（這一句要重新生成）" if h["可以縮"] else h["原因"]),
             name=nm, card=k)
         look[-1]["縮小"] = h
+    # 10-02 第六批第五件：全片底噪還沒在第 2 步確認 → 提醒（不擋；沒確認照樣用自動挑的那一段，它本來就夠安靜）
+    try:
+        from bookclub import roomtone
+
+        rt = roomtone.load_info(workdir)
+    except Exception:  # noqa: BLE001
+        rt = None
+    if not rt or not rt.get("已確認"):
+        a, b = (rt.get("start"), rt.get("end")) if rt and rt.get("start") is not None else (0.0, 0.0)
+        row(look, "底噪:確認", a, b,
+            ("全片底噪還沒挑（打開第 2 步會自動挑）" if not rt else
+             "這支影片找不到夠安靜的片段當全片底噪，附近找不到時會墊全靜音" if rt.get("start") is None else
+             f"全片底噪（{t1(a)}–{t1(b)}）還沒確認")
+            + "：到第 2 步「全片底噪」播放、聆聽，如果聽到任何聲音，它就不能當作底噪。沒確認的話照樣用自動挑的那一段",
+            todo="到第 2 步（挑老師參考音那一頁）最下面的「全片底噪」")
     if soft:
         row(look, "聲紋:段落是老師", soft[0]["start"], soft[-1]["end"],
             f"另外 {len(soft)} 句聲音特徵判斷不是老師、但整段的聲音判斷是老師（多半是誤判，例如冥想引導、老師壓低聲音）。"
@@ -737,7 +752,8 @@ def render_inputs(workdir: Path) -> list[Path]:
 
     return [p for p in (review.review_path(workdir), nameplan.plan_path(workdir), tts.teacher_log_path(workdir),
                         students.log_path(workdir), workdir / "校對" / "段落.json", workdir / "名字覆核決定.json",
-                        studentnames.decisions_path(workdir), studentgen.log_path(workdir))
+                        studentnames.decisions_path(workdir), studentgen.log_path(workdir),
+                        workdir / "參考音" / "底噪.json")   # 10-02 第六批：全片底噪換一段 → 要重新組裝
             if p.exists()]
 
 
@@ -752,6 +768,10 @@ def render_done(workdir: Path, tag: str, methods: list[str]) -> tuple[bool, str]
     bad = [m for m in methods if not ((summ.get("輸出") or {}).get(m, {}).get("驗證") or {}).get("通過")]
     if bad:
         return False, f"成品沒有通過驗證（{'、'.join(bad)}），要重新組裝"
+    from bookclub import roomtone
+
+    if summ.get("底噪挑法") != roomtone.METHOD:   # 10-02 第六批第五件：墊底噪的挑法改了，聲音會不一樣（生成好的聲音不用重做）
+        return False, "墊底噪的挑法改了，要重新組裝（生成好的聲音沿用）"
     return True, "成品比覆核、生成結果都新"
 
 

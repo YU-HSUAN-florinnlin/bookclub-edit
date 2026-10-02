@@ -92,6 +92,7 @@ def test_name_range_hint_and_shrink():
     fc = execute.final_check(w)
     rows = [r for r in fc["請看一眼"] if r["key"].startswith("前後沒聲音:")]
     assert len(rows) == 1 and rows[0]["縮小"]["鍵"] == "名字:1" and "建議縮成" in rows[0]["說明"]
+    assert any(r["key"] == "底噪:確認" for r in fc["請看一眼"])   # 第五件：全片底噪還沒確認 → 提醒
     # 沒有自動改：名字決定裡沒有重念範圍
     assert "整句起訖" not in (_r(w / "名字覆核決定.json") if (w / "名字覆核決定.json").is_file() else {}).get("1", {})
     # 照建議縮小 → 存到名字卡片的重念範圍（第 3 步同一條路）

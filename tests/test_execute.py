@@ -192,7 +192,9 @@ def test_done_checks_on_fake_workdir():
     wd.write_json(out / f"輸出摘要_{tag}.json", {"輸出": {"sw": {"驗證": {"通過": False}}}})
     (out / f"成品_{tag}_sw.mp4").touch()
     assert "驗證" in execute.render_done(w, tag, ["sw"])[1]
-    wd.write_json(out / f"輸出摘要_{tag}.json", {"輸出": {"sw": {"驗證": {"通過": True}}}})
+    from bookclub import roomtone   # 10-02 第六批：摘要要記底噪挑法（挑法改了要重新組裝）
+
+    wd.write_json(out / f"輸出摘要_{tag}.json", {"輸出": {"sw": {"驗證": {"通過": True}}}, "底噪挑法": roomtone.METHOD})
     time.sleep(0.02)
     (out / f"成品_{tag}_sw.mp4").touch()
     assert execute.render_done(w, tag, ["sw"])[0]

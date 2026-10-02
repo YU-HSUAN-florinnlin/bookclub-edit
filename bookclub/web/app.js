@@ -867,7 +867,9 @@ function renderStep2Body(play = false) {
       </div>
       <p id="refMsg"></p>
     </div>
+    <div class="card" id="roomCard"><p class="muted">全片底噪載入中…</p></div>
   `;
+  renderRoomCard();
 
   document.getElementById("btnPrev").addEventListener("click", () => refsGo(refsPointer - 1, true));
   document.getElementById("btnNext").addEventListener("click", () => refsGo(refsPointer + 1, true));
@@ -897,6 +899,40 @@ function renderStep2Body(play = false) {
   document.getElementById("btnUse").addEventListener("click", () => save(!isChosen));
   const swapBtn = document.getElementById("btnSwapAudio");
   if (swapBtn) swapBtn.addEventListener("click", () => save(true));
+}
+
+// 10-02 第六批第五件：全片底噪（消音、補空白的地方附近找不到夠安靜的聲音時，墊這一段）。宇軒的說法照原話寫
+async function renderRoomCard() {
+  const box = document.getElementById("roomCard");
+  if (!box) return;
+  let r;
+  try { r = await apiGet("/api/roomtone"); } catch (e) { box.innerHTML = `<p class="muted">全片底噪讀不到：${esc(e.message)}</p>`; return; }
+  if (!document.getElementById("roomCard")) return;
+  const n = (r["候選"] || []).length;
+  if (r["沒有"] || r.start == null) {
+    box.innerHTML = `<h2>全片底噪</h2><p class="muted">${r["沒有"] ? "還沒有整支影片的聲音（第 1 步分析跑完才挑得出來）。" : "這支影片找不到夠安靜的片段：消音的地方附近找不到安靜的聲音時，會墊全靜音。"}</p>`;
+    return;
+  }
+  const a = Math.max(0, r.start), b = r.end;
+  box.innerHTML = `<h2>全片底噪</h2>
+    <p>消音、補空白的地方，附近找不到夠安靜的聲音時，會墊這一段（從整支影片自動挑最安靜的地方）。</p>
+    <p class="hint"><b>播放、聆聽，如果聽到任何聲音，它就不能當作底噪。</b></p>
+    <p>原片時間：${esc(fcTime(a))}–${esc(fcTime(b))}（${(b - a).toFixed(1)} 秒）｜第 ${(r["選第幾個"] || 0) + 1} 段／共 ${n} 段　
+      ${r["已確認"] ? `<span class="badge done">已確認</span>` : `<span class="badge">還沒確認</span>`}</p>
+    <audio id="roomAudio" controls preload="none" src="/api/audio?start=${a.toFixed(2)}&end=${b.toFixed(2)}"></audio>
+    <p class="muted">很小聲是正常的（本來就該幾乎聽不到），可以把音量開大一點聽。</p>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button id="roomOk" ${r["已確認"] ? "disabled" : ""}>這段可以</button>
+      <button id="roomNext" class="secondary" ${n < 2 ? "disabled" : ""}>換一段</button>
+    </div>
+    <p class="muted">還沒確認也可以先往下做：照樣用這一段（它本來就夠安靜），第 4 步開始前的總檢查會提醒你回來聽。</p>`;
+  const act = async (v) => {
+    try { await apiPost("/api/roomtone", { "動作": v }); } catch (e) { alert(e.message); return; }
+    await renderRoomCard();
+    if (v === "換一段") { const au = document.getElementById("roomAudio"); if (au) au.play().catch(() => {}); }
+  };
+  document.getElementById("roomOk").addEventListener("click", () => act("確認"));
+  document.getElementById("roomNext").addEventListener("click", () => act("換一段"));
 }
 
 function refRateName(rate) {   // 10-01：不用「48kHz」這種說法

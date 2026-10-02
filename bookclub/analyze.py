@@ -306,6 +306,14 @@ def run_analyze(
     print(f"[分析一條龍] 全部完成，總耗時 {fmt_time(total_elapsed)}（{total_elapsed:.1f} 秒）")
     print(f"[分析一條龍] 分析結果：{analysis_result_path(workdir)}")
     print(f"[分析一條龍] 報告：{report_path(workdir)}")
+    try:   # 10-02 第六批第五件：順便挑全片底噪（第 2 步讓人確認；挑不到不擋分析）
+        from bookclub import roomtone
+
+        info = roomtone.ensure_info(workdir)
+        if info and info.get("start") is not None:
+            print(f"[分析一條龍] 全片底噪：{info['start']:.1f}–{info['end']:.1f} 秒，{info['dBFS']} dBFS（第 2 步播放確認）")
+    except Exception as exc:  # noqa: BLE001
+        print(f"⚠️ 全片底噪沒挑成（{type(exc).__name__}），組裝前會再挑一次")
     return result
 
 

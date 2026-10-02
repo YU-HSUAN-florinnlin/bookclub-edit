@@ -318,13 +318,14 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
     """原片時間軸上換好聲音 → 依片段接起來（刪除、停格）→ 新聲音軌。回傳每筆的放置資訊。"""
     import soundfile as sf
 
-    from bookclub import assemble
+    from bookclub import assemble, roomtone
 
     a, b = d["範圍"]
     orig = out / f"原聲_{tag}.wav"
     if not orig.is_file():
         _extract(video, a, b, orig)
     x, _ = sf.read(str(orig), dtype="float32")
+    bed = roomtone.bed_for(workdir, video, SR)   # 10-02 第六批第五件：所有墊底噪的地方用同一套挑法
     y = x.copy()
     tails: dict[str, np.ndarray] = {}
     placed = {}
@@ -338,7 +339,7 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
             continue
         s0 = max(0, min(spans[k][0] for k in ks))
         t0 = min(len(x), max(spans[k][1] for k in ks))
-        mix = assemble.room_tone(x, s0, t0, t0 - s0, SR) if ROOM_UNDER else np.zeros(t0 - s0, np.float32)
+        mix = assemble.room_tone(x, s0, t0, t0 - s0, SR, bed=bed) if ROOM_UNDER else np.zeros(t0 - s0, np.float32)
         for k in ks:
             e = d["動作"][k]
             s, t = max(0, spans[k][0]), min(len(x), spans[k][1])
@@ -358,7 +359,7 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
             continue
         if e["類型"] in MUTE_KINDS:
             local = [sp for sp in spans if sp != (s, t)]
-            new = assemble.room_tone(x, s, t, t - s, SR, avoid=local)
+            new = assemble.room_tone(x, s, t, t - s, SR, avoid=local, bed=bed)
             assemble.splice(y, s, new, SR)
             continue
         long = e.get("停格秒") or (e.get("加快", 1.0) > 1.0)
@@ -367,7 +368,7 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
         gain = _gain(clip, x[s:t])
         clip = (clip * gain).astype(np.float32)
         head = assemble.fit_length(clip, t - s)
-        room = assemble.room_tone(x, s, t, len(clip) + (t - s), SR) if ROOM_UNDER else None
+        room = assemble.room_tone(x, s, t, len(clip) + (t - s), SR, bed=bed) if ROOM_UNDER else None
         if room is not None:
             head = head + room[:t - s]
         assemble.splice(y, s, head, SR)
@@ -388,7 +389,7 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
     tmp = out / f"_組聲音中_{dst.name}"
     total = 0
     with sf.SoundFile(str(tmp), "w", SR, 1, subtype="PCM_16") as fw:
-        for seg in output_segments(x, y, plist, tails, a):
+        for seg in output_segments(x, y, plist, tails, a, bed):
             fw.write(np.clip(seg, -1, 1))
             total += len(seg)
     tmp.replace(dst)
@@ -396,7 +397,13 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
     return {"原聲": orig, "新聲音": dst, "片段": plist, "放置": placed, "長度": total / SR}
 
 
-def output_segments(x: np.ndarray, y: np.ndarray, plist: list[dict], tails: dict, a: float):
+def roomtone_method() -> str:
+    from bookclub import roomtone
+
+    return roomtone.METHOD
+
+
+def output_segments(x: np.ndarray, y: np.ndarray, plist: list[dict], tails: dict, a: float, bed=None):
     """原片時間軸上換好的聲音 y → 依片段（刪除、停格）一段一段吐出成品聲音（09-30 從 build_audio 抽出來，
     讓組聲音可以邊組邊寫檔）。x 是原聲（停格示範墊底噪用）。"""
     from bookclub import assemble
@@ -419,7 +426,7 @@ def output_segments(x: np.ndarray, y: np.ndarray, plist: list[dict], tails: dict
             fz = p["停格"]
             fill = tails.get(fz.get("edit")) if fz.get("edit") else None
             if fill is None:   # 停格示範：墊環境底噪
-                fill = assemble.room_tone(x, e, e + 1, n, SR)
+                fill = assemble.room_tone(x, e, e + 1, n, SR, bed=bed)
             yield assemble.fit_length(fill.astype(np.float32), n)
 
 
@@ -1047,7 +1054,7 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     summary = {"範圍": [a, b], "原長度秒": round(b - a, 3), "刪除秒": round(sum(y - x for x, y in d["刪除"]), 3),
                "停格秒": round(sum(f["dur"] for f in d["停格"]), 3), "預期成品秒": round(expected, 3),
                "片段數": len(plist), "聲音處理秒": round(audio_s, 1), "動作數": len(d["動作"]),
-               "警告": d["警告"], "輸出": {}}
+               "警告": d["警告"], "輸出": {}, "底噪挑法": roomtone_method()}
     old = wd.read_json(out / f"輸出摘要_{tag}.json", default=None) or {}
     if old.get("範圍") == [a, b]:
         summary["輸出"] = old.get("輸出", {})   # 只重跑某幾種做法時，其他做法的紀錄留著
