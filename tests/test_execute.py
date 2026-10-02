@@ -1033,6 +1033,73 @@ def test_name_plan_change_to_mute_after_first_run_takes_effect():
     assert kinds.get("名字消音", 0) == len(wd.read_json(nameplan.plan_path(w))["消音"]) >= 1
 
 
+def _render_fail_setup(w: Path):
+    """前三步假的（都做過了），組裝用 run_execute 自己的；假裝上次退回重做沒做完（組裝完要收尾）。"""
+    from bookclub import finalcheck
+
+    calls: list = []
+    runners, checks = _fake(calls, {"做過": {"老師名字", "學員重念", "保留原聲學員名字"}})
+    runners.pop("組裝")
+    checks.pop("組裝")
+    finished: list = []
+    olds = (finalcheck.load_check, finalcheck.finish_redo)
+    finalcheck.load_check = lambda wk: {"重做中": {"項目": ["假的"]}}
+    finalcheck.finish_redo = lambda wk: finished.append(1) or {"項目": []}
+    return runners, checks, finished, olds
+
+
+def _render_fail_restore(olds) -> None:
+    from bookclub import finalcheck
+
+    finalcheck.load_check, finalcheck.finish_redo = olds
+
+
+def test_render_low_disk_fails_step_without_finish_redo():
+    """10-02 第七批（C1）：組裝當下硬碟不夠（假的 disk_usage）→ 抽聲音之前就停、步驟標失敗、不做 finish_redo。"""
+    import shutil as _sh
+
+    w = _fresh()
+    runners, checks, finished, olds = _render_fail_setup(w)
+    real = _sh.disk_usage
+    _sh.disk_usage = lambda p: real(p)._replace(free=int(3.0e9))
+    try:
+        execute.run_execute(w, end=180.0, runners=runners, checks=checks, skip_precheck=True, log=lambda s: None)
+        raise AssertionError("硬碟不夠還標做完")
+    except RuntimeError as e:
+        assert "硬碟可用空間只剩 3.0 GB" in str(e) and "至少要 5 GB" in str(e), e
+    finally:
+        _sh.disk_usage = real
+        _render_fail_restore(olds)
+    prog = wd.read_json(execute.progress_path(w))
+    assert prog["步驟"]["組裝"]["狀態"] == "失敗" and not finished
+    assert not (w / "輸出" / "原聲音軌.wav").exists() and not list((w / "輸出").glob("*聲音*.wav"))
+
+
+def test_render_without_valid_output_not_marked_done():
+    """10-02 第七批（C1）：組裝跑完但成品驗證沒過（或沒產出）→ 再檢查一次沒過，步驟標失敗、不做 finish_redo。"""
+    w = _fresh()
+    runners, checks, finished, olds = _render_fail_setup(w)
+
+    def fake_render(wk, ctx):
+        out = wk / "輸出"
+        out.mkdir(exist_ok=True)
+        for m in ctx["輸出做法"]:
+            (out / f"成品_{ctx['標記']}_{m}.mp4").write_bytes(b"x")
+        wd.write_json(out / f"輸出摘要_{ctx['標記']}.json",
+                      {"輸出": {m: {"驗證": {"通過": False}} for m in ctx["輸出做法"]}})
+
+    runners["組裝"] = fake_render
+    try:
+        execute.run_execute(w, end=180.0, runners=runners, checks=checks, skip_precheck=True, log=lambda s: None)
+        raise AssertionError("驗證沒過還標做完")
+    except RuntimeError as e:
+        assert "跑完了，但還沒做好" in str(e) and "沒有通過驗證" in str(e), e
+    finally:
+        _render_fail_restore(olds)
+    prog = wd.read_json(execute.progress_path(w))
+    assert prog["步驟"]["組裝"]["狀態"] == "失敗" and "沒有通過驗證" in prog["錯誤"] and not finished
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

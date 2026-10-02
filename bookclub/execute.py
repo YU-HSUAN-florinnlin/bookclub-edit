@@ -1341,6 +1341,15 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
                 log(traceback.format_exc(limit=3))
                 raise
             ctx.pop("回報", None)
+            # 10-02 第七批（C1）：跑完再檢查一次真的做好了沒有（例如組裝沒產出成品、驗證沒過），沒有就標失敗、不收尾
+            ok, why_after = checks[key](workdir, ctx)
+            if not ok:
+                st.update({"狀態": "失敗", "結束": _now(), "訊息": f"跑完了，但還沒做好：{why_after}"})
+                prog["錯誤"] = f"{key}：跑完了，但還沒做好：{why_after}"
+                prog["結束時間"] = _now()
+                save()
+                log(f"[AI 執行] ⚠️ {key}：跑完了，但還沒做好（{why_after}）")
+                raise RuntimeError(f"{key}：跑完了，但還沒做好：{why_after}")
             st.update({"狀態": "做完", "結束": _now(), "訊息": why if "子程式" not in st else f"{why}｜{len(st['子程式'])} 支程式做完"})
             save()
             log(f"[AI 執行] {key}：做完")

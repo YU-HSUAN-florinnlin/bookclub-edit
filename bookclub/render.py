@@ -1017,8 +1017,11 @@ def join_jumps(new: np.ndarray, joins: list[float]) -> list[dict]:
 
 def render_video(workdir: str | Path, start: float, end: float, *, video: str | Path | None = None,
                  label: bool = False, methods: list[str] = ("sw",), tag: str | None = None,
-                 demo_freeze: bool = False, demo_blur: bool = False, min_free_gb: float = 5.0,
+                 demo_freeze: bool = False, demo_blur: bool = False, min_free_gb: float | None = None,
                  include_kept: bool = False) -> dict:
+    """10-02 第七批（C1）：有任何一種輸出做法沒產出成品（硬碟不夠略過、驗證沒過）就丟例外，訊息寫原因與數字，
+    第 4 步不會標「做完」。硬碟門檻讀 settings.toml 的 thresholds.execute_min_disk_gb_start（以前寫死 5 GB），
+    在抽聲音之前就先看一次。"""
     import shutil
 
     import soundfile as sf
@@ -1033,6 +1036,14 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     tag = tag or f"{int(a // 60)}-{int(b // 60)}"
     out = workdir / "輸出"
     out.mkdir(parents=True, exist_ok=True)
+    if min_free_gb is None:
+        from bookclub.config import load_settings
+
+        min_free_gb = load_settings().thresholds.execute_min_disk_gb_start
+    free = shutil.disk_usage(str(out)).free / 1e9
+    if free < min_free_gb:   # 10-02 第七批：抽聲音之前就先看（聲音軌、成品都要寫進硬碟）
+        raise RuntimeError(f"硬碟可用空間只剩 {free:.1f} GB，組裝至少要 {min_free_gb:g} GB，沒有開始組裝。"
+                           "清掉用不到的檔案（舊的測試工作區、輸出資料夾裡用不到的中間檔）或重開機後，再按一次「開始執行」")
     # 10-02 第五批：複製來的工作區，輸出資料夾裡這次要寫的檔如果是指回原本工作區的連結，先拿掉連結（ffmpeg、寫音檔會順著連結覆蓋原本的）
     for f in out.iterdir():
         if f.is_symlink() and f"_{tag}" in f.name:
@@ -1096,10 +1107,12 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     from bookclub import proclog   # 09-29：AI 處理紀錄＋沒登記的變動檢查（生成/處理紀錄.json，第 5 步讀）
     proclog.write_render_log(workdir, d, plist, au["原聲"], au["新聲音"], tag)
 
+    problems = []
     for m in methods:
         free = shutil.disk_usage(str(out)).free / 1e9
         if free < min_free_gb:
             summary["輸出"][m] = {"略過": f"硬碟只剩 {free:.1f} GB"}
+            problems.append(f"{m}：硬碟可用空間只剩 {free:.1f} GB（至少要 {min_free_gb:g} GB），沒有輸出")
             continue
         dst = out / f"成品_{tag}_{m}.mp4"
         # 09-29：先輸出到暫存檔名，驗證通過才換成正式檔名；中斷的殘檔、驗證沒過的檔不會被當成做好了
@@ -1115,6 +1128,7 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
         else:
             final = out / f"成品_{tag}_{m}_驗證沒過.mp4"
             tmp.replace(final)
+            problems.append(f"{m}：成品驗證沒過（{verify_problem(ver)}），存成 {final.name}")
         summary["輸出"][m] = {"耗時秒": round(spent, 1), "大小MB": round(final.stat().st_size / 1e6, 1),
                             "倍速": round((b - a) / spent, 2), "推估整支98分鐘秒": round(spent * 5864 / (b - a)),
                             **stat, "驗證": ver, "檔案": final.name}
@@ -1133,7 +1147,25 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
                                   "標字時段數": len(wins), "驗證": verify(dst, expected, joins, full_decode=True),
                                   "檔案": dst.name}
     wd.write_json(out / f"輸出摘要_{tag}.json", summary)
+    if problems:   # 10-02 第七批（C1）：沒產出成品不能當作做完
+        raise RuntimeError("組裝沒有產出成品：" + "；".join(problems))
     return summary
+
+
+def verify_problem(ver: dict) -> str:
+    """驗證沒過的原因（只寫數字）。"""
+    out = []
+    if abs(ver.get("長度誤差秒", 0)) >= 0.1:
+        out.append(f"畫面長度差 {ver['長度誤差秒']:+.2f} 秒（預期 {ver.get('預期秒')} 秒）")
+    if abs(ver.get("聲畫差秒", 0)) >= 0.1:
+        out.append(f"畫面比聲音長 {ver['聲畫差秒']:+.2f} 秒")
+    if ver.get("剪點黑畫面"):
+        out.append(f"剪點附近有 {len(ver['剪點黑畫面'])} 處黑畫面")
+    if ver.get("解碼錯誤行數"):
+        out.append(f"解碼錯誤 {ver['解碼錯誤行數']} 行")
+    if ver.get("QuickTime能解") is False:
+        out.append("QuickTime 打不開")
+    return "、".join(out) or "原因不明"
 
 
 def _video_size(video: Path) -> tuple[int, int]:
