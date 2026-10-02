@@ -157,7 +157,7 @@ def precheck(workdir: str | Path) -> dict:
 
     lack_codes = epcodes.missing(workdir)
     if lack_codes:
-        missing.append(f"有 {len(lack_codes)} 個名字這一集還沒選英文代號：第 3 步開始前 ②（學員）或 ③（其他名稱）選好，"
+        missing.append(f"有 {len(lack_codes)} 個名字這一集還沒選代號：第 3 步開始前 ②（學員）或 ③（其他名稱）選好，"
                        "或按「幫還沒代號的自動配」")
     # 09-30：老師提到名字裡有「換不了代號」的（句子裡找不到名字），不處理的話成品會照原聲念出名字 → 不能開始
     if wd.read_json(wd.names_path(workdir), default=None):
@@ -463,6 +463,21 @@ def final_check(workdir: str | Path) -> dict:
             paths=_fix_paths(s0, e, near(s0, e), index, turn=t), heard_now=ans == OUT_A)
         # 10-02 第四批：答過「老師的話，不用處理」（或這裡勾了「我聽過了」）的不再拿掉，留著顯示成確認過、可以在這裡改答案
         must[-1].update({"段落外答案": ans, "段落外起訖": [round(s0, 3), round(e, 3)]})
+    # 10-02 第七批（任務單 26）：要念的文字裡還有舊英文代號 → 一定要處理（送去生成的文字不該再有英文代號）
+    from bookclub import codeswap
+
+    try:
+        left_codes = codeswap.leftover_texts(workdir)
+    except Exception:  # noqa: BLE001 — 讀不到不擋（其他檢查照常）
+        left_codes = []
+    for x in left_codes:
+        info = index.get(x["卡片"]) or {}
+        nm = review.item_name(index, x["卡片"]) if info else x["卡片"].split(":")[0]
+        row(must, f"英文代號:{x['卡片']}:{x['欄位']}", float(info.get("start") or 0.0), float(info.get("end") or 0.0),
+            f"〈{nm}〉要念的文字裡還有英文代號（{'、'.join(x['代號'])}），送去生成會念英文",
+            name=nm, card=x["卡片"] if info else None,
+            todo="到第 3 步「開始前 4 件事」② 上面按「把這一集的英文代號換成中文」，"
+                 "或命令列 bookclub codes convert <工作區>；只有這一句的話也可以在卡片上直接改字")
     # 2. 名字換不了代號
     for m in plan.get("要人處理", []):
         k = f"名字:{m['候選']}"

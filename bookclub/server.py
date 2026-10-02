@@ -1231,6 +1231,10 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub import students
 
             self._send_json(200, students.set_voice_choice(server.workdir, str(body["學員"]), body.get("聲線") or None))
+        elif path == "/api/codes/convert":   # 10-02 第七批：把這一集的英文代號換成中文（body：{"對照": {舊: 新}, "試跑": bool}）
+            from bookclub import codeswap
+
+            self._send_json(200, codeswap.apply(server.workdir, body.get("對照") or {}, dry_run=bool(body.get("試跑"))))
         elif path == "/api/codes/auto":   # 09-29：幫還沒代號的自動配
             from bookclub import epcodes
 

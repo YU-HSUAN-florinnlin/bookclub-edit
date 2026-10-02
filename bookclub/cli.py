@@ -203,6 +203,14 @@ def build_parser() -> argparse.ArgumentParser:
     redo_list = redo_sub.add_parser("list", help="列出要重做的項目（成品檢查按了「送回 AI 重做」的那一份）")
     redo_list.add_argument("workdir", help="工作區路徑")
 
+    codes_parser = sub.add_parser("codes", help="這一集的代號（10-02 起用外國人名的中文寫法）")
+    codes_sub = codes_parser.add_subparsers(dest="codes_command")
+    cconv = codes_sub.add_parser("convert", help="把這一集的英文代號換成中文：存代號的地方與要念的文字一起換，先備份")
+    cconv.add_argument("workdir", help="工作區路徑")
+    cconv.add_argument("--map", action="append", metavar="舊=新",
+                       help="對照，例如 --map Joan=潔西（可以給好幾次；舊名單裡有對應的不給也會照名單換）")
+    cconv.add_argument("--dry-run", action="store_true", help="只列出會換幾處，不改檔")
+
     render_parser = sub.add_parser("render", help="組裝：把生成的聲音、消音放回原本的時間")
     render_sub = render_parser.add_subparsers(dest="render_command")
     render_audio_parser = render_sub.add_parser("audio", help="組出跟原片等長的新聲音軌＋處理前後試聽")
@@ -462,6 +470,33 @@ def main(argv: list[str] | None = None) -> int:
             print(f"一次重做這幾筆：{r['項目'][0]['建議指令']}（網頁第 4 步按「開始執行」也一樣）")
             return 0
         print("用法：bookclub redo list <工作區>")
+        return 2
+
+    if args.command == "codes":
+        if args.codes_command == "convert":
+            from bookclub import codeswap
+
+            rows = codeswap.plan(args.workdir)["英文代號"]
+            if not rows:
+                print("這一集沒有英文代號了，不用換。")
+                return 0
+            print("這一集還在用的英文代號（舊 → 建議；存代號的地方幾格、要念的文字裡幾處）：")
+            for r in rows:
+                print(f"  {r['舊']} → {r['建議'] or '（舊名單沒有對應，要用 --map 給）'}；{r['存代號的地方']} 格、{r['要念的文字']} 處")
+            try:
+                res = codeswap.apply(args.workdir, codeswap.parse_map(args.map), dry_run=args.dry_run)
+            except ValueError as e:
+                print(f"沒有換：{e}")
+                return 2
+            print(("試跑（沒有改檔）：" if args.dry_run else "換好了：")
+                  + "；".join(f"{o} → {n}（{res['每個代號換了幾處'][o]} 處）" for o, n in res["對照"].items()))
+            if not args.dry_run:
+                print(f"改到的檔：{'、'.join(res['改到的檔']) or '—'}；備份在工作區的 {res['備份']}")
+                print("換過的句子到第 4 步會重新生成（做過的判斷照舊：文字對不上就重做）")
+                if res.get("還剩"):
+                    print(f"⚠️ 還有英文代號沒換到：{'、'.join(res['還剩'])}")
+            return 0
+        print("用法：bookclub codes convert <工作區> [--map Joan=潔西 ...] [--dry-run]")
         return 2
 
     if args.command == "render":

@@ -1511,17 +1511,15 @@ function rvPrepPeopleHtml() {
   const right = chosen.length ? chosen.map((r) => {
     const cur = (rv.data["這一集代號"] || {})[r] || nameCode[r] || "";
     const who = people.filter(([, p]) => p["本名"] === r).map(([n]) => n).join("、");
-    const opts = ['<option value="">（還沒指定）</option>'].concat(codes.map((c) => `<option ${cur === c ? "selected" : ""}>${esc(c)}</option>`))
-      .concat(cur && !codes.includes(cur) ? [`<option selected>${esc(cur)}</option>`] : [])
-      .concat(['<option value="__new">新的代號…</option>']).join("");
+    const opts = rvCodeOpts(cur, "（還沒指定）") + '<option value="__new">新的代號…</option>';
     const notInRoster = !reals.includes(r);
     return `<li class="rv-person"><div class="nm"><b>${esc(r)}</b><span class="rv-meta">${esc(who)}${notInRoster ? "・名冊上沒有，選了代號會加進名冊" : ""}</span></div>
-      <div class="ctl"><label>英文代號 <select class="rv-namecode" data-real="${esc(r)}">${opts}</select></label>
+      <div class="ctl"><label>代號 <select class="rv-namecode" data-real="${esc(r)}">${opts}</select></label>
 </div></li>`;
   }).join("") : `<li class="rv-meta">左邊選了本名之後，這裡會列出來。</li>`;
-  return `${rvDupHtml()}<p class="rv-meta">左邊是照聲音特徵分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個英文代號（只影響這一集，老師講到他的名字、學員稿子裡的名字都會照這裡換）。</p>${rvAutoHtml()}
+  return `${rvDupHtml()}<p class="rv-meta">左邊是照聲音特徵分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個代號（只影響這一集，老師講到他的名字、學員稿子裡的名字都會照這裡換）。</p>${rvEnglishCodesHtml()}${rvAutoHtml()}
     <div class="rv-people2"><div><h4>照聲音特徵分出來的人</h4><ul class="rv-people">${left}</ul></div>
-      <div><h4>本名 → 這支影片的英文代號</h4><ul class="rv-people">${right}</ul></div></div>`;
+      <div><h4>本名 → 這支影片的代號</h4><ul class="rv-people">${right}</ul></div></div>`;
 }
 
 // 09-30 宇軒：學員聲線依男女自動輪流（男 1、男 2⋯／女 1、女 2⋯，女 5 不用），每位不同；這裡顯示、可以改
@@ -1538,10 +1536,37 @@ function rvVoiceSelect(n, p) {
     <option value="" ${v["人選的"] ? "" : "selected"}>${esc(auto)}</option>${og("男")}${og("女")}</select></label>`;
 }
 
+// 10-02 第七批：代號選單分女男、只顯示中文（後端 epcodes.code_groups）；這一集用到的其他代號放最後
+function rvCodeOpts(cur, first) {
+  const g = rv.data["代號分組"] || {};
+  const flat = rv.data["代號選項"] || [];
+  const opt = (c) => `<option ${cur === c ? "selected" : ""}>${esc(c)}</option>`;
+  const groups = g["女"] ? [["女", g["女"]], ["男", g["男"] || []], ["這一集用到的其他代號", g["這一集用到的其他代號"] || []]]
+    : [["代號", flat]];
+  const all = groups.flatMap(([, cs]) => cs);
+  return [`<option value="">${esc(first)}</option>`]
+    .concat(groups.filter(([, cs]) => cs.length).map(([lab, cs]) => `<optgroup label="${esc(lab)}">${cs.map(opt).join("")}</optgroup>`))
+    .concat(cur && !all.includes(cur) ? [`<option selected>${esc(cur)}</option>`] : [])
+    .join("");
+}
+
+// 10-02 第七批：這一集還在用英文代號 → 「把這一集的英文代號換成中文」（後端 codeswap）
+function rvEnglishCodesHtml() {
+  const rows = rv.data["英文代號換中文"] || [];
+  if (!rows.length) return "";
+  const g = rv.data["代號分組"] || {};
+  const pick = (r) => `<select class="rv-cvt" data-old="${esc(r["舊"])}"><option value="">（選一個）</option>
+    <optgroup label="女">${(g["女"] || []).map((c) => `<option ${c === r["建議"] ? "selected" : ""}>${esc(c)}</option>`).join("")}</optgroup>
+    <optgroup label="男">${(g["男"] || []).map((c) => `<option ${c === r["建議"] ? "selected" : ""}>${esc(c)}</option>`).join("")}</optgroup></select>`;
+  return `<div class="rv-person" id="rv-cvtbox"><p class="rv-warnline">這一集還在用英文代號（聲音模型念英文名常念得怪）。可以一次換成中文寫法：存代號的地方和要念的文字一起換，換之前自動備份；換過的句子到第 4 步會重新生成。</p>
+    <ul>${rows.map((r) => `<li><b>${esc(r["舊"])}</b> → ${pick(r)} <span class="rv-meta">${r["存代號的地方"]} 格、要念的文字 ${r["要念的文字"]} 處${r["建議"] ? "" : "・舊名單沒有對應，要自己選"}</span></li>`).join("")}</ul>
+    <button class="primary small" id="rv-cvtgo">把這一集的英文代號換成中文</button></div>`;
+}
+
 function rvAutoHtml() {
   // 09-29：名冊拿掉代號欄後，每一集要自己選代號；還沒選的一鍵配常用英文名（之後可以改）
   const lack = rv.data["還沒代號"] || [];
-  return `<div class="rv-actions">${lack.length ? `<span class="rv-warnline">還有 ${lack.length} 個名字這一集沒有英文代號</span>` : ""}
+  return `<div class="rv-actions">${lack.length ? `<span class="rv-warnline">還有 ${lack.length} 個名字這一集沒有代號</span>` : ""}
     <button class="ghost small" id="rv-autocode">幫還沒代號的自動配</button></div>`;
 }
 
@@ -1567,9 +1592,7 @@ function rvPrepNamesHtml() {
   const cntOf = (u) => u["刪除段落外次數"] !== u["次數"] ? `${u["刪除段落外次數"]} 次（另 ${u["次數"] - u["刪除段落外次數"]} 次在刪除段落裡）` : `${u["次數"]} 次`;
   const who = (u) => `${esc(u["是誰"])}${u["名冊本名"] && u["名冊本名"] !== u["名字"] ? `・名冊上是 ${esc(u["名冊本名"])}` : u["名冊本名"] ? "・名冊上有" : "・名冊上沒有"}`;
   const unRows = un.map((u) => {
-    const codeOpts = ['<option value="">選代號</option>'].concat(codes.map((c) => `<option ${u["代號"] === c ? "selected" : ""}>${esc(c)}</option>`))
-      .concat(u["代號"] && !codes.includes(u["代號"]) ? [`<option selected>${esc(u["代號"])}</option>`] : [])
-      .concat(['<option value="__new">新的代號…</option>']).join("");
+    const codeOpts = rvCodeOpts(u["代號"] || "", "選代號") + '<option value="__new">新的代號…</option>';
     const sameOpts = ['<option value="">選是哪一位</option>'].concat(reals.map((r) =>
       `<option value="${esc(r)}" ${u["同一人"] === r ? "selected" : ""}>${esc(r)}（${esc(codeOf(r) || "還沒選代號")}）</option>`)).join("");
     const result = u["做法"] === "換成代號" && u["代號"] ? `→ <b>${esc(u["代號"])}</b>` : u["做法"] === "是上面的學員" && u["同一人"] ? `→ 同 ${esc(u["同一人"])}（<b>${esc(u["代號"] || "還沒選代號")}</b>）` : "";
@@ -1642,7 +1665,7 @@ function rvBindPrep(root) {
   }));
   const askCode = (el) => {   // 「新的代號…」：自己打一個英文代號
     if (el.value !== "__new") return el.value || null;
-    const v = (prompt("輸入新的英文代號（例如 Grace）") || "").trim();
+    const v = (prompt("輸入新的代號（外國人名的中文寫法，例如 葛蕾絲）") || "").trim();
     if (!v) { el.value = ""; return undefined; }
     return v;
   };
@@ -1661,11 +1684,27 @@ function rvBindPrep(root) {
     if (el.value === "換成代號" || el.value === "是上面的學員") return;   // 選了代號／哪一位才存
     await apiPost("/api/people/decide", { "名字": el.dataset.name, "做法": el.value }); await reload();
   }));
+  const cvt = root.querySelector("#rv-cvtgo");
+  if (cvt) cvt.addEventListener("click", async () => {   // 10-02 第七批：把這一集的英文代號換成中文
+    const map = {};
+    root.querySelectorAll(".rv-cvt").forEach((el) => { map[el.dataset.old] = el.value; });
+    const lack = Object.entries(map).filter(([, v]) => !v).map(([k]) => k);
+    if (lack.length) { alert(`還沒選：${lack.join("、")}`); return; }
+    const used = Object.values(map);
+    if (new Set(used).size !== used.length) { alert("同一集不能兩個人換成同一個代號"); return; }
+    if (!confirm(`要換成：${Object.entries(map).map(([o, n]) => `${o} → ${n}`).join("、")}？\n換之前會自動備份；換過的句子到第 4 步會重新生成。`)) return;
+    try {
+      const r = await apiPost("/api/codes/convert", { "對照": map });
+      alert(`換好了：${Object.entries(r["每個代號換了幾處"]).map(([o, n]) => `${o} ${n} 處`).join("、")}。備份在工作區的 ${r["備份"]}`
+        + (r["還剩"] && r["還剩"].length ? `\n還有沒換到的：${r["還剩"].join("、")}` : ""));
+    } catch (e) { if (!e.shown) alert(e.message || e); }
+    await reload();
+  });
   const auto = root.querySelector("#rv-autocode");
   if (auto) auto.addEventListener("click", async () => {
     try {
       const r = await apiPost("/api/codes/auto", {});
-      alert(`配好了：② ${r["②"]} 位、③ ${r["③"]} 個。${r["代號不夠"] ? "常用英文名不夠用，剩下的請自己打新代號。" : "不喜歡的直接改。"}`);
+      alert(`配好了：② ${r["②"]} 位、③ ${r["③"]} 個。${r["代號不夠"] ? "名單上的代號不夠用，剩下的請自己打新代號。" : "不喜歡的直接改。"}`);
     } catch (e) { alert(e.message || e); }
     await reload();
   });
@@ -1899,7 +1938,7 @@ const rvEdCtx = {
       }
       if (ed.kind === "名字" && !ed.id) {
         const codes = rv.data["代號選項"] || [];
-        return `<label>換成代號 <select id="rv-ed-code"><option value="">（選一個）</option>${codes.map((c) => `<option ${c === ed.code ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
+        return `<label>換成代號 <select id="rv-ed-code">${rvCodeOpts(ed.code || "", "（選一個）")}</select></label>
           <label>逐字稿裡寫成 <input id="rv-ed-word" size="6" placeholder="不填就用對齊到的字" value="${esc(ed.word || "")}"></label>`;
       }
       if (ed.kind === "局部消音" && !ed.id) return rvRadios("rv-ed-way", rv.data["選項"]["消音"], ed.way || rv.data["選項"]["消音"][0], "rv-ed-way");

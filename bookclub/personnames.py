@@ -364,7 +364,7 @@ def decide(workdir: str | Path, name: str, how: str, code: str | None = None, sa
         roster = {r["canonical"]: r["代號"] for r in names.load_roster(data_dir() / "名冊.csv") if r.get("canonical")}
         code = epcodes.episode_codes(workdir).get(same_as)
         if not code:
-            raise ValueError(f"「{same_as}」還沒有英文代號：先在「學員是誰」右欄幫他選")
+            raise ValueError(f"「{same_as}」還沒有代號：先在「學員是誰」右欄幫他選")
         if same_as in roster:
             add_roster_alias(same_as, [name, *p["其他寫法"]])
         else:
@@ -373,7 +373,7 @@ def decide(workdir: str | Path, name: str, how: str, code: str | None = None, sa
     elif how == "換成代號":
         code = (code or "").strip()
         if not code:
-            raise ValueError("換成代號要選一個英文代號")
+            raise ValueError("換成代號要選一個代號")
         added = int(add_to_roster(name, p["其他寫法"], code))   # 已經在名冊上：不改名冊，這一集的代號記在決定裡（epcodes）
         rescanned = rescan_names(workdir)
     elif how == "不是名字":

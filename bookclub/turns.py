@@ -460,6 +460,7 @@ def page_data(workdir: str | Path) -> dict:
     from bookclub import epcodes as _ep   # 09-29：名冊拿掉代號欄，選單用常用英文名＋這一集用過的
 
     data["代號選項"] = _ep.code_options(workdir)
+    data["代號分組"] = _ep.code_groups(workdir)   # 10-02 第七批：選單分女男、只顯示中文
     # 09-29「學員是誰」改兩欄：左邊選本名（最後一個選項是老師），右邊每個本名在這支影片用哪個英文代號
     data["本名選項"] = sorted({r["canonical"] for r in roster if r.get("canonical")})
     data["名冊代號"] = {r["canonical"]: r["代號"] for r in roster if r.get("canonical") and r["代號"]}

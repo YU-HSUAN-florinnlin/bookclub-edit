@@ -1,7 +1,7 @@
 """這一集的代號表（09-29 宇軒：不用每一集同一個學員都用同一個英文名，只要同一集一致）。
 
 名冊（`~/讀書會剪輯資料/名冊.csv`）只負責認得出誰是誰（本名＋其他寫法）；09-29 宇軒決定拿掉英文代號欄，
-每一集自己選代號（`CODE_POOL` 是給選單用的英文名，也可以自己打）。這一集的代號照下面的先後蓋過去（後面的優先）：
+每一集自己選代號（`CODE_POOL` 是給選單用的名單，10-02 起改成外國人名的中文寫法，也可以自己打）。這一集的代號照下面的先後蓋過去（後面的優先）：
 
 1. 名冊上的英文代號（舊名冊還有這一欄才會用到，相容用）
 2. 第 3 步「③ 名冊上沒有的名字」選「換成代號」的（`校對/人名決定.json`）
@@ -18,19 +18,47 @@ from pathlib import Path
 from bookclub import workdir as wd
 
 
-CODE_POOL = (
+# 10-02 第七批（任務單 26 號）：代號一律用外國人名的中文寫法（聲音模型念英文名常念得怪、每次不一樣；
+# 不用中文名，是要讓學員一聽就知道這是抽換過的）。宇軒 10-02 定稿，選單只顯示中文、分女男。
+# 括號裡的英文只用來對應舊代號（`OLD_TO_NEW`，換代號時預先帶出）。
+NEW_CODES_F = (("安娜", "Anna"), ("貝拉", "Bella"), ("克洛伊", "Chloe"), ("黛西", "Daisy"), ("艾瑪", "Emma"),
+               ("費歐娜", "Fiona"), ("漢娜", "Hannah"), ("艾瑞絲", "Iris"), ("賈斯敏", "Jasmine"), ("潔西", "Jessie"),
+               ("茱莉亞", "Julia"), ("凱特", "Kate"), ("蘿拉", "Laura"), ("露西", "Lucy"), ("米亞", "Mia"),
+               ("妮娜", "Nina"), ("蘿絲", "Rose"), ("露比", "Ruby"))
+NEW_CODES_M = (("傑克", "Jack"), ("湯姆", "Tom"), ("大衛", "David"), ("麥可", "Michael"), ("亨利", "Henry"),
+               ("凱文", "Kevin"), ("安迪", "Andy"), ("馬克", "Mark"), ("里歐", "Leo"), ("山姆", "Sam"), ("保羅", "Paul"))
+CODE_POOL_F = tuple(c for c, _ in NEW_CODES_F)
+CODE_POOL_M = tuple(c for c, _ in NEW_CODES_M)
+CODE_POOL = CODE_POOL_F + CODE_POOL_M
+OLD_TO_NEW = {en: zh for zh, en in NEW_CODES_F + NEW_CODES_M}
+# 10-02 之前選單上的英文名（換代號、總檢查找「要念的文字裡還有舊英文代號」用）
+_OLD_POOL = (
     "Amy", "Anna", "Bella", "Chloe", "Claire", "Daisy", "Ella", "Emma", "Fiona", "Grace", "Hannah", "Iris", "Ivy",
     "Jasmine", "Joan", "Julia", "Kate", "Laura", "Lily", "Lucy", "Mia", "Nina", "Olivia", "Rose", "Ruby", "Sara",
     "Tina", "Vivian", "Wendy", "Zoe",
     "Adam", "Ben", "Chris", "Daniel", "David", "Eric", "Frank", "Henry", "Ian", "Jack", "Jason", "Kevin", "Leo",
     "Mark", "Max", "Nick", "Oscar", "Paul", "Ray", "Sam", "Tom", "Victor", "Will",
 )
+OLD_CODE_POOL = tuple(sorted(set(_OLD_POOL) | set(OLD_TO_NEW)))
+
+
+def suggest_chinese(code: str | None) -> str | None:
+    """舊英文代號 → 新名單上的中文寫法（不分大小寫）；舊名單上沒有對應的回 None。"""
+    low = (code or "").strip().lower()
+    return next((zh for en, zh in OLD_TO_NEW.items() if en.lower() == low), None)
 
 
 def code_options(workdir: str | Path | None = None) -> list[str]:
-    """代號選單：常用英文名＋這一集已經用到的（自己打過的新代號也在）。"""
+    """代號選單：中文名單（女、男）＋這一集已經用到的（自己打過的、還沒換掉的英文代號也在）。"""
     used = set(episode_codes(workdir).values()) if workdir is not None else set()
-    return list(CODE_POOL) + sorted(used - set(CODE_POOL))
+    return list(CODE_POOL) + sorted(c for c in used - set(CODE_POOL) if c)
+
+
+def code_groups(workdir: str | Path | None = None) -> dict[str, list[str]]:
+    """代號選單分組（網頁用）：{女: [...], 男: [...], 這一集用到的其他代號: [...]}。"""
+    used = set(episode_codes(workdir).values()) if workdir is not None else set()
+    return {"女": list(CODE_POOL_F), "男": list(CODE_POOL_M),
+            "這一集用到的其他代號": sorted(c for c in used - set(CODE_POOL) if c)}
 
 
 def episode_codes(workdir: str | Path) -> dict[str, str]:
@@ -246,7 +274,7 @@ def missing(workdir: str | Path) -> list[str]:
 
 def auto_assign(workdir: str | Path) -> dict:
     """「幫還沒代號的自動配」：② 選了本名的學員、③ 名冊上的人（沒選不用處理／不是名字）還沒代號的，
-    依序配 `CODE_POOL` 裡這一集還沒用過的英文名。② 的寫進右欄，③ 的寫成「換成代號」決定。"""
+    依序配 `CODE_POOL` 裡這一集還沒用過的代號。② 的寫進右欄，③ 的寫成「換成代號」決定。"""
     from bookclub import personnames
     from bookclub import turns as turns_mod
 

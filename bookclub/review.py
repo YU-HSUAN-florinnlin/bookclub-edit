@@ -265,7 +265,7 @@ def prep_pending(dec: dict, people: dict, suggestions: list[dict], mentioned: li
         out["學員"].append(f"{'、'.join(no_real)} 還沒選本名")
     no_code = sorted({p["本名"] for p in live.values() if p.get("本名") and not (codes.get(p["本名"]) or p.get("代號"))})
     if no_code:
-        out["學員"].append(f"{'、'.join(no_code)} 還沒選英文代號")
+        out["學員"].append(f"{'、'.join(no_code)} 還沒選代號")
     if people_missing:
         out["名字"].append(PEOPLE_MISSING)
     un = [u for u in mentioned if not u.get("已決定") and not u.get("都在刪除段落")]
@@ -1028,6 +1028,8 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "色帶": bands,
         "學員": people,
         "代號選項": tdata.get("代號選項", []),
+        "代號分組": tdata.get("代號分組") or {},   # 10-02 第七批：選單分女男、只顯示中文
+        "英文代號換中文": _english_codes(workdir),   # 10-02 第七批：這一集還在用的英文代號（有的話 ② 上面顯示「換成中文」）
         "聲線選項": voice_opts,
         "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號", "這一集的名字")},   # 09-29「學員是誰」兩欄
         "代號重複": _dup_codes(workdir, tdata),
@@ -1075,6 +1077,16 @@ def _dup_codes(workdir: Path, tdata: dict) -> dict:
     here |= {c.get("canonical") for c in (wd.read_json(wd.names_path(workdir), default={}) or {}).get("candidates", [])
              if c.get("canonical") and not c.get("敏感詞")}
     return epcodes.duplicates(workdir, here)
+
+
+def _english_codes(workdir: Path) -> list[dict]:
+    from bookclub import codeswap
+
+    try:
+        return codeswap.plan(workdir)["英文代號"]
+    except Exception as exc:  # noqa: BLE001 — 列不出來不要擋住工作台
+        print(f"⚠️ 英文代號列不出來：{exc}")
+        return []
 
 
 def _unlisted_names(workdir: Path, chosen: set[str] | None = None, cuts: list | None = None) -> list[dict]:

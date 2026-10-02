@@ -42,8 +42,13 @@ def test_no_roster_codes_then_auto_assign():
     codes = epcodes.episode_codes(w)
     assert len(set(codes.values())) == len(codes) and set(codes.values()) <= set(epcodes.CODE_POOL)
     assert all(c["代號"] for c in wd.read_json(wd.names_path(w))["candidates"] if not c.get("敏感詞"))
-    # 選單：常用英文名＋這一集自己打過的
-    assert "Grace" in epcodes.code_options(w)
+    # 選單：10-02 第七批改成外國人名的中文寫法（分女男），＋這一集自己打過的
+    opts = epcodes.code_options(w)
+    assert "艾瑪" in opts and "傑克" in opts and not any(c in opts for c in ("Grace", "Emma"))
+    g = epcodes.code_groups(w)
+    assert g["女"][:2] == ["安娜", "貝拉"] and "湯姆" in g["男"] and len(g["女"]) == 18 and len(g["男"]) == 11
+    assert set(codes.values()) <= set(g["女"]) | set(g["男"])
+    assert epcodes.suggest_chinese("emma") == "艾瑪" and epcodes.suggest_chinese("Joan") is None
 
 
 def test_code_change_updates_written_texts():

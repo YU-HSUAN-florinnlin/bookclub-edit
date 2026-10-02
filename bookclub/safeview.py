@@ -65,6 +65,8 @@ ENUM_KEYS = {"狀態", "類型", "做法", "排法", "放回做法", "版本", "
 ID_KEYS = {"id", "鍵", "key", "段落", "sentence_id", "區域", "候選", "覆核項目", "句子", "重疊項目", "生成編號", "建議id",
            "來源段落", "edit", "第3步", "生成", "聽過", "編號"}
 SPEAKER_KEYS = {"說話者", "學員", "學員說話者", "文字學員編號", "學員猜的"}
+# 10-02 第七批：代號（艾瑪、Emma 這類）不是個資，但值只有在新舊代號名單裡才印（自己打的、其他字照樣遮）
+CODE_KEYS = {"代號", "建議代號", "舊", "建議", "新"}
 STAMP_KEYS = {"更新時間", "建立時間", "時間", "產生時間", "開始", "結束", "看過時間", "處理紀錄產生時間", "開始時間", "結束時間",
               "重做時間"}
 TIME_KEYS = {"start", "end", "slot", "原片", "成品", "at", "標的起訖", "改過的起訖", "整句起訖", "老師起訖", "學員起訖",
@@ -101,6 +103,13 @@ def _num(v: float) -> str:
     return str(v) if isinstance(v, int) else f"{v:.3f}".rstrip("0").rstrip(".")
 
 
+def known_code(v: str) -> bool:
+    """新名單（中文寫法）或舊英文名單上的代號（不分大小寫）。"""
+    from bookclub import epcodes
+
+    return v in epcodes.CODE_POOL or v.strip().lower() in {c.lower() for c in epcodes.OLD_CODE_POOL}
+
+
 def val(key: str, v) -> str:
     """一個欄位的值 → 可以印的字（白名單，見檔案開頭）。"""
     k = key.split(".")[-1]
@@ -121,6 +130,8 @@ def val(key: str, v) -> str:
             return v
         if k in STAMP_KEYS and _STAMP_RE.match(v):
             return v
+        if k in CODE_KEYS and known_code(v):
+            return v
         return mask(v)
     if isinstance(v, (list, tuple)):
         if not v:
@@ -131,7 +142,7 @@ def val(key: str, v) -> str:
             if k in TIME_KEYS and len(v) == 2:
                 return f"{timemap.t1(v[0])}–{timemap.t1(v[1])}"
             return "[" + ", ".join(val(k, x) for x in v) + "]"
-        if all(isinstance(x, str) for x in v) and k in (ID_KEYS | ENUM_KEYS | SPEAKER_KEYS):
+        if all(isinstance(x, str) for x in v) and k in (ID_KEYS | ENUM_KEYS | SPEAKER_KEYS | CODE_KEYS):
             shown = [val(k, x) for x in v[:10]]
             return "[" + ", ".join(shown) + (f", ⋯共 {len(v)} 個" if len(v) > 10 else "") + "]"
         return f"<清單 {len(v)} 筆>"
@@ -547,6 +558,26 @@ def topic_room(w: Path, f: Filter, out: list[str]) -> None:
         out.append(f"  候選 {i} " + fmt_row(c, ("start", "end", "dBFS")))
 
 
+def topic_codes(w: Path, f: Filter, out: list[str]) -> None:
+    """這一集用到的代號（10-02 第七批）：每個代號幾個人用、還在用的英文代號與建議（不印本名）。"""
+    from collections import Counter as _C
+
+    from bookclub import codeswap, epcodes
+
+    used = _C(epcodes.episode_codes(w).values())
+    out.append(f"這一集的代號表：{len(used)} 個代號")
+    for code, n in sorted(used.items(), key=lambda kv: str(kv[0])):
+        out.append("  " + fmt_row({"代號": code, "人數": n}, ("代號", "人數")))
+    rows = codeswap.plan(w)["英文代號"]
+    out.append(f"還在用的英文代號 {len(rows)} 個（換代號：bookclub codes convert <工作區> --map 舊=新）")
+    for r in rows:
+        out.append("  " + fmt_row(r, ("舊", "建議", "存代號的地方", "要念的文字")))
+    left = codeswap.leftover_texts(w)
+    out.append(f"要念的文字裡還有舊英文代號：{len(left)} 處")
+    for x in left:
+        out.append("  " + fmt_row({"鍵": x["卡片"], "類型": x["欄位"], "代號": x["代號"]}, ("鍵", "類型")))
+
+
 TOPICS = {
     "檔案": "工作區有哪些資料檔、大小、修改時間",
     "段落": "學員／老師段落（校對/段落.json）：編號、起訖、說話者代號、內容類型、已確認",
@@ -563,11 +594,12 @@ TOPICS = {
     "換算": "原片時間 ↔ 成品時間（--原片 42:59.8 或 --成品 38:26.4，可以給好幾個）",
     "前後沒聲音": "老師重念範圍開頭或結尾有一段沒有字（第六批）：建議範圍、能不能一鍵縮小",
     "底噪": "全片底噪（第六批第五件）：挑到哪一段、音量、確認了沒有、候選",
+    "代號": "這一集用到的代號（每個幾個人用，不印本名）、還在用的英文代號與建議的中文、要念的文字裡還有舊英文代號的地方",
 }
 ALIASES = {"files": "檔案", "turns": "段落", "sentences": "句子", "words": "字", "overlaps": "重疊", "names": "名字",
            "mutes": "消音", "cuts": "消音", "剪掉": "消音", "finalcheck": "總檢查", "gen": "生成", "parts": "子程式",
            "final": "成品檢查", "第5步": "成品檢查", "decisions": "剪輯決策", "convert": "換算", "time": "換算",
-           "edges": "前後沒聲音", "room": "底噪"}
+           "edges": "前後沒聲音", "room": "底噪", "codes": "代號"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -631,6 +663,8 @@ def run(argv: list[str]) -> list[str]:
             topic_silent_edges(w, f, out)
         elif topic == "底噪":
             topic_room(w, f, out)
+        elif topic == "代號":
+            topic_codes(w, f, out)
     return out
 
 
