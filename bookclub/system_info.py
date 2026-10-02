@@ -7,6 +7,19 @@ import re
 from pathlib import Path
 
 
+def find_claude() -> str | None:
+    """找 claude 指令（10-02 第七批 B3：doctor、段落分析、建議刪除、人名清單、網頁開始分析前都用這一個）：
+    先找 PATH，找不到再看 ~/.local/bin/claude（伺服器從沒載入 ~/.profile 的 shell 啟動時 PATH 裡沒有）。
+    `bookclub/detect.py`（安裝前跑）用同樣的找法。找不到回 None。"""
+    import shutil
+
+    found = shutil.which("claude")
+    if found:
+        return found
+    local_bin = Path.home() / ".local" / "bin" / "claude"
+    return str(local_bin) if local_bin.exists() else None
+
+
 def detect_os() -> str:
     return platform.system()
 

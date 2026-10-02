@@ -271,8 +271,7 @@ def check_hf_login() -> Check:
 
 
 def check_claude_cli() -> Check:
-    local_bin = Path.home() / ".local" / "bin" / "claude"
-    found = shutil.which("claude") or (str(local_bin) if local_bin.exists() else None)
+    found = system_info.find_claude()   # 10-02 第七批：跟分析時叫 claude 用同一個找法
     if found:
         return Check("claude 指令", True, found, required=False)
     fix = "確認 Claude Code 已安裝、且 ~/.local/bin 有在 PATH 裡"
@@ -285,7 +284,8 @@ def check_claude_cli() -> Check:
 
 def check_claude_responds(timeout_s: int = 30) -> Check:
     try:
-        result = subprocess.run(["claude", "-p", "回覆 OK"], capture_output=True, text=True, timeout=timeout_s)
+        result = subprocess.run([system_info.find_claude() or "claude", "-p", "回覆 OK"], capture_output=True, text=True,
+                                timeout=timeout_s)
         if result.returncode == 0 and result.stdout.strip():
             return Check("claude 回應測試", True, result.stdout.strip()[:60], required=False)
         return Check(

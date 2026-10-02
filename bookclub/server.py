@@ -328,6 +328,16 @@ def parse_range(range_header: str | None, file_size: int) -> tuple[int, int]:
 # /api/state
 # ---------------------------------------------------------------------------
 
+CLAUDE_MISSING = ("找不到 claude 指令（PATH 和 ~/.local/bin 都沒有）：段落分析、建議刪除段落、人名清單會沒跑成功，"
+                  "第 3 步沒有學員段落。先裝好 Claude Code、登入一次（bookclub doctor 可以檢查），再按開始分析")
+
+
+def find_claude() -> str | None:
+    from bookclub.system_info import find_claude as _find
+
+    return _find()
+
+
 def build_state(workdir: Path, video: Path | None = None) -> dict:
     """工作區摘要：影片資訊、各步驟有沒有完成、各步驟耗時、統計數字。"""
     workdir = Path(workdir)
@@ -417,6 +427,10 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
         "substeps": substeps,
         "總耗時_s": elapsed.get("總耗時"),
         "有分析結果檔": bool(analysis),
+        # 10-02 第七批（A3＋B3）：Claude 那幾步沒跑成功要看得到；開始分析前先看找不找得到 claude
+        "要注意": analysis.get("要注意") or [],
+        "Claude沒跑成功": analysis.get("Claude沒跑成功") or [],
+        "找得到claude": bool(find_claude()),
     }
 
 
@@ -870,6 +884,9 @@ class BookclubServer(ThreadingHTTPServer):
 
             if not merged_transcript_path(self.workdir).exists() and not groq_key_ready():
                 return {"started": False, "error": GROQ_KEY_MISSING}
+            if not opts.get("skip_turns") and not find_claude() and not opts.get("沒有claude也開始"):
+                # 10-02 第七批（B3）：找不到 claude 先在畫面上說（要開始的話再按一次「還是開始」）
+                return {"started": False, "error": CLAUDE_MISSING, "找不到claude": True}
 
             self.run_state = self._fresh_run_state()
             self.run_state["running"] = True
@@ -1161,7 +1178,7 @@ class Handler(BaseHTTPRequestHandler):
             d.mkdir(parents=True, exist_ok=True)          # 按下「開始分析」才建資料夾（在影片旁邊）
             register_project(d)
             server.use_project(d, video)
-            opts = {k: body[k] for k in ("skip_turns", "skip_overlap") if k in body}
+            opts = {k: body[k] for k in ("skip_turns", "skip_overlap", "沒有claude也開始") if k in body}
             result = server.start_analyze({"video": str(video), **opts})
             self._send_json(202 if result.get("started") else 409,
                             {**result, "專案": d.name, "路徑": str(d), "接著做": existed})

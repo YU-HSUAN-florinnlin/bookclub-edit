@@ -52,6 +52,7 @@ async function apiPost(path, body, { quiet = false } = {}) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(data.error || `${path} 失敗（${res.status}）`);
+    err.data = data;   // 10-02 第七批：呼叫端看得到其他欄位（例如「找不到claude」）
     if (!quiet) { showSaveError(err.message); err.shown = true; }
     throw err;
   }
@@ -706,8 +707,16 @@ async function renderPicker(path, projectList) {
 async function startPicked() {
   const msg = document.getElementById("pkMsg");
   msg.textContent = "開始中…";
+  const body = { "影片": pickedVideo };
   try {
-    const r = await apiPost("/api/projects/start", { "影片": pickedVideo });
+    let r;
+    try {
+      r = await apiPost("/api/projects/start", body, { quiet: true });
+    } catch (e) {
+      // 10-02 第七批（B3）：找不到 claude 先說，確定要開始再送一次
+      if (!(e.data && e.data["找不到claude"]) || !confirm(`${e.message}\n\n還是要開始分析嗎？`)) throw e;
+      r = await apiPost("/api/projects/start", { ...body, "沒有claude也開始": true });
+    }
     msg.textContent = r["接著做"] ? "接著做，已經完成的步驟會跳過" : "已建立專案";
   } catch (e) { msg.innerHTML = `<span class="badge error">失敗</span> ${esc(e.message)}`; return; }
   location.hash = "#step1";
@@ -744,6 +753,17 @@ async function renderStep1Body() {
   const allDone = order.every(([k]) => (sub[k] || {}).done);   // 10-01 第三批 10：分析做完了，按鈕改「重新分析（做完的會跳過）」
   const errorMsg = status && status.error;
   const messages = (status && status.messages) || [];
+  // 10-02 第七批（A3＋B3）：Claude 那幾步沒跑成功、找不到 claude，畫面上說清楚
+  const failed = state["Claude沒跑成功"] || [];
+  const failedSteps = new Set(failed.map((f) => f["步驟"]));
+  const otherNotes = (state["要注意"] || []).filter((m) => ![...failedSteps].some((k) => m.startsWith(`${k}（Claude）`)));
+  const claudeCard = (failed.length || otherNotes.length || state["找得到claude"] === false) ? `
+    <div class="card" id="step1Warn">
+      ${state["找得到claude"] === false ? `<p class="rv-warnline" id="noClaude">找不到 claude 指令（PATH 和 ~/.local/bin 都沒有）：段落分析、建議刪除段落、人名清單會沒跑成功，第 3 步沒有學員段落。先裝好 Claude Code、登入一次（終端機跑 bookclub doctor 可以檢查），再按開始分析。</p>` : ""}
+      ${failed.length ? `<p><span class="badge error">沒跑成功</span> 上次分析有 ${failed.length} 個用 Claude 的步驟沒跑成功：</p>
+        <ul id="claudeFailed">${failed.map((f) => `<li><b>${esc(f["步驟"])}</b>：${esc(f["原因"])}<br><span class="muted">重跑：${esc(f["怎麼重跑"])}</span></li>`).join("")}</ul>` : ""}
+      ${otherNotes.length ? `<p>要注意：</p><ul>${otherNotes.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
+    </div>` : "";
 
   contentEl.innerHTML = `
     <h1>1　影片分析</h1>
@@ -754,6 +774,7 @@ async function renderStep1Body() {
         <tbody>${rows}</tbody>
       </table>
     </div>
+    ${claudeCard}
     <div class="card">
       <button id="btnAnalyze" ${running ? "disabled" : ""}>${running ? "分析執行中…" : allDone ? "重新分析（做完的會跳過）" : "開始分析"}</button>
       ${!running && allDone ? `<span class="muted">每一步都做完了；再按一次只會補做沒做完的，做完的直接沿用</span>` : ""}
@@ -769,10 +790,20 @@ async function renderStep1Body() {
 
 async function startAnalyze() {
   try {
-    await apiPost("/api/run/analyze", {});
+    await apiPost("/api/run/analyze", {}, { quiet: true });
   } catch (e) {
-    alert(`無法開始分析：${e.message}`);
-    return;
+    // 10-02 第七批（B3）：找不到 claude 先說，確定要開始再送一次
+    if (e.data && e.data["找不到claude"] && confirm(`${e.message}\n\n還是要開始分析嗎？`)) {
+      try {
+        await apiPost("/api/run/analyze", { "沒有claude也開始": true }, { quiet: true });
+      } catch (e2) {
+        alert(`無法開始分析：${e2.message}`);
+        return;
+      }
+    } else {
+      alert(`無法開始分析：${e.message}`);
+      return;
+    }
   }
   await renderStep1Body();
 }

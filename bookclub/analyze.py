@@ -59,6 +59,18 @@ def skipped_overlap_result(workdir: Path, scan_regions: list) -> dict:
     }
 
 
+CLAUDE_RERUN = {   # 10-02 第七批（A3）：三個 Claude 步驟沒跑成功時，畫面與 分析結果.json 寫怎麼重跑
+    "段落分析": "第 1 步按「重新分析（做完的會跳過）」，或命令列 bookclub run turns <工作區>",
+    "建議刪除段落": "第 1 步按「重新分析（做完的會跳過）」，或命令列 bookclub run cuts <工作區>",
+    "人名清單": "第 1 步按「重新分析（做完的會跳過）」，或命令列 bookclub run people <工作區>",
+}
+
+
+def claude_failure(step: str, exc: Exception) -> dict:
+    """一個 Claude 步驟沒跑成功 → {步驟, 原因, 怎麼重跑}（原因只留錯誤種類與前 150 字）。"""
+    return {"步驟": step, "原因": f"{type(exc).__name__}：{str(exc)[:150]}", "怎麼重跑": CLAUDE_RERUN[step]}
+
+
 def keep_elapsed_if_all_reused(elapsed: dict, old_result: dict | None) -> dict:
     """10-01：每一步都沿用上次結果（接著做、全部跳過）時，保留上次的耗時；
     不然總覽會寫「影片分析花了 0.1 秒」。有任何一步真的重做就照這次的。"""
@@ -107,6 +119,7 @@ def run_analyze(
 
     from bookclub import turns as turns_mod
 
+    claude_failed: list[dict] = []   # 10-02 第七批（A3）：三個 Claude 步驟哪幾個沒跑成功
     t0 = time.time()
     text_future = None
     cut_future = None
@@ -138,6 +151,7 @@ def run_analyze(
             text_data, text_s = text_future.result()
             elapsed["2a_段落文字_Claude"] = round(text_s, 1)
         except Exception as exc:  # Claude 叫不到、額度用完：退回純聲紋判斷，其他分析照常
+            claude_failed.append(claude_failure("段落分析", exc))
             print(f"⚠️ [分析一條龍] 段落分析（Claude）失敗：{exc}")
             print("   → 這次先用純聲紋判斷繼續跑；修好之後重跑 bookclub run analyze（已完成的步驟會沿用），"
                   "或單獨跑 bookclub run turns <工作區>（先用 bookclub doctor --claude 確認叫得到 Claude）")
@@ -258,7 +272,8 @@ def run_analyze(
             elapsed["2d_人名清單"] = round(time.time() - t_pp, 1)
             print(f"[分析一條龍] 人名清單：{pp.get('統計', {}).get('名字數', 0)} 個名字"
                   f"（名冊上沒有 {pp.get('統計', {}).get('名冊上沒有', 0)} 個，要在第 3 步決定）")
-        except Exception as exc:  # Claude 失敗就沒有清單，不擋其他步驟
+        except Exception as exc:  # Claude 失敗就沒有清單，不擋其他步驟（第 3 步 ③ 不能標完成、第 4 步擋住）
+            claude_failed.append(claude_failure("人名清單", exc))
             print(f"⚠️ [分析一條龍] 人名清單（Claude）失敗：{exc}；之後可以單獨跑 bookclub run people <工作區>")
 
     # 建議刪除段落在背景跑（Claude＋候選附近的畫面檢查），不擋前面的步驟，最後才收
@@ -269,6 +284,7 @@ def run_analyze(
             elapsed["2c_刪除建議"] = round(cut_s, 1)
             print(f"[分析一條龍] 建議刪除段落：{len(cut_data.get('建議', []))} 筆")
         except Exception as exc:  # Claude 失敗就沒有建議，不擋其他步驟
+            claude_failed.append(claude_failure("建議刪除段落", exc))
             print(f"⚠️ [分析一條龍] 建議刪除段落（Claude）失敗：{exc}；這次沒有建議，之後可以單獨跑 bookclub run cuts <工作區>")
     if pool is not None:
         pool.shutdown(wait=False)
@@ -290,7 +306,9 @@ def run_analyze(
         "重疊掃描區域數": len(scan_regions),
         "重疊掃描總秒數": round(sum(e - s for s, e in scan_regions), 1),
         "重疊數": overlap_result.get("重疊數", 0),
-        "要注意": [m for m in (overlap_result.get("輸入改過"), names_result.get("輸入改過")) if m],   # 09-29 檢查 #7
+        "要注意": [m for m in (overlap_result.get("輸入改過"), names_result.get("輸入改過")) if m]   # 09-29 檢查 #7
+        + [f"{f['步驟']}（Claude）沒跑成功：{f['原因']}。重跑：{f['怎麼重跑']}" for f in claude_failed],
+        "Claude沒跑成功": claude_failed,   # 10-02 第七批（A3）：網頁第 1 步列出來
         "重疊已自動跳過數": overlap_result.get("已自動跳過數", 0),
         "參考音候選數": ref_record.get("候選數", 0),
         "名字候選數": names_result["統計"].get("總筆數", 0),

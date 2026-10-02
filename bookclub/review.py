@@ -239,8 +239,19 @@ def set_prep(workdir: str | Path, key: str, done: bool) -> dict:
         return {"ok": True, "開始前確認": dec["開始前確認"]}
 
 
+PEOPLE_MISSING = ("人名清單沒跑成功（第 1 步用 Claude 找這一集提到的人名）：到第 1 步按「重新分析（做完的會跳過）」，"
+                  "或命令列 bookclub run people <工作區>，跑成功之後才能標完成")
+
+
+def people_list_missing(workdir: Path) -> bool:
+    """10-02 第七批（A3）：有逐字稿、卻沒有 `校對/人名清單.json`（Claude 那一步沒跑成功）。"""
+    from bookclub import personnames
+
+    return wd.merged_transcript_path(workdir).exists() and not personnames.people_path(workdir).exists()
+
+
 def prep_pending(dec: dict, people: dict, suggestions: list[dict], mentioned: list[dict],
-                 codes: dict[str, str]) -> dict[str, list[str]]:
+                 codes: dict[str, str], people_missing: bool = False) -> dict[str, list[str]]:
     """開始前 4 件事，每一件底下還沒處理的（純函式，09-30）：
     ① 建議刪除段落還沒選刪不刪 ② 學員還沒選本名、選了本名還沒代號 ③ 被提到的名字還沒決定
     ④ 學員還沒選保留原聲或重新生成（標完成後才冒出來的，例如拆開、① 改成不刪）。"""
@@ -255,6 +266,8 @@ def prep_pending(dec: dict, people: dict, suggestions: list[dict], mentioned: li
     no_code = sorted({p["本名"] for p in live.values() if p.get("本名") and not (codes.get(p["本名"]) or p.get("代號"))})
     if no_code:
         out["學員"].append(f"{'、'.join(no_code)} 還沒選英文代號")
+    if people_missing:
+        out["名字"].append(PEOPLE_MISSING)
     un = [u for u in mentioned if not u.get("已決定") and not u.get("都在刪除段落")]
     if un:
         out["名字"].append(f"{len(un)} 個被提到的名字還沒決定")
@@ -1001,7 +1014,8 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
 
     mentioned = _unlisted_names(workdir, {p["本名"] for p in tdata.get("學員", {}).values() if p.get("本名")}, will_cut)
     ep_codes = epcodes.episode_codes(workdir)
-    pending = prep_pending(dec, people, suggestions, mentioned, ep_codes)
+    missing_people = people_list_missing(workdir)
+    pending = prep_pending(dec, people, suggestions, mentioned, ep_codes, missing_people)
     reverted = _auto_unprep(workdir, pending)
     for k in reverted:
         dec["開始前確認"][k] = False
@@ -1027,6 +1041,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "刪除建議": [{**sg, "決定": dec["刪除建議"].get(sg["id"], {}).get("決定")} for sg in suggestions],
         "開始前確認": dec["開始前確認"],
         "開始前待處理": pending,          # 09-30：每一件底下還沒處理的（有的話不能標完成）
+        "人名清單沒跑成功": missing_people,   # 10-02 第七批（A3）
         "開始前自動改回": reverted,       # 09-30：這次讀資料時因為冒出新項目、自動改回還沒做的
         "選項": {"重疊": OVERLAP_SHOWN, "重疊排法": OVERLAP_ARRANGE, "名字": NAME_HOWS, "名字標記": NAME_TAGS,
                  "學員名字": list(studentnames.HOWS),

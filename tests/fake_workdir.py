@@ -139,6 +139,9 @@ def make(root: str | Path) -> Path:
     people["學員1"]["點名線索"] = {"Amy": 1}
     people["學員1"]["建議代號"] = "Amy"
     _write(w / "校對" / "段落.json", {"段落": turns, "學員": people, "比對": {}, "統計": {"段落數": len(turns)}})
+    # 10-02 第七批：第 1 步人名清單（Claude）跑成功的樣子（沒有這個檔＝沒跑成功，第 3 步 ③ 不能標完成、第 4 步擋住）
+    _write(w / "校對" / "人名清單.json", {"人名": [], "模型": "假的", "句數": len(sents),
+                                        "統計": {"名字數": 0, "名冊上有": 0, "名冊上沒有": 0}})
 
     def cand(sent, word, code, start, end, how):
         return {"start": start, "end": end, "sentence": sent["text"], "sentence_id": sent["id"], "name": word,

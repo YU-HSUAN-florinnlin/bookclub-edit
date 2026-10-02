@@ -71,6 +71,7 @@ def test_find_people_with_fake_claude_and_called_names():
                                   {"名字": "阿強", "是誰": "其他人", "行號": [i, i + 1]},
                                   {"名字": "作者", "是誰": "書中人物或作者", "行號": [0]}]}, ensure_ascii=False)
 
+    personnames.people_path(w).unlink()   # 10-02 第七批：假工作區現在帶一份空的人名清單（跑成功的樣子），這裡要真的跑
     data = personnames.find_people(w, call=fake, log=lambda m: None)
     assert data["統計"] == {**data["統計"], "名字數": 3, "名冊上有": 1, "名冊上沒有": 2}
     assert personnames.people_path(w).is_file()
@@ -107,6 +108,7 @@ def test_unlisted_decide_adds_to_roster_and_rescans():
     sp["sentences"] = sents
     (w / "說話者判斷.json").write_text(json.dumps(sp, ensure_ascii=False), encoding="utf-8")
     roster_backup = (_DATA / "名冊.csv").read_text(encoding="utf-8")
+    personnames.people_path(w).unlink()   # 10-02 第七批：假工作區帶的空人名清單拿掉，這裡要真的跑
     try:
         personnames.find_people(w, call=lambda p, m: json.dumps({"人名": [
             {"名字": "阿強", "是誰": "學員", "行號": [i]}, {"名字": "某作者", "是誰": "書中人物或作者", "行號": [0]}]},

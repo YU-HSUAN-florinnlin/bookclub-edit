@@ -1587,8 +1587,10 @@ function rvPrepNamesHtml() {
       <p class="rv-meta">被提到時一樣換成這個代號；要改代號回「② 辨識學員聲音是誰」右欄。</p></details></li>` : "";
   const cutBlock = cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只出現在確認刪除的段落裡（${cutOnly.length} 個：${esc(cutOnly.map((u) => u["名字"]).join("、"))}），不用處理</summary>
       <p class="rv-meta">這些段落會整段刪掉。如果在「① 建議刪除段落」改成不刪，會回到上面。</p></details></li>` : "";
-  if (!all.length) return `<p class="rv-meta">這一集沒有找到被提到的人名（第 1 步人名清單還沒跑，或真的沒有）。</p>`;
-  return `${rvDupHtml()}${rvAutoHtml()}<p class="rv-meta">這一集被提到的所有人名（老師或學員講到的），每個決定被提到時換成什麼：
+  // 10-02 第七批（A3）：Claude 那一步沒跑成功，名冊上沒有的名字這裡看不到
+  const peopleWarn = rv.data["人名清單沒跑成功"] ? `<p class="rv-warnline" id="rvPeopleMissing">人名清單沒跑成功（第 1 步用 Claude 找這一集提到的人名）：名冊上沒有的名字這裡看不到，成品可能照原聲念出來。到第 1 步按「重新分析（做完的會跳過）」，或命令列 bookclub run people &lt;工作區&gt;；跑成功之前 ③ 不能標完成。</p>` : "";
+  if (!all.length) return peopleWarn || `<p class="rv-meta">這一集沒有找到被提到的人名（第 1 步人名清單還沒跑，或真的沒有）。</p>`;
+  return `${peopleWarn}${rvDupHtml()}${rvAutoHtml()}<p class="rv-meta">這一集被提到的所有人名（老師或學員講到的），每個決定被提到時換成什麼：
     名冊上的人預設「換成代號」，代號每一集自己選（或按上面自動配）；其實是 ② 某位學員（轉錯字、暱稱）選「是上面的學員」；家人、朋友、沒登記的人選「換成代號」；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
     <p class="rv-meta">${un.length} 個要看，${un.filter((u) => !u["已決定"]).length} 個還沒確認。</p>
     <ul class="rv-people">${unRows}${twoBlock}${cutBlock}</ul>`;

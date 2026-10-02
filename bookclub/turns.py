@@ -72,7 +72,12 @@ def format_lines(sentences: list[dict], offset: int = 0) -> str:
 
 
 def call_claude(prompt: str, model: str, timeout_s: int = 600) -> str:
-    r = subprocess.run(["claude", "-p", "--model", model], input=prompt, capture_output=True, text=True,
+    from bookclub.system_info import find_claude
+
+    exe = find_claude()   # 10-02 第七批（B3）：跟 doctor 同一個找法（PATH 沒有就找 ~/.local/bin/claude）
+    if not exe:
+        raise RuntimeError("找不到 claude 指令（PATH 和 ~/.local/bin 都沒有）；先用 bookclub doctor 確認 Claude Code 裝好、登入過")
+    r = subprocess.run([exe, "-p", "--model", model], input=prompt, capture_output=True, text=True,
                        timeout=timeout_s)
     if r.returncode != 0:
         raise RuntimeError(f"claude -p 失敗：{r.stderr.strip()[:300]}")

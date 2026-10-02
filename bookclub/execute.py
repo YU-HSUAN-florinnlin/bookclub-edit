@@ -175,6 +175,8 @@ def precheck(workdir: str | Path) -> dict:
             where = "、".join(wd.fmt_time(when[str(m["候選"])]) for m in stuck if str(m["候選"]) in when)
             missing.append(f"老師提到名字有 {len(stuck)} 筆還處理不了（{where}）：句子裡找不到名字、換不了代號，成品會照原聲念出來。"
                            "在第 3 步那一筆的卡片上改好要重念的句子，或改成直接消音")
+    if review.people_list_missing(workdir):   # 10-02 第七批（A3）：名冊上沒有的名字沒人看過，成品可能照原聲念出來
+        missing.append(review.PEOPLE_MISSING.replace("跑成功之後才能標完成", "跑成功、在第 3 步 ③ 決定完再開始"))
     dec = review.load_decisions(workdir)
     if not any(dec["開始前確認"].values()):
         notes.append("第 3 步還沒覆核：照第 1 步的建議做（名字整句換掉、學員全部重念、建議刪除的段落不刪）")
