@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from bookclub import workdir as wd
@@ -483,6 +484,21 @@ def make_plan(workdir: str | Path, only: list[int] | None = None) -> dict:
     return _write_plan(workdir, plan, n_cands=len(names.get("candidates", [])), only=only)
 
 
+def refresh_plan(workdir: str | Path) -> dict | None:
+    """10-02 第七批（A1）：第 4 步每次執行開頭都重排名字處理計畫（組裝讀這個檔）。
+
+    以前只有「老師名字有句子要生成」那一步才寫，名字全部選直接消音、或跑過一次後把某句改成直接消音，
+    組裝拿到的是舊的或空的計畫（名字沒消音）。沒有名字候選、也不是匯入的工作區 → 不用排，回 None。
+    內容跟檔案一樣就不重寫（`_write_plan`）。"""
+    workdir = Path(workdir).expanduser()
+    if not wd.read_json(wd.names_path(workdir), default=None) and not (workdir / IMPORTED_PATH).exists():
+        return None
+    try:
+        return make_plan(workdir)
+    except FileNotFoundError:   # 匯入的覆核結果裡沒有計畫
+        return None
+
+
 def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | None = None) -> dict:
     """排出處理計畫（不寫檔）：`make_plan` 與匯出覆核結果共用，兩邊排出來的計畫一定一樣。"""
     workdir = Path(workdir).expanduser()
@@ -532,8 +548,12 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
 
 def _write_plan(workdir: Path, plan: dict, n_cands: int | None = None, only: list[int] | None = None,
                 note: str = "") -> dict:
-    wd.write_json(sentences_path(workdir), [{k: g[k] for k in ("id", "text", "slot")} for g in plan["生成"]])
-    wd.write_json(plan_path(workdir), plan)
+    # 10-02 第七批（A1）：內容跟檔案一樣就不重寫——每次執行都會重排，改了修改時間組裝會以為要重做
+    sents = [{k: g[k] for k in ("id", "text", "slot")} for g in plan["生成"]]
+    if wd.read_json(sentences_path(workdir), default=None) != sents:
+        wd.write_json(sentences_path(workdir), sents)
+    if wd.read_json(plan_path(workdir), default=None) != json.loads(json.dumps(plan, ensure_ascii=False)):
+        wd.write_json(plan_path(workdir), plan)
     print(f"[名字處理] {note}" + (f"候選 {n_cands} 筆" if n_cands is not None else "")
           + (f"（這次只處理 {len(only)} 筆）" if only else "")
           + f"：生成 {len(plan['生成'])} 段、消音 {len(plan['消音'])} 段、略過 {len(plan['略過'])} 筆、"

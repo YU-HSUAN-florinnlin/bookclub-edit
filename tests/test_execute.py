@@ -963,6 +963,76 @@ def test_memory_status_warns_before_start_without_changing_threshold():
     assert "現在 7.0 GB" in text and "偏滿" in text and "重開機" in text and "swap" not in text
 
 
+def _fake_teacher_log(w: Path, plan: dict) -> None:
+    table = tts.load_pron_table()
+    ref = wd.ref_dir(w) / "ref.wav"
+    recs = [{"id": g["id"], "text": g["text"], "生成用文字": tts.apply_pron(g["text"], table)[0], "slot": g["slot"],
+             "slot_s": g["slot"][1] - g["slot"][0], "嘗試": [], "選定": 1, "要人聽": False,
+             "放回時間格": {"檔案": f"生成/老師/{g['id']}_放回時間格.wav", "放回做法": "補靜音", "差異比例": 0.0}}
+            for g in plan["生成"]]
+    wd.write_json(tts.teacher_log_path(w), {"參考音": str(ref), "參考音指紋": tts.ref_fingerprint(ref),
+                                           "參考音逐字稿": (wd.ref_dir(w) / "ref.txt").read_text(encoding="utf-8").strip(),
+                                           "句子": recs})
+
+
+def _render_kinds(w: Path) -> dict:
+    from bookclub import render
+
+    d = render.build_decisions(w, 0.0, 180.0)
+    out: dict = {}
+    for e in d["動作"]:
+        out[e["類型"]] = out.get(e["類型"], 0) + 1
+    return out
+
+
+def test_name_plan_refreshed_every_run_all_muted():
+    """10-02 第七批（A1）：名字全部選直接消音（沒有要生成的句子）→ 老師名字那一步跳過，
+    但開始執行時一定重排計畫，組裝排出來的名字消音筆數＝計畫筆數。"""
+    w = _fresh()
+    (w / nameplan.DECISIONS_FILE_NAME).write_text(json.dumps(
+        {"1": {"做法": nameplan.MUTE}, "2": {"做法": nameplan.MUTE}}, ensure_ascii=False), encoding="utf-8")
+    assert not nameplan.plan_path(w).exists()
+    assert execute.names_done(w)[0]   # 沒有要生成的 → 這一步會被跳過
+    runners, checks = _fake([])
+    checks["老師名字"] = lambda wk, c: execute.names_done(wk)
+    execute.run_execute(w, end=180.0, runners=runners, checks=checks, skip_precheck=True, only_steps=["老師名字"],
+                        log=lambda s: None)
+    plan = wd.read_json(nameplan.plan_path(w))
+    assert len(plan["消音"]) >= 2 and not plan["生成"]
+    assert _render_kinds(w).get("名字消音", 0) == len(plan["消音"])
+    # 內容一樣再跑一次：不重寫（不然組裝每次都以為要重做）
+    m0 = nameplan.plan_path(w).stat().st_mtime_ns
+    time.sleep(0.02)
+    execute.run_execute(w, end=180.0, runners=runners, checks=checks, skip_precheck=True, only_steps=["老師名字"],
+                        log=lambda s: None)
+    assert nameplan.plan_path(w).stat().st_mtime_ns == m0
+
+
+def test_name_plan_change_to_mute_after_first_run_takes_effect():
+    """10-02 第七批（A1）：跑過一次（某句整句重念、生成好了），之後把那一筆改成直接消音 → 組裝用新的做法。"""
+    w = _fresh()
+    dec = w / nameplan.DECISIONS_FILE_NAME
+    dec.write_text(json.dumps({"1": {"tags": ["不是名字"]}}, ensure_ascii=False), encoding="utf-8")
+    plan1 = nameplan.make_plan(w)
+    assert plan1["生成"]
+    _fake_teacher_log(w, plan1)
+    assert _render_kinds(w).get("名字整句換掉", 0) == len(plan1["生成"])
+    # 第 3 步改成直接消音
+    data = json.loads(dec.read_text(encoding="utf-8"))
+    for c in plan1["生成"]:
+        for i in c.get("候選") or []:
+            data[str(i)] = {"做法": nameplan.MUTE}
+    dec.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    assert execute.names_done(w)[0]   # 沒有要生成的 → 跳過；以前計畫檔就停在舊的
+    runners, checks = _fake([])
+    checks["老師名字"] = lambda wk, c: execute.names_done(wk)
+    execute.run_execute(w, end=180.0, runners=runners, checks=checks, skip_precheck=True, only_steps=["老師名字"],
+                        log=lambda s: None)
+    kinds = _render_kinds(w)
+    assert kinds.get("名字整句換掉", 0) == 0, kinds
+    assert kinds.get("名字消音", 0) == len(wd.read_json(nameplan.plan_path(w))["消音"]) >= 1
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

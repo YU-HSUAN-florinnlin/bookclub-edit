@@ -1268,6 +1268,9 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     n = epcodes.sync(workdir)   # 09-29：名字候選的代號跟這一集的代號表對齊
     if n:
         log(f"[AI 執行] 名字代號照這一集的代號表更新了 {n} 筆")
+    from bookclub import nameplan
+
+    nameplan.refresh_plan(workdir)   # 10-02 第七批（A1）：每次都重排名字處理計畫，組裝才拿得到最新的做法
     a = 0.0 if start is None else float(start)
     b = float(end) if end is not None else float(video_duration(workdir) or 0.0)
     if b <= a:
