@@ -12,6 +12,10 @@
     2. 整支轉文字：Groq whisper-large-v3，10 分鐘一段、verbose_json、
        每次呼叫間隔 3.1 秒、429 就等待重試。做法照 spikes/diarize/light_pass_test.py
        驗證過的參數，不用學員名單（這支函式不知道是哪一場，只放口頭語）。
+       10-02 第七批：工作區有主流程的逐字稿（`transcript/merged.json`，`run analyze` 第 1 步）時
+       不再整支轉第二次——讀它的字、在這裡切短句（`split_short_sentences`，只在挑參考音裡用）；
+       說話者判斷讀現有的 `說話者判斷.json`（含合併判斷的修正，`label_short_sentences` 照時間對到短句），
+       不覆寫。以前會用另一套句子編號把它整份蓋掉，段落分析、找名字接著用錯的句子。
     3. 不用老師自錄聲音找老師：逐句抽聲紋、正規化，用 scipy 階層式分群
        （average linkage、cosine 距離、距離門檻 0.6）分群，講話總秒數最多的
        那群＝老師；該群平均聲紋（正規化）當老師聲紋。若有給 teacher_ref
@@ -77,6 +81,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 import subprocess
 import time
@@ -161,6 +166,16 @@ COMBINE_DEDUP_GAP_S = COMBINE_MIN_SEG_S / 2  # 短片段去重疊用的起點最
 COMBINE_POOL_CAP = 40        # 短片段候選池最多留幾個（依分數排序後截斷，避免組合爆炸）
 
 REF_DIR_NAME = "參考音"
+
+# 10-02 第七批（B1＋B5）：有主流程逐字稿（transcript/merged.json）時，挑參考音不再整支送 Groq 第二次，
+# 改讀主流程的字、在這裡面切短句（只在挑參考音裡用，不寫回任何共用檔案）。
+# 門檻怎麼定的：第一堂（98 分鐘）主流程的 10772 個字，跟舊做法（整支 10 分鐘一段送 Groq）的 1446 句比
+# 句數與句長分布（10/25/50/75/90 百分位：舊的 1.0/1.8/2.4/4.0/6.0 秒），掃停頓 0.15–1.2 秒 × 最長 4–30 秒，
+# 停頓 0.3 秒＋最長 4 秒最接近：1453 句、百分位 0.6/1.3/2.7/3.8/4.0 秒。用 `bookclub inspect` 拿的時間只到
+# 0.1 秒，字跟字之間的小停頓量不準，之後拿新影片實測再調。
+SHORT_PAUSE_S = 0.3   # 字跟字之間空超過這麼久就斷句
+SHORT_MAX_S = 4.0     # 一句最長這麼多秒（超過就在下一個字前斷）
+_MAIN_ID_RE = re.compile(r"^\d{4}_\d{3}$")   # 主流程（transcribe.py）的句子編號：0000_000
 
 
 # ---------- 小工具 ----------
@@ -353,16 +368,18 @@ def _classify(sim: float) -> str:
 
 
 def _step3_speaker_classify(
-    audio_path: Path, workdir: Path, sentences: list[dict]
+    audio_path: Path, workdir: Path, sentences: list[dict], *, write_cache: bool = True,
 ) -> tuple[list[dict], dict, float]:
-    """回傳 (sentences 附上 sim/label，cluster_info，耗時)。快取到 說話者判斷.json。"""
+    """回傳 (sentences 附上 sim/label，cluster_info，耗時)。快取到 說話者判斷.json。
+    write_cache=False（10-02 第七批）：只算、不寫檔（說話者判斷.json 已經是主流程的，不能被蓋掉）。"""
     cache_path = workdir / "說話者判斷.json"
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
         # 09-29 檢查 #7：逐字稿重轉過（句子 id 或文字不同），舊的判斷對不上，重算（只是聲紋，約 2 分鐘，沒有人工決定）
         if [(s["id"], s["text"]) for s in cached["sentences"]] == [(s["id"], s["text"]) for s in sentences]:
             return cached["sentences"], cached["cluster_info"], 0.0
-        print("⚠️ [3/找老師] 逐字稿跟上次判斷說話者時不一樣（重轉過文字），重新判斷說話者")
+        print("⚠️ [3/找老師] 逐字稿跟上次判斷說話者時不一樣（重轉過文字），重新判斷說話者"
+              + ("" if write_cache else "（這次只算、不寫回說話者判斷.json）"))
 
     from pyannote.core import Segment
     from pyannote.audio.core.io import Audio as PyannoteAudio
@@ -427,11 +444,81 @@ def _step3_speaker_classify(
         "老師聲紋中心": teacher_center.tolist(),
     }
 
-    cache_path.write_text(
-        json.dumps({"sentences": results, "cluster_info": cluster_info}, ensure_ascii=False, indent=1),
-        encoding="utf-8",
-    )
+    if write_cache:
+        cache_path.write_text(
+            json.dumps({"sentences": results, "cluster_info": cluster_info}, ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
     return results, cluster_info, elapsed
+
+
+# ---------- 10-02 第七批：讀主流程的逐字稿與說話者判斷（不再整支送 Groq 第二次） ----------
+
+def split_short_sentences(words: list[dict], pause_s: float = SHORT_PAUSE_S,
+                          max_s: float = SHORT_MAX_S) -> list[dict]:
+    """主流程的字（`merged.json` 的 words）照時間切成短句（純函式）：字跟字之間空超過 pause_s 就斷，
+    一句超過 max_s 秒就在下一個字前斷。回傳 [{id, start, end, text}]，id 是這裡自己編的（R00000），
+    只在挑參考音裡用。"""
+    out: list[dict] = []
+    cur: list[dict] = []
+    for w in sorted((w for w in words if w.get("end", 0) > w.get("start", 0) or w.get("word")),
+                    key=lambda w: w["start"]):
+        if cur and (w["start"] - cur[-1]["end"] > pause_s or w["end"] - cur[0]["start"] > max_s):
+            out.append(cur)
+            cur = []
+        cur.append(w)
+    if cur:
+        out.append(cur)
+    return [{"id": f"R{k:05d}", "start": round(ws[0]["start"], 3), "end": round(max(w["end"] for w in ws), 3),
+             "text": "".join(w.get("word") or "" for w in ws)} for k, ws in enumerate(out)]
+
+
+def label_short_sentences(short: list[dict], judged: list[dict]) -> list[dict]:
+    """短句對到 `說話者判斷.json` 的句子（純函式）：跟哪一句重疊最多，就用那一句的判斷（label，已含
+    合併判斷的修正）、聲紋分數（sim）、信心分數（avg_logprob）。一句都沒對到的標「太短」（不拿來挑）。"""
+    js = sorted(judged, key=lambda s: s["start"])
+    starts = [s["start"] for s in js]
+    import bisect
+
+    out = []
+    for r in short:
+        i = max(0, bisect.bisect_right(starts, r["start"]) - 1)
+        best, best_ov = None, 0.0
+        for s in js[max(0, i - 2):]:
+            if s["start"] >= r["end"]:
+                break
+            ov = min(r["end"], s["end"]) - max(r["start"], s["start"])
+            if ov > best_ov:
+                best, best_ov = s, ov
+        if best is None:
+            out.append({**r, "label": "太短", "sim": None, "avg_logprob": 0.0})
+        else:
+            out.append({**r, "label": best.get("label"), "sim": best.get("sim"),
+                        "avg_logprob": best.get("avg_logprob", 0.0), "對到": best.get("id")})
+    return out
+
+
+def is_main_flow_speakers(data: dict | None) -> bool:
+    """說話者判斷.json 的句子編號是主流程的格式（0000_000）。"""
+    sents = (data or {}).get("sentences") or []
+    return bool(sents) and all(_MAIN_ID_RE.match(str(s.get("id", ""))) for s in sents)
+
+
+def _from_main_flow(audio_path: Path, workdir: Path, merged: dict) -> tuple[list[dict], list[dict], list[dict], dict, float]:
+    """有主流程逐字稿時挑參考音要用的資料：(短句, 字, 判斷說話者用的句子, cluster_info, 找老師耗時)。
+
+    `說話者判斷.json` 已經存在 → 直接讀（含合併判斷的修正），**不覆寫**；不存在 → 用主流程的句子判斷一次
+    （跟 `run analyze` 寫的是同一份、同樣的句子編號）。"""
+    cache_path = workdir / "說話者判斷.json"
+    t3 = 0.0
+    if cache_path.exists():
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        judged, cluster_info = data["sentences"], data["cluster_info"]
+    else:
+        judged, cluster_info, t3 = _step3_speaker_classify(audio_path, workdir, merged.get("sentences") or [])
+    words = merged.get("words") or []
+    short = label_short_sentences(split_short_sentences(words), judged)
+    return short, words, judged, cluster_info, t3
 
 
 def _teacher_ref_confirmation(teacher_ref: Path, teacher_center: list[float], inference=None) -> float:
@@ -1173,12 +1260,28 @@ def pick_reference(
     total_dur = audio_dur_s(audio_path)
     print(f"[主流程] 影片音訊長度：{fmt_time(total_dur)}")
 
-    sentences, words, per_chunk, t2 = _step2_transcribe(audio_path, workdir)
-    elapsed["2_轉文字_總計"] = round(t2, 1)
-    elapsed["2_轉文字_各段"] = per_chunk
-    print(f"[2/轉文字] 共 {len(sentences)} 句、{len(words)} 個字，總耗時 {t2:.1f} 秒")
-
-    sentences, cluster_info, t3 = _step3_speaker_classify(audio_path, workdir, sentences)
+    merged_path = workdir / "transcript" / "merged.json"
+    if merged_path.exists():
+        # 10-02 第七批（B1＋B5）：讀主流程的逐字稿與說話者判斷，不再整支送 Groq 第二次、不覆寫說話者判斷.json
+        merged = json.loads(merged_path.read_text(encoding="utf-8"))
+        sentences, words, judged, cluster_info, t3 = _from_main_flow(audio_path, workdir, merged)
+        elapsed["2_轉文字_總計"] = 0.0
+        elapsed["2_轉文字_各段"] = {}
+        source = "主流程逐字稿（transcript/merged.json）切短句"
+        print(f"[2/轉文字] 沿用主流程的逐字稿：{len(words)} 個字，切成 {len(sentences)} 句短句（只在挑參考音裡用）")
+    else:
+        sentences, words, per_chunk, t2 = _step2_transcribe(audio_path, workdir)
+        elapsed["2_轉文字_總計"] = round(t2, 1)
+        elapsed["2_轉文字_各段"] = per_chunk
+        print(f"[2/轉文字] 共 {len(sentences)} 句、{len(words)} 個字，總耗時 {t2:.1f} 秒")
+        source = "整支 10 分鐘一段另外轉一次（沒有主流程逐字稿）"
+        cache_path = workdir / "說話者判斷.json"
+        keep = cache_path.exists() and is_main_flow_speakers(json.loads(cache_path.read_text(encoding="utf-8")))
+        if keep:
+            print("⚠️ [3/找老師] 說話者判斷.json 是 `run analyze` 寫的（句子編號是主流程的格式），不覆寫；"
+                  "這次挑參考音另外算一份只在這裡用。要用主流程的逐字稿，先確認 transcript/merged.json 還在")
+        sentences, cluster_info, t3 = _step3_speaker_classify(audio_path, workdir, sentences, write_cache=not keep)
+        judged = sentences
     elapsed["3_找老師"] = round(t3, 1)
     print(f"[3/找老師] 老師群佔比 {cluster_info['老師群佔可比對總秒數比例']}，耗時 {t3:.1f} 秒"
           if t3 else "[3/找老師] 已有快取，略過")
@@ -1196,7 +1299,7 @@ def pick_reference(
         elapsed["3b_teacher_ref確認"] = round(time.time() - t_confirm0, 1)
         print(f"[3/找老師] teacher_ref 確認相似度：{teacher_confirmation}")
 
-    sentence_exclude = _exclude_regions_from_sentences(sentences)
+    sentence_exclude = _exclude_regions_from_sentences(judged)   # 排除區域照說話者判斷的句子算（跟以前一樣）
     all_exclude = _merge_intervals(sentence_exclude + list(exclude_regions or []))
     exclude_total_s = sum(e - s for s, e in all_exclude)
     print(f"[3.5/排除區域] {len(all_exclude)} 段、共 {exclude_total_s:.1f} 秒"
@@ -1222,7 +1325,7 @@ def pick_reference(
         if _pick_combine_set(combine_pool) is None:
             mode = "放寬"
             relaxed_exclude = _merge_intervals(
-                _exclude_regions_from_sentences(sentences, labels=("不是老師",)) + list(exclude_regions or [])
+                _exclude_regions_from_sentences(judged, labels=("不是老師",)) + list(exclude_regions or [])
             )
             combine_pool, t_find2 = _find_combine_segments(sentences, exclude_regions=relaxed_exclude)
             t5d_total += t_find2
@@ -1423,6 +1526,8 @@ def pick_reference(
         "淘汰數": sum(1 for a in attempts_out if a["狀態"] == "淘汰"),
         "候選數": len(candidates_out),
         "候選音檔格式": CLIP_FORMAT_DESC,
+        "逐字稿來源": source,
+        "短句數": len(sentences),
         "選定名次": None,
     }
     (ref_dir / "挑選紀錄.json").write_text(
