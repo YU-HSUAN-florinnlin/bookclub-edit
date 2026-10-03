@@ -277,7 +277,15 @@ def topic_words(w: Path, f: Filter, out: list[str], limit: int) -> None:
     # 10-04 #105：轉文字時被挖掉的靜音（只有時間），用來查「一個字橫跨被挖掉的靜音」
     sil = [s for s in (merged.get("silence_map") or []) if f.ok({"start": s.get("start"), "end": s.get("end")})]
     if sil:
-        out.append("轉文字時挖掉的靜音：" + "、".join(f"{timemap.t1(s['start'])}–{timemap.t1(s['end'])}（{s['end'] - s['start']:.1f} 秒）" for s in sil[:30]))
+        out.append("VAD 判定的安靜處（挖停頓的做法轉的就是被挖掉的地方）：" + "、".join(f"{timemap.t1(s['start'])}–{timemap.t1(s['end'])}（{s['end'] - s['start']:.1f} 秒）" for s in sil[:30]))
+    # 10-04 #62：整個落在安靜超過 1 秒的地方的字（可能是 Groq 自己編的；只印數字與時間）
+    from bookclub.transcribe import QUIET_WORD_MIN_S, quiet_word_stats
+
+    qs = quiet_word_stats(words, merged.get("silence_map") or [])
+    if merged.get("轉文字做法"):
+        out.append(f"轉文字做法：{merged['轉文字做法'] if merged['轉文字做法'] in ('不挖停頓', '保留一秒停頓') else '<其他>'}")
+    out.append(f"落在安靜超過 {QUIET_WORD_MIN_S:.0f} 秒的地方的字（整支）：{qs['字數']} 個、{qs['處數']} 處"
+               + ("：" + "、".join(f"{timemap.t1(a)}–{timemap.t1(b)}（{n} 個）" for a, b, n in qs["位置"][:30]) if qs["位置"] else ""))
     if rows:
         out.append(f"第一個字從 {timemap.t1(rows[0]['start'])} 開始，最後一個字到 {timemap.t1(rows[-1]['end'])}")
         gaps = [(rows[i]["end"], rows[i + 1]["start"]) for i in range(len(rows) - 1) if rows[i + 1]["start"] - rows[i]["end"] >= 0.5]

@@ -62,6 +62,8 @@ def test_no_extension_for_old_workspaces():
     assert ws["範圍"] is None and (ws["start"], ws["end"]) == (2.05, 3.5)
     assert nameplan.extend_enabled({"保留停頓秒數": 1.0}) is True
     assert nameplan.extend_enabled({"sentences": []}) is False and nameplan.extend_enabled(None) is False
+    assert nameplan.extend_enabled({"轉文字做法": "不挖停頓"}) is True          # 10-04 乙：新轉的工作區
+    assert nameplan.extend_enabled({"轉文字做法": "別的"}) is False
 
 
 def test_no_extension_when_boundary_already_at_punct_or_pause():
@@ -124,6 +126,26 @@ def test_extension_does_not_swallow_other_name_cards():
 def test_other_ranges_excludes_itself():
     c1, c2 = _cand(2.3, 2.8), _cand(1.0, 1.4)
     assert nameplan.other_ranges([c1, c2], c1, [(9.0, 9.5)]) == [(1.0, 1.4), (9.0, 9.5)]
+
+
+def test_problem_c_neighbor_card_whole_sentence_not_overlapped():
+    """問題 C：s1「謝謝小名，那我們」（卡 2，整句換掉）、s2「請小美分享」（卡 1）、s3「一下。」
+    以前卡 1 往前延伸到逗號 [0.925, 3.3]，跟卡 2 的 [0.0, 1.5] 疊在一起，組裝時長的優先、卡 2 那一段老師的話不見。"""
+    words = [_w("謝謝", 0.0, 0.4), _w("小名", 0.4, 0.8), _w("那", 0.85, 1.0), _w("我們", 1.0, 1.5),
+             _w("請", 1.55, 1.8), _w("小美", 1.8, 2.2), _w("分享", 2.2, 2.7), _w("一下", 2.75, 3.3)]
+    sents = {"s1": {"id": "s1", "start": 0.0, "end": 1.5, "text": "謝謝小名，那我們", "label": "老師"},
+             "s2": {"id": "s2", "start": 1.55, "end": 2.7, "text": "請小美分享", "label": "老師"},
+             "s3": {"id": "s3", "start": 2.75, "end": 3.3, "text": "一下。", "label": "老師"}}
+    c1 = _cand(1.8, 2.2, sid="s2", matched="小美", code="Amy")
+    c2 = _cand(0.4, 0.8, sid="s1", matched="小名", code="Tom")
+    plan = nameplan.build_plan([c1, c2], {}, sents, words=words, extend=True)
+    slots = sorted(g["slot"] for g in plan["生成"])
+    assert len(slots) == 2, plan["生成"]
+    assert slots[0][1] <= slots[1][0] + 1e-6, slots          # 兩筆時間格不重疊
+    texts = " ".join(g["text"] for g in plan["生成"])
+    assert "Amy" in texts and "Tom" in texts and "小名" not in texts and "小美" not in texts
+    g1 = next(g for g in plan["生成"] if 1 in g["候選"])
+    assert g1["slot"][0] >= 1.5 - 1e-6 and abs(g1["slot"][1] - 3.3) < 1e-6   # 往後照樣延伸到「一下。」
 
 
 def _run_all():
