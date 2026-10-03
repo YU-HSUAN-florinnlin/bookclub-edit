@@ -960,5 +960,123 @@ def test_legacy_pause_cache_failure_retried():
                              phase="停頓", log=lambda s: None)
         assert again, "舊快取裡被吞掉的錯誤要再試"
 
+
+# ---------- 漏字、頭尾少念（10-03 第八批 #61、#104） ----------
+
+def test_missing_run_blocks_even_when_similarity_high():
+    text = "今天我想分享一下這週練習的心得，" * 6 + "其實我發現呼吸的時候比較能夠放鬆下來。" + "然後我們繼續往下看。" * 3
+    heard = text.replace("其實我發現呼吸的時候比較能夠放鬆下來。", "")   # 整句不見
+    assert tts.content_score(text, heard) >= tts.CONTENT_MIN
+    problem, run = tts.content_problem(text, heard)
+    assert problem == tts.MISSING_RUN and run >= 18
+    # 只漏一兩個字、或聽成同音別字：不算漏一串
+    assert tts.content_problem(text, text.replace("想分享", "想", 1))[0] is None
+    assert tts.missing_run(text, text.replace("練習", "連息", 1)) == 0
+
+
+def test_tail_missing_char_detected_homophones_and_fillers_ok():
+    text = "我覺得這次的練習讓我在面對壓力的時候比較能夠停下來看看自己現在的感覺，真的很好"
+    assert tts.content_score(text, text[:-1]) >= tts.CONTENT_MIN
+    assert tts.content_problem(text, text[:-1])[0] == tts.TAIL_MISSING        # 最後一個字沒念
+    assert tts.content_problem(text, text[:-1] + "號")[0] is None               # 同音別字（好／號）不算少念
+    assert tts.content_problem(text + "啊", text)[0] is None                    # 結尾語助詞轉文字沒寫出來不算
+    assert tts.content_problem(text, text + "。嗯")[0] is None                  # 轉文字多聽到一個語助詞也不算
+    assert tts.content_problem(text, "我" + text)[0] is None                    # 開頭多一個字
+    assert tts.content_problem(text, text[2:])[0] == tts.HEAD_MISSING           # 開頭兩個字沒念
+    assert tts.content_problem("總共有三十個人", "總共有30個人")[0] is None     # 數字寫法不同不判斷
+    assert tts.content_problem("好的", "")[0] is None                          # 太短的不做頭尾檢查
+
+
+def test_tail_missing_retries_then_flags_for_listening():
+    """結尾少念：照現有規則換種子重念；三次都少念 → 要人聽，原因寫「結尾可能少念了字」。"""
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        text = "我覺得這次的練習讓我在面對壓力的時候比較能夠停下來，真的很好"
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": text}], ensure_ascii=False), encoding="utf-8")
+        calls: list = []
+        log = tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=lambda p: text[:-1],
+                                   check_similarity=False, use_pauses=False, log=lambda s: None)
+        r = log["句子"][0]
+        assert len(calls) == tts.MAX_ATTEMPTS and r["要人聽"] and r["內容問題"] == tts.TAIL_MISSING
+        assert all(a["內容問題"] == tts.TAIL_MISSING and not a["內容通過"] for a in r["嘗試"])
+
+        # 第二次念對了：通過、沒有內容問題
+        (Path(d) / "二").mkdir()
+        work2 = _ref_work(Path(d) / "二")
+        sp2 = work2 / "句子.json"
+        sp2.write_text(json.dumps([{"id": "A", "text": text}], ensure_ascii=False), encoding="utf-8")
+        heard = iter([text[:-1], text])
+        r = tts.generate_teacher(work2, sp2, synth=_len_synth([]), hear=lambda p: next(heard),
+                                 check_similarity=False, use_pauses=False, log=lambda s: None)["句子"][0]
+        assert r["選定"] == 2 and not r["要人聽"] and "內容問題" not in r
+
+
+def test_old_cache_rechecked_with_new_rules_without_regenerating_same_attempt():
+    """舊快取（沒有內容問題欄位）沿用時照新規則重新判斷：結尾少念的那一次不算通過，換種子再念；那一次本身不重新生成。"""
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        text = "我覺得這次的練習讓我在面對壓力的時候比較能夠停下來，真的很好"
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": text}], ensure_ascii=False), encoding="utf-8")
+        calls: list = []
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=lambda p: text, check_similarity=False,
+                             use_pauses=False, log=lambda s: None)
+        cp = tts.teacher_out_dir(work) / tts.ATTEMPT_CACHE
+        cache = json.loads(cp.read_text(encoding="utf-8"))
+        for v in cache.values():
+            v["heard"] = text[:-1]
+            v.pop("problem", None)
+            v.pop("missing", None)
+        cp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+        calls.clear()
+        r = tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=lambda p: text, check_similarity=False,
+                                 use_pauses=False, redo=True, log=lambda s: None)["句子"][0]
+        assert len(calls) == 1 and r["選定"] == 2 and r["嘗試"][0]["內容問題"] == tts.TAIL_MISSING
+
+
+# ---------- 聲音檔不在當作沒做過（10-03 第九批 #19，全面檢查 C5） ----------
+
+def test_output_missing_checks_chosen_and_fitted_files():
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        (w / "生成").mkdir()
+        rec = {"檔案": "生成/A.wav", "放回時間格": {"檔案": "生成/A_放回時間格.wav", "來源檔案": "生成/A_第1次.wav"}}
+        assert tts.output_missing(rec, w)
+        for f in ("A.wav", "A_放回時間格.wav", "A_第1次.wav"):
+            (w / "生成" / f).write_bytes(b"RIFF")
+        assert not tts.output_missing(rec, w)
+        (w / "生成" / "A_第1次.wav").unlink()
+        assert tts.output_missing(rec, w)          # 停格補長用的來源檔不在也不行
+        assert not tts.output_missing(None, w)     # 沒有紀錄：交給 record_stale
+        it = {"id": "A", "text": "甲"}
+        assert not tts.needs_work({**rec, "text": "甲"}, it) and tts.needs_work({**rec, "text": "甲"}, it, workdir=w)
+
+
+def test_deleted_wavs_regenerated_reusing_attempt_cache():
+    """清硬碟刪了選定檔、放回時間格的檔：再跑一次會補回來（嘗試快取的聲音還在就沿用、不重新生成）；
+    連每一次生成的檔都刪了才真的重新生成。"""
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        text = "這個是我們今天課程的重點之一。"
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": text, "slot": [10.0, 10.0 + len(text) * 0.25]}],
+                                 ensure_ascii=False), encoding="utf-8")
+        calls: list = []
+        q = dict(hear=lambda p: text, check_similarity=False, use_pauses=False, log=lambda s: None)
+        r = tts.generate_teacher(work, sp, synth=_len_synth(calls), **q)["句子"][0]
+        assert len(calls) == 1
+        chosen, fitted = work / r["檔案"], work / r["放回時間格"]["檔案"]
+        chosen.unlink()
+        fitted.unlink()
+        calls.clear()
+        r = tts.generate_teacher(work, sp, synth=_len_synth(calls), **q)["句子"][0]
+        assert calls == [] and chosen.is_file() and fitted.is_file()     # 沿用快取，檔案補回來了
+        for f in tts.teacher_out_dir(work).glob("*.wav"):
+            f.unlink()
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), **q)
+        assert calls == [text] and chosen.is_file() and fitted.is_file()  # 快取的聲音也不在：重新生成
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

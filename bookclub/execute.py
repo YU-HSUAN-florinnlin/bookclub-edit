@@ -734,7 +734,8 @@ def names_done(workdir: Path) -> tuple[bool, str]:
         return False, f"老師參考音換過了，{len(gen)} 句都要重新生成"
     table = tts.load_pron_table(workdir / tts.PRON_TABLE_NAME if (workdir / tts.PRON_TABLE_NAME).is_file() else None)
     left = [g["id"] for g in gen if not (recs.get(g["id"]) or {}).get("放回時間格")
-            or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]})]
+            or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]})
+            or tts.output_missing(recs[g["id"]], workdir)]   # 10-03 第九批 #19：聲音檔不在當作沒做過
     return (not left), (f"{len(gen)} 句都生成好了" if not left else f"還有 {len(left)}／{len(gen)} 句要生成")
 
 
@@ -754,7 +755,8 @@ def students_done(workdir: Path, a: float | None, b: float | None) -> tuple[bool
     now = students.current_refs(workdir, items) if recs else {}
     left = [it["id"] for it in items if not (recs.get(it["id"]) or {}).get("放回時間格")
             or tts.record_stale(recs[it["id"]], {**it, "生成用文字": tts.apply_pron(it["text"], table)[0]},
-                                now.get(it["學員"]) or wd.localize(recs[it["id"]].get("參考音"), workdir))]   # 10-02 第五批
+                                now.get(it["學員"]) or wd.localize(recs[it["id"]].get("參考音"), workdir))   # 10-02 第五批
+            or tts.output_missing(recs[it["id"]], workdir)]   # 10-03 第九批 #19：聲音檔不在當作沒做過
     return (not left), (f"{len(items)} 段都生成好了" if not left else f"還有 {len(left)}／{len(items)} 段要生成")
 
 
@@ -773,7 +775,8 @@ def stunames_done(workdir: Path) -> tuple[bool, str]:
     left = [g["id"] for g in sp["生成"] if g["id"] not in back
             and (not (recs.get(g["id"]) or {}).get("放回時間格")
                  or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]},
-                                     studentgen.current_ref(workdir, g["學員"], recs[g["id"]])))]
+                                     studentgen.current_ref(workdir, g["學員"], recs[g["id"]]))
+                 or tts.output_missing(recs[g["id"]], workdir))]   # 10-03 第九批 #19：聲音檔不在當作沒做過
     return (not left), (f"{len(sp['生成'])} 句都處理好了" if not left else f"還有 {len(left)}／{len(sp['生成'])} 句要生成")
 
 

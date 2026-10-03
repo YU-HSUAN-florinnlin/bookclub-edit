@@ -132,6 +132,96 @@ def content_score(expected: str, heard: str) -> float:
     return round(difflib.SequenceMatcher(None, a, b, autojunk=False).ratio(), 4)
 
 
+# ---------- 漏字、頭尾少念（10-03 第八批 #61、#104） ----------
+# 整體相似度高也可能漏掉一整句（@2827.28：146 字、相似度 0.93）或最後一個字沒念（78 字、0.972），另外擋。
+# 比對用讀音（不分聲調）：轉文字常寫成同音的別字（在／再、那／哪），那不算漏念。
+MISSING_RUN_MIN = 6        # 轉回文字漏掉連續這麼多個字（不算標點）就不通過
+EDGE_CHARS = 2             # 頭尾檢查：要念的文字最後（最前）這麼多個字
+EDGE_SLACK = 2             # 轉回文字的結尾（開頭）多看這麼多個字：轉文字偶爾在頭尾多聽出一兩個字
+EDGE_MIN_LEN = 6           # 要念的文字少於這麼多字就不做頭尾檢查（短句由相似度管）
+FILLERS = set("啊阿呀吧呢喔哦噢嗯欸誒耶啦嘛哈呃唷囉齁")   # 頭尾的語助詞：轉文字常常不寫出來，不當成少念
+MISSING_RUN = "漏了一串字"
+TAIL_MISSING = "結尾可能少念了字"
+HEAD_MISSING = "開頭可能少念了字"
+
+
+@functools.lru_cache(maxsize=8192)
+def _sound(ch: str) -> str:
+    """一個字的讀音（拼音、不分聲調）；不是中文就原樣（小寫）。"""
+    if not ("\u4e00" <= ch <= "\u9fff"):
+        return ch.lower()
+    try:
+        from pypinyin import Style, lazy_pinyin
+
+        return (lazy_pinyin(ch, style=Style.NORMAL) or [ch])[0]
+    except Exception:  # noqa: BLE001 — 沒有 pypinyin：退回比字
+        return ch
+
+
+def _sounds(text: str) -> list[str]:
+    return [_sound(c) for c in normalize_for_compare(text or "")]
+
+
+def missing_run(expected: str, heard: str) -> int:
+    """轉回文字最長漏掉連續幾個字（照讀音比；中間夾一個碰巧對上的字也算同一串）。"""
+    a, b = _sounds(expected), _sounds(heard)
+    run = best = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if tag == "equal":
+            if i2 - i1 >= 2:
+                run = 0
+            continue
+        if tag == "delete":
+            run += i2 - i1
+        elif tag == "replace":
+            run += max(0, (i2 - i1) - (j2 - j1))   # 聽成別的字（長度差不多）不算漏；少了的部分才算
+        best = max(best, run)
+    return best
+
+
+def _strip_fillers(seq: list[str], chars: str, tail: bool) -> tuple[list[str], str]:
+    while seq and chars and (chars[-1] if tail else chars[0]) in FILLERS:
+        seq, chars = (seq[:-1], chars[:-1]) if tail else (seq[1:], chars[1:])
+    return seq, chars
+
+
+def _is_subseq(small: list[str], big: list[str]) -> bool:
+    it = iter(big)
+    return all(x in it for x in small)
+
+
+def edge_missing(expected: str, heard: str, tail: bool = True) -> bool:
+    """要念的文字最後（tail=False：最前）EDGE_CHARS 個字，照順序在轉回文字的結尾（開頭）EDGE_CHARS＋EDGE_SLACK 個字裡
+    找不到（照讀音比）→ 可能少念了。頭尾的語助詞先拿掉；有數字、英文（轉文字可能寫成阿拉伯數字或中文）就不判斷。"""
+    ea, ha = normalize_for_compare(expected or ""), normalize_for_compare(heard or "")
+    if len(ea) < EDGE_MIN_LEN:
+        return False
+    a, ea = _strip_fillers([_sound(c) for c in ea], ea, tail)
+    b, ha = _strip_fillers([_sound(c) for c in ha], ha, tail)
+    if len(a) < EDGE_CHARS:
+        return False
+    n = EDGE_CHARS + EDGE_SLACK
+    ec, hc = (ea[-EDGE_CHARS:], ha[-n:]) if tail else (ea[:EDGE_CHARS], ha[:n])
+    if any(c.isascii() for c in ec + hc):
+        return False
+    want, have = (a[-EDGE_CHARS:], b[-n:]) if tail else (a[:EDGE_CHARS], b[:n])
+    return not _is_subseq(want, have)
+
+
+def content_problem(expected: str, heard: str | None) -> tuple[str | None, int]:
+    """相似度以外的內容問題：（問題說法或 None, 最長漏掉連續幾個字）。說法是固定的三種（給人看、`bookclub inspect` 印得出來）。"""
+    if heard is None:
+        return None, 0
+    run = missing_run(expected, heard)
+    if run >= MISSING_RUN_MIN:
+        return MISSING_RUN, run
+    if edge_missing(expected, heard, tail=True):
+        return TAIL_MISSING, run
+    if edge_missing(expected, heard, tail=False):
+        return HEAD_MISSING, run
+    return None, run
+
+
 # ---------- 發音對照表 ----------
 
 PRON_TABLE_NAME = "發音對照表.csv"
@@ -227,9 +317,16 @@ class Attempt:
     paused_s: float | None = None   # 照原片停頓插入空白後的長度；沒做就是 None
     check_failed: bool = False      # 09-30：要檢查內容但沒做成（網路、Groq 有問題）→ 這一句標要人聽
     rechecked: bool = False         # 10-03 第九批 #20：內容檢查是事後（停頓／收尾那一支）補做的
+    problem: str | None = None      # 10-03 #61／#104：相似度以外的內容問題（漏了一串字、結尾／開頭可能少念了字）
+    missing: int = 0                # 10-03 #61：轉回文字最長漏掉連續幾個字
 
     def content_ok(self) -> bool:
-        return self.content is None or self.content >= CONTENT_MIN
+        return self.content is None or (self.content >= CONTENT_MIN and not self.problem)
+
+    def check(self, expected: str) -> "Attempt":
+        """照要念的文字補上相似度以外的檢查（新生成、沿用快取、補做檢查都走這裡；門檻改了舊快取也照新的判斷）。"""
+        self.problem, self.missing = content_problem(expected, self.heard)
+        return self
 
     def lengths(self) -> list[float]:
         return [self.audio_s] + ([self.paused_s] if self.paused_s else [])
@@ -249,6 +346,7 @@ class Attempt:
             "倍數": round(self.elapsed_s / self.audio_s, 1) if self.audio_s else None,
             "轉回文字": self.heard, "內容相似度": self.content,
             "內容通過": self.content_ok(), "內容檢查沒做成": self.check_failed,
+            "內容問題": self.problem, "漏字數": self.missing,
             "長度通過": self.length_ok(slot_s, tolerance),
             "聲紋相似度": self.similarity,
         }
@@ -459,13 +557,14 @@ def _run_attempt(
             check_failed = True
             log(f"  ⚠️ 念對沒有的檢查沒做成（{type(exc).__name__}，多半是網路），這一句先標要人聽，生成照常往下")
     att = Attempt(seed, speed, audio_s, elapsed, heard, content_score(text, heard) if heard is not None else None,
-                  check_failed=check_failed)
+                  check_failed=check_failed).check(text)
     if similar:
         try:
             att.similarity = similar(path)
         except Exception as exc:  # 聲紋只是參考，算不出來不擋生成
             log(f"  ⚠️ 像不像老師聲音算不出來（只記錄用，不影響）：{type(exc).__name__}")
-    log(attempt_line(n, seed, speed, audio_s, elapsed, att.content, att.content_ok(), slot_s, att.similarity))
+    log(attempt_line(n, seed, speed, audio_s, elapsed, att.content, att.content_ok(), slot_s, att.similarity,
+                     att.problem))
     return att
 
 
@@ -479,13 +578,14 @@ def way_number(seed: int) -> int:
 
 
 def attempt_line(n: int, seed: int, speed: float, audio_s: float, elapsed: float, content: float | None,
-                 content_ok: bool, slot_s: float | None, similarity: float | None) -> str:
+                 content_ok: bool, slot_s: float | None, similarity: float | None, problem: str | None = None) -> str:
     """第 4 步執行訊息裡每一次生成的那一行（10-02 第六批：使用者看得到，「種子」「內容分數」「長度差」改成白話；
     紀錄檔的欄位不變）。例：「第 2 次生成：第 2 種念法、正常速度，聲音 2.9 秒（花 41 秒）；念的字對了 92%；比原本的時間短 61%」"""
     pace = "正常速度" if abs(speed - 1.0) < 1e-6 else (f"念快一點（{speed:.2f} 倍）" if speed > 1 else f"念慢一點（{speed:.2f} 倍）")
     parts = [f"  第 {n} 次生成：第 {way_number(seed)} 種念法、{pace}，聲音 {audio_s:.1f} 秒（花 {elapsed:.0f} 秒）"]
     if content is not None:
-        parts.append(f"念的字對了 {content:.0%}" + ("" if content_ok else f"（不到 {CONTENT_MIN:.0%}，換一種念法再試）"))
+        why = problem if problem and content >= CONTENT_MIN else f"不到 {CONTENT_MIN:.0%}"
+        parts.append(f"念的字對了 {content:.0%}" + ("" if content_ok else f"（{why}，換一種念法再試）"))
     if slot_s:
         d = audio_s / slot_s - 1
         parts.append("跟原本的時間差不多" if abs(d) < 0.005 else f"比原本的時間{'長' if d > 0 else '短'} {abs(d):.0%}")
@@ -523,6 +623,8 @@ def _finalize(
         "要人聽": not chosen.content_ok() or chosen.check_failed,
         "內容已檢查": chosen.content is not None,
     }
+    if chosen.problem:   # 10-03 #61／#104：重念幾次都還是漏字、頭尾少念 → 要人聽，原因記下來（第 5 步顯示）
+        record["內容問題"] = chosen.problem
     if not slot_s:
         return record
 
@@ -768,10 +870,29 @@ def pause_entry_failed(ent: dict, att: Attempt, has_audio: bool) -> str | None:
     return None
 
 
-def needs_work(rec: dict | None, it: dict, ref_wav: str | Path | None = None) -> bool:
+def output_missing(rec: dict | None, workdir: str | Path) -> bool:
+    """10-03 第九批 #19（全面檢查 C5）：紀錄說做過了，但選定檔、放回時間格的檔（含放回前的來源檔，停格補長用）不在
+    （清硬碟刪了、複製工作區沒帶到）。這樣的句子當成沒做過；重新生成時 `_嘗試快取.json` 對得上的那幾次照樣沿用。
+    沒有紀錄回傳 False（那由 record_stale 管）。"""
+    if not rec:
+        return False
+    fit = rec.get("放回時間格") or {}
+    for path in (rec.get("檔案"), fit.get("檔案") if isinstance(fit, dict) else None,
+                 fit.get("來源檔案") if isinstance(fit, dict) else None):
+        if path:
+            p = wd.localize(path, Path(workdir))
+            if p is None or not p.is_file():
+                return True
+    return False
+
+
+def needs_work(rec: dict | None, it: dict, ref_wav: str | Path | None = None,
+               workdir: str | Path | None = None) -> bool:
     """生成程式挑要做的句子：record_stale，加上上次停頓沒做成的（10-03 第九批 #18：這一步有跑就再試一次；
-    聲音沿用 `_嘗試快取.json`，不會重新生成）。第 4 步「做過沒有」仍只看 record_stale，停頓沒做成不擋流程。"""
-    return record_stale(rec, it, ref_wav) or bool((rec or {}).get("停頓沒做成"))
+    聲音沿用 `_嘗試快取.json`，不會重新生成）。第 4 步「做過沒有」仍只看 record_stale，停頓沒做成不擋流程。
+    給了 workdir 時，聲音檔不在的也要做（10-03 第九批 #19；第 4 步「做過沒有」也看這個）。"""
+    return (record_stale(rec, it, ref_wav) or bool((rec or {}).get("停頓沒做成"))
+            or (workdir is not None and output_missing(rec, workdir)))
 
 
 def _ctx_to_json(ctx: dict) -> dict:
@@ -907,11 +1028,12 @@ def run_generation(
             hit = None
         if hit:
             say(f"  第 {n} 次生成：沿用上次生成好的聲音")
-            att = Attempt(**{k: v for k, v in hit.items() if k in ATTEMPT_FIELDS})
+            att = Attempt(**{k: v for k, v in hit.items() if k in ATTEMPT_FIELDS}).check(it["text"])
             if att.check_failed and hear:   # 上次內容檢查沒做成（網路）：聲音不用重新生成，補檢查就好
                 try:
                     att.heard = hear(out_dir / f"{it['id']}_第{n}次.wav")
                     att.content = content_score(it["text"], att.heard)
+                    att.check(it["text"])
                     att.check_failed = False
                     att.rechecked = True
                     save_entry(key, att, wav)
@@ -1152,7 +1274,7 @@ def generate_teacher(
         log("參考音跟上次不同，全部重新生成。")
         done = {}
 
-    todo = [it for it in items if needs_work(done.get(it["id"]), it)]   # 10-03 第九批 #18：停頓沒做成的再試
+    todo = [it for it in items if needs_work(done.get(it["id"]), it, workdir=workdir)]   # #18 停頓沒做成、#19 檔案不在的再做
     log(f"[老師聲音] 共 {len(items)} 句，要生成 {len(todo)} 句（其他 {len(items) - len(todo)} 句沿用上次結果）")
     out_dir = teacher_out_dir(workdir)
     out_dir.mkdir(parents=True, exist_ok=True)

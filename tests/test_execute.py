@@ -175,12 +175,16 @@ def test_done_checks_on_fake_workdir():
     plan = nameplan.compute_plan(w)
     wd.write_json(tts.teacher_log_path(w), {"句子": [{"id": g["id"], "text": g["text"], "放回時間格": {"檔案": "x.wav"}}
                                                     for g in plan["生成"]]})
+    assert not execute.names_done(w)[0]          # 10-03 第九批 #19：紀錄說做過了、聲音檔不在 → 沒做過
+    (w / "x.wav").write_bytes(b"RIFF")
     assert execute.names_done(w)[0]
     done, why = execute.students_done(w, None, None)
     assert not done
     items, _ = students.build_items(w)
     wd.write_json(students.log_path(w), {"句子": [{"id": it["id"], "text": it["text"], "放回時間格": {"檔案": "y.wav"}}
                                                  for it in items]})
+    assert not execute.students_done(w, None, None)[0]
+    (w / "y.wav").write_bytes(b"RIFF")
     assert execute.students_done(w, None, None)[0]
     tag = execute.tag_for(0, 180)
     assert not execute.render_done(w, tag, ["sw"])[0]
@@ -503,6 +507,8 @@ def test_default_planners_split_by_voice_and_skip_done():
         wd.write_json(students.log_path(w), {"句子": [
             {"id": it["id"], "text": it["text"], "生成用文字": it["text"], "slot": it["slot"], "參考音": ref[it["id"]],
              "參考音指紋": tts.ref_fingerprint(ref[it["id"]]), "放回時間格": {"檔案": "y.wav"}} for it in items]})
+        assert execute._plan_students(w, ctx) != []                       # 10-03 第九批 #19：聲音檔不在 → 還要做
+        (w / "y.wav").write_bytes(b"RIFF")
         assert execute._plan_students(w, ctx) == []                       # 都做過了：不開任何程式
         assert execute._plan_render(w, ctx)[0][1][0] == "組裝"
     finally:
@@ -861,6 +867,7 @@ def test_redo_planner_opens_only_cleared_voice():
         wd.write_json(students.log_path(w), {"句子": [
             {"id": it["id"], "text": it["text"], "生成用文字": it["text"], "slot": it["slot"], "參考音": ref[it["id"]],
              "參考音指紋": tts.ref_fingerprint(ref[it["id"]]), "放回時間格": {"檔案": "y.wav"}} for it in items]})
+        (w / "y.wav").write_bytes(b"RIFF")   # 10-03 第九批 #19：聲音檔要在才算做過
         assert execute._plan_students(w, ctx) == []
         finalcheck.clear_generated(w, "學員", [items[0]["id"]], "2026-10-01T23:00:00")
         parts = execute._plan_students(w, ctx)

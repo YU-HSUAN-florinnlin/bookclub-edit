@@ -153,7 +153,8 @@ def pending(workdir: str | Path) -> list[str]:
     left = {g["學員"] for g in sp["生成"] if g["id"] not in back
             and (not (recs.get(g["id"]) or {}).get("放回時間格")
                  or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]},
-                                     current_ref(workdir, g["學員"], recs[g["id"]])))}
+                                     current_ref(workdir, g["學員"], recs[g["id"]]))
+                 or tts.output_missing(recs[g["id"]], workdir))}   # 10-03 第九批 #19：聲音檔不在當作沒做過
     return sorted(left)
 
 
@@ -215,7 +216,7 @@ def generate(workdir: str | Path, *, synth_factory=None, hear=None, align=None, 
         for it in group:
             it["slot_s"] = it["slot"][1] - it["slot"][0]
             it["生成用文字"], it["發音對照"] = tts.apply_pron(it["text"], table)
-        todo = [it for it in group if tts.needs_work(done.get(it["id"]), it, ref["wav"])]   # 10-03 第九批 #18：停頓沒做成的再試
+        todo = [it for it in group if tts.needs_work(done.get(it["id"]), it, ref["wav"], workdir)]   # #18 停頓沒做成、#19 檔案不在
         log(f"[{TAG}] {who}：{len(group)} 句，要生成 {len(todo)} 句（參考音 {ref.get('長度秒', '沿用')} 秒）")
         if not todo:
             continue
