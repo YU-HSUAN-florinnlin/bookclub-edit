@@ -516,15 +516,15 @@ def transcribe(
             if result is not None and _whole_cache_ok(result, start, end):
                 print(f"[1/轉文字] 塊 {tag} 已有逐字稿，跳過")
             else:
-                if result is not None:
-                    print(f"[1/轉文字] 塊 {tag} 的快取是別的做法或別的切點轉的，重轉")
                 chunk_audio = cdir / f"{WHOLE_PREFIX}{tag}.flac"
                 sf.write(str(chunk_audio), audio[int(start * SR):int(end * SR)], SR, format="FLAC")
                 if chunk_audio.stat().st_size > GROQ_MAX_BYTES and end - start > 60:
                     cut = split_chunk_at_quiet(start, end, silence_map)
                     chunks[i:i + 1] = [(start, cut), (cut, end)]
                     print(f"[1/轉文字] 塊 {tag} 超過 Groq 上限，從 {fmt_time(cut)} 的安靜處再切一刀")
-                    continue
+                    continue   # 對切過的工作區重跑時，對切後的塊多半已經有快取（下一圈判斷），這裡不印「重轉」
+                if result is not None:
+                    print(f"[1/轉文字] 塊 {tag} 的快取是別的做法或別的切點轉的，重轉")
                 print(f"[1/轉文字] 塊 {tag}（{fmt_time(start)}–{fmt_time(end)}）轉文字中...")
                 result = call_groq(tag, chunk_audio.read_bytes())
                 result.update({METHOD_KEY: METHOD_NAME[MODE_WHOLE], "_塊起": start, "_塊訖": end})
