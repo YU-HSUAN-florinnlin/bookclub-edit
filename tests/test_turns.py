@@ -332,6 +332,84 @@ def test_get_text_turns_does_not_reuse_cache_with_gap():
         assert json.loads(p.read_text(encoding="utf-8"))["段落"][0]["迄"] == 4
 
 
+def _mark_workdir(d: str, turns_list: list[dict], n_sents: int = 8) -> Path:
+    w = Path(d)
+    (w / "校對").mkdir(exist_ok=True)
+    sents = [{"id": f"s{i}", "start": i * 5.0, "end": i * 5.0 + 4, "text": f"第{i}句。", "label": "老師"}
+             for i in range(n_sents)]
+    (w / "說話者判斷.json").write_text(json.dumps({"sentences": sents}, ensure_ascii=False), encoding="utf-8")
+    full = []
+    for tid, ids, who in turns_list:
+        idx = [int(x[1:]) for x in ids]
+        full.append({"id": tid, "start": idx[0] * 5.0, "end": idx[-1] * 5.0 + 4, "句子": ids, "說話者": who,
+                     "原文": "".join(f"第{i}句。" for i in idx), "校對稿": "".join(f"第{i}句。" for i in idx),
+                     "已確認": False, "校對秒數": None})
+    data = {"段落": full, "學員": {}}
+    (w / "校對" / "段落.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return w
+
+
+def _ids(w: Path) -> list[str]:
+    return [t["id"] for t in json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))["段落"]]
+
+
+def test_mark_student_ids_never_repeat():
+    """10-03 第八批（#13）：先切開再標、連標兩段沒有句子的短段落、刪一段再標 → 編號都不重複。"""
+    with tempfile.TemporaryDirectory() as d:
+        # 先切開（T001 → T001、T001m1）再標 T001 中間那一句：切出來的新編號不能跟後面的 T001m1 撞
+        w = _mark_workdir(d, [("T001", ["s0", "s1", "s2"], "老師"), ("T001m1", ["s3"], "老師"),
+                              ("T002", ["s4", "s5"], "老師")])
+        turns.mark_student(w, 5.0, 9.0, "新學員")
+        ids = _ids(w)
+        assert len(ids) == len(set(ids)) and len(ids) == 5, ids
+
+    with tempfile.TemporaryDirectory() as d:
+        # 連標兩段沒有句子的短段落（標的範圍沒有蓋到任何句子的中點）
+        w = _mark_workdir(d, [("T001", [f"s{i}" for i in range(8)], "老師")])
+        a = turns.mark_student(w, 4.1, 4.6, "新學員")["段落"]
+        b = turns.mark_student(w, 9.1, 9.6, "新學員")["段落"]
+        assert a == ["U001"] and b == ["U002"]
+        # 刪掉 U001 再標：不能再出一個 U002（以前用「有幾段 U＋1」）；刪掉的號碼也不再用
+        data = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
+        data["段落"] = [t for t in data["段落"] if t["id"] != "U001"]
+        (w / "校對" / "段落.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        c = turns.mark_student(w, 14.1, 14.6, "新學員")["段落"]
+        assert c == ["U003"], c
+        data = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
+        data["段落"] = [t for t in data["段落"] if t["id"] != "U003"]
+        (w / "校對" / "段落.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        assert turns.mark_student(w, 19.1, 19.6, "新學員")["段落"] == ["U004"]
+        ids = _ids(w)
+        assert len(ids) == len(set(ids)), ids
+
+
+def test_duplicate_ids_in_old_file_are_repaired():
+    """10-03 第八批（#13）：讀到有重複編號的舊檔會修好；生成紀錄已經用舊編號的那一段保留原編號。"""
+    with tempfile.TemporaryDirectory() as d:
+        w = _mark_workdir(d, [("T001", ["s0"], "學員1"), ("T001m1", ["s1"], "學員1"), ("T001m1", ["s2"], "學員1"),
+                              ("U002", ["s3"], "學員1"), ("U002", ["s4"], "學員1")])
+        data = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
+        for t in data["段落"]:
+            if t["id"] == "U002":
+                t["句子"] = []
+        (w / "校對" / "段落.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        gen = w / "生成"
+        gen.mkdir()
+        # 生成紀錄：T001m1 用在第二段（s2，10–14 秒）；U002 用在第一段（s3，15–19 秒）
+        (gen / "學員紀錄.json").write_text(json.dumps({"句子": [
+            {"id": "T001m1_01", "段落": "T001m1", "slot": [10.0, 14.0]},
+            {"id": "U002_01", "段落": "U002", "slot": [15.0, 19.0]}]}, ensure_ascii=False), encoding="utf-8")
+        changed = turns.repair_turn_ids(w, log=lambda *_: None)
+        got = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))["段落"]
+        ids = [t["id"] for t in got]
+        assert len(ids) == len(set(ids)), ids
+        by_start = {t["start"]: t["id"] for t in got}
+        assert by_start[10.0] == "T001m1" and by_start[5.0] == "T001m2"      # 有生成紀錄的保留原編號
+        assert by_start[15.0] == "U002" and by_start[20.0] == "U003"
+        assert sorted(changed) == [("T001m1", "T001m2"), ("U002", "U003")]
+        assert turns.repair_turn_ids(w, log=lambda *_: None) == []            # 修好之後不再改
+
+
 def test_voice_role_uses_original_voice_label():
     ss = [{**_sent(0, "老師"), "聲紋判斷": "不是老師"}, _sent(1, "不是老師")]
     assert turns._voice_role(ss) == "學員"

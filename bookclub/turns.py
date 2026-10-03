@@ -501,6 +501,7 @@ def page_data(workdir: str | Path) -> dict:
     from bookclub.config import data_dir
 
     workdir = Path(workdir)
+    repair_turn_ids(workdir)   # 10-03 第八批（#13）：舊檔有重複編號就先修好
     data = wd.read_json(turns_path(workdir))
     if not data:
         return {"尚未準備": True}
@@ -866,12 +867,78 @@ def _new_student_name(data: dict) -> str:
     return f"學員{n}"
 
 
-def _unique_id(data: dict, base: str) -> str:
-    ids = {t["id"] for t in data["段落"]}
+def _unique_id(data: dict, base: str, taken: set[str] | None = None) -> str:
+    ids = {t["id"] for t in data["段落"]} | (taken or set())
     k = 1
     while f"{base}m{k}" in ids:
         k += 1
     return f"{base}m{k}"
+
+
+_U_ID = re.compile(r"^U(\d+)")
+
+
+def _next_u_id(data: dict) -> str:
+    """10-03 第八批（#13）：手動標的短段落（沒有句子）編號＝目前 U 開頭最大的號碼＋1（也看用過的最大號，
+    刪掉的號碼不再用，免得生成紀錄裡舊的那段對到新的段落）。"""
+    nums = [int(m.group(1)) for t in data["段落"] if (m := _U_ID.match(str(t.get("id", ""))))]
+    n = 1 + max(nums + [int(data.get("U最大號") or 0)] or [0])
+    data["U最大號"] = n
+    return f"U{n:03d}"
+
+
+def fix_duplicate_ids(data: dict, records: list[dict] | None = None) -> list[tuple[str, str]]:
+    """10-03 第八批（#13）：`段落` 裡編號重複的，後面那一段換新編號（就地改 data），回傳 [(舊, 新), ...]。
+
+    生成紀錄（`生成/學員紀錄.json` 的 `句子[]`，每筆有 `段落` 與 `slot`）已經用這個編號的那一段保留原編號：
+    同編號的幾段裡，時間跟生成紀錄重疊的那一段留原編號，其他換；都沒有生成紀錄就第一段留。"""
+    groups: dict[str, list[dict]] = {}
+    for t in data["段落"]:
+        groups.setdefault(t["id"], []).append(t)
+    taken = set(groups)
+    changed: list[tuple[str, str]] = []
+    for tid, ts in groups.items():
+        if len(ts) < 2:
+            continue
+        slots = [r.get("slot") for r in (records or []) if r.get("段落") == tid and r.get("slot")]
+
+        def used(t: dict) -> bool:
+            return any(a < t["end"] and t["start"] < b for a, b in slots)
+
+        keep = next((t for t in ts if used(t)), ts[0])
+        for t in ts:
+            if t is keep:
+                continue
+            if _U_ID.match(tid):
+                new = _next_u_id(data)
+                while new in taken:
+                    new = _next_u_id(data)
+            else:
+                new = _unique_id(data, tid.split("m")[0], taken)
+            t["id"] = new
+            taken.add(new)
+            changed.append((tid, new))
+    return changed
+
+
+def repair_turn_ids(workdir: str | Path, log=print) -> list[tuple[str, str]]:
+    """讀 `校對/段落.json` 時檢查編號重複；有就修好寫回（第 3 步開頁時呼叫）。"""
+    from bookclub import students
+
+    workdir = Path(workdir)
+    with _lock:
+        data = wd.read_json(turns_path(workdir))
+        if not data or not data.get("段落"):
+            return []
+        ids = [t["id"] for t in data["段落"]]
+        if len(ids) == len(set(ids)):
+            return []
+        records = (wd.read_json(students.log_path(workdir), default=None) or {}).get("句子", [])
+        changed = fix_duplicate_ids(data, records)
+        wd.write_json(turns_path(workdir), data)
+    if changed:
+        log(f"⚠️ [段落] 校對/段落.json 有重複的段落編號，已改：{'、'.join(f'{a}→{b}' for a, b in changed)}")
+    return changed
 
 
 def merge_person(workdir: str | Path, src: str, dst: str) -> dict:
@@ -962,17 +1029,16 @@ def mark_student(workdir: str | Path, start: float, end: float, who: str) -> dic
                 part = {**t, "句子": run, "start": sent[run[0]]["start"], "end": sent[run[-1]]["end"],
                         "原文": "".join(sent[s]["text"] for s in run)}
                 part["校對稿"] = t["校對稿"] if len(runs) == 1 else part["原文"]
-                if k:
-                    part["id"] = _unique_id({"段落": out + [t]}, t["id"])
+                if k:   # 10-03 第八批（#13）：新編號跟整份段落比（含還沒排到的），不只跟已經排好的比
+                    part["id"] = _unique_id({"段落": data["段落"] + out}, t["id"])
                 if isin:
                     part.update(mark)
                     made.append(part)
                 out.append(part)
         if not made:
             near = [s for s in sorted(sent.values(), key=lambda s: s["start"]) if s["start"] < end and start < s["end"]]
-            n = 1 + sum(1 for t in out if t["id"].startswith("U"))
             text = "".join(s["text"] for s in near)
-            part = {"id": f"U{n:03d}", "start": round(start, 3), "end": round(end, 3), "句子": [], "原文": text,
+            part = {"id": _next_u_id(data), "start": round(start, 3), "end": round(end, 3), "句子": [], "原文": text,
                     "校對稿": text, "聲音判斷": "不確定", "信心": None, "老師點名": None, "文字學員編號": None,
                     "手動標記": True, **mark}
             out.append(part)
