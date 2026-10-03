@@ -358,7 +358,7 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
                 part[-f:] *= np.linspace(1, 0, f, dtype=np.float32)
             mix[s - s0:t - s0] += part
             placed[e["id"]] = {"增益": round(float(gain), 3), "疊放": oid}
-        assemble.splice(y, s0, mix, SR)
+        y[s0:t0] = mix   # 10-03 第八批 #60：兩邊都生成的疊放，整段換成底噪＋兩邊的聲音，不跟原片交叉淡入淡出
     for k, (e, (s, t)) in enumerate(zip(d["動作"], spans)):
         s, t = max(0, s), min(len(x), t)
         if any(k in ks for ks in stacks.values() if len(ks) > 1):
@@ -373,21 +373,17 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
         clip = _read_audio_tempo(workdir / src, e.get("加快", 1.0))
         gain = _gain(clip, x[s:t])
         clip = (clip * gain).astype(np.float32)
-        head = assemble.fit_length(clip, t - s)
-        room = assemble.room_tone(x, s, t, len(clip) + (t - s), SR, bed=bed) if ROOM_UNDER else None
-        if room is not None:
-            head = head + room[:t - s]
-        assemble.splice(y, s, head, SR)
-        if e.get("停格秒"):
-            n = int(round(e["停格秒"] * SR))
-            tail = assemble.fit_length(clip[t - s:], n)
-            if room is not None:
-                tail = tail + assemble.fit_length(room[t - s:], n)
-            f = min(int(SR * 0.02), len(tail) // 2)
-            if f:
-                tail[-f:] *= np.linspace(1, 0, f, dtype=np.float32)
+        # 10-03 第八批 #60：頭尾從底噪淡入、淡出到底噪，整格不留原片；停格點前後兩截直接接上（見 assemble.voice_over_room）
+        fz = int(round(e["停格秒"] * SR)) if e.get("停格秒") else 0
+        room = assemble.room_tone(x, s, t, (t - s) + fz, SR, bed=bed) if ROOM_UNDER else None
+        head, tail, cut = assemble.voice_over_room(clip, room, t - s, fz, SR)
+        y[s:t] = head
+        if tail is not None:
             tails[e["id"]] = tail
         placed[e["id"]] = {"增益": round(float(gain), 3)}
+        if cut >= assemble.CUT_MARK_S:   # 比時間格長又沒停格（或停格不夠）：被切掉，第 5 步標出來
+            e["結尾切掉秒"] = round(cut, 2)
+            placed[e["id"]]["結尾切掉秒"] = e["結尾切掉秒"]
 
     plist = pieces(a, b, d["刪除"], d["停格"])
     # 09-30：一段一段寫進檔案，不在記憶體裡接成一整條（整支 98 分鐘一條 48kHz 就 1.1 GB，以前同時握四、五條）

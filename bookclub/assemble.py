@@ -6,7 +6,7 @@
 - 聲音從**原片影片**重新抽（48kHz 單聲道，存成 `輸出/原聲音軌.wav`），不用分析用的 16kHz
   `audio.flac`；只讀寫有動到的段落，整支影片不放進記憶體
 - 換聲音：生成檔（24kHz）轉成 48kHz、裁補成剛好等於時間格，音量對齊原本那一段，
-  接縫前後各 10 毫秒交叉淡入淡出
+  底下墊底噪、頭尾各 10 毫秒從底噪淡入／淡出到底噪，整格不留原片（10-03 第八批 #60；以前跟原片交叉淡入淡出）
 - 消音：墊環境底噪——在前後 20 秒內找最安靜的 0.5 秒（沒人說話的地方），重複鋪滿
 - 兩筆重疊時，時間長的（整句換掉）蓋過短的（名字消音）
 
@@ -33,6 +33,12 @@ ROOM_SEARCH_S = 20.0
 ROOM_WIN_S = 0.5
 CONTEXT_S = 2.0
 ACTIVE_DB = -40.0   # 算音量時只看比最大聲低不到 40 dB 的音框（講話的部分）
+# 接縫做法版本（10-03 第八批 #23）：換聲音類頭尾怎麼接、停格點怎麼接改了就加 1。處理紀錄每一筆換聲音類都記這個號碼，
+# 第 5 步的內容指紋含它——接縫改了，換聲音類的每一筆回到還沒看（宇軒 10-03 定：還是要聽一下）
+# 1：頭尾各 10 毫秒跟原片交叉淡入淡出（09 月到 10-03）
+# 2：（10-03 第八批 #60）換聲音類頭尾 10 毫秒從底噪淡入、淡出到底噪，整格不留原片；停格點前後兩截直接接上
+SEAM_VERSION = 2
+CUT_MARK_S = 0.05   # 聲音比時間格長、又沒停格：結尾被切掉超過這麼多秒，第 5 步標出來（更短的是取樣換算的零頭）
 
 
 def out_dir(workdir: Path) -> Path:
@@ -321,8 +327,33 @@ def fit_length(clip: np.ndarray, n: int) -> np.ndarray:
     return np.concatenate([clip, np.zeros(n - len(clip), dtype=np.float32)])
 
 
+def voice_over_room(clip: np.ndarray, room: np.ndarray | None, n: int, freeze_n: int = 0,
+                    sr: int = SR) -> tuple[np.ndarray, np.ndarray | None, float]:
+    """換聲音類（學員重念、名字整句換掉、保留原聲學員名字）放進時間格的聲音（10-03 第八批 #60，純函式）。
+
+    以前用 `splice` 頭尾各 10 毫秒跟原片交叉淡入淡出：接縫切在學員還在講話的地方，就混進 10 毫秒學員原聲（T034 雜音）。
+    現在：生成的聲音頭尾各 10 毫秒**從底噪淡入、淡出到底噪**，底下整段墊 room（底噪），整格不留原片。
+    - n：時間格多長；freeze_n：停格補長多長（0＝沒有停格）。回傳（時間格那一截 head、停格那一截 tail 或 None、結尾被切掉幾秒）
+    - 有停格：head 結尾不淡出、tail 開頭不淡入，head＋tail＝原本連續的聲音，只在整句最後淡出
+    - 聲音比時間格（＋停格）長：多的切掉，結尾一樣淡出；切掉的秒數回傳給第 5 步標出來
+    room 是 None 時底下是全靜音。"""
+    total = n + max(0, freeze_n)
+    voice = fit_length(clip.astype(np.float32), total).copy()
+    cut = max(0, len(clip) - total) / sr
+    f = min(int(sr * FADE_S), total // 2)
+    if f > 0:
+        voice[:f] *= np.linspace(0, 1, f, dtype=np.float32)
+        voice[-f:] *= np.linspace(1, 0, f, dtype=np.float32)
+    if room is not None:
+        voice = voice + fit_length(room.astype(np.float32), total)
+    head = voice[:n]
+    tail = voice[n:] if freeze_n > 0 else None
+    return head, tail, round(cut, 3)
+
+
 def splice(y: np.ndarray, s: int, clip: np.ndarray, sr: int = SR) -> None:
-    """把 clip 放進 y[s:s+len(clip)]，頭尾各 10 毫秒跟原本的聲音交叉淡入淡出。"""
+    """把 clip 放進 y[s:s+len(clip)]，頭尾各 10 毫秒跟原本的聲音交叉淡入淡出。
+    10-03 第八批 #60 起只給消音類（墊底噪）用；換聲音類改用 `voice_over_room`（不跟原片交疊）。"""
     n = len(clip)
     f = min(int(sr * FADE_S), n // 2)
     seg = clip.astype(np.float32).copy()
@@ -354,10 +385,16 @@ def render_edit(window: np.ndarray, w0: int, edit: dict, clip: np.ndarray | None
     if t <= s:
         return y[s:t]
     if edit["類型"] not in MUTE_KINDS:
-        new = match_loudness(fit_length(clip, t - s), window[s:t], sr)
-    else:
-        local = [(a - w0, b - w0) for a, b in spans if (a - w0, b - w0) != (s, t)]
-        new = room_tone(window, s, t, t - s, sr, avoid=local, bed=bed)
+        # 10-03 第八批 #60：換聲音從底噪淡入、淡出到底噪，整格不留原片（不再跟原片交叉淡入淡出）
+        loud = match_loudness(fit_length(clip, max(len(clip), t - s)), window[s:t], sr)
+        room = room_tone(window, s, t, t - s, sr, bed=bed)
+        new, _tail, cut = voice_over_room(loud, room, t - s, 0, sr)
+        if cut >= CUT_MARK_S:
+            edit["結尾切掉秒"] = round(cut, 2)
+        y[s:t] = new
+        return y[s:t]
+    local = [(a - w0, b - w0) for a, b in spans if (a - w0, b - w0) != (s, t)]
+    new = room_tone(window, s, t, t - s, sr, avoid=local, bed=bed)
     splice(y, s, new, sr)
     return y[s:t]
 

@@ -1245,13 +1245,17 @@ def keep_awake(log: Callable[[str], None] = print):
 def run_execute(workdir: str | Path, *, start: float | None = None, end: float | None = None,
                 methods: list[str] | None = None, redo: bool = False, only_steps: list[str] | None = None,
                 runners: dict | None = None, checks: dict | None = None, skip_precheck: bool = False,
-                parts: PartOptions | None = None, redo_returned: bool = False,
+                parts: PartOptions | None = None, redo_returned: bool = False, reassemble_only: bool = False,
                 log: Callable[[str], None] = print) -> dict:
     """依序跑第 4 步。回傳進度。
 
     redo_returned（10-01 第三批）：第 5 步退回的那幾筆一起重做——開始前先清掉那幾句的生成結果
     （`finalcheck.prepare_redo`），之後照常一步一步跑（只有清掉的會重新生成），組裝一定重做；
     組裝做完，那幾筆在第 5 步回到「還沒看」、標「重做過」（`finalcheck.finish_redo`）。
+
+    reassemble_only（10-03 第八批 #23）：「只重新組裝」——退回的那幾筆記進重做中，但不清生成、不換念法
+    （`prepare_redo(reassemble_only=True)`），只跑「組裝」這一步；組裝做完一樣回到還沒看、標「重做過（只重新組裝）」。
+    沒有退回的也照樣重新組裝一次。
 
     10-01：每一步、每一個聲線各自開一支程式跑（`_part_runners`，見上面「每一步、每一個聲線各自一支程式跑」）；
     parts 可以從外面傳假的子程式指令、假的硬碟／swap 數字（測試用）。
@@ -1296,7 +1300,10 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     from bookclub import finalcheck
 
     redoing = None
-    if redo_returned:
+    if reassemble_only:
+        only_steps = list(only_steps or ["組裝"])
+        redoing = finalcheck.prepare_redo(workdir, a, b, log=log, reassemble_only=True) or {finalcheck.REASSEMBLE_ONLY: True}
+    elif redo_returned:
         redoing = finalcheck.prepare_redo(workdir, a, b, log=log)
     if not redoing and (finalcheck.load_check(workdir).get("重做中") or {}).get("項目"):
         redoing = {"接著做": True}   # 上次重做退回的沒做完（停止、失敗）：這次組裝做完一樣收尾

@@ -423,7 +423,10 @@ async function renderExecuteBody() {
         要念的字和範圍都沒改的，會換一種念法重新生成，每退回一次換一次，不會回到用過的念法；上一版的聲音留著備份。
         做完到第 5 步，這幾筆會回到「還沒看」、標「重做過」。${d["重做中"] ? "<b>上次重做還沒做完</b>，再按一次會接著做。" : ""}</p>
       <p><button id="btnRedo" ${execBlocked ? "disabled" : ""}>只重做退回的這幾筆（${redo.length} 筆）</button>
+        <button id="btnReassemble" class="secondary" ${execBlocked ? "disabled" : ""}>只重新組裝（不重新生成）</button>
         ${execBlocked && !running ? `<span class="muted">要先能按「開始執行」（見上面）</span>` : ""}</p>
+      <p class="muted small">「只重新組裝」：生成的聲音不動（不重新生成、不換念法），只照現在的做法重新放回去、輸出新的成品；
+        退回的這幾筆一樣回到第 5 步「還沒看」、標「重做過（只重新組裝）」。聲音本身沒問題、要改的是接起來的地方時用這顆。</p>
       <table class="kv">${redo.map((it, i) => `<tr><td>${esc(typeof fcKind === "function" ? fcKind(it["類型"]) : it["類型"])}　${esc((it["覆核名稱"] || []).join("、") || "—")}
         ${typeof fcBoth === "function" && (it["原片"] || it["成品"]) ? `<div class="muted">${esc(fcBoth(it))}</div>` : ""}</td>
         <td>${esc(it["原因"])}${it["改範圍"] ? `<div class="muted">範圍改了${it["改範圍"]["原本"] ? `：${esc(fmtRange(it["改範圍"]["原本"]))} → ${esc(fmtRange(it["改範圍"]["改成"]))}` : ""}（存在第 3 步〈${esc(it["改範圍"]["名稱"] || "")}〉）</div>` : ""}
@@ -449,6 +452,13 @@ async function renderExecuteBody() {
   if (redoBtn) redoBtn.addEventListener("click", async () => {
     if (!confirm(`只重做第 5 步退回的 ${redo.length} 筆，再重新組裝？\n要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。`)) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value] }, { quiet: true }); }
+    catch (e) { alert(`無法開始：${e.message}`); return; }
+    await renderExecuteBody();
+  });
+  const reBtn = document.getElementById("btnReassemble");   // 10-03 第八批 #23：只重新組裝（整支影片的範圍）
+  if (reBtn) reBtn.addEventListener("click", async () => {
+    if (!confirm(`只重新組裝？\n生成的聲音不動、不重新生成，照現在的做法重新放回去。\n第 5 步退回的 ${redo.length} 筆組裝做完會回到「還沒看」。`)) return;
+    try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value], "只重新組裝": true }, { quiet: true }); }
     catch (e) { alert(`無法開始：${e.message}`); return; }
     await renderExecuteBody();
   });

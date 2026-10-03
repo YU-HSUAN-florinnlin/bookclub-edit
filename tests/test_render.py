@@ -126,6 +126,31 @@ def test_output_segments_stream_same_as_concat():
     assert len(got) == len(whole) and np.max(np.abs(got - np.clip(whole, -1, 1))) < 1e-4
 
 
+def test_freeze_point_continuous_in_output():
+    """10-03 第八批 #60：學員重念比時間格長、結尾停格——成品裡停格點前後兩截接起來＝原本連續的聲音（沒有缺口、
+    head 結尾不淡出、tail 開頭不淡入），只在整句最後淡出到底噪。照 build_audio 的放法（assemble.voice_over_room）。"""
+    import numpy as np
+
+    from bookclub import assemble
+
+    a, SR = 0.0, render.SR
+    x = (0.5 * np.sin(2 * np.pi * 200 * np.arange(int(4 * SR)) / SR)).astype(np.float32)   # 原片：學員講話
+    s, t, fz = int(1.0 * SR), int(2.0 * SR), int(0.4 * SR)
+    clip = (0.3 * np.sin(2 * np.pi * 330 * np.arange(t - s + fz) / SR)).astype(np.float32)
+    room = np.full(t - s + fz, 0.001, dtype=np.float32)
+    head, tail, cut = assemble.voice_over_room(clip, room, t - s, fz, SR)
+    y = x.copy()
+    y[s:t] = head
+    plist = render.pieces(a, 4.0, [], [{"at": 2.0, "dur": 0.4, "edit": "E1"}])
+    whole = np.concatenate(list(render.output_segments(x, y, plist, {"E1": tail}, a)))
+    f = int(SR * assemble.FADE_S)
+    got = whole[s:t + fz]
+    want = clip + room
+    assert cut == 0.0 and np.allclose(got[f:-f], want[f:-f], atol=1e-7)   # 停格點（t）前後逐點跟原本的聲音一樣
+    assert abs(got[-1] - 0.001) < 1e-6 and abs(got[0] - 0.001) < 1e-6      # 頭尾淡到底噪
+    assert np.array_equal(whole[t + fz:], x[t:])                           # 停格之後接回原片
+
+
 def test_build_decisions_mutes_overlaps():
     """09-30：重疊處除了「不用改」都要消音（或被換聲音蓋掉），成品不能留學員原聲；保留原聲的學員不動；救回的也算。"""
     import os

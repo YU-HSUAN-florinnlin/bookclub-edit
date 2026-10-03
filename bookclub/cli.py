@@ -83,6 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
     ex_parser.add_argument("--redo", action="store_true", help="做過的也重跑（生成本身還是會沿用快取，見 README）")
     ex_parser.add_argument("--redo-returned", action="store_true",
                            help="第 5 步退回的那幾筆一起重做：清掉那幾句重新生成，再重新組裝（網頁第 4 步按「開始執行」就是這樣）")
+    ex_parser.add_argument("--reassemble-only", action="store_true",
+                           help="只重新組裝（10-03）：第 5 步退回的那幾筆不重新生成、不換念法，生成的聲音照舊重新放回去；"
+                                "組裝做完回到第 5 步「還沒看」、標「重做過（只重新組裝）」（網頁第 4 步「只重新組裝」那顆）")
 
     part_parser = run_sub.add_parser(
         "part", help="第 4 步內部用（10-01）：「AI 執行」一支程式只跑一段、只載入一個模型；平常不用自己打，run execute 會開")
@@ -298,7 +301,8 @@ def main(argv: list[str] | None = None) -> int:
                             end=parse_time(args.end) if args.end else None,
                             methods=[m.strip() for m in args.methods.split(",") if m.strip()] if args.methods else None,
                             only_steps=[x.strip() for x in args.only.split(",") if x.strip()] if args.only else None,
-                            redo=args.redo, redo_returned=args.redo_returned)
+                            redo=args.redo, redo_returned=args.redo_returned or args.reassemble_only,
+                            reassemble_only=args.reassemble_only)
             except (FileNotFoundError, ValueError, PartFailed) as e:   # 前置檢查沒過、子程式出錯：印清楚就好，不印程式追蹤
                 print(f"⚠️ {e}")
                 return 1

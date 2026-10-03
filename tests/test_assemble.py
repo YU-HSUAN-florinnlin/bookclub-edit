@@ -144,10 +144,100 @@ def test_apply_edits_replace_and_mute():
     assert len(y) == len(x)
     mid = y[int(1.5 * SR):int(2.0 * SR)]
     assert abs(assemble.active_rms(mid) - assemble.active_rms(x[SR:3 * SR])) < 0.02   # 音量對齊
-    assert np.abs(y[int(2.6 * SR):int(2.98 * SR)]).max() < 1e-6   # 生成比較短 → 後面補空白
+    # 生成比較短 → 後面只剩底噪（10-03 第八批 #60：換聲音底下墊底噪、整格不留原片；以前是全靜音）
+    assert np.abs(y[int(2.6 * SR):int(2.98 * SR)]).max() < 0.01
     muted = y[int(7.05 * SR):int(7.95 * SR)]
     assert np.abs(muted).max() < 0.01                                 # 消音處換成底噪
     assert np.array_equal(y[: int(0.99 * SR)], x[: int(0.99 * SR)])   # 沒動到的地方不變
+
+
+# ---------- 10-03 第八批 #60：接縫與停格點 ----------
+
+def _noise(n: int, amp: float, seed: int) -> np.ndarray:
+    return (np.random.default_rng(seed).standard_normal(n) * amp).astype(np.float32)
+
+
+def test_voice_seams_only_generated_and_room_no_original():
+    """換聲音類頭尾 10 毫秒從底噪淡入、淡出到底噪：時間格裡每一點＝生成聲音（淡入淡出）＋底噪，原片一點都不留；
+    相鄰兩格都是生成聲音時，中間只有底噪。"""
+    sr = SR
+    f = int(sr * assemble.FADE_S)
+    n = sr // 2
+    clip = _tone(0.5, amp=0.3, f=330)
+    room = _noise(n, 0.001, 1)
+    head, tail, cut = assemble.voice_over_room(clip, room, n, 0, sr)
+    assert tail is None and cut == 0.0 and len(head) == n
+    ramp = np.linspace(0, 1, f, dtype=np.float32)
+    want = clip[:n].copy()
+    want[:f] *= ramp
+    want[-f:] *= ramp[::-1]
+    assert np.allclose(head, want + room, atol=1e-7)                       # 接縫上只有生成聲音與底噪
+    assert abs(head[0] - room[0]) < 1e-7 and abs(head[-1] - room[-1]) < 1e-7  # 頭尾第一點就是底噪
+    # 放進原片（學員還在講話的大聲音）：兩支原片只有時間格裡面不一樣（同樣大聲、相位不同）→ 成品時間格裡逐點一樣＝沒留原片
+    quiet = _tone(0.5, amp=0.001)
+    x1 = np.concatenate([_tone(1.6, amp=0.5, f=200), quiet])
+    t = np.arange(len(x1)) / sr
+    x2 = x1.copy()
+    a, b = int(0.5 * sr), int(1.5 * sr)
+    x2[a:b] = (0.5 * np.cos(2 * np.pi * 200 * t[a:b])).astype(np.float32)
+    edits = [{"類型": "學員重念", "start": 0.5, "end": 1.0}, {"類型": "學員重念", "start": 1.0, "end": 1.5}]
+    clips = {0: clip, 1: _tone(0.5, amp=0.3, f=550)}
+    y1 = assemble.apply_edits(x1, [dict(e) for e in edits], clips)
+    y2 = assemble.apply_edits(x2, [dict(e) for e in edits], clips)
+    assert np.allclose(y1[a:b], y2[a:b], atol=1e-4)                        # 接縫（頭、交界、尾）都不含原片
+    assert np.abs(y1[sr - 2:sr + 2]).max() < 0.01                          # 相鄰兩格中間只有底噪（兩邊都淡到 0）
+    assert np.array_equal(y1[:a], x1[:a]) and np.array_equal(y1[b:], x1[b:])   # 時間格外面不動
+
+
+def test_freeze_halves_join_back_into_one_continuous_voice():
+    """停格點：head 結尾不淡出、tail 開頭不淡入，接起來＝原本連續的聲音，只在整句最後淡出。"""
+    sr = SR
+    f = int(sr * assemble.FADE_S)
+    n, fz = int(0.6 * sr), int(0.4 * sr)
+    clip = _tone(1.0, amp=0.3, f=330)
+    room = _noise(n + fz, 0.001, 2)
+    head, tail, cut = assemble.voice_over_room(clip, room, n, fz, sr)
+    assert len(head) == n and len(tail) == fz and cut == 0.0
+    joined = np.concatenate([head, tail])
+    want = clip.copy() + room
+    assert np.allclose(joined[f:-f], want[f:-f], atol=1e-7)               # 中間（含停格點）逐點一樣，沒有缺口
+    assert np.allclose(joined[n - 50:n + 50], want[n - 50:n + 50], atol=1e-7)
+    assert abs(joined[-1] - room[-1]) < 1e-7                              # 只在整句最後淡出到底噪
+
+
+def test_too_long_without_freeze_fades_and_marks_cut():
+    """聲音比時間格長又沒停格：多的切掉、結尾淡出，回報切掉幾秒；組裝時記在動作上，處理紀錄標出來、要人聽。"""
+    from bookclub import proclog
+
+    sr = SR
+    f = int(sr * assemble.FADE_S)
+    n = sr
+    clip = _tone(1.3, amp=0.3, f=330)
+    head, tail, cut = assemble.voice_over_room(clip, None, n, 0, sr)
+    assert tail is None and abs(cut - 0.3) < 1e-3 and abs(head[-1]) < 1e-7
+    assert np.allclose(head[-f:], clip[n - f:n] * np.linspace(1, 0, f, dtype=np.float32), atol=1e-7)
+    x = _tone(3.0, amp=0.5)
+    e = {"類型": "換聲音", "start": 1.0, "end": 2.0, "候選": ["2"], "檔案": "a.wav", "文字": "x"}
+    assemble.apply_edits(x, [e], {0: clip})
+    assert e["結尾切掉秒"] == 0.3
+    rec = proclog.records_from_edl([e])[0]
+    assert "結尾被切掉 0.30 秒" in rec["做了什麼"] and rec["要人聽"] and rec["結尾切掉秒"] == 0.3
+    short = {"類型": "換聲音", "start": 1.0, "end": 2.0, "候選": ["2"], "檔案": "a.wav", "文字": "x"}
+    assemble.apply_edits(x, [short], {0: _tone(0.98, amp=0.3)})
+    assert "結尾切掉秒" not in short
+
+
+def test_mute_kinds_still_crossfade_with_original():
+    """消音類（局部消音、名字消音）做法不動：頭尾仍跟原片交叉淡入淡出。"""
+    x = _tone(2.0, amp=0.5)
+    y = assemble.apply_edits(x, [{"類型": "名字消音", "start": 0.5, "end": 1.0}], {})
+    s = int(0.5 * SR)
+    assert abs(y[s] - x[s]) < 1e-6                                        # 第一點還是原片（淡出原片、淡入底噪）
+    assert np.abs(y[s + int(0.1 * SR):s + int(0.4 * SR)]).max() < 0.01
+
+
+def test_seam_version_bumped_for_new_joins():
+    assert assemble.SEAM_VERSION == 2
 
 
 def test_render_audio_end_to_end():
