@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from bookclub import workdir as wd
+from bookclub.assemble import GAP_KEEP_KIND, GAP_KIND, gap_keep_text, gap_mute_text
 
 FRAME_S = 0.02            # 每 20 毫秒比一次
 PAD_S = 0.1               # 紀錄範圍前後各留 0.1 秒（接縫淡入淡出、剪點淡出淡入會碰到旁邊一點點）
@@ -35,7 +36,7 @@ MERGE_GAP_S = 0.2         # 兩處變動中間隔不到 0.2 秒，併成一處�
 
 # 會動到聲音的紀錄類型（檢查只拿這些當「有登記」）；模糊是畫面、重疊標記只是說明，不算
 AUDIO_KINDS = ("學員重念", "名字整句換掉", "名字消音", "局部消音", "學員名字消音", "學員名字換代號", "刪除", "停格",
-               "換聲音", "消音")
+               "換聲音", "消音", "學員空隙消音")
 # 10-03 第八批 #23：換聲音類（生成的聲音放進原片）＋停格（重念的後半截）：接縫做法改了，這幾類的成品聲音跟著變
 SEAM_KINDS = ("學員重念", "名字整句換掉", "換聲音", "學員名字換代號", "停格")
 
@@ -72,6 +73,8 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
 
     for e in d.get("動作", []):
         kind, s, t = e["類型"], e["start"], e["end"]
+        if e.get("併入前一格"):   # #102：很短的空隙照樣墊底噪，不另外列（前一格紀錄的前後 0.1 秒已經涵蓋）
+            continue
         rec = {"類型": kind, "原片": [_r(s), _r(t)], "成品": [_r(_ot(s, plist)), _r(_ot(t, plist))],
                "動到聲音": True, "要人聽": bool(e.get("要人聽")), "檔案": None, "文字": e.get("text"), "覆核項目": []}
         if kind == "學員重念":
@@ -104,6 +107,10 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
             rec["覆核項目"] = [f"學員名字:{c}" for c in e.get("候選", [])]
             rec["做了什麼"] = student_name_text(e)
             rec["檔案"] = e.get("檔案")
+        elif kind == GAP_KIND:   # 10-03 第八批補修 #102
+            rec["覆核項目"] = [f"學員段落:{e['段落']}"]
+            rec["做了什麼"] = gap_mute_text(e)
+            rec["空隙秒"] = _r(e.get("空隙秒"))
         else:
             rec["做了什麼"] = kind
         mark_cut(rec, e)
@@ -140,6 +147,11 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
                          "要人聽": False, "檔案": None, "文字": None,
                          "覆核項目": near(links.get("重疊", []), m["start"], m["end"]),
                          "做了什麼": f"重疊（{m.get('做法', '')}）：{m.get('處理', '')}"})
+        elif m["類型"] == GAP_KEEP_KIND:   # #102：空隙裡有老師的話／別的處理，原片沒動，要人聽
+            recs.append({"類型": GAP_KEEP_KIND, "原片": [_r(m["start"]), _r(m["end"])],
+                         "成品": [_r(_ot(m["start"], plist)), _r(_ot(m["end"], plist))], "動到聲音": False,
+                         "要人聽": True, "檔案": None, "文字": None, "覆核項目": [f"學員段落:{m['段落']}"],
+                         "空隙秒": _r(m.get("空隙秒")), "保留原因": m.get("保留原因"), "做了什麼": gap_keep_text(m)})
         elif m["類型"] == "名字要人處理":
             recs.append({"類型": "名字要人處理", "原片": None, "成品": None, "動到聲音": False, "要人聽": True,
                          "檔案": None, "文字": None, "覆核項目": [f"名字:{m['候選']}"],

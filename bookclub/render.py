@@ -42,7 +42,7 @@ FONT_CANDIDATES = ["/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/
 DEMO_FREEZE_S = 1.0
 BLUR_S = 30.0
 JOIN_FADE_S = 0.01
-from bookclub.assemble import MUTE_KINDS  # noqa: E402  墊底噪的動作（名字消音、局部消音…）
+from bookclub.assemble import GAP_KIND, MUTE_KINDS  # noqa: E402  墊底噪的動作（名字消音、局部消音…）
 
 ROOM_UNDER = True   # 生成的聲音底下墊附近原片的環境底噪（生成檔的停頓是數位全靜音，接在原片中間會像突然真空）
 
@@ -234,6 +234,12 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     warnings += w
     for e in kept:
         e["start"], e["end"] = clip_to_cuts(e["start"], e["end"], cuts)
+    # 10-03 第八批補修 #102：同一個學員段落裡兩格之間的空隙墊底噪（以前播原片，學員原聲的尾巴會留在成品）；
+    # 空隙裡有老師的話或別的處理就保留原聲、標要人聽
+    gaps_new, gap_marks = student_gap_edits(workdir, now_by, kept, kept_now, cuts, ov_marks, a, b)
+    if gaps_new:
+        kept = sorted(kept + gaps_new, key=lambda e: e["start"])
+    marks += gap_marks
     # 每一處重疊最後實際怎麼了；還留著原聲的列出來，`render_video` 看到就不輸出成品
     left = []
     for m in ov_marks:
@@ -255,6 +261,32 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     return {"範圍": [a, b], "刪除": cuts, "動作": kept, "停格": sorted(freezes, key=lambda f: f["at"]),
             "模糊": blur, "標記": marks, "警告": warnings, "學員聲線": voices, "重疊沒處理": left,
             "名字沒處理": name_left}
+
+
+def student_gap_edits(workdir: Path, now_by: dict, kept: list[dict], kept_now: set, cuts: list, ov_marks: list[dict],
+                      a: float, b: float) -> tuple[list[dict], list[dict]]:
+    """#102：學員段落裡兩格之間的空隙（見 `assemble.student_gaps`、`assemble.gap_edits`）。
+    只處理兩邊的格子這次都有動作（重念、或先消音）的空隙；保留原聲的學員、重疊卡片自己生成的那一句不算格子。
+    沒有段落分析（匯入的工作區，`now_by` 是空的）就不處理。"""
+    from bookclub import assemble, students
+
+    if not now_by:
+        return [], []
+    chunks = [{"id": it["id"], "段落": it["段落"], "slot": it["slot"]} for it in now_by.values()
+              if not it.get("重疊") and it.get("學員") not in kept_now]
+    try:
+        chunks += [{"id": m["id"], "段落": m["id"].rsplit("_", 1)[0], "slot": [m["start"], m["end"]]}
+                   for m in students.empty_chunks(workdir) if m["學員"] not in kept_now]
+    except FileNotFoundError:
+        pass
+    handled = {e.get("id") for e in kept if e.get("id")}
+    gaps = [g for g in assemble.student_gaps(chunks, a, b) if g["前一格"] in handled and g["後一格"] in handled]
+    if not gaps:
+        return [], []
+    speakers = wd.read_json(wd.speakers_path(workdir), default=None) or {}
+    teacher = [(s["start"], s["end"]) for s in speakers.get("sentences", []) if s.get("label") == "老師"]
+    busy = [(m["start"], m["end"]) for m in ov_marks]
+    return assemble.gap_edits(gaps, kept, teacher, cuts, busy)
 
 
 def clip_to_cuts(a: float, b: float, cuts: list[tuple[float, float]]) -> tuple[float, float]:
@@ -366,7 +398,10 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
         if e["類型"] in MUTE_KINDS:
             local = [sp for sp in spans if sp != (s, t)]
             new = assemble.room_tone(x, s, t, t - s, SR, avoid=local, bed=bed)
-            assemble.splice(y, s, new, SR)
+            if e["類型"] in assemble.HARD_MUTE_KINDS:   # #102 學員段落的空隙：整段底噪，不跟原片交叉淡入淡出
+                y[s:t] = new
+            else:
+                assemble.splice(y, s, new, SR)
             continue
         long = e.get("停格秒") or (e.get("加快", 1.0) > 1.0)
         src = e["來源檔案"] if long else e["檔案"]
@@ -676,6 +711,8 @@ def label_text(e: dict) -> str:
         return "局部消音" + ("（霧化還沒做，先墊底噪）" if e.get("霧化") else "")
     if e["類型"] == "學員名字消音":
         return f"AI：{e.get('學員', '學員')} 講到名字消音"
+    if e["類型"] == GAP_KIND:
+        return "AI：學員段落空隙墊底噪"
     if e["類型"] == "學員名字換代號":
         return f"AI：{e.get('學員', '學員')} 講到名字換代號（學員聲音生成，音色可能有差）"
     return "AI：名字消音"
@@ -747,6 +784,11 @@ def build_marks(d: dict, plist: list[dict], precision: dict | None = None) -> li
         if m["類型"] == "重疊":
             rows.append({"類型": "重疊", "原片": [m["start"], m["end"]], "成品": [ot(m["start"]), ot(m["end"])],
                          "做了什麼": f"重疊（建議：{m['做法']}）：{m['處理']}", "要人聽": False})
+        elif m["類型"] == "學員空隙保留原聲":   # #102
+            from bookclub.assemble import gap_keep_text
+
+            rows.append({"類型": m["類型"], "原片": [m["start"], m["end"]], "成品": [ot(m["start"]), ot(m["end"])],
+                         "做了什麼": gap_keep_text(m), "要人聽": True})
         elif m["類型"] == "名字要人處理":
             rows.append({"類型": "名字要人處理", "原片": None, "成品": None,
                          "做了什麼": f"名字候選 {m['候選']} 沒有自動處理：{m['原因']}（這筆在原片裡沒動）", "要人聽": True})

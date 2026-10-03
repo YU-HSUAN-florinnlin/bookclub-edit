@@ -510,6 +510,77 @@ def test_names_left_blocks_uncovered_name():
     assert not assemble.names_left(names, edits, a=0.0, b=15.0)   # 範圍外的不算
 
 
+# ---------- #102 學員段落裡兩格之間的空隙 ----------
+
+def _chunk_edits(slots: dict[str, list[float]]) -> list[dict]:
+    return [{"類型": "學員重念", "id": k, "start": s, "end": t} for k, (s, t) in slots.items()]
+
+
+def test_student_gaps_only_between_chunks_of_same_turn():
+    """同一個段落相鄰兩格之間才算空隙；段落頭尾、不同段落之間都不算；範圍外的切掉。"""
+    chunks = [{"id": "T003_01", "段落": "T003", "slot": [40.0, 48.0]}, {"id": "T003_02", "段落": "T003", "slot": [48.5, 56.0]},
+              {"id": "T003_03", "段落": "T003", "slot": [58.1, 66.0]}, {"id": "T003_04", "段落": "T003", "slot": [66.0, 70.0]},
+              {"id": "T005_01", "段落": "T005", "slot": [72.0, 80.0]}]
+    gaps = assemble.student_gaps(chunks)
+    assert [(g["段落"], g["start"], g["end"], g["前一格"], g["後一格"]) for g in gaps] == [
+        ("T003", 48.0, 48.5, "T003_01", "T003_02"), ("T003", 56.0, 58.1, "T003_02", "T003_03")], gaps   # 66.0 相連不算
+    assert [(g["start"], g["end"]) for g in assemble.student_gaps(chunks, 0.0, 57.0)] == [(48.0, 48.5), (56.0, 57.0)]
+
+
+def test_gap_edits_mute_whole_gap_and_tiny_gap_merged():
+    """沒有老師、沒有別的處理：整段墊底噪（學員空隙消音，對到段落）；很短的照樣墊、帶「併入前一格」；剪掉的部分不處理。"""
+    edits = _chunk_edits({"T003_01": [40.0, 48.0], "T003_02": [48.5, 56.0], "T003_03": [56.03, 60.0], "T003_04": [61.0, 64.0]})
+    gaps = assemble.student_gaps([{"id": e["id"], "段落": "T003", "slot": [e["start"], e["end"]]} for e in edits])
+    new, marks = assemble.gap_edits(gaps, edits, cuts=[(60.5, 60.8)])
+    assert marks == []
+    got = [(e["類型"], round(e["start"], 3), round(e["end"], 3), e["段落"], bool(e.get("併入前一格"))) for e in new]
+    assert got == [("學員空隙消音", 48.0, 48.5, "T003", False), ("學員空隙消音", 56.0, 56.03, "T003", True),
+                   ("學員空隙消音", 60.0, 60.5, "T003", False), ("學員空隙消音", 60.8, 61.0, "T003", False)], got
+    assert all(e["類型"] in assemble.MUTE_KINDS for e in new)
+    assert "0.50 秒墊底噪（不留原聲）" in assemble.gap_mute_text(new[0])
+    # 格子實際的時間格比段落分析的寬一點（舊紀錄差幾十毫秒）：只墊沒被格子蓋到的部分
+    wide = [dict(e) for e in edits]
+    wide[0]["end"] = 48.2
+    new, _ = assemble.gap_edits(gaps[:1], wide)
+    assert [(round(e["start"], 3), e["end"]) for e in new] == [(48.2, 48.5)]
+
+
+def test_gap_edits_keep_original_when_teacher_or_other_action():
+    """空隙裡有老師的話、或別的動作（名字、重疊、局部消音）→ 保留原片，加一筆要人聽的標記；碰一點點邊不算。"""
+    edits = _chunk_edits({"T003_01": [40.0, 48.0], "T003_02": [50.0, 56.0], "T003_03": [57.0, 60.0]})
+    gaps = assemble.student_gaps([{"id": e["id"], "段落": "T003", "slot": [e["start"], e["end"]]} for e in edits])
+    new, marks = assemble.gap_edits(gaps, edits, teacher=[(48.3, 49.6), (55.9, 56.03)])
+    assert [(e["start"], e["end"]) for e in new] == [(56.0, 57.0)]          # 第二個空隙老師只碰到 0.03 秒：照樣墊
+    assert [(m["類型"], m["start"], m["end"], m["空隙秒"], m["保留原因"]) for m in marks] == [
+        ("學員空隙保留原聲", 48.0, 50.0, 2.0, "老師的話")], marks
+    assert assemble.gap_keep_text(marks[0]) == "學員段落中間有老師的話，這 2.00 秒保留原聲，請聽有沒有學員的聲音"
+    # 名字消音落在空隙裡：那一筆照做，其餘保留原聲
+    other = edits + [{"類型": "名字消音", "start": 56.2, "end": 56.6, "候選": [1]}]
+    new, marks = assemble.gap_edits(gaps, other)
+    assert [(e["start"], e["end"]) for e in new] == [(48.0, 50.0)]
+    assert [(m["start"], m["end"], m["空隙秒"], m["保留原因"]) for m in marks] == [(56.0, 57.0, 0.6, "別的處理")], marks
+    # 選了「不用改」的重疊（沒有動作）也算
+    new, marks = assemble.gap_edits(gaps, edits, busy=[(48.5, 48.9)])
+    assert [m["start"] for m in marks] == [48.0] and [e["start"] for e in new] == [56.0]
+
+
+def test_gap_mute_is_pure_room_tone_not_crossfaded():
+    """空隙墊底噪整段直接換掉（不跟原片交叉淡入淡出）：成品裡只有底噪、沒有原片；別的消音照舊交叉淡入淡出。"""
+    sr = assemble.SR
+    rng = np.random.default_rng(1)
+    x = (0.001 * rng.standard_normal(sr * 12)).astype(np.float32)
+    t = np.arange(sr * 4) / sr
+    x[sr * 2:sr * 6] += (0.3 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)   # 2–6 秒學員講話（含空隙 3.0–3.5）
+    gap = {"類型": "學員空隙消音", "start": 3.0, "end": 3.5, "id": "空隙:T003_01", "段落": "T003", "候選": []}
+    y = assemble.apply_edits(x, [gap], {})
+    s, e = int(3.0 * sr), int(3.5 * sr)
+    assert np.max(np.abs(y[s:e])) < 0.02, np.max(np.abs(y[s:e]))      # 原片 0.3 的聲音一點都沒留（連頭尾 10 毫秒）
+    assert np.array_equal(y[:s], x[:s]) and np.array_equal(y[e:], x[e:])
+    mute = {**gap, "類型": "局部消音", "id": "M001"}
+    y2 = assemble.apply_edits(x, [mute], {})
+    assert np.max(np.abs(y2[s:s + int(0.005 * sr)])) > 0.05           # 舊做法頭 10 毫秒跟原片交叉淡入（對照）
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0

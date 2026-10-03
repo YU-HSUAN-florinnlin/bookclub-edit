@@ -79,7 +79,9 @@ def stackable(e: dict, k: dict) -> bool:
     return bool(e.get("疊放") and k.get("疊放") and e.get("重疊") and e.get("重疊") == k.get("重疊"))
 
 
-MUTE_KINDS = ("消音", "名字消音", "局部消音", "學員名字消音")   # 墊環境底噪的動作（其他是換聲音）
+MUTE_KINDS = ("消音", "名字消音", "局部消音", "學員名字消音", "學員空隙消音")   # 墊環境底噪的動作（其他是換聲音）
+# 墊底噪時整段直接換成底噪、頭尾不跟原片交叉淡入淡出的（#102：空隙兩邊是重念的格子，交叉淡入會混進 10 毫秒學員原聲）
+HARD_MUTE_KINDS = ("學員空隙消音",)
 SWAP_KINDS = ("換聲音", "學員重念", "名字整句換掉")
 # 10-02 第七批（A2）：換聲音被較長的那筆蓋過一部分時，沒蓋到的部分改成哪一種消音
 SWAP_TO_MUTE = {"換聲音": "消音", "名字整句換掉": "名字消音", "學員重念": "局部消音", "學員名字換代號": "學員名字消音"}
@@ -161,8 +163,8 @@ def plan_name_ranges(plan: dict, stu_plan: dict | None = None) -> list[dict]:
     return out
 
 
-def subtract(a: float, b: float, blockers: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """[a, b] 扣掉 blockers 蓋到的部分，回傳剩下的小段（純函式）。"""
+def subtract(a: float, b: float, blockers: list[tuple[float, float]], min_len: float = 0.01) -> list[tuple[float, float]]:
+    """[a, b] 扣掉 blockers 蓋到的部分，回傳剩下的小段（純函式；短於 min_len 秒的零頭不要）。"""
     parts = [(a, b)]
     for x, y in sorted(blockers):
         nxt = []
@@ -175,7 +177,94 @@ def subtract(a: float, b: float, blockers: list[tuple[float, float]]) -> list[tu
             if y < e:
                 nxt.append((y, e))
         parts = nxt
-    return [(s, e) for s, e in parts if e - s >= 0.01]
+    return [(s, e) for s, e in parts if e - s >= min_len]
+
+
+# ---------- 學員段落裡兩格之間的空隙（10-03 第八批補修 #102） ----------
+# 起因：學員重念把一個學員段落切成好幾格，每格是「第一句開始～最後一句結束」；格子之間句子不相連就有空隙，
+# 以前沒有任何動作蓋到、組裝時播原片——逐字稿的句子結束時間比實際早時，學員原聲的尾巴留在成品裡（T034）。
+# 宇軒定（B）：同一個學員段落裡相鄰兩格之間的空隙整段墊底噪；空隙裡有老師的話或別的處理時保留原聲、標要人聽。
+# 段落最前面、最後面（第一格之前、最後一格之後）不動。
+GAP_KIND = "學員空隙消音"            # 墊底噪（MUTE_KINDS 之一），處理紀錄對到 學員段落:<id>
+GAP_KEEP_KIND = "學員空隙保留原聲"    # 標記：空隙裡有老師的話／別的處理，原片沒動、要人聽
+GAP_RECORD_MIN_S = 0.05   # 墊底噪的空隙短於這個秒數：照樣墊，但處理紀錄不另外列一筆（前一格紀錄的前後 0.1 秒已經涵蓋）
+GAP_TEACHER_TOL_S = 0.05  # 老師的句子跟空隙重疊超過這個秒數才算「空隙裡有老師的話」（逐字稿起訖的誤差不算）
+GAP_MIN_S = 0.001         # 比這短的空隙（取樣換算的零頭）不處理
+
+
+def student_gaps(chunks: list[dict], a: float = 0.0, b: float = 1e12) -> list[dict]:
+    """學員重念的每一格 → 同一個學員段落裡相鄰兩格之間的空隙（純函式）。
+    `chunks`：[{id, 段落, slot}]；回傳 [{段落, start, end, 前一格, 後一格}]（依時間排序、切到 [a, b] 裡）。
+    段落最前面、最後面不算空隙。"""
+    by: dict[str, list[dict]] = {}
+    for c in chunks:
+        by.setdefault(c["段落"], []).append(c)
+    out = []
+    for tid, cs in by.items():
+        cs = sorted(cs, key=lambda c: c["slot"][0])
+        for p, n in zip(cs, cs[1:]):
+            s, t = max(p["slot"][1], a), min(n["slot"][0], b)
+            if t - s > GAP_MIN_S:
+                out.append({"段落": tid, "start": s, "end": t, "前一格": p["id"], "後一格": n["id"]})
+    out.sort(key=lambda g: g["start"])
+    return out
+
+
+def _own(e: dict, tid: str) -> bool:
+    """這一筆動作是不是這個學員段落自己的格子（學員重念、被蓋過改消音、時間格改過先消音、刪光的格子都帶格子的 id）。"""
+    return str(e.get("id") or "").startswith(f"{tid}_") and e["類型"] in ("學員重念", "局部消音")
+
+
+def gap_edits(gaps: list[dict], edits: list[dict], teacher: list[tuple[float, float]] = (),
+              cuts: list[tuple[float, float]] = (), busy: list[tuple[float, float]] = ()) -> tuple[list[dict], list[dict]]:
+    """空隙要怎麼處理（純函式，#102）。回傳（要加的墊底噪動作、保留原聲的標記）。
+
+    - 剪掉的部分、這個段落自己的格子蓋到的部分不用處理
+    - 剩下的部分有老師的句子（`teacher`，重疊超過 GAP_TEACHER_TOL_S）、或別的動作（名字、重疊、局部消音）、
+      或 `busy`（例如選了「不用改」的重疊）碰到 → 整個空隙保留原片，加一筆 GAP_KEEP_KIND 標記（要人聽）
+    - 不然整段墊底噪（GAP_KIND）；短於 GAP_RECORD_MIN_S 的帶 `併入前一格`（處理紀錄不另外列）"""
+    new, marks = [], []
+    for g in gaps:
+        tid = g["段落"]
+        own = [(e["start"], e["end"]) for e in edits if _own(e, tid)]
+        free = [p for s, t in subtract(g["start"], g["end"], list(cuts), GAP_MIN_S)
+                for p in subtract(s, t, own, GAP_MIN_S)]
+        if not free:
+            continue
+
+        def hits(spans, tol: float = 0.0) -> list[tuple[float, float]]:
+            return [(x, y) for x, y in spans
+                    if any(min(y, t) - max(x, s) > tol for s, t in free)]
+
+        others = hits([(e["start"], e["end"]) for e in edits if not _own(e, tid)])
+        tea = hits(list(teacher), GAP_TEACHER_TOL_S)
+        bz = hits(list(busy))
+        if tea or others or bz:
+            left = [p for s, t in free for p in subtract(s, t, others, GAP_MIN_S)]
+            sec = sum(t - s for s, t in left)
+            if sec >= GAP_RECORD_MIN_S:
+                marks.append({"類型": GAP_KEEP_KIND, "start": round(left[0][0], 3), "end": round(left[-1][1], 3),
+                              "段落": tid, "前一格": g["前一格"], "後一格": g["後一格"], "空隙秒": round(sec, 3),
+                              "保留原因": "老師的話" if tea else "別的處理"})
+            continue
+        for s, t in free:
+            sec = round(t - s, 3)
+            new.append({"類型": GAP_KIND, "start": s, "end": t, "id": f"空隙:{g['前一格']}", "段落": tid,
+                        "前一格": g["前一格"], "後一格": g["後一格"], "候選": [], "空隙秒": sec,
+                        **({"併入前一格": True} if sec < GAP_RECORD_MIN_S else {})})
+    return new, marks
+
+
+def gap_keep_text(m: dict) -> str:
+    """保留原聲那一筆的說明（處理紀錄「做了什麼」、標記清單共用）。"""
+    sec = float(m.get("空隙秒") or 0.0)
+    if m.get("保留原因") == "老師的話":
+        return f"學員段落中間有老師的話，這 {sec:.2f} 秒保留原聲，請聽有沒有學員的聲音"
+    return f"學員段落中間有別的處理（名字、重疊或消音），其餘 {sec:.2f} 秒保留原聲，請聽有沒有學員的聲音"
+
+
+def gap_mute_text(e: dict) -> str:
+    return f"學員段落裡兩格之間的空隙 {float(e.get('空隙秒') or (e['end'] - e['start'])):.2f} 秒墊底噪（不留原聲）"
 
 
 def local_mutes(dec: dict) -> list[dict]:
@@ -395,7 +484,10 @@ def render_edit(window: np.ndarray, w0: int, edit: dict, clip: np.ndarray | None
         return y[s:t]
     local = [(a - w0, b - w0) for a, b in spans if (a - w0, b - w0) != (s, t)]
     new = room_tone(window, s, t, t - s, sr, avoid=local, bed=bed)
-    splice(y, s, new, sr)
+    if edit["類型"] in HARD_MUTE_KINDS:
+        y[s:t] = new
+    else:
+        splice(y, s, new, sr)
     return y[s:t]
 
 

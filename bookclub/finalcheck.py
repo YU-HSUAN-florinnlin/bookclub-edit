@@ -333,6 +333,8 @@ def retime_target(rec: dict, index: dict) -> dict:
         return no("學員提到名字的範圍照逐字稿的字自動抓，第 3 步也沒有改時間", f"{go}改做法（直接消音或換成代號）")
     if kind == "模糊示範":
         return no("畫面模糊是示範用的，沒有範圍可以改", "不用改")
+    if kind in ("學員空隙消音", "學員空隙保留原聲"):   # 10-03 第八批補修 #102
+        return no("學員段落裡兩格之間的空隙是組裝時自動處理的，沒有自己的範圍可以改", f"{go}改學員段落的範圍或要念的字")
     if kind == "名字要人處理":
         return no("這一筆沒有自動處理（原片沒動）", f"{go}把要重念的句子改好（名字寫成代號），或改成直接消音")
     if ovs and any((index.get(k) or {}).get("疊放") for k in ovs):
