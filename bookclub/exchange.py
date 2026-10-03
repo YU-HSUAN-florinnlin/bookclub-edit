@@ -242,11 +242,10 @@ def import_review(zip_path: str | Path, workdir: str | Path, video: str | Path, 
     wd.write_json(wd.analysis_result_path(workdir), {"video": str(video), "workdir": str(workdir),
                                                      "影片長度": round(got, 1), "匯入自": zip_path.name,
                                                      "匯入時間": datetime.now().isoformat(timespec="seconds")})
-    audio = wd.audio_path(workdir)
-    if not audio.exists():
-        print(f"[匯入] 從影片抽聲音（16kHz 單聲道）：{video.name}")
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(video), "-ar", "16000", "-ac", "1", "-vn",
-                        str(audio)], check=True)
+    from bookclub.refpick import ensure_audio
+
+    print(f"[匯入] 從影片抽聲音（16kHz 單聲道）：{video.name}")
+    ensure_audio(video, workdir)   # 10-03 第八批（#11）：共用抽音（殘檔比長度、先寫暫存檔名）
     for w in warnings:
         print(f"⚠️ [匯入] {w}")
     plan = result.get("名字處理計畫") or {}

@@ -66,6 +66,21 @@ CLAUDE_RERUN = {   # 10-02 第七批（A3）：三個 Claude 步驟沒跑成功�
 }
 
 
+TRANSCRIPT_TAIL_WARN_S = 180.0   # 10-03 第八批（#11）：逐字稿最後一句離片尾超過 3 分鐘，「要注意」加一條（不擋）
+
+
+def transcript_tail_warning(sentences: list[dict], video_len: float | None) -> str | None:
+    """逐字稿最後一句的結束時間離片尾太遠（多半是抽音中斷、只轉了前半段）→ 一句提醒；不用提醒回傳 None。"""
+    if not video_len:
+        return None
+    last = max((float(s.get("end", 0) or 0) for s in sentences), default=0.0)
+    if video_len - last <= TRANSCRIPT_TAIL_WARN_S:
+        return None
+    return (f"逐字稿只到 {fmt_time(last)}，影片有 {fmt_time(video_len)}（最後 {fmt_time(video_len - last)} 沒有逐字稿）："
+            "可能是抽音被中斷、只轉了前半段，後半段的學員原聲與名字不會處理。片尾本來就沒人說話可以不管；"
+            "不是的話，把 audio.flac 與 transcript/ 改名後重跑第 1 步")
+
+
 def claude_failure(step: str, exc: Exception) -> dict:
     """一個 Claude 步驟沒跑成功 → {步驟, 原因, 怎麼重跑}（原因只留錯誤種類與前 150 字）。"""
     return {"步驟": step, "原因": f"{type(exc).__name__}：{str(exc)[:150]}", "怎麼重跑": CLAUDE_RERUN[step]}
@@ -111,6 +126,11 @@ def run_analyze(
     duration = transcript["duration"]
     print(f"[分析一條龍] 1/7 轉文字完成：{len(sentences)} 句、{len(words)} 個字、"
           f"影片長度 {fmt_time(duration)}")
+    from bookclub.refpick import video_audio_len_s
+
+    tail_warning = transcript_tail_warning(sentences, video_audio_len_s(video) if video.exists() else None)
+    if tail_warning:
+        print(f"⚠️ [分析一條龍] {tail_warning}")
 
     # ---------- 2. 段落分析的文字部分（Claude，雲端）‖ 認老師（聲紋，本機），同時跑 ----------
     # 09-25 宇軒：段落分析以文字為主，冥想引導、導讀整段算老師；提前到這裡，讓後面找重疊、
@@ -306,7 +326,7 @@ def run_analyze(
         "重疊掃描區域數": len(scan_regions),
         "重疊掃描總秒數": round(sum(e - s for s, e in scan_regions), 1),
         "重疊數": overlap_result.get("重疊數", 0),
-        "要注意": [m for m in (overlap_result.get("輸入改過"), names_result.get("輸入改過")) if m]   # 09-29 檢查 #7
+        "要注意": [m for m in (tail_warning, overlap_result.get("輸入改過"), names_result.get("輸入改過")) if m]   # 09-29 檢查 #7；10-03 #11 逐字稿沒到片尾
         + [f"{f['步驟']}（Claude）沒跑成功：{f['原因']}。重跑：{f['怎麼重跑']}" for f in claude_failed],
         "Claude沒跑成功": claude_failed,   # 10-02 第七批（A3）：網頁第 1 步列出來
         "重疊已自動跳過數": overlap_result.get("已自動跳過數", 0),

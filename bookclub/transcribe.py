@@ -27,7 +27,6 @@ whisper-large-v3（verbose_json，word＋segment 時間戳）→ 把塊內時間
 from __future__ import annotations
 
 import json
-import subprocess
 import time
 from pathlib import Path
 
@@ -49,17 +48,10 @@ CHUNK_PREFIX = "chunk_"  # 跟 refpick.py 的 2 位數（00.flac）分開，共�
 # ---------- 步驟 1：抽音（跟 refpick.py 的抽音步驟共用同一個檔案） ----------
 
 def extract_audio(video: str | Path, workdir: Path) -> tuple[Path, float]:
-    video = Path(video).expanduser()
-    out = audio_path(workdir)
-    if out.exists():
-        return out, 0.0
-    t0 = time.time()
-    subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video),
-         "-ar", str(SR), "-ac", "1", "-vn", str(out)],
-        check=True,
-    )
-    return out, time.time() - t0
+    """10-03 第八批（#11）：跟 refpick 共用 `refpick.ensure_audio`（殘檔比長度、先寫暫存檔名）。"""
+    from bookclub.refpick import ensure_audio
+
+    return ensure_audio(video, workdir)
 
 
 # ---------- VAD：找人聲區段、挖掉靜音 ----------

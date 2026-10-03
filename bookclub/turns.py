@@ -138,6 +138,48 @@ def stitch_chunks(chunks: list[list[dict]]) -> list[dict]:
     return all_turns
 
 
+RETRY_WAIT_S = 5   # 某一塊沒成功時，等幾秒再重送（測試改成 0）
+
+
+def _span_time(sentences: list[dict], a: int, b: int) -> str:
+    """第 a 到第 b 行在原片幾分到幾分（只寫時間，不寫逐字稿文字）。"""
+    if not sentences:
+        return "?"
+    a, b = max(0, min(a, len(sentences) - 1)), max(0, min(b, len(sentences) - 1))
+    return f"{wd.fmt_time(sentences[a]['start'])}–{wd.fmt_time(sentences[b].get('end', sentences[b]['start']))}"
+
+
+def turn_gaps(turns: list[dict], n: int) -> list[tuple[int, int]]:
+    """第 0 到第 n-1 行裡，沒有屬於任何段落的行 → [(起, 迄), ...]（純函式）。"""
+    covered = [False] * n
+    for t in turns:
+        a, b = t.get("起"), t.get("迄")
+        if not isinstance(a, int) or not isinstance(b, int):
+            continue
+        for i in range(max(0, a), min(n - 1, b) + 1):
+            covered[i] = True
+    gaps, i = [], 0
+    while i < n:
+        if covered[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and not covered[j + 1]:
+            j += 1
+        gaps.append((i, j))
+        i = j + 1
+    return gaps
+
+
+def check_turns_cover(turns: list[dict], sentences: list[dict]) -> None:
+    """10-03 第八批（#4）：每一句都要屬於某一段；有缺口就丟例外，寫哪幾行、原片幾分到幾分。"""
+    gaps = turn_gaps(turns, len(sentences))
+    if gaps:
+        where = "、".join(f"第 {a}–{b} 行（原片 {_span_time(sentences, a, b)}）" for a, b in gaps[:5])
+        more = f" 等 {len(gaps)} 處" if len(gaps) > 5 else ""
+        raise ValueError(f"段落分析有缺口：{where}{more} 不屬於任何段落")
+
+
 def text_turns(sentences: list[dict], model: str, log=print, workers: int = PARALLEL_CALLS,
                call=None) -> list[dict]:
     """整支逐字稿分塊交給 Claude，**同時送出**（預設 4 塊一起），全部回來再依順序接起來。
@@ -156,12 +198,17 @@ def text_turns(sentences: list[dict], model: str, log=print, workers: int = PARA
         for attempt in (1, 2):   # Claude 偶爾回傳格式壞掉的 JSON、或同時送太多被拒，重送一次
             try:
                 raw = parse_json(call(PROMPT + "\n逐字稿：\n" + format_lines(sentences[start:end], start), model))
+                raw_turns = raw.get("段落", []) if isinstance(raw, dict) else []
+                chunk = normalize_turns(raw_turns if isinstance(raw_turns, list) else [], start, end - 1)
+                # 10-03 第八批（#4）：格式對、內容空（或沒蓋到這一塊頭尾）也算這一塊失敗，跟格式壞掉一樣重送
+                if not chunk or chunk[0]["起"] != start or chunk[-1]["迄"] != end - 1:
+                    raise ValueError(f"Claude 回的段落是空的（第 {k + 1} 塊，{start}–{end - 1} 行，"
+                                     f"原片 {_span_time(sentences, start, end - 1)}）")
                 break
             except (ValueError, RuntimeError, subprocess.TimeoutExpired):
                 if attempt == 2:
                     raise
-                time.sleep(5)
-        chunk = normalize_turns(raw.get("段落", []), start, end - 1)
+                time.sleep(RETRY_WAIT_S)
         for t in chunk:
             if t.get("學員編號"):
                 t["學員編號"] = f"C{k}-{t['學員編號']}"
@@ -170,7 +217,9 @@ def text_turns(sentences: list[dict], model: str, log=print, workers: int = PARA
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         chunks = list(pool.map(one, range(len(ranges))))
-    return stitch_chunks(chunks)
+    out = stitch_chunks(chunks)
+    check_turns_cover(out, sentences)
+    return out
 
 
 def get_text_turns(workdir: str | Path, sentences: list[dict], *, model: str | None = None, log=print,
@@ -183,8 +232,13 @@ def get_text_turns(workdir: str | Path, sentences: list[dict], *, model: str | N
     path = text_turns_path(workdir)
     cached = wd.read_json(path)
     if cached and cached.get("句數") == len(sentences):
-        log(f"[段落] 已有 {path.name}（{len(cached['段落'])} 段），不再呼叫 Claude")
-        return cached
+        gaps = turn_gaps(cached.get("段落") or [], len(sentences))
+        if not gaps:
+            log(f"[段落] 已有 {path.name}（{len(cached['段落'])} 段），不再呼叫 Claude")
+            return cached
+        # 10-03 第八批（#4）：舊檔有缺口（某一塊當初回空）就不沿用，重新送
+        log(f"⚠️ [段落] {path.name} 有 {len(gaps)} 處缺口（第一處：第 {gaps[0][0]}–{gaps[0][1]} 行），"
+            "不沿用，重新交給 Claude")
     if model is None:
         from bookclub.config import load_settings
 
@@ -447,6 +501,7 @@ def page_data(workdir: str | Path) -> dict:
     from bookclub.config import data_dir
 
     workdir = Path(workdir)
+    repair_turn_ids(workdir)   # 10-03 第八批（#13）：舊檔有重複編號就先修好
     data = wd.read_json(turns_path(workdir))
     if not data:
         return {"尚未準備": True}
@@ -812,12 +867,78 @@ def _new_student_name(data: dict) -> str:
     return f"學員{n}"
 
 
-def _unique_id(data: dict, base: str) -> str:
-    ids = {t["id"] for t in data["段落"]}
+def _unique_id(data: dict, base: str, taken: set[str] | None = None) -> str:
+    ids = {t["id"] for t in data["段落"]} | (taken or set())
     k = 1
     while f"{base}m{k}" in ids:
         k += 1
     return f"{base}m{k}"
+
+
+_U_ID = re.compile(r"^U(\d+)")
+
+
+def _next_u_id(data: dict) -> str:
+    """10-03 第八批（#13）：手動標的短段落（沒有句子）編號＝目前 U 開頭最大的號碼＋1（也看用過的最大號，
+    刪掉的號碼不再用，免得生成紀錄裡舊的那段對到新的段落）。"""
+    nums = [int(m.group(1)) for t in data["段落"] if (m := _U_ID.match(str(t.get("id", ""))))]
+    n = 1 + max(nums + [int(data.get("U最大號") or 0)] or [0])
+    data["U最大號"] = n
+    return f"U{n:03d}"
+
+
+def fix_duplicate_ids(data: dict, records: list[dict] | None = None) -> list[tuple[str, str]]:
+    """10-03 第八批（#13）：`段落` 裡編號重複的，後面那一段換新編號（就地改 data），回傳 [(舊, 新), ...]。
+
+    生成紀錄（`生成/學員紀錄.json` 的 `句子[]`，每筆有 `段落` 與 `slot`）已經用這個編號的那一段保留原編號：
+    同編號的幾段裡，時間跟生成紀錄重疊的那一段留原編號，其他換；都沒有生成紀錄就第一段留。"""
+    groups: dict[str, list[dict]] = {}
+    for t in data["段落"]:
+        groups.setdefault(t["id"], []).append(t)
+    taken = set(groups)
+    changed: list[tuple[str, str]] = []
+    for tid, ts in groups.items():
+        if len(ts) < 2:
+            continue
+        slots = [r.get("slot") for r in (records or []) if r.get("段落") == tid and r.get("slot")]
+
+        def used(t: dict) -> bool:
+            return any(a < t["end"] and t["start"] < b for a, b in slots)
+
+        keep = next((t for t in ts if used(t)), ts[0])
+        for t in ts:
+            if t is keep:
+                continue
+            if _U_ID.match(tid):
+                new = _next_u_id(data)
+                while new in taken:
+                    new = _next_u_id(data)
+            else:
+                new = _unique_id(data, tid.split("m")[0], taken)
+            t["id"] = new
+            taken.add(new)
+            changed.append((tid, new))
+    return changed
+
+
+def repair_turn_ids(workdir: str | Path, log=print) -> list[tuple[str, str]]:
+    """讀 `校對/段落.json` 時檢查編號重複；有就修好寫回（第 3 步開頁時呼叫）。"""
+    from bookclub import students
+
+    workdir = Path(workdir)
+    with _lock:
+        data = wd.read_json(turns_path(workdir))
+        if not data or not data.get("段落"):
+            return []
+        ids = [t["id"] for t in data["段落"]]
+        if len(ids) == len(set(ids)):
+            return []
+        records = (wd.read_json(students.log_path(workdir), default=None) or {}).get("句子", [])
+        changed = fix_duplicate_ids(data, records)
+        wd.write_json(turns_path(workdir), data)
+    if changed:
+        log(f"⚠️ [段落] 校對/段落.json 有重複的段落編號，已改：{'、'.join(f'{a}→{b}' for a, b in changed)}")
+    return changed
 
 
 def merge_person(workdir: str | Path, src: str, dst: str) -> dict:
@@ -908,17 +1029,16 @@ def mark_student(workdir: str | Path, start: float, end: float, who: str) -> dic
                 part = {**t, "句子": run, "start": sent[run[0]]["start"], "end": sent[run[-1]]["end"],
                         "原文": "".join(sent[s]["text"] for s in run)}
                 part["校對稿"] = t["校對稿"] if len(runs) == 1 else part["原文"]
-                if k:
-                    part["id"] = _unique_id({"段落": out + [t]}, t["id"])
+                if k:   # 10-03 第八批（#13）：新編號跟整份段落比（含還沒排到的），不只跟已經排好的比
+                    part["id"] = _unique_id({"段落": data["段落"] + out}, t["id"])
                 if isin:
                     part.update(mark)
                     made.append(part)
                 out.append(part)
         if not made:
             near = [s for s in sorted(sent.values(), key=lambda s: s["start"]) if s["start"] < end and start < s["end"]]
-            n = 1 + sum(1 for t in out if t["id"].startswith("U"))
             text = "".join(s["text"] for s in near)
-            part = {"id": f"U{n:03d}", "start": round(start, 3), "end": round(end, 3), "句子": [], "原文": text,
+            part = {"id": _next_u_id(data), "start": round(start, 3), "end": round(end, 3), "句子": [], "原文": text,
                     "校對稿": text, "聲音判斷": "不確定", "信心": None, "老師點名": None, "文字學員編號": None,
                     "手動標記": True, **mark}
             out.append(part)

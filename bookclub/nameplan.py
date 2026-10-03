@@ -257,6 +257,10 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         if cut and str(i) in cut:
             skipped.append({"候選": i, "原因": CUT_SKIP})
             continue
+        if c.get("同一處"):   # 10-03 第八批（#12）：同一處比中好幾個人，已經併進主卡，照主卡處理
+            skipped.append({"候選": i, "原因": f"跟第 {c['同一處']} 筆是同一處（合成一張卡，照那一張處理）",
+                            "同一處": c["同一處"]})
+            continue
         if tags & SKIP_TAGS:
             skipped.append({"候選": i, "原因": "、".join(sorted(tags & SKIP_TAGS))})
             continue
@@ -305,11 +309,11 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             if replace_name(range_words(words, lo_, hi_), c) is not None:
                 _add_ranged(ranged, manual, c, i, d, {"start": lo_, "end": hi_, "範圍": "逐字", "整句": [lo_, hi_]}, words)
                 continue
-        if new is None and not edited:
+        if new is None and not edited and not (item and item.get("改稿")):
             manual.append({"候選": i, "原因": "句子裡找不到比對到的字，無法自動換成代號"})
             continue
         if new is not None:     # 找不到字但人已經改好要念的句子（09-30）：照人改的念，不算「要人處理」
-            texts[sid] = new
+            texts[sid] = new    # 10-03 第八批（#12）：同一句另一張卡已經整句改好（改稿）→ 併進那一句，跟縮小範圍的一樣
         full = "".join(texts[g["id"]] for g in group)
         lo = min(group[0]["start"], c["start"])   # 名字本身一定包進時間格（句首的字可能比句子早開始）
         hi = max(group[-1]["end"], c["end"])
@@ -332,7 +336,50 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
     gen.extend(whole.values())
     gen.extend(ranged)
     gen.sort(key=lambda g: g["slot"][0])
-    return {"生成": gen, "消音": mutes, "略過": skipped, "要人處理": manual}
+    plan = {"生成": gen, "消音": mutes, "略過": skipped, "要人處理": manual}
+    _apply_covers(plan, candidates, decisions, default_how)
+    return plan
+
+
+COVER_TOL_S = 0.05
+
+
+def _apply_covers(plan: dict, candidates: list[dict], decisions: dict, default_how: str = WHOLE) -> None:
+    """10-03 第八批（#12）：名字（整句換掉、沒標不是名字），整個落在另一筆**已通過**、整句換掉的
+    重念範圍裡 → 由那一句處理：從「要人處理」拿掉（還沒通過的，連自己單獨一筆的生成也拿掉），併進那一句的 `候選`，記在 `涵蓋`。
+    跟覆核工作台 `review.mark_name_covers` 同一個規則（卡片上寫「已由那一張涵蓋」）。那一筆退回、改做法，就不再涵蓋。"""
+    def dec(i) -> dict:
+        return decisions.get(str(i), {}) or {}
+
+    def plain(i) -> bool:
+        d = dec(i)
+        return (d.get("做法") or default_how) == WHOLE and not (set(d.get("tags", [])) & SKIP_TAGS)
+
+    by_id = {str(c.get("id", i)): c for i, c in enumerate(candidates, start=1)}
+    covers = [g for g in plan["生成"] if str(g.get("id", "")).startswith("S") and not g.get("整段")
+              and any(dec(k).get("已確認") and plain(k) for k in g.get("候選", []))]
+    if not covers:
+        return
+    out: dict[str, str] = {}
+    for key, c in by_id.items():
+        if not plain(key) or c.get("老師整段") or c.get("同一處"):
+            continue
+        g = next((g for g in covers if key not in {str(x) for x in g["候選"]}
+                  and g["slot"][0] - COVER_TOL_S <= c["start"] and c["end"] <= g["slot"][1] + COVER_TOL_S), None)
+        if g is None:
+            continue
+        own = [x for x in plan["生成"] if x is not g and key in {str(y) for y in x.get("候選", [])}]
+        if any(len(x["候選"]) > 1 for x in own) or (own and dec(key).get("已確認")):
+            continue   # 自己那一句還有別的名字、或這一筆自己通過了要生成的句子：照舊（已通過的只從「要人處理」救回）
+        in_manual = [m for m in plan["要人處理"] if str(m["候選"]) == key]
+        if not own and not in_manual:
+            continue
+        plan["生成"] = [x for x in plan["生成"] if not any(x is o for o in own)]
+        plan["要人處理"] = [m for m in plan["要人處理"] if str(m["候選"]) != key]
+        g["候選"].append(c.get("id", int(key) if key.isdigit() else key))
+        out[key] = g["id"]
+    if out:
+        plan["涵蓋"] = out
 
 
 def _names_in(text: str, cands: list[dict]) -> str | None:

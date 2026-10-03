@@ -91,6 +91,24 @@ def load_roster(path: Path) -> list[dict]:
     return out
 
 
+def roster_duplicate_spellings(path: Path) -> list[dict]:
+    """10-03 第八批（#12）：名冊裡同一個寫法（中文名或其他寫法）出現在兩列以上 → [{寫法, 列: [列號…]}]。
+    列號照試算表：標題列算第 1 列。同一處名字會同時比中兩個人、出兩張卡；讓人決定是不是同一人。"""
+    path = Path(path)
+    if not path.exists():
+        return []
+    rows: dict[str, list[int]] = {}
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        for n, row in enumerate(csv.DictReader(f), start=2):
+            canonical = (row.get("中文名") or "").strip()
+            if not canonical:
+                continue
+            spells = {canonical} | {v.strip() for v in re.split(r"[、,，/]", row.get("其他寫法") or "") if v.strip()}
+            for w in spells:
+                rows.setdefault(w, []).append(n)
+    return [{"寫法": w, "列": ns} for w, ns in sorted(rows.items(), key=lambda kv: kv[1]) if len(ns) > 1]
+
+
 def load_sensitive_words(path: Path) -> list[dict]:
     """讀 `敏感詞.csv`（欄位：原詞,替代詞）。"""
     path = Path(path)

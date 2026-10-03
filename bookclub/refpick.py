@@ -213,18 +213,65 @@ def _ref_dir(workdir: Path, ref_dir_name: str = REF_DIR_NAME) -> Path:
 
 # ---------- 步驟 1：抽音 ----------
 
-def _step1_extract_audio(video: Path, workdir: Path) -> tuple[Path, float]:
+AUDIO_LEN_TOLERANCE_S = 1.0   # 10-03 第八批（#11）：audio.flac 跟影片的聲音長度差超過這個秒數，就當成抽音中斷的殘檔
+AUDIO_TMP_NAME = "audio.抽音中.flac"   # 抽音先寫這個檔名，ffmpeg 成功結束才改名成 audio.flac
+
+
+def video_audio_len_s(video: Path) -> float | None:
+    """影片聲音的長度（ffprobe：第一條音軌的長度，讀不到就用整支影片的長度）；都讀不到回傳 None。"""
+    for args in (["-select_streams", "a:0", "-show_entries", "stream=duration"],
+                 ["-show_entries", "format=duration"]):
+        try:
+            r = subprocess.run(["ffprobe", "-v", "error", *args, "-of", "csv=p=0", str(video)],
+                               capture_output=True, text=True, timeout=60)
+            v = float(r.stdout.strip().splitlines()[0])
+            if v > 0:
+                return v
+        except (ValueError, IndexError, OSError, subprocess.TimeoutExpired):
+            continue
+    return None
+
+
+def ensure_audio(video: str | Path, workdir: str | Path, *, log=print) -> tuple[Path, float]:
+    """整支影片抽成 `audio.flac`（16kHz 單聲道），轉文字、挑參考音、匯入覆核結果共用這一支（10-03 第八批 #11）。
+
+    - 已經有 `audio.flac`：先比長度，跟影片的聲音長度差不到 1 秒才沿用；差太多（多半是抽音中斷的殘檔）
+      就改名留著（`audio.殘檔-時間.flac`，不刪）、重新抽，訊息寫明。影片長度讀不到時照舊沿用
+    - 抽音先寫到暫存檔名，ffmpeg 成功結束才改名；中途失敗不會留下 `audio.flac`（暫存檔清掉），下次重抽
+    回傳 (audio.flac 路徑, 抽音秒數；沿用時 0)。"""
+    video = Path(video).expanduser()
+    workdir = Path(workdir).expanduser()
     workdir.mkdir(parents=True, exist_ok=True)
-    audio_path = workdir / "audio.flac"
-    if audio_path.exists():
-        return audio_path, 0.0
+    out = workdir / "audio.flac"
+    if out.exists():
+        want = video_audio_len_s(video) if video.exists() else None
+        try:
+            got = audio_dur_s(out)
+        except Exception:
+            got = 0.0   # 讀不開的檔（例如中斷時只寫了開頭）：當成殘檔
+        if want is None or abs(got - want) <= AUDIO_LEN_TOLERANCE_S:
+            return out, 0.0
+        keep = out.with_name(f"audio.殘檔-{time.strftime('%Y%m%d-%H%M%S')}.flac")
+        out.rename(keep)
+        log(f"⚠️ [抽音] audio.flac 只有 {got:.1f} 秒、影片的聲音是 {want:.1f} 秒（差超過 {AUDIO_LEN_TOLERANCE_S:.0f} 秒），"
+            f"多半是上次抽音被中斷：舊檔改名成 {keep.name} 留著，重新抽")
+    tmp = workdir / AUDIO_TMP_NAME
     t0 = time.time()
-    subprocess.run(
-        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video),
-         "-ar", str(SR), "-ac", "1", "-vn", str(audio_path)],
-        check=True,
-    )
-    return audio_path, time.time() - t0
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video),
+             "-ar", str(SR), "-ac", "1", "-vn", "-f", "flac", str(tmp)],
+            check=True,
+        )
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    tmp.replace(out)
+    return out, time.time() - t0
+
+
+def _step1_extract_audio(video: Path, workdir: Path) -> tuple[Path, float]:
+    return ensure_audio(video, workdir)
 
 
 # ---------- 步驟 2：整支轉文字 ----------
