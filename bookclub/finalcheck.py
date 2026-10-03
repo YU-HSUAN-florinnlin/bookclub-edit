@@ -1259,16 +1259,35 @@ def redone_info(rec: dict, check: dict, log: dict | None) -> dict | None:
     key = record_key(rec)
     keys = set(rec.get("覆核項目") or [])
     o = rec.get("原片") or [None, None]
-    for e in done.get("項目", []):
-        eo = e.get("原片") or [None, None]
-        close = o[0] is not None and eo[0] is not None and eo[0] - 1.0 <= o[1] and o[0] <= eo[1] + 1.0
-        if e.get("鍵") == key or (keys & set(e.get("覆核項目") or []) and close):
-            return {"時間": done["時間"], "原因": e.get("原因", ""), "做法": e.get("做法"),
-                    "第幾版": e.get("第幾版"), "換一種念法": bool(e.get("沒改")),   # 10-02 第四批
-                    REASSEMBLE_ONLY: bool(e.get(REASSEMBLE_ONLY)),   # 10-03 第八批 #23
-                    "標籤": "重做過（只重新組裝）" if e.get(REASSEMBLE_ONLY) else "重做過",
-                    "新版本": (record_print(rec) != e["指紋"]) if e.get("指紋") else None}
-    return None
+    # 10-03 第八批補修：先找同一個鍵；找不到（重做後範圍改了、鍵變了）才用「同一張第 3 步卡片＋時間有重疊」找。
+    # 以前是「同一張卡片＋相差 1 秒內」就算：同一個學員段落切成好幾格、格子相鄰時，會拿到隔壁那一格的退回原因
+    # （第一堂 T034 24 格，原因整排錯位；沒退回過的格子也顯示「重做過」）
+    items = done.get("項目", [])
+    hit = next((e for e in items if e.get("鍵") == key), None)
+    if hit is None:
+        taken = {record_key(r) for r in (log or {}).get("紀錄", [])}
+        for e in items:
+            if e.get("鍵") in taken or not keys & set(e.get("覆核項目") or []):
+                continue          # 那一筆退回自己還在（鍵沒變）：它的原因只屬於它自己
+            eo = e.get("原片") or [None, None]
+            if o[0] is None or eo[0] is None:
+                continue
+            if eo[0] == eo[1]:   # 整片看時標的（一個時間點）：落在這一筆前後 1 秒內
+                ok = o[0] - 1.0 <= eo[0] <= o[1] + 1.0
+            else:
+                both = min(o[1], eo[1]) - max(o[0], eo[0])
+                ok = both > 0 and both >= 0.5 * min(o[1] - o[0], eo[1] - eo[0])
+            if ok:
+                hit = e
+                break
+    if hit is None:
+        return None
+    e = hit
+    return {"時間": done["時間"], "原因": e.get("原因", ""), "做法": e.get("做法"),
+            "第幾版": e.get("第幾版"), "換一種念法": bool(e.get("沒改")),   # 10-02 第四批
+            REASSEMBLE_ONLY: bool(e.get(REASSEMBLE_ONLY)),   # 10-03 第八批 #23
+            "標籤": "重做過（只重新組裝）" if e.get(REASSEMBLE_ONLY) else "重做過",
+            "新版本": (record_print(rec) != e["指紋"]) if e.get("指紋") else None}
 
 
 def suggest_command(workdir: Path, it: dict) -> str:

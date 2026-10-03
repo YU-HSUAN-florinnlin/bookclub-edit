@@ -457,6 +457,29 @@ def test_rerender_updates_product_length():
     assert not d["狀態"]["可以輸出"] and any("只看過" in x for x in d["狀態"]["還不能輸出的原因"])
 
 
+def test_redone_reason_stays_on_its_own_record_not_the_neighbour():
+    """10-03 補修：同一個學員段落切成相鄰好幾格，重做過的原因只顯示在被退回的那一格，不會錯位到隔壁。"""
+    def rec(a, b, kind="學員重念"):
+        return {"類型": kind, "原片": [a, b], "成品": [a, b], "覆核項目": ["學員段落:T034"], "做了什麼": "x", "檔案": None, "文字": None}
+    r1, r2, r3 = rec(10.0, 20.0), rec(20.0, 28.0), rec(28.0, 36.0)
+    log = {"產生時間": "t1", "紀錄": [r1, r2, r3]}
+    done = {"時間": "t", "處理紀錄產生時間": "t1", "項目": [
+        {"鍵": fc.record_key(r1), "原片": [10.0, 20.0], "覆核項目": ["學員段落:T034"], "原因": "第一格的原因", "做法": "重新生成"},
+        {"鍵": fc.record_key(r3), "原片": [28.0, 36.0], "覆核項目": ["學員段落:T034"], "原因": "第三格的原因", "做法": "重新生成"}]}
+    check = {"重做過": done}
+    assert fc.redone_info(r1, check, log)["原因"] == "第一格的原因"
+    assert fc.redone_info(r2, check, log) is None                 # 隔壁沒退回過：不顯示
+    assert fc.redone_info(r3, check, log)["原因"] == "第三格的原因"   # 以前會拿到第一格或隔壁的
+    # 重做後範圍改了（鍵變了）：用時間重疊找回來
+    moved = rec(10.4, 20.0)
+    log2 = {"產生時間": "t1", "紀錄": [moved, r2, r3]}
+    assert fc.redone_info(moved, check, log2)["原因"] == "第一格的原因"
+    assert fc.redone_info(r2, check, log2) is None
+    # 整片看時標的（一個時間點）：照舊對到附近那一筆
+    done["項目"].append({"鍵": "R001", "原片": [24.0, 24.0], "覆核項目": ["學員段落:T034"], "原因": "整片看時標的", "做法": "重新生成"})
+    assert fc.redone_info(r2, check, log)["原因"] == "整片看時標的"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
