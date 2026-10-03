@@ -188,11 +188,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     review_parser = sub.add_parser("review", help="第 3 步覆核結果：匯出給夥伴、在夥伴的電腦匯入")
     review_sub = review_parser.add_subparsers(dest="review_command")
-    rexp = review_sub.add_parser("export", help="把覆核結果打包成一個 zip（網頁第 3 步也有按鈕）")
+    rexp = review_sub.add_parser("export", help="把覆核結果打包成一個 zip（網頁第 3 步也有按鈕）；只含老師提到名字的部分")
     rexp.add_argument("workdir", help="工作區路徑")
     rexp.add_argument("--out", help="zip 存到哪裡（預設 工作區/匯出/覆核結果_影片名_時間.zip）")
     rexp.add_argument("--video", help="原片路徑（預設讀分析結果記錄的影片，用來記下長度與大小）")
-    rimp = review_sub.add_parser("import", help="匯入覆核結果：建工作區、抽聲音，接著就能 gen names、render audio")
+    rimp = review_sub.add_parser("import", help="匯入覆核結果：建工作區、抽聲音，接著就能 gen names、render audio。只能做老師提到名字的部分，"
+                                             "不能跑第 4 步（run execute）與第 5 步；要交接整個專案請複製整個工作區資料夾")
     rimp.add_argument("zip", help="匯出的 zip")
     rimp.add_argument("workdir", help="新的工作區資料夾")
     rimp.add_argument("--video", required=True, help="原片路徑（要跟匯出時同一支，會比對長度）")
