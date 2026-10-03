@@ -1256,6 +1256,10 @@ def run_part(workdir: str | Path, step: str, phase: str | None = None, *, voice:
     from bookclub.tts import StopRequested
 
     workdir = Path(workdir).expanduser()
+    from bookclub import refpick, tts as _tts
+
+    # 10-03 第九批（#17）：生成後用 Groq 檢查內容時碰到額度用完，等待中按「停止」也要有效（丟 StopRequested）
+    refpick.set_groq_stop_check(lambda: _tts.check_stop(workdir))
     try:
         if step == "老師名字":
             from bookclub import nameplan, tts

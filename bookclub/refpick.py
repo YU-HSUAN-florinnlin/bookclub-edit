@@ -277,38 +277,117 @@ def _step1_extract_audio(video: Path, workdir: Path) -> tuple[Path, float]:
 # ---------- 步驟 2：整支轉文字 ----------
 
 GROQ_FLAKY_WAITS_S = (5, 15, 30, 60, 60, 120, 120, 180)   # 斷線、逾時、伺服器錯誤：照這個間隔重試，全部約 10 分鐘
+# 10-03 第九批（#17）：以前 429（額度用完）照 Groq 說的秒數一直等、沒有上限，第 4 步按「停止」也停不下來。
+GROQ_RATE_MAX_WAIT_S = 20 * 60   # 同一次呼叫因為 429 累計最多等 20 分鐘；Groq 一開口就要等更久，直接停、不等
+GROQ_WAIT_SLICE_S = 5.0          # 等待切成 5 秒一小段，每段之間看一次有沒有按停止
+GROQ_WAIT_REPORT_S = 60.0        # 等 Groq 額度時，每 60 秒印一次「還要 X 秒」
+
+_GROQ_STOP_CHECK = None   # 沒傳 should_stop 時用這個（第 4 步的子程式在 execute.run_part 裡設定）
+# 額度用完停下來之後，到 Groq 說的時間之前，同一支程式再呼叫就直接停、不再等一輪（第 4 步一句一句檢查時，
+# 不會每一句都等 20 分鐘；那幾句照 tts 原本的做法標「要人聽」，下次再補檢查）
+_GROQ_BLOCKED_UNTIL = 0.0
 
 
-def groq_retry(call, *, sleep=time.sleep, log=print):
+class GroqQuotaExhausted(RuntimeError):
+    """Groq 額度用完（429），要等的時間超過上限：停下來，訊息寫大概多久後再試。"""
+
+
+class GroqWaitStopped(RuntimeError):
+    """等 Groq 的時候按了停止（should_stop 回傳 True；should_stop 自己丟例外的話就是那個例外）。"""
+
+
+def set_groq_stop_check(check) -> None:
+    """設定等 Groq 時要看的「有沒有按停止」：不帶參數的函式，回傳 True（或自己丟例外）＝停。None＝不看。"""
+    global _GROQ_STOP_CHECK
+    _GROQ_STOP_CHECK = check
+
+
+def _fmt_wait(sec: float) -> str:
+    sec = max(0, int(round(sec)))
+    if sec < 90:
+        return f"{sec} 秒"
+    if sec < 5400:
+        return f"{round(sec / 60)} 分鐘"
+    return f"{sec / 3600:.1f} 小時"
+
+
+def _retry_after_s(e) -> float:
+    """429 回應的 retry-after 秒數；沒帶、讀不到就用 GROQ_RETRY_DEFAULT_WAIT_S。"""
+    try:
+        v = e.response.headers.get("retry-after")
+        if v:
+            return max(0.0, float(v))
+    except Exception:  # noqa: BLE001
+        pass
+    return GROQ_RETRY_DEFAULT_WAIT_S
+
+
+def _wait_or_stop(total: float, *, sleep, should_stop, log=None, label: str = "") -> None:
+    """等 total 秒；有 should_stop 就切成小段、每段之間看一次，按了停止就丟 GroqWaitStopped。
+    log 有給的話每 GROQ_WAIT_REPORT_S 秒印一次「{label}，還要 X 秒」。沒有 should_stop、也不用印進度時，一次睡完。"""
+    if should_stop is None and (log is None or total <= GROQ_WAIT_REPORT_S):
+        sleep(total)
+        return
+    left, since_report = float(total), 0.0
+    while left > 0:
+        if should_stop is not None and should_stop():
+            raise GroqWaitStopped(f"按了停止：{label}的時候停下來（還剩 {_fmt_wait(left)} 沒等）")
+        step = min(GROQ_WAIT_SLICE_S, left)
+        sleep(step)
+        left -= step
+        since_report += step
+        if log is not None and left > 0 and since_report >= GROQ_WAIT_REPORT_S:
+            since_report = 0.0
+            log(f"[Groq] {label}，還要 {_fmt_wait(left)}...")
+    if should_stop is not None and should_stop():
+        raise GroqWaitStopped(f"按了停止：{label}的時候停下來")
+
+
+def groq_retry(call, *, sleep=time.sleep, log=print, should_stop=None, max_rate_wait_s: float | None = None):
     """呼叫 Groq，暫時性的錯誤等一下再試（09-30：第 4 步掛一整晚，網路閃一下不能整批停掉）：
 
-    - 429（速率限制）：照回應說的秒數等，一直等到過（跟以前一樣）
+    - 429（速率限制、額度用完）：照回應說的秒數等，畫面紀錄每分鐘印「在等 Groq 額度，還要 X 秒」；
+      同一次呼叫累計最多等 `GROQ_RATE_MAX_WAIT_S`（10-03 第九批 #17）。Groq 說要等的超過剩下的額度，
+      就丟 `GroqQuotaExhausted`，訊息寫額度用完、大概多久後再試
     - 斷線、逾時、Groq 伺服器錯誤（5xx）：照 `GROQ_FLAKY_WAITS_S` 重試，全部試完還不行才往外丟
     - 其他錯誤（金鑰不對、檔案格式不對）：重試沒用，直接往外丟
+    - 等待中按停止：`should_stop`（不給就用 `set_groq_stop_check` 設定的）回傳 True 就丟 `GroqWaitStopped`；
+      它自己丟例外（例如第 4 步的 StopRequested）就讓那個例外出去
     `call` 是不帶參數的函式；`sleep` 測試時換成假的。"""
     from groq import APIConnectionError, APITimeoutError, InternalServerError, RateLimitError
 
-    flaky = 0
+    global _GROQ_BLOCKED_UNTIL
+    should_stop = should_stop if should_stop is not None else _GROQ_STOP_CHECK
+    cap = GROQ_RATE_MAX_WAIT_S if max_rate_wait_s is None else max_rate_wait_s
+    flaky, rate_waited = 0, 0.0
     while True:
+        if should_stop is not None and should_stop():
+            raise GroqWaitStopped("按了停止：還沒送給 Groq 就停下來")
+        left = _GROQ_BLOCKED_UNTIL - time.time()
+        if left > 0:
+            raise GroqQuotaExhausted(f"Groq 額度用完了（剛才 429 停下來的），大約 {_fmt_wait(left)}後再試；"
+                                     "每天的額度用完的話，要等到隔天")
         try:
             return call()
         except RateLimitError as e:
-            wait_s = GROQ_RETRY_DEFAULT_WAIT_S
-            try:
-                retry_after = e.response.headers.get("retry-after")
-                if retry_after:
-                    wait_s = float(retry_after)
-            except Exception:
-                pass
-            log(f"[轉文字] 碰到 429（速率限制），等待 {wait_s:.0f} 秒後重試...")
-            sleep(wait_s)
+            wait_s = _retry_after_s(e)
+            if rate_waited + wait_s > cap:
+                _GROQ_BLOCKED_UNTIL = time.time() + wait_s
+                done = f"已經等了 {_fmt_wait(rate_waited)}，" if rate_waited else ""
+                raise GroqQuotaExhausted(
+                    f"Groq 額度用完了（429）：{done}Groq 說還要等 {_fmt_wait(wait_s)}，超過最多等 {_fmt_wait(cap)} 的上限，先停下來。"
+                    f"大約 {_fmt_wait(wait_s)}後再按一次開始（做好的不重做）；每天的額度用完的話，要等到隔天") from e
+            log(f"[Groq] 碰到 429（額度用完），在等 Groq 額度，還要 {_fmt_wait(wait_s)}"
+                f"（同一次最多等 {_fmt_wait(cap)}，已等 {_fmt_wait(rate_waited)}）...")
+            _wait_or_stop(wait_s, sleep=sleep, should_stop=should_stop, log=log, label="在等 Groq 額度")
+            rate_waited += wait_s
         except (APIConnectionError, APITimeoutError, InternalServerError) as e:
             if flaky >= len(GROQ_FLAKY_WAITS_S):
                 raise
             wait_s = GROQ_FLAKY_WAITS_S[flaky]
             flaky += 1
-            log(f"[轉文字] 連不上 Groq（{type(e).__name__}），{wait_s} 秒後再試（第 {flaky}／{len(GROQ_FLAKY_WAITS_S)} 次）...")
-            sleep(wait_s)
+            log(f"[Groq] 連不上 Groq（{type(e).__name__}），{wait_s} 秒後再試（第 {flaky}／{len(GROQ_FLAKY_WAITS_S)} 次）...")
+            _wait_or_stop(wait_s, sleep=sleep, should_stop=should_stop, label="等 Groq 連線恢復")
 
 
 def _groq_transcribe_bytes(client, filename: str, data: bytes) -> dict:
