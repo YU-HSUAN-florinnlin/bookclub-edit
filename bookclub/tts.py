@@ -151,13 +151,13 @@ def load_pron_table(path: str | Path | None = None) -> list[tuple[str, str]]:
     只影響送進模型念的文字；內容檢查、對位、標點判斷都還是用原本的文字。
     檔案不存在就是沒有對照表。長的詞先換，避免短詞先換掉長詞的一部分。
     """
-    import csv
+    from bookclub import csvfile
 
     path = Path(path).expanduser() if path else pron_table_path()
     if not path.is_file():
         return []
-    with open(path, encoding="utf-8-sig", newline="") as f:
-        rows = [(r.get("原字", "").strip(), r.get("生成用", "").strip()) for r in csv.DictReader(f)]
+    # 10-03 第九批 #35：Excel 另存的 Big5 也讀得了（見 csvfile）
+    rows = [((r.get("原字") or "").strip(), (r.get("生成用") or "").strip()) for r in csvfile.read_rows(path)]
     rows = [(a, b) for a, b in rows if a and b and a != b]
     return sorted(rows, key=lambda r: -len(r[0]))
 

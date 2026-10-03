@@ -190,8 +190,7 @@ def estimate_student_f0(workdir: Path, spans: list[tuple[float, float]], max_s: 
 
 def roster_gender(real: str | None) -> str | None:
     """名冊（用本名找）這個人有填性別就回傳「男」「女」。09-30：名冊拿掉代號欄後改用本名找（以前用代號找，永遠找不到）。"""
-    import csv
-
+    from bookclub import csvfile
     from bookclub.config import data_dir
 
     if not real:
@@ -199,12 +198,11 @@ def roster_gender(real: str | None) -> str | None:
     path = data_dir() / "名冊.csv"
     if not path.is_file():
         return None
-    with open(path, encoding="utf-8-sig", newline="") as f:
-        for r in csv.DictReader(f):
-            names = [(r.get("中文名") or "").strip()] + [x.strip() for x in re.split(r"[、,，/]", r.get("其他寫法") or "")]
-            if real in [n for n in names if n]:
-                g = (r.get("性別") or "").strip()
-                return "男" if g.startswith("男") else "女" if g.startswith("女") else None
+    for r in csvfile.read_rows(path):   # 10-03 第九批 #35：Excel 另存的 Big5 也讀得了
+        names = [(r.get("中文名") or "").strip()] + [x.strip() for x in re.split(r"[、,，/]", r.get("其他寫法") or "")]
+        if real in [n for n in names if n]:
+            g = (r.get("性別") or "").strip()
+            return "男" if g.startswith("男") else "女" if g.startswith("女") else None
     return None
 
 
