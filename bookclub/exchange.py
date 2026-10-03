@@ -11,6 +11,11 @@
 
 `bookclub review import <zip> <新工作區> --video <影片>`：建工作區、比對影片長度、從影片抽 `audio.flac`、
 放好檔案，讓 `bookclub gen names`、`bookclub render audio` 直接能跑。
+
+10-03 第九批（#36）：匯入的工作區**只能做老師提到名字的部分**（老師聲音重念名字、組聲音軌試聽），不能跑第 4 步
+「開始 AI 修改」與第 5 步：第 4 步要原本的 `transcript/merged.json`、`校對/段落.json`、`名字候選.json`、覆核決定等，
+這份匯出為了不帶原始逐字稿與本名刻意不放，補齊等於把整個工作區搬過去。要交接整個專案，複製整個工作區資料夾
+（工作區搬家已經支援，見 tests/test_copied_workdir.py）。匯出的說明、終端機訊息、`給夥伴的說明.txt` 都寫明這件事（`SCOPE_*`）。
 """
 
 from __future__ import annotations
@@ -31,6 +36,16 @@ RESULT_NAME = "覆核結果.json"
 README_NAME = "給夥伴的說明.txt"
 PRON_NAME = "發音對照表.csv"
 DURATION_TOLERANCE_S = 1.0
+
+# 10-03 第九批（#36）：這份匯出包含什麼、能做什麼、不能做什麼（說明檔、匯出／匯入訊息共用）
+SCOPE_CONTAINS = "這份匯出只含老師提到名字的處理：覆核結果（代號後的文字與決定）、老師參考音、發音對照表；不含原始逐字稿與學員本名。"
+SCOPE_CAN = ("匯入後可以做：老師提到名字的地方用老師的 AI 聲音重念（bookclub gen names），"
+             "再組出新聲音軌與處理前後試聽（bookclub render audio）。")
+SCOPE_CANNOT = ("匯入後不能做：第 4 步「開始 AI 修改」（學員重念、刪除段落、重疊、組影片）與第 5 步成品檢查。"
+                "這幾步要用原本的逐字稿與段落分析，這份匯出沒有放。")
+SCOPE_HANDOVER = ("要把整個專案交給夥伴、讓對方接著做第 4、5 步：請複製整個工作區資料夾（例如 第1堂_剪輯工作區）"
+                  "連同原片給對方，對方也要先在第 0 步匯入你的設定包。工作區資料夾裡有原始逐字稿（含學員本名），只傳給協作夥伴。")
+SCOPE_LINES = (SCOPE_CONTAINS, SCOPE_CAN, SCOPE_CANNOT, SCOPE_HANDOVER)
 
 
 def tool_version() -> str:
@@ -145,16 +160,16 @@ def _readme(result: dict) -> str:
         f"匯出時間：{result['匯出時間']}　工具版本：{result['工具版本']}",
         f"還沒確認：{pending} 筆" + (f"（{'、'.join(f'{k} {n}' for k, n in result['未確認各類'].items())}）" if pending else ""),
         "",
-        "怎麼用：",
+        "這份匯出包含什麼、能做什麼：",
+        *(f"・{line}" for line in SCOPE_LINES),
+        "",
+        "怎麼用（只做老師提到名字的部分）：",
         "1. 把這個 zip 跟原片放在你的電腦上（原片要跟上面是同一支，匯入時會比對長度）",
         "2. 匯入：bookclub review import <這個 zip> <新的工作區資料夾> --video <原片>",
         "3. 老師提到名字的地方，用老師的 AI 聲音生成：bookclub gen names <新的工作區資料夾>",
         "4. 組出新聲音軌與處理前後試聽：bookclub render audio <新的工作區資料夾>",
         "",
-        "學員段落的匿名聲線生成還沒做；學員段落、重疊、刪除段落、局部消音的決定都已經在 覆核結果.json 裡，",
-        "之後的版本直接讀這份。",
-        "",
-        "這個 zip 不含原始逐字稿與學員本名，只有代號後的文字。",
+        "學員段落、重疊、刪除段落、局部消音的決定也記在 覆核結果.json 裡（給人看），匯入後的工作區不會照這些決定修改。",
     ]
     return "\n".join(lines) + "\n"
 
@@ -192,9 +207,11 @@ def export_review(workdir: str | Path, out: str | Path | None = None, video: str
         print(f"⚠️ [匯出] 還有 {len(result['還有本名的地方'])} 處文字裡有名冊上的本名，還沒換成代號："
               f"{'、'.join(result['還有本名的地方'][:10])}")
     print(f"[匯出] {out}")
+    for line in SCOPE_LINES:   # 10-03 第九批（#36）
+        print(f"[匯出] {line}")
     return {"檔案": str(out), "未確認數": result["未確認數"], "未確認各類": result["未確認各類"],
             "還有本名的地方": result["還有本名的地方"],
-            "內含": [RESULT_NAME, README_NAME, *files], "缺參考音": missing_ref}
+            "內含": [RESULT_NAME, README_NAME, *files], "缺參考音": missing_ref, "用途": list(SCOPE_LINES)}
 
 
 def probe_duration(video: Path) -> float:
@@ -255,4 +272,8 @@ def import_review(zip_path: str | Path, workdir: str | Path, video: str | Path, 
     print(f"[匯入] 名字：生成 {len(plan.get('生成', []))} 段、消音 {len(plan.get('消音', []))} 段；"
           f"學員段落 {len(result.get('學員段落', []))} 段；還沒確認 {result.get('未確認數', 0)} 筆")
     print(f"[匯入] 下一步：bookclub gen names {workdir}　→　bookclub render audio {workdir}")
-    return {"工作區": str(workdir), "警告": warnings, "影片長度": got}
+    print(f"[匯入] {SCOPE_CAN}")   # 10-03 第九批（#36）：匯入的工作區能做哪幾步、不能做哪幾步
+    print(f"[匯入] {SCOPE_CANNOT}")
+    print(f"[匯入] {SCOPE_HANDOVER}")
+    return {"工作區": str(workdir), "警告": warnings, "影片長度": got,
+            "可以做": SCOPE_CAN, "不能做": SCOPE_CANNOT, "交接整個專案": SCOPE_HANDOVER}
