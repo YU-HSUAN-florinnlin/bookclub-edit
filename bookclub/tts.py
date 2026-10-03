@@ -719,19 +719,59 @@ class NotGeneratedYet(RuntimeError):
     """10-01：插入停頓／收尾那一支程式發現有句子還沒生成過（生成那一支沒做完），不在這裡載入生成模型。"""
 
 
+class AlignerLoadError(RuntimeError):
+    """10-03 第九批 #18：逐字對位模型載入失敗（模型沒下載好、記憶體不夠）。同一支程式裡不再重試載入。"""
+
+
+def fail_reason(exc: BaseException) -> str:
+    """停頓沒做成的原因（記進紀錄、印在訊息裡）：錯誤種類＋前 150 個字。"""
+    msg = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+    return f"{type(exc).__name__}" + (f"：{msg[:150]}" if msg else "")
+
+
+def _load_aligner(holder: dict, log: Callable[[str], None], tag: str) -> Align:
+    """載入對位模型；失敗就記在 holder，之後每一句直接用同一個錯誤（不重複載入，8GB 的 Mac 記憶體不夠時一直重載更糟）。"""
+    if "error" in holder:
+        raise holder["error"]
+    if "align" not in holder:
+        log(f"[{tag}] 載入逐字對位模型，照原片停頓插入空白...")
+        try:
+            from bookclub.pauses import Aligner
+
+            holder["align"] = Aligner().align
+        except Exception as exc:  # noqa: BLE001 — 包括記憶體不夠（MemoryError）、模型檔不完整
+            holder["error"] = AlignerLoadError(f"逐字對位模型載入失敗（{fail_reason(exc)}）")
+            log(f"  ⚠️ [{tag}] {holder['error']}：這一次每一句都不照原片停頓插入空白，先用其他做法放回時間格；"
+                "下次執行會再試")
+            raise holder["error"] from exc
+    return holder["align"]
+
+
 def lazy_aligner(log: Callable[[str], None] = print, tag: str = "插入停頓") -> Align:
     """10-01：要用到才載入逐字對位模型；同一支程式裡好幾組（好幾個聲線）共用一個，只載入一次。"""
     holder: dict = {}
 
     def align(path, text: str) -> list:
-        if "align" not in holder:
-            log(f"[{tag}] 載入逐字對位模型，照原片停頓插入空白...")
-            from bookclub.pauses import Aligner
-
-            holder["align"] = Aligner().align
-        return holder["align"](path, text)
+        return _load_aligner(holder, log, tag)(path, text)
 
     return align
+
+
+def pause_entry_failed(ent: dict, att: Attempt, has_audio: bool) -> str | None:
+    """`_停頓快取.json` 這一筆是不是「停頓沒做成」（10-03 第九批 #18），是的話回傳原因。
+    新的一筆都有「沒做成」欄位；10-03 以前的沒有，用內容推：有原片聲音卻沒有原片停頓分析、
+    或內容通過卻沒有插入停頓版本，就是當時出錯被吞掉了。"""
+    if "沒做成" in ent:
+        return ent["沒做成"] or None
+    if has_audio and (ent.get("ctx") is None or (not ent.get("插入停頓") and att.content_ok())):
+        return "上次對位沒做成（原因當時沒記下來）"
+    return None
+
+
+def needs_work(rec: dict | None, it: dict, ref_wav: str | Path | None = None) -> bool:
+    """生成程式挑要做的句子：record_stale，加上上次停頓沒做成的（10-03 第九批 #18：這一步有跑就再試一次；
+    聲音沿用 `_嘗試快取.json`，不會重新生成）。第 4 步「做過沒有」仍只看 record_stale，停頓沒做成不擋流程。"""
+    return record_stale(rec, it, ref_wav) or bool((rec or {}).get("停頓沒做成"))
 
 
 def _ctx_to_json(ctx: dict) -> dict:
@@ -916,6 +956,8 @@ def run_generation(
 
     # 階段二：插入停頓
     slotted = [it for it in todo if it["slot"] and it.get("原文")]
+    has_audio = wd.audio_path(workdir).is_file()
+    pause_fail: dict[str, str] = {}   # 10-03 第九批 #18：停頓沒做成的句子 → 原因
     pcache_path = out_dir / PAUSE_CACHE
     pcache = (wd.read_json(pcache_path, default=None) or {}) if phase else {}
 
@@ -936,6 +978,9 @@ def run_generation(
         sid = it["id"]
         h = histories[sid]
         bi = _base_index(h)
+        why = pause_entry_failed(ent, h[bi], has_audio)
+        if why:   # 10-03 第九批 #18：停頓那一支沒做成的，收尾照樣做（不照原片停頓），紀錄寫原因
+            pause_fail[sid] = why
         if ent.get("ctx"):
             ctxs[sid] = _ctx_from_json(ent["ctx"], out_dir)
         p = ent.get("插入停頓")
@@ -960,16 +1005,16 @@ def run_generation(
                 synth = None
                 _free_memory()
             real_align = align
+            holder: dict = {}
 
             def use_align(path, text):
                 nonlocal real_align, load_s
                 if real_align is None:   # 10-01：要用到才載入（停頓那一支全部沿用的話就不載入）
                     t = time.time()
-                    log(f"[{tag}] 載入逐字對位模型，照原片停頓插入空白...")
-                    from bookclub.pauses import Aligner
-
-                    real_align = Aligner().align
-                    load_s += time.time() - t
+                    try:
+                        real_align = _load_aligner(holder, log, tag)   # 10-03 第九批 #18：載入失敗記下來，不每句重載
+                    finally:
+                        load_s += time.time() - t
                 return real_align(path, text)
 
             for it in slotted:
@@ -979,15 +1024,18 @@ def run_generation(
                 if phase == "停頓":
                     check_stop(workdir)   # 10-01：停頓那一支也是做完一句就停
                     ent = pcache.get(sid)
-                    if not fresh_pauses and pkey_ok(ent, it, bi):
+                    # 10-03 第九批 #18：上次沒做成（對位模型出錯）的不沿用，再試一次
+                    if not fresh_pauses and pkey_ok(ent, it, bi) and not pause_entry_failed(ent, h[bi], has_audio):
                         use_entry(it, ent)
                         continue
-                ent = {"鍵": pkey(it, bi), "ctx": None, "插入停頓": None,
+                ent = {"鍵": pkey(it, bi), "ctx": None, "插入停頓": None, "沒做成": None,
                        "來源指紋": file_fingerprint(out_dir / f"{sid}_第{bi + 1}次.wav")}
                 try:
                     ctx = prepare_original(workdir, it, out_dir, use_align)
-                except Exception as exc:
-                    log(f"  ⚠️ 第 {sid} 句原片停頓分析失敗，不做插入停頓：{exc}")
+                except Exception as exc:  # noqa: BLE001 — 不讓整步停下來；記下原因，下次再試
+                    ent["沒做成"] = pause_fail[sid] = f"原片停頓分析沒做成：{fail_reason(exc)}"
+                    if not isinstance(exc, AlignerLoadError):   # 載入失敗已經說過一次
+                        log(f"  ⚠️ 第 {sid} 句沒照原片停頓（{ent['沒做成']}），先用其他做法放回時間格；下次執行會再試")
                     ctx = None
                 if ctx:
                     ctxs[sid] = ctx
@@ -1002,8 +1050,10 @@ def run_generation(
                                            "長度秒": h[bi].paused_s}
                             log(f"  第 {sid} 句：原片 {len(ctx['pauses'])} 個停頓，插入 {len(inserts)} 段空白，"
                                 f"長度 {h[bi].audio_s:.1f} → {h[bi].paused_s:.1f} 秒（時間格 {it['slot_s']:.1f} 秒）")
-                        except Exception as exc:
-                            log(f"  ⚠️ 第 {sid} 句插入停頓失敗：{exc}")
+                        except Exception as exc:  # noqa: BLE001
+                            ent["沒做成"] = pause_fail[sid] = f"插入停頓沒做成：{fail_reason(exc)}"
+                            if not isinstance(exc, AlignerLoadError):
+                                log(f"  ⚠️ 第 {sid} 句沒照原片停頓（{ent['沒做成']}），先用其他做法放回時間格；下次執行會再試")
                 if phase == "停頓":
                     pcache[sid] = ent
                     wd.write_json(pcache_path, pcache)
@@ -1031,6 +1081,9 @@ def run_generation(
     for it in todo:
         done[it["id"]] = _finalize(it, out_dir, histories[it["id"]], paused.get(it["id"]),
                                    ctxs.get(it["id"]), tolerance, log, role=role, tag=tag)
+        if it["id"] in pause_fail:   # 10-03 第九批 #18：紀錄看得出停頓沒做成、原因
+            done[it["id"]]["停頓沒做成"] = pause_fail[it["id"]]
+            log(f"[{tag}] 第 {it['id']} 句沒照原片停頓（{pause_fail[it['id']]}）；下次這一步有執行時會再試")
         ent = versions.get(it["id"])
         if ent and ent.get("以前的版本"):   # 10-02 第四批：退回重做過的句子，記第幾版、以前的版本（舊的那幾版留在紀錄裡）
             done[it["id"]].update({"第幾版": len(ent["以前的版本"]) + 1, "以前的版本": ent["以前的版本"],
@@ -1099,7 +1152,7 @@ def generate_teacher(
         log("參考音跟上次不同，全部重新生成。")
         done = {}
 
-    todo = [it for it in items if record_stale(done.get(it["id"]), it)]
+    todo = [it for it in items if needs_work(done.get(it["id"]), it)]   # 10-03 第九批 #18：停頓沒做成的再試
     log(f"[老師聲音] 共 {len(items)} 句，要生成 {len(todo)} 句（其他 {len(items) - len(todo)} 句沿用上次結果）")
     out_dir = teacher_out_dir(workdir)
     out_dir.mkdir(parents=True, exist_ok=True)

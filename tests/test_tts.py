@@ -864,5 +864,101 @@ def test_recheck_fail_in_one_program_regenerates():
                                  use_pauses=False, redo=True, log=lambda s: None)["句子"][0]
         assert len(calls) == 2 and r["選定"] == 2 and not r["要人聽"]   # 照一般「內容沒過」：換一種念法重念
 
+
+# ---------- 10-03 第九批 #18：對位模型出錯不吞掉、不寫成「沒有停頓」的結果 ----------
+
+def _two_pause_sentences(work: Path) -> Path:
+    sp = work / "句子.json"
+    sp.write_text(json.dumps([{"id": "P", "slot": [10.0, 16.0]}, {"id": "Q", "slot": [10.0, 16.0]}]), encoding="utf-8")
+    return sp
+
+
+def test_aligner_load_failure_not_cached_and_retried():
+    if not shutil.which("ffmpeg"):
+        return
+    hear = lambda p: "甲乙丙丁戊己庚辛"   # noqa: E731
+    loads = []
+
+    class BrokenAligner:
+        def __init__(self):
+            loads.append(1)
+            raise MemoryError("記憶體不夠")
+
+    real = pauses.Aligner
+    with tempfile.TemporaryDirectory() as d:
+        work = _pause_work(Path(d))
+        sp = _two_pause_sentences(work)
+        tts.generate_teacher(work, sp, synth=lambda t, s, v: (_tone_s(4.0), SR), hear=hear, check_similarity=False,
+                             phase="生成", log=lambda s: None)
+        msgs: list = []
+        pauses.Aligner = BrokenAligner
+        try:
+            tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, phase="停頓", log=msgs.append)
+        finally:
+            pauses.Aligner = real
+        assert loads == [1], "載入失敗一次就好，不每句重載"
+        assert any("對位模型載入失敗" in m and "MemoryError" in m for m in msgs), msgs
+        pc = json.loads((tts.teacher_out_dir(work) / tts.PAUSE_CACHE).read_text(encoding="utf-8"))
+        assert all("MemoryError" in (pc[k]["沒做成"] or "") for k in ("P", "Q")), pc
+        # 收尾照樣做完（流程不停），紀錄看得出停頓沒做成、原因
+        msgs.clear()
+        tone = lambda t, s, v: (_tone_s(4.0 / v), SR)   # noqa: E731 — 沒插入停頓：收尾會改語速重生成
+        recs = tts.generate_teacher(work, sp, synth=tone, hear=hear, check_similarity=False, align=_never,
+                                    phase="收尾", log=msgs.append)["句子"]
+        assert all("MemoryError" in r["停頓沒做成"] for r in recs), recs
+        assert all("插入停頓" not in [v["版本"] for v in r["候選做法"]] for r in recs)
+        assert any("沒照原片停頓" in m for m in msgs)
+        # 下次這一步有執行：停頓沒做成的句子再做一次（聲音沿用，不重新生成），這次對位成功
+        aligned: list = []
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, phase="生成", log=lambda s: None)
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, align=_pause_align(aligned),
+                             phase="停頓", log=lambda s: None)
+        assert aligned, "上次沒做成的要再試"
+        recs = tts.generate_teacher(work, sp, synth=tone, hear=hear, check_similarity=False, align=_never,
+                                    phase="收尾", log=lambda s: None)["句子"]
+        assert all("停頓沒做成" not in r and r["建議做法"] == "插入停頓" for r in recs), recs
+
+
+def test_align_error_in_one_program_recorded():
+    if not shutil.which("ffmpeg"):
+        return
+
+    def bad_align(path, text):
+        raise RuntimeError("模型檔不完整")
+
+    with tempfile.TemporaryDirectory() as d:
+        work = _pause_work(Path(d))
+        r = tts.generate_teacher(work, work / "句子.json", synth=lambda t, s, v: (_tone_s(4.0), SR),
+                                 hear=lambda p: "甲乙丙丁戊己庚辛", check_similarity=False, align=bad_align,
+                                 log=lambda s: None)["句子"][0]
+        assert "模型檔不完整" in r["停頓沒做成"] and r["放回時間格"]
+
+
+def test_legacy_pause_cache_failure_retried():
+    """10-03 以前的停頓快取沒有「沒做成」欄位：有原片聲音卻沒有原片停頓分析，就是當時出錯被吞掉，要再試。"""
+    if not shutil.which("ffmpeg"):
+        return
+    hear = lambda p: "甲乙丙丁戊己庚辛"   # noqa: E731
+    with tempfile.TemporaryDirectory() as d:
+        work = _pause_work(Path(d))
+        sp = work / "句子.json"
+        tts.generate_teacher(work, sp, synth=lambda t, s, v: (_tone_s(4.0), SR), hear=hear, check_similarity=False,
+                             phase="生成", log=lambda s: None)
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, align=_pause_align([]),
+                             phase="停頓", log=lambda s: None)
+        pp = tts.teacher_out_dir(work) / tts.PAUSE_CACHE
+        pc = json.loads(pp.read_text(encoding="utf-8"))
+        assert pc["P"]["沒做成"] is None
+        ok = {k: v for k, v in pc["P"].items() if k != "沒做成"}
+        pp.write_text(json.dumps({"P": ok}, ensure_ascii=False), encoding="utf-8")   # 舊的、成功的：沿用
+        again: list = []
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, align=_pause_align(again),
+                             phase="停頓", log=lambda s: None)
+        assert again == []
+        pp.write_text(json.dumps({"P": {**ok, "ctx": None, "插入停頓": None}}, ensure_ascii=False), encoding="utf-8")
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, align=_pause_align(again),
+                             phase="停頓", log=lambda s: None)
+        assert again, "舊快取裡被吞掉的錯誤要再試"
+
 if __name__ == "__main__":
     sys.exit(_run_all())
