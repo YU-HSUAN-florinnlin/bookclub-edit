@@ -406,10 +406,25 @@ def test_trim_stretched_leaves_normal_names_alone():
     assert nm._trim_stretched(audio, SR, [(1.0, 2.5), (2.5, 3.0)]) is None    # 拉長但一路都有聲音，沒得縮
 
 
-def test_trim_stretched_all_chars_stretched_takes_longest_voiced_part():
+def test_trim_stretched_all_chars_stretched():
+    # 兩段有聲音、名字的字全都被拉長 → 拿不準，沿用原本範圍
     audio = np.concatenate([_tone(0.2), _silence(1.5), _tone(0.5), _silence(1.0)])
+    assert nm._trim_stretched(audio, SR, [(0.0, 1.1), (1.1, 2.2)]) is None
+    # 只有一段有聲音 → 縮到那一段
+    audio = np.concatenate([_silence(1.7), _tone(0.5), _silence(1.0)])
     got = nm._trim_stretched(audio, SR, [(0.0, 1.1), (1.1, 2.2)])
     assert got is not None and abs(got[0] - 1.7) < 0.03 and abs(got[1] - 2.2) < 1e-6
+
+
+def test_trim_stretched_slow_name_keeps_every_char():
+    """審查 6：慢慢念、字中間有停頓的名字（2.0–2.3、2.8–3.1），以前被縮成只剩 (2.8, 3.1)。"""
+    audio = np.concatenate([_silence(2.0), _tone(0.3), _silence(0.5), _tone(0.3), _silence(2.0)])
+    got = nm._trim_stretched(audio, SR, [(2.0, 2.3), (2.8, 3.1)])
+    assert got is None or (got[0] <= 2.0 + 0.03 and got[1] >= 3.1 - 0.03), got
+    # 正常的字跟拉長的字混在一起、正常的字各在不同的有聲段 → 從第一段開頭留到最後一段結尾
+    audio = np.concatenate([_silence(1.4), _tone(0.3), _silence(0.4), _tone(0.3), _silence(2.0)])
+    got = nm._trim_stretched(audio, SR, [(0.0, 1.45), (1.45, 1.7), (2.1, 2.4)])
+    assert got is not None and got[0] <= 1.45 and got[1] >= 2.4 - 1e-6, got
 
 
 def test_find_names_stretched_second_occurrence_range_is_short():
