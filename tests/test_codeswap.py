@@ -191,6 +191,21 @@ def test_review_page_shows_english_codes():
     assert data["代號分組"]["女"][0] == "安娜" and "傑克" in data["代號分組"]["男"]
 
 
+def test_english_words_in_spoken_text_are_look_rows_not_blockers():
+    """10-03 第八批 #66：要念的文字裡有英文詞 → 總檢查「請看一眼」提醒改成中文，不擋；舊英文代號不算在這裡。"""
+    assert codeswap.english_words("今天很 happy，Happy 也算") == ["happy", "Happy"]
+    assert codeswap.english_words("Emma 說 A 班沒有英文") == []          # 舊代號另外有「一定要處理」；單一字母不算
+    w = _fresh()
+    _seed(w)
+    codeswap.apply(w, {"Joan": "潔西", "Amy": "安娜"})
+    cards = {x["卡片"]: x for x in codeswap.english_texts(w)}
+    assert "名字:1" in cards and any(k.startswith("學員段落:") for k in cards)   # Rosemary、Roseanne／Emmanuel
+    fc = execute.final_check(w)
+    look = [r for r in fc["請看一眼"] if r["key"].startswith("英文:")]
+    assert look and all("建議改成中文" in r["說明"] for r in look)
+    assert not [r for r in fc["一定要處理"] if r["key"].startswith("英文:")]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

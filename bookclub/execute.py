@@ -603,6 +603,19 @@ def final_check(workdir: str | Path) -> dict:
                "要生成秒數": round(gen_s), "預估秒數": round(gen_s * GEN_SPEED + ASSEMBLE_S), "硬碟可用GB": round(free, 1),
                "記憶體": memory_status(),   # 10-02 第五批：開始前就提醒記憶體偏滿
                "提醒": "執行期間關掉其他程式（Zoom、瀏覽器分頁）；接上電源、筆電不要闔上（螢幕可以關）"}
+    # 10-03 第八批 #66：要念的文字裡有英文詞 → 請看一眼（不擋）。AI 念英文容易念錯（happy 念成 heavy）
+    try:
+        en_texts = codeswap.english_texts(workdir)
+    except Exception:  # noqa: BLE001 — 讀不到不擋
+        en_texts = []
+    for x in en_texts:
+        info = index.get(x["卡片"]) or {}
+        if not info:
+            continue
+        nm = review.item_name(index, x["卡片"])
+        row(look, f"英文:{x['卡片']}", float(info.get("start") or 0.0), float(info.get("end") or 0.0),
+            f"〈{nm}〉要念的文字裡有英文（{x['幾個']} 個詞）。AI 念英文容易念錯；不是專有名詞的話，建議改成中文再生成",
+            name=nm, card=x["卡片"], todo="到第 3 步這張卡片把英文改成中文；是專有名詞、要照念的就不用改")
     # 10-02 第六批：已經組裝過的話，每一列附上成品時間（還沒有成品時只列原片）
     try:
         from bookclub import timemap

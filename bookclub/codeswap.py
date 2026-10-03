@@ -260,6 +260,31 @@ def leftover_texts(workdir: str | Path) -> list[dict]:
     return out
 
 
+_EN_WORD = re.compile(r"[A-Za-z]{2,}")
+
+
+def english_words(text: str) -> list[str]:
+    """文字裡的英文詞（兩個字母以上；舊英文代號名單上的不算，那些另外有「一定要處理」）。純函式。"""
+    old = {c.lower() for c in epcodes.OLD_CODE_POOL}
+    return [w for w in _EN_WORD.findall(text or "") if w.lower() not in old]
+
+
+def english_texts(workdir: str | Path) -> list[dict]:
+    """要念的文字裡有英文詞的卡片（10-03 第八批 #66，第 4 步開始前總檢查「請看一眼」用）：[{卡片, 欄位: [...], 幾個}]。
+
+    起因：happy 念成 heavy。宇軒 10-03 定：不放進發音對照表自動換（對照表是「包含就換」，unhappy 會誤換；
+    刻意講英文做名詞解釋時也不該被換），提醒人改稿——中英夾雜、不是專有名詞的，建議改成中文再生成。"""
+    data = _load(Path(workdir))
+    by_card: dict[str, dict] = {}
+    for s in _text_slots(data):
+        n = len(english_words(s["容器"][s["鍵"]]))
+        if n:
+            x = by_card.setdefault(s["卡片"], {"卡片": s["卡片"], "欄位": [], "幾個": 0})
+            x["欄位"].append(s["欄位"])
+            x["幾個"] = max(x["幾個"], n)
+    return list(by_card.values())
+
+
 def parse_map(items: list[str] | None) -> dict[str, str]:
     """命令列的 `--map Joan=潔西`（可以給好幾次，也可以一次給「Joan=潔西,Emma=艾瑪」）。"""
     out = {}

@@ -2133,3 +2133,28 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "ArrowDown" && !rv.prepOpen) { e.preventDefault(); rvStep(1); }
   else if (e.key === "ArrowUp" && !rv.prepOpen) { e.preventDefault(); rvStep(-1); }
 });
+
+// 10-03 第八批 #66：要念的文字裡有英文時提醒（happy 念成 heavy）。只提醒、不擋；改不改由人決定。
+const RV_EN_IDS = ["rv-text", "rv-namesay", "rv-tsay", "rv-tt", "rv-st"];
+function rvHasEnglish(text) { return /[A-Za-z]{2,}/.test(text || ""); }
+function rvEnglishHint(el) {
+  if (!el || !RV_EN_IDS.includes(el.id)) return;
+  const id = el.id + "-en";
+  let tip = document.getElementById(id);
+  if (!rvHasEnglish(el.value)) { if (tip) tip.remove(); return; }
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.id = id;
+    tip.className = "rv-meta";
+    tip.textContent = "這段有英文。AI 念英文容易念錯；不是專有名詞的話，建議改成中文再生成。";
+    el.insertAdjacentElement("afterend", tip);
+  }
+}
+if (typeof document !== "undefined") {
+  document.addEventListener("input", (e) => rvEnglishHint(e.target));
+  let rvEnTimer = null;
+  new MutationObserver(() => {
+    clearTimeout(rvEnTimer);
+    rvEnTimer = setTimeout(() => RV_EN_IDS.forEach((i) => rvEnglishHint(document.getElementById(i))), 80);
+  }).observe(document.documentElement, { childList: true, subtree: true });
+}
