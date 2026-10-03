@@ -108,5 +108,105 @@ def test_summary_counts_voices_in_candidate_folder():
     assert s["匿名聲線"]["數量"] == 3 and "男聲 2 個" in s["匿名聲線"]["狀態"], s["匿名聲線"]
 
 
+
+def _silent_wav(path: Path, seconds: float = 1.0, value: int = 0) -> None:
+    """假的聲線檔：幾秒的靜音 wav（value 不同 → 內容不同）。"""
+    import struct
+    import wave
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(struct.pack("<h", value) * int(16000 * seconds))
+
+
+def _voice_dir(names=("男1", "男2", "女1", "女5")) -> Path:
+    d = _dir({"名冊.csv": ROSTER})
+    c = d / "聲線" / "候選_0928"
+    for n in names:
+        _silent_wav(c / f"{n}.wav")
+        (c / f"{n}.txt").write_text(f"{n} 的稿", encoding="utf-8")
+    _silent_wav(d / "聲線" / "男聲_暫定.wav")                       # 有候選時暫定的不帶
+    (d / "聲線" / "男聲_暫定.txt").write_text("稿", encoding="utf-8")
+    return d
+
+
+def test_export_includes_voices_but_not_skipped():
+    """10-03（#7）：設定包帶第 4 步會用的聲線與逐字稿，跳過不用的（女 5）與用不到的暫定聲線不帶。"""
+    d = _voice_dir()
+    out = profile.export_profile(d / "包.zip", root=d)
+    with zipfile.ZipFile(out["檔案"]) as z:
+        names = set(z.namelist())
+        readme = z.read("說明.txt").decode("utf-8")
+    for n in ("男1", "男2", "女1"):
+        assert f"聲線/候選_0928/{n}.wav" in names and f"聲線/候選_0928/{n}.txt" in names, names
+    assert not any("女5" in n for n in names) and not any("暫定" in n for n in names), names
+    assert out["匿名聲線"] == {"男": 2, "女": 1}
+    assert "匿名聲線：男 2 個、女 1 個" in readme
+
+
+def test_export_falls_back_to_provisional_voice_when_gender_has_no_candidate():
+    """某個性別沒有候選時才帶暫定聲線（跟 voice_pool 一樣）。"""
+    d = _voice_dir(names=("女1",))
+    out = profile.export_profile(d / "包.zip", root=d)
+    with zipfile.ZipFile(out["檔案"]) as z:
+        names = set(z.namelist())
+    assert {"聲線/男聲_暫定.wav", "聲線/男聲_暫定.txt", "聲線/候選_0928/女1.wav"} <= names, names
+    assert out["匿名聲線"] == {"男": 1, "女": 1}
+
+
+def test_import_voices_into_empty_folder_gives_full_pool():
+    from bookclub.students import voice_pool
+
+    src = _voice_dir()
+    out = profile.export_profile(src / "包.zip", root=src)
+    dst = _dir({})
+    r = profile.import_profile(out["檔案"], root=dst)
+    v = r["匿名聲線"]
+    assert v["男"] == 2 and v["女"] == 1 and v["新增"] == 6 and not v["衝突"], v
+    assert "匿名聲線：男 2 個、女 1 個" in v["說明"]
+    pool = voice_pool(dst / "聲線")
+    assert [f.stem for f in pool["男"]] == ["男1", "男2"] and [f.stem for f in pool["女"]] == ["女1"], pool
+    # 再匯入一次：內容一樣 → 全部略過
+    r2 = profile.import_profile(out["檔案"], root=dst)
+    assert r2["匿名聲線"]["新增"] == 0 and r2["匿名聲線"]["略過"] == 6 and not r2["匿名聲線"]["衝突"]
+
+
+def test_import_keeps_local_voice_with_different_content_and_lists_conflict():
+    src = _voice_dir()
+    out = profile.export_profile(src / "包.zip", root=src)
+    dst = _dir({})
+    mine = dst / "聲線" / "候選_0928" / "男1.wav"
+    _silent_wav(mine, value=7)
+    before = mine.read_bytes()
+    r = profile.import_profile(out["檔案"], root=dst)
+    assert mine.read_bytes() == before                                     # 不覆蓋
+    assert r["匿名聲線"]["衝突"] == ["聲線/候選_0928/男1.wav"], r["匿名聲線"]
+    assert r["衝突數"] == 1 and "男1.wav" in r["匿名聲線"]["說明"]
+
+
+def test_import_says_so_when_package_has_no_voices():
+    a = _dir({"敏感詞.csv": "原詞,替代詞\n某公司,一家公司\n"})
+    out = profile.export_profile(a / "包.zip", root=a)
+    r = profile.import_profile(out["檔案"], root=_dir({}))
+    assert r["匿名聲線"]["男"] == 0 and "設定包裡沒有" in r["匿名聲線"]["說明"]
+
+
+def test_import_ignores_voice_paths_escaping_folder():
+    """壞掉或惡意的 zip：聲線/../ 之類的路徑、不是 wav／txt 的檔，一律不寫。"""
+    a = _dir({})
+    zp = a / "壞.zip"
+    with zipfile.ZipFile(zp, "w") as z:
+        z.writestr("敏感詞.csv", "原詞,替代詞\n某,另\n")
+        z.writestr("聲線/../外面.txt", "x")
+        z.writestr("聲線/候選_0928/執行.sh", "x")
+    dst = _dir({})
+    r = profile.import_profile(zp, root=dst)
+    assert not (dst / "外面.txt").exists() and not (dst / "聲線" / "候選_0928" / "執行.sh").exists()
+    assert r["匿名聲線"]["新增"] == 0
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())
