@@ -209,14 +209,43 @@ EXTEND_MAX_S = 5.0       # 往前、往後各最多延伸這麼多秒；這麼�
 
 
 def extend_enabled(merged: dict | None) -> bool:
-    """轉文字時段跟段之間補了空白的工作區（`transcribe` 寫 `保留停頓秒數`，句子比較短）才延伸重念範圍。
-    已經轉好、生成過的工作區（第一堂）不動，免得已經生成的句子時間格跟著變、要重新生成。"""
-    return bool((merged or {}).get("保留停頓秒數"))
+    """新做法轉的工作區才延伸重念範圍：`轉文字做法`＝「不挖停頓」（10-04 #62 乙，Groq 自己斷句），或有
+    `保留停頓秒數`（保留一秒的做法，已停用）。已經轉好、生成過的工作區（第一堂）不動，免得已經生成的句子
+    時間格跟著變、要重新生成。"""
+    m = merged or {}
+    return m.get("轉文字做法") == "不挖停頓" or bool(m.get("保留停頓秒數"))
 
 
-def other_ranges(candidates: list[dict], c: dict, extra=()) -> list[tuple[float, float]]:
-    """延伸重念範圍時不能碰到的範圍：c 以外每一個名字候選＋extra（保留原聲學員的名字候選）。"""
-    return [(float(x["start"]), float(x["end"])) for x in candidates if x is not c] + list(extra)
+def _card_reach(ordered: list[dict], pos: dict, c: dict) -> tuple[str | None, tuple[float, float]]:
+    """一張卡最多可能重念到哪裡（純函式）：它的完整句子（`expand_sentence`）再加前一句、後一句（它自己可能延伸
+    進去的地方）。回傳 (完整句子第一段的 id, (起, 訖))；找不到句子的（人工補的）就是名字本身。"""
+    sid = c.get("sentence_id")
+    if sid not in pos:
+        return None, (float(c["start"]), float(c["end"]))
+    group = expand_sentence(ordered, pos[sid])
+    before, after = neighbors(ordered, group)
+    a = min([group[0]["start"], c["start"]] + ([before["start"]] if before else []))
+    b = max([group[-1]["end"], c["end"]] + ([after["end"]] if after else []))
+    return group[0]["id"], (float(a), float(b))
+
+
+def other_ranges(candidates: list[dict], c: dict, extra=(), ordered: list[dict] | None = None) -> list[tuple[float, float]]:
+    """延伸重念範圍時不能碰到的範圍：c 以外每一個名字候選＋extra（保留原聲學員的名字候選）。
+
+    10-04 問題 C：給了 `ordered`（全部句子）的話，再加上別張卡「整句換掉」最多會重念到的地方（它的完整句子＋
+    前後各一句，含它自己延伸的部分）——不然兩張卡的時間格疊在一起，組裝時長的優先，另一張卡的話會不見。
+    跟 c 同一個完整句子的卡（會併成同一筆）不算。保守：別張卡選什麼做法都算。"""
+    out = [(float(x["start"]), float(x["end"])) for x in candidates if x is not c]
+    if ordered is not None:
+        pos = {x["id"]: k for k, x in enumerate(ordered)}
+        key = _card_reach(ordered, pos, c)[0]
+        for x in candidates:
+            if x is c:
+                continue
+            k, rng = _card_reach(ordered, pos, x)
+            if k is None or k != key:
+                out.append(rng)
+    return out + list(extra)
 
 
 def student_name_ranges(workdir: Path) -> list[tuple[float, float]]:
@@ -379,7 +408,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
     這種項目帶 `範圍`（自動／人選）與 `整句`（原本整句的起訖），文字照範圍裡逐字稿的字。
     `cut`（10-01 第三批）：落在剪掉的片段裡的候選編號（字串）→ 放進略過，不生成、不消音（剪掉的地方本來就沒有聲音）。
     `extend`（10-04 #62）：整句換掉的範圍斷在話中間時延伸到標點或真的停頓（`whole_slot` 的 around）；
-    延伸時不碰其他名字候選與 `avoid`（保留原聲學員的名字候選）的範圍。
+    延伸時不碰其他名字候選、別張卡最多會重念到的地方（`other_ranges`）與 `avoid`（保留原聲學員的名字候選）。
     """
     gen, mutes, skipped, manual = [], [], [], []
     ranged: list[dict] = []       # 縮小範圍的（範圍疊在一起的名字併成一筆）
@@ -430,7 +459,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             group = [g for g in ordered if g["end"] > min(c["start"], group[0]["start"]) + 0.05
                      and g["start"] < max(c["end"], group[-1]["end"]) - 0.05 and (g in group or ok_teacher(g))] or group
         ws = whole_slot(c, d, group, words, neighbors(ordered, group) if extend else None,
-                        other_ranges(candidates, c, avoid) if extend else ())
+                        other_ranges(candidates, c, avoid, ordered) if extend else ())
         if ws["範圍"]:
             _add_ranged(ranged, manual, c, i, d, ws, words)
             continue

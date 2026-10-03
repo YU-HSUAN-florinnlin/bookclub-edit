@@ -252,20 +252,49 @@ def test_existing_merged_json_is_reused_without_vad_or_groq():
         tc.extract_audio, tc._run_vad = orig_extract, orig_vad
 
 
-def _fake_run(w: Path, chunk_result: dict) -> dict:
-    """假的抽音／VAD，塊級快取已經在 → 不呼叫 Groq，跑完整個合併流程。"""
-    audio = np.zeros(25 * tc.SR, dtype="float32")
-    sil = [{"start": 0.0, "end": 10.0}, {"start": 12.0, "end": 12.5}, {"start": 13.5, "end": 20.0},
-           {"start": 21.0, "end": 25.0}]
+def _no_groq():
+    """測試一律不連 Groq：換掉連線與呼叫；真的走到呼叫就記下來（或回傳 fake_results 裡排好的結果）。"""
+    calls: list[tuple[str, int]] = []
+    orig = (tc._groq_client, tc._groq_call_with_retry, tc.FREE_TIER_MIN_INTERVAL_S)
+
+    def fake_call(client, filename, data, prompt):
+        calls.append((filename, len(data)))
+        if not _no_groq.queue:
+            raise AssertionError("測試不該呼叫 Groq")
+        return _no_groq.queue.pop(0)
+
+    tc._groq_client = lambda: object()
+    tc._groq_call_with_retry = fake_call
+    tc.FREE_TIER_MIN_INTERVAL_S = 0.0
+    return calls, orig
+
+
+_no_groq.queue = []
+
+
+def _restore_groq(orig):
+    tc._groq_client, tc._groq_call_with_retry, tc.FREE_TIER_MIN_INTERVAL_S = orig
+
+
+def _fake_run(w: Path, chunk_result: dict | None, mode: str = tc.MODE_KEEP, audio_s: float = 25.0,
+              silence=None, segs=None) -> dict:
+    """假的抽音／VAD；保留一秒做法時塊級快取 chunk_0000 先放好。不呼叫 Groq（呼叫到就失敗，除非 _no_groq.queue 有排）。"""
+    audio = np.zeros(int(audio_s * tc.SR), dtype="float32")
+    sil = silence if silence is not None else [{"start": 0.0, "end": 10.0}, {"start": 12.0, "end": 12.5},
+                                               {"start": 13.5, "end": 20.0}, {"start": 21.0, "end": 25.0}]
+    segs = segs if segs is not None else SEGS
     orig_extract, orig_vad = tc.extract_audio, tc._run_vad
     tc.extract_audio = lambda video, workdir: (w / "audio.flac", 0.0)
-    tc._run_vad = lambda f: (audio, [dict(s) for s in SEGS], sil, 25.0)
+    tc._run_vad = lambda f: (audio, [dict(s) for s in segs], sil, audio_s)
+    _calls, orig = _no_groq()
     try:
         (w / "transcript").mkdir(exist_ok=True)
-        (w / "transcript" / "chunk_0000.json").write_text(json.dumps(chunk_result), encoding="utf-8")
-        return tc.transcribe(w / "v.mp4", w)
+        if chunk_result is not None:
+            (w / "transcript" / "chunk_0000.json").write_text(json.dumps(chunk_result), encoding="utf-8")
+        return tc.transcribe(w / "v.mp4", w, mode=mode)
     finally:
         tc.extract_audio, tc._run_vad = orig_extract, orig_vad
+        _restore_groq(orig)
 
 
 def test_transcribe_new_chunk_maps_pause_and_splits_long_pause():
@@ -281,7 +310,7 @@ def test_transcribe_new_chunk_maps_pause_and_splits_long_pause():
     assert [s["id"] for s in got["sentences"]] == ["0000_000", "0000_001"]
     assert got["sentences"][0]["end"] == 13.5 and got["sentences"][1]["start"] == 20.0
     assert got["sentences"][1]["text"] == "開始"
-    assert got["保留停頓秒數"] == tc.KEEP_PAUSE_S
+    assert got["保留停頓秒數"] == tc.KEEP_PAUSE_S and got["轉文字做法"] == "保留一秒停頓"
     assert max(s["end"] - s["start"] for s in got["sentences"]) < 5.0
 
 
@@ -393,6 +422,144 @@ def test_random_mapping_properties():
             small_gap = any(segs[k]["end"] - 1e-6 <= s and e <= segs[k + 1]["start"] + 1e-6
                             and segs[k + 1]["start"] - segs[k]["end"] <= 1.0 + 1e-6 for k in range(len(segs) - 1))
             assert touches or small_gap, (trial, a, b, s, e, segs)
+
+
+# ---------- 10-04 #62 乙：不挖停頓，整支每約 10 分鐘一塊 ----------
+
+def test_default_mode_is_whole():
+    assert tc.PAUSE_MODE == tc.MODE_WHOLE == "不挖"
+    assert tc.METHOD_NAME[tc.MODE_WHOLE] == "不挖停頓"
+
+
+def test_plan_whole_chunks_cuts_at_nearest_quiet_and_covers_all():
+    sil = [{"start": 570.0, "end": 572.0},     # 中間 571：離 600 有 29 秒
+           {"start": 610.0, "end": 611.0},     # 中間 610.5：離 600 最近 → 切這裡
+           {"start": 1300.0, "end": 1301.0}]   # 第二刀理想 1210.5，前後 60 秒內沒有安靜處 → 切在 1210.5
+    ch = tc.plan_whole_chunks(2000.0, sil)
+    assert ch[0] == (0.0, 610.5)
+    assert ch[1] == (610.5, 1210.5)
+    assert ch[-1][1] == 2000.0
+    for (a, b), (c, d) in zip(ch, ch[1:]):
+        assert b == c                                   # 頭尾相接，不重疊、不漏
+    assert all(b - a <= tc.WHOLE_CHUNK_S + tc.WHOLE_SEARCH_S + 1e-6 for a, b in ch)
+    assert ch[-1] == (1210.5, 2000.0) or ch[-1][0] > 1210.5
+
+
+def test_plan_whole_chunks_last_chunk_and_short_video():
+    assert tc.plan_whole_chunks(500.0, []) == [(0.0, 500.0)]
+    assert tc.plan_whole_chunks(650.0, []) == [(0.0, 650.0)]          # 不到 11 分鐘：一塊
+    ch = tc.plan_whole_chunks(97 * 60.0, [])                           # 97 分鐘的影片
+    assert len(ch) == 10 and ch[-1] == (5400.0, 5820.0)
+
+
+def test_map_whole_offsets_and_clamps():
+    res = {"words": [{"word": "好", "start": 1.0, "end": 1.4}, {"word": "嗯", "start": 9.9, "end": 12.0},
+                     {"word": "怪", "start": 3.0, "end": 2.9}],
+           "segments": [{"start": 0.5, "end": 11.0, "text": "好嗯", "avg_logprob": -0.1}]}
+    ws, ss = tc.map_whole(res, 600.0, 610.0, "0001")
+    assert (ws[0]["start"], ws[0]["end"]) == (601.0, 601.4)
+    assert (ws[1]["start"], ws[1]["end"]) == (609.9, 610.0)          # 超出這一塊 → 夾在塊尾
+    assert ws[2]["end"] >= ws[2]["start"]
+    assert ss[0]["id"] == "0001_000" and (ss[0]["start"], ss[0]["end"]) == (600.5, 610.0)
+
+
+def _whole_env(chunk_s=10.0, search_s=2.0):
+    o = (tc.WHOLE_CHUNK_S, tc.WHOLE_SEARCH_S)
+    tc.WHOLE_CHUNK_S, tc.WHOLE_SEARCH_S = chunk_s, search_s
+    return o
+
+
+def test_transcribe_whole_mode_end_to_end_and_cache_reuse():
+    o = _whole_env()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            w = Path(d)
+            # 25 秒：切在 10.25（12.0–12.5 安靜處離 10 最近？不在 ±2 秒 → 10.0）…照 plan_whole_chunks 算
+            plan = tc.plan_whole_chunks(25.0, [{"start": 9.0, "end": 9.5}, {"start": 21.0, "end": 25.0}])
+            _no_groq.queue[:] = [{"words": [{"word": "大家", "start": 0.5, "end": 1.0}],
+                                  "segments": [{"start": 0.5, "end": 1.0, "text": "大家"}]}
+                                 for _ in plan]
+            got = _fake_run(w, None, mode=tc.MODE_WHOLE,
+                            silence=[{"start": 9.0, "end": 9.5}, {"start": 21.0, "end": 25.0}])
+            assert not _no_groq.queue                       # 每一塊呼叫一次
+            assert got["轉文字做法"] == "不挖停頓" and "保留停頓秒數" not in got
+            starts = [a for a, _b in plan]
+            assert [x["start"] for x in got["words"]] == [round(a + 0.5, 3) for a in starts]
+            assert [x["id"] for x in got["sentences"]] == [f"{k:04d}_000" for k in range(len(plan))]
+            cache = json.loads((w / "transcript" / "whole_0000.json").read_text(encoding="utf-8"))
+            assert cache[tc.METHOD_KEY] == "不挖停頓" and cache["_塊起"] == plan[0][0] and cache["_塊訖"] == plan[0][1]
+            # merged.json 拿掉重跑：塊級快取都對得上 → 不呼叫 Groq（佇列是空的，呼叫就失敗）
+            (w / "transcript" / "merged.json").unlink()
+            again = _fake_run(w, None, mode=tc.MODE_WHOLE,
+                              silence=[{"start": 9.0, "end": 9.5}, {"start": 21.0, "end": 25.0}])
+            assert again["words"] == got["words"]
+    finally:
+        tc.WHOLE_CHUNK_S, tc.WHOLE_SEARCH_S = o
+        _no_groq.queue[:] = []
+
+
+def test_whole_mode_does_not_reuse_other_method_or_other_cut_cache():
+    o = _whole_env()
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            w = Path(d)
+            sil = [{"start": 9.0, "end": 9.5}]
+            plan = tc.plan_whole_chunks(25.0, sil)
+            (w / "transcript").mkdir()
+            # 塊 0：保留一秒做法的快取 → 不能用；塊 1：同做法但切點不一樣 → 不能用；其他塊：對得上 → 沿用
+            bad0 = {tc.METHOD_KEY: "保留一秒停頓", "_塊起": plan[0][0], "_塊訖": plan[0][1], "words": [], "segments": []}
+            bad1 = {tc.METHOD_KEY: "不挖停頓", "_塊起": plan[1][0] + 1.0, "_塊訖": plan[1][1], "words": [], "segments": []}
+            (w / "transcript" / "whole_0000.json").write_text(json.dumps(bad0), encoding="utf-8")
+            (w / "transcript" / "whole_0001.json").write_text(json.dumps(bad1), encoding="utf-8")
+            for k, (a, b) in enumerate(plan[2:], start=2):
+                ok = {tc.METHOD_KEY: "不挖停頓", "_塊起": a, "_塊訖": b, "words": [], "segments": []}
+                (w / "transcript" / f"whole_{k:04d}.json").write_text(json.dumps(ok), encoding="utf-8")
+            _no_groq.queue[:] = [{"words": [], "segments": []}, {"words": [], "segments": []}]
+            _fake_run(w, None, mode=tc.MODE_WHOLE, silence=sil)
+            assert not _no_groq.queue                      # 剛好重轉 2 塊
+    finally:
+        tc.WHOLE_CHUNK_S, tc.WHOLE_SEARCH_S = o
+        _no_groq.queue[:] = []
+
+
+def test_keep_mode_does_not_reuse_whole_mode_cache():
+    """保留一秒的塊級快取如果記著別的做法 → 不能混用，重轉那一塊。"""
+    with tempfile.TemporaryDirectory() as d:
+        _no_groq.queue[:] = [{"words": [], "segments": []}]
+        try:
+            _fake_run(Path(d), {tc.METHOD_KEY: "不挖停頓", "words": [], "segments": []}, mode=tc.MODE_KEEP)
+            assert not _no_groq.queue
+        finally:
+            _no_groq.queue[:] = []
+
+
+def test_whole_mode_splits_chunk_over_groq_size_limit():
+    o = _whole_env(chunk_s=130.0, search_s=30.0)
+    ob = tc.GROQ_MAX_BYTES
+    tc.GROQ_MAX_BYTES = 1     # 什麼都超過 → 一直從安靜處對切，直到一塊不到 60 秒
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            sil = [{"start": 74.0, "end": 76.0}]
+            _no_groq.queue[:] = [{"words": [], "segments": []} for _ in range(8)]
+            _fake_run(Path(d), None, mode=tc.MODE_WHOLE, audio_s=150.0, silence=sil)
+            n = 8 - len(_no_groq.queue)
+            assert 2 <= n <= 4, n
+            cache = sorted((Path(d) / "transcript").glob("whole_*.json"))
+            spans = [(json.loads(f.read_text())["_塊起"], json.loads(f.read_text())["_塊訖"]) for f in cache]
+            assert spans[0] == (0.0, 75.0) or spans[0][1] <= 75.0
+            assert spans[-1][1] == 150.0 and all(b == c for (_a, b), (c, _d) in zip(spans, spans[1:]))
+    finally:
+        tc.WHOLE_CHUNK_S, tc.WHOLE_SEARCH_S = o
+        tc.GROQ_MAX_BYTES = ob
+        _no_groq.queue[:] = []
+
+
+def test_quiet_word_stats_counts_words_inside_long_quiet():
+    words = [_w("好", 1.0, 1.2), _w("嗯", 5.2, 5.4), _w("啊", 5.6, 5.8), _w("喔", 9.0, 9.2), _w("跨", 12.9, 13.3)]
+    sil = [{"start": 5.0, "end": 7.0}, {"start": 8.8, "end": 9.5}, {"start": 12.0, "end": 13.0}]
+    st = tc.quiet_word_stats(words, sil)
+    # 5.0–7.0 裡 2 個；8.8–9.5 只有 0.7 秒不算；跨出 13.0 的不算
+    assert st == {"字數": 2, "處數": 1, "位置": [[5.0, 7.0, 2]]}
 
 
 def _run_all():

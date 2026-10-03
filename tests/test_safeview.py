@@ -160,6 +160,29 @@ def test_new_unknown_field_is_masked():
     assert "假名字林小花" not in out and "王大明" not in out
 
 
+def test_words_topic_prints_quiet_word_stats_without_text():
+    w = make()
+    m = _r(w / "transcript" / "merged.json")
+    m["轉文字做法"] = "不挖停頓"
+    t0 = max(x["end"] for x in m["words"]) + 10.0     # 假工作區的字都在這之前
+    m["silence_map"] = [{"start": t0, "end": t0 + 4.0}]
+    m["words"] = m["words"] + [{"word": "假名字林小花", "start": t0 + 1.0, "end": t0 + 1.5}]
+    _w(w / "transcript" / "merged.json", m)
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            safeview.main([str(w), "字"])
+        out = buf.getvalue()
+        assert "轉文字做法：不挖停頓" in out
+        assert "落在安靜超過 1 秒的地方的字（整支）：1 個、1 處" in out
+        assert "假名字林小花" not in out
+    finally:
+        m["words"] = m["words"][:-1]
+        m.pop("轉文字做法")
+        m.pop("silence_map")
+        _w(w / "transcript" / "merged.json", m)
+
+
 def test_val_whitelist():
     assert safeview.val("狀態", "通過") == "通過"
     assert safeview.val("狀態", "王大明") == "<文字 3 字>"            # 白名單欄位、不認得的值 → 遮掉
