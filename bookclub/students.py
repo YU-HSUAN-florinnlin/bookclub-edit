@@ -190,8 +190,7 @@ def estimate_student_f0(workdir: Path, spans: list[tuple[float, float]], max_s: 
 
 def roster_gender(real: str | None) -> str | None:
     """名冊（用本名找）這個人有填性別就回傳「男」「女」。09-30：名冊拿掉代號欄後改用本名找（以前用代號找，永遠找不到）。"""
-    import csv
-
+    from bookclub import csvfile
     from bookclub.config import data_dir
 
     if not real:
@@ -199,12 +198,11 @@ def roster_gender(real: str | None) -> str | None:
     path = data_dir() / "名冊.csv"
     if not path.is_file():
         return None
-    with open(path, encoding="utf-8-sig", newline="") as f:
-        for r in csv.DictReader(f):
-            names = [(r.get("中文名") or "").strip()] + [x.strip() for x in re.split(r"[、,，/]", r.get("其他寫法") or "")]
-            if real in [n for n in names if n]:
-                g = (r.get("性別") or "").strip()
-                return "男" if g.startswith("男") else "女" if g.startswith("女") else None
+    for r in csvfile.read_rows(path):   # 10-03 第九批 #35：Excel 另存的 Big5 也讀得了
+        names = [(r.get("中文名") or "").strip()] + [x.strip() for x in re.split(r"[、,，/]", r.get("其他寫法") or "")]
+        if real in [n for n in names if n]:
+            g = (r.get("性別") or "").strip()
+            return "男" if g.startswith("男") else "女" if g.startswith("女") else None
     return None
 
 
@@ -579,7 +577,7 @@ def voice_groups(workdir: str | Path, start: float | None = None, end: float | N
     out = []
     for ref in sorted({it["參考音檔"] for it in items}):
         group = [it for it in items if it["參考音檔"] == ref]
-        todo = [it for it in group if tts.record_stale(done.get(it["id"]), it, Path(ref))]
+        todo = [it for it in group if tts.needs_work(done.get(it["id"]), it, Path(ref))]   # 10-03 第九批 #18：停頓沒做成的再試
         out.append({"參考音": ref, "名稱": voice_name(ref), "學員": sorted({it["學員"] for it in group}),
                     "段數": len(group), "要做": len(todo)})
     return out
@@ -640,7 +638,7 @@ def generate_students(
             if not p.is_file():
                 raise FileNotFoundError(f"找不到學員聲線參考音：{p}")
         ref_text = ref_txt.read_text(encoding="utf-8").strip()
-        todo = [it for it in group if tts.record_stale(done.get(it["id"]), it, ref_wav)]
+        todo = [it for it in group if tts.needs_work(done.get(it["id"]), it, ref_wav)]   # 10-03 第九批 #18：停頓沒做成的再試
         log(f"[學員聲音] {voice_name(ref_wav)}（{'、'.join(sorted({it['學員'] for it in group}))}）："
             f"{len(group)} 段（{sum(it['slot_s'] for it in group):.0f} 秒），要生成 {len(todo)} 段")
         if not todo:

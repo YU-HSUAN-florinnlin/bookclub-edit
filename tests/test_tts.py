@@ -691,5 +691,274 @@ def test_legacy_attempt_cache_key_still_used():
         tts.generate_teacher(work, work / "句子.json", synth=_never, hear=hear, check_similarity=False,
                              phase="生成")
 
+
+# ---------- 10-03 第九批 #21：改回原文字或原聲線，不沿用被蓋掉的聲音檔 ----------
+
+def _ref_work(d: Path) -> Path:
+    work = Path(d)
+    ref = work / "參考音"
+    ref.mkdir()
+    sf.write(str(ref / "ref.wav"), np.zeros(SR, dtype=np.float32), SR)
+    (ref / "ref.txt").write_text("參考", encoding="utf-8")
+    return work
+
+
+def _len_synth(calls: list):
+    """生成的長度跟字數有關：不同文字的聲音檔內容不一樣。"""
+    def synth(text, seed, speed):
+        calls.append(text)
+        return np.zeros(int(len(text) * 0.25 * SR), dtype=np.float32) + 0.01, SR
+    return synth
+
+
+def test_text_a_b_a_regenerates_instead_of_reusing_overwritten_file():
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        sp = work / "句子.json"
+        now = {"text": ""}
+        hear = lambda p: now["text"]   # noqa: E731
+        calls: list = []
+        for text in ("甲乙丙丁", "甲乙丙丁戊己庚辛", "甲乙丙丁"):
+            now["text"] = text
+            sp.write_text(json.dumps([{"id": "A", "text": text}], ensure_ascii=False), encoding="utf-8")
+            r = tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=hear, check_similarity=False,
+                                     use_pauses=False, log=lambda s: None)["句子"][0]
+            assert abs(_dur(work / r["檔案"]) - len(text) * 0.25) < 0.02, (text, _dur(work / r["檔案"]))
+        assert calls == ["甲乙丙丁", "甲乙丙丁戊己庚辛", "甲乙丙丁"]   # 改回 A：重新生成，不沿用被 B 蓋掉的檔
+        calls.clear()                                                   # 什麼都沒改的續跑（--redo）照樣沿用
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=hear, check_similarity=False,
+                             use_pauses=False, redo=True, log=lambda s: None)
+        assert calls == []
+
+
+def test_voice_m1_m2_m1_regenerates():
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        od = work / "生成" / "學員"
+        od.mkdir(parents=True)
+        refs = {}
+        for name, f0 in (("男1", 0.0), ("男2", 0.5)):
+            refs[name] = work / f"{name}.wav"
+            sf.write(str(refs[name]), np.zeros(SR, dtype=np.float32) + f0, SR)
+        it = {"id": "S1", "text": "謝謝大家", "生成用文字": "謝謝大家", "發音對照": [], "slot": None, "slot_s": None}
+        used = []
+        for name in ("男1", "男2", "男1"):
+            def synth(text, seed, speed, name=name):
+                used.append(name)
+                return np.zeros(int((1.0 if name == "男1" else 2.0) * SR), dtype=np.float32) + 0.01, SR
+            done: dict = {}
+            tts.run_generation(work, [dict(it)], od, refs[name], "參考", TOL, save=lambda: None, done=done,
+                               role="學員", check_similarity=False, use_pauses=False, synth=synth,
+                               hear=lambda p: "謝謝大家", log=lambda s: None)
+            assert abs(_dur(work / done["S1"]["檔案"]) - (1.0 if name == "男1" else 2.0)) < 0.02, name
+        assert used == ["男1", "男2", "男1"]
+
+
+def test_legacy_cache_without_file_fingerprint():
+    """09 月的快取沒記檔案指紋：這一句這一次只生成過一種才沿用；有過別種文字（檔案可能被蓋掉）就重新生成。"""
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": "甲乙丙丁"}], ensure_ascii=False), encoding="utf-8")
+        hear = lambda p: "甲乙丙丁"   # noqa: E731
+        calls: list = []
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=hear, check_similarity=False,
+                             use_pauses=False, phase="生成", log=lambda s: None)
+        cp = tts.teacher_out_dir(work) / tts.ATTEMPT_CACHE
+        cache = json.loads(cp.read_text(encoding="utf-8"))
+        legacy = {k: {f: v for f, v in e.items() if f not in ("檔案指紋", "參考音逐字稿指紋")} for k, e in cache.items()}
+        cp.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+        calls.clear()
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=hear, check_similarity=False,
+                             use_pauses=False, phase="生成", log=lambda s: None)
+        assert calls == []                                       # 只有一種：沿用
+        (k, e), = legacy.items()
+        legacy[k.replace("甲乙丙丁", "別的文字")] = e             # 同一句第 1 次生成過別的文字
+        cp.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=hear, check_similarity=False,
+                             use_pauses=False, phase="生成", log=lambda s: None)
+        assert calls == ["甲乙丙丁"]
+
+
+def test_ref_text_changed_regenerates_attempt():
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": "甲乙丙丁"}], ensure_ascii=False), encoding="utf-8")
+        calls: list = []
+        for _ in range(2):
+            tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=lambda p: "甲乙丙丁", check_similarity=False,
+                                 use_pauses=False, log=lambda s: None)
+        assert len(calls) == 1
+        (work / "參考音" / "ref.txt").write_text("換了逐字稿", encoding="utf-8")   # 參考音檔一樣、逐字稿改了
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=lambda p: "甲乙丙丁", check_similarity=False,
+                             use_pauses=False, log=lambda s: None)
+        assert len(calls) == 2
+
+
+def test_pause_cache_redone_when_source_file_changed():
+    if not shutil.which("ffmpeg"):
+        return
+    hear = lambda p: "甲乙丙丁戊己庚辛"   # noqa: E731
+    with tempfile.TemporaryDirectory() as d:
+        work = _pause_work(Path(d))
+        sp = work / "句子.json"
+        tts.generate_teacher(work, sp, synth=lambda t, s, v: (_tone_s(4.0), SR), hear=hear, check_similarity=False,
+                             phase="生成", log=lambda s: None)
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, align=_pause_align([]),
+                             phase="停頓", log=lambda s: None)
+        src = tts.teacher_out_dir(work) / "P_第1次.wav"
+        sf.write(str(src), _tone_s(3.0), SR)          # 這個檔被別次生成蓋掉（快取那邊也對不上，會先重新生成）
+        tts.generate_teacher(work, sp, synth=lambda t, s, v: (_tone_s(4.2), SR), hear=hear, check_similarity=False,
+                             phase="生成", log=lambda s: None)
+        again: list = []
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, align=_pause_align(again),
+                             phase="停頓", log=lambda s: None)
+        assert again, "來源聲音檔換過，插入停頓要重做"
+
+
+# ---------- 10-03 第九批 #20：停頓／收尾補做內容檢查，補出「不過」不讓整步失敗 ----------
+
+def test_recheck_fail_in_later_programs_does_not_stop_step():
+    def broken(path):
+        raise ConnectionError("連不上")
+
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": "甲乙丙丁"}, {"id": "B", "text": "戊己庚辛", "slot_s": 1.0}],
+                                 ensure_ascii=False), encoding="utf-8")
+        calls: list = []
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=broken, check_similarity=False,
+                             use_pauses=False, phase="生成", log=lambda s: None)
+        assert len(calls) == 2
+        # Groq 恢復了，但補做的檢查發現第 1 次沒念對；第 2 次（收尾換一種念法）念對了
+        wrong_first = lambda p: "完全不對的內容" if "第1次" in Path(p).name else {"A": "甲乙丙丁", "B": "戊己庚辛"}[Path(p).name[0]]  # noqa: E731
+        msgs: list = []
+        out = tts.generate_teacher(work, sp, synth=_never, hear=wrong_first, check_similarity=False,
+                                   use_pauses=False, phase="停頓", log=msgs.append)
+        assert out == {} and any("補做的檢查沒過" in m for m in msgs), msgs
+        calls.clear()
+        r = {x["id"]: x for x in tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=wrong_first,
+                                                       check_similarity=False, use_pauses=False, phase="收尾",
+                                                       log=lambda s: None)["句子"]}
+        # 沒有時間格的 A：不重新生成，標要人聽；有時間格的 B：收尾那一支換一種念法再念，念對了
+        assert r["A"]["要人聽"] and len(r["A"]["嘗試"]) == 1 and not r["A"]["嘗試"][0]["內容通過"]
+        assert [a["種子"] for a in r["B"]["嘗試"]] == [42, 1] and r["B"]["選定"] == 2 and not r["B"]["要人聽"]
+        assert calls == ["戊己庚辛"]
+
+
+def test_recheck_fail_in_one_program_regenerates():
+    def broken(path):
+        raise ConnectionError("連不上")
+
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": "甲乙丙丁"}], ensure_ascii=False), encoding="utf-8")
+        calls: list = []
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=broken, check_similarity=False,
+                             use_pauses=False, log=lambda s: None)
+        wrong_first = lambda p: "完全不對的內容" if "第1次" in Path(p).name else "甲乙丙丁"  # noqa: E731
+        r = tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=wrong_first, check_similarity=False,
+                                 use_pauses=False, redo=True, log=lambda s: None)["句子"][0]
+        assert len(calls) == 2 and r["選定"] == 2 and not r["要人聽"]   # 照一般「內容沒過」：換一種念法重念
+
+
+# ---------- 10-03 第九批 #18：對位模型出錯不吞掉、不寫成「沒有停頓」的結果 ----------
+
+def _two_pause_sentences(work: Path) -> Path:
+    sp = work / "句子.json"
+    sp.write_text(json.dumps([{"id": "P", "slot": [10.0, 16.0]}, {"id": "Q", "slot": [10.0, 16.0]}]), encoding="utf-8")
+    return sp
+
+
+def test_aligner_load_failure_not_cached_and_retried():
+    if not shutil.which("ffmpeg"):
+        return
+    hear = lambda p: "甲乙丙丁戊己庚辛"   # noqa: E731
+    loads = []
+
+    class BrokenAligner:
+        def __init__(self):
+            loads.append(1)
+            raise MemoryError("記憶體不夠")
+
+    real = pauses.Aligner
+    with tempfile.TemporaryDirectory() as d:
+        work = _pause_work(Path(d))
+        sp = _two_pause_sentences(work)
+        tts.generate_teacher(work, sp, synth=lambda t, s, v: (_tone_s(4.0), SR), hear=hear, check_similarity=False,
+                             phase="生成", log=lambda s: None)
+        msgs: list = []
+        pauses.Aligner = BrokenAligner
+        try:
+            tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, phase="停頓", log=msgs.append)
+        finally:
+            pauses.Aligner = real
+        assert loads == [1], "載入失敗一次就好，不每句重載"
+        assert any("對位模型載入失敗" in m and "MemoryError" in m for m in msgs), msgs
+        pc = json.loads((tts.teacher_out_dir(work) / tts.PAUSE_CACHE).read_text(encoding="utf-8"))
+        assert all("MemoryError" in (pc[k]["沒做成"] or "") for k in ("P", "Q")), pc
+        # 收尾照樣做完（流程不停），紀錄看得出停頓沒做成、原因
+        msgs.clear()
+        tone = lambda t, s, v: (_tone_s(4.0 / v), SR)   # noqa: E731 — 沒插入停頓：收尾會改語速重生成
+        recs = tts.generate_teacher(work, sp, synth=tone, hear=hear, check_similarity=False, align=_never,
+                                    phase="收尾", log=msgs.append)["句子"]
+        assert all("MemoryError" in r["停頓沒做成"] for r in recs), recs
+        assert all("插入停頓" not in [v["版本"] for v in r["候選做法"]] for r in recs)
+        assert any("沒照原片停頓" in m for m in msgs)
+        # 下次這一步有執行：停頓沒做成的句子再做一次（聲音沿用，不重新生成），這次對位成功
+        aligned: list = []
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, phase="生成", log=lambda s: None)
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, align=_pause_align(aligned),
+                             phase="停頓", log=lambda s: None)
+        assert aligned, "上次沒做成的要再試"
+        recs = tts.generate_teacher(work, sp, synth=tone, hear=hear, check_similarity=False, align=_never,
+                                    phase="收尾", log=lambda s: None)["句子"]
+        assert all("停頓沒做成" not in r and r["建議做法"] == "插入停頓" for r in recs), recs
+
+
+def test_align_error_in_one_program_recorded():
+    if not shutil.which("ffmpeg"):
+        return
+
+    def bad_align(path, text):
+        raise RuntimeError("模型檔不完整")
+
+    with tempfile.TemporaryDirectory() as d:
+        work = _pause_work(Path(d))
+        r = tts.generate_teacher(work, work / "句子.json", synth=lambda t, s, v: (_tone_s(4.0), SR),
+                                 hear=lambda p: "甲乙丙丁戊己庚辛", check_similarity=False, align=bad_align,
+                                 log=lambda s: None)["句子"][0]
+        assert "模型檔不完整" in r["停頓沒做成"] and r["放回時間格"]
+
+
+def test_legacy_pause_cache_failure_retried():
+    """10-03 以前的停頓快取沒有「沒做成」欄位：有原片聲音卻沒有原片停頓分析，就是當時出錯被吞掉，要再試。"""
+    if not shutil.which("ffmpeg"):
+        return
+    hear = lambda p: "甲乙丙丁戊己庚辛"   # noqa: E731
+    with tempfile.TemporaryDirectory() as d:
+        work = _pause_work(Path(d))
+        sp = work / "句子.json"
+        tts.generate_teacher(work, sp, synth=lambda t, s, v: (_tone_s(4.0), SR), hear=hear, check_similarity=False,
+                             phase="生成", log=lambda s: None)
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, align=_pause_align([]),
+                             phase="停頓", log=lambda s: None)
+        pp = tts.teacher_out_dir(work) / tts.PAUSE_CACHE
+        pc = json.loads(pp.read_text(encoding="utf-8"))
+        assert pc["P"]["沒做成"] is None
+        ok = {k: v for k, v in pc["P"].items() if k != "沒做成"}
+        pp.write_text(json.dumps({"P": ok}, ensure_ascii=False), encoding="utf-8")   # 舊的、成功的：沿用
+        again: list = []
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, align=_pause_align(again),
+                             phase="停頓", log=lambda s: None)
+        assert again == []
+        pp.write_text(json.dumps({"P": {**ok, "ctx": None, "插入停頓": None}}, ensure_ascii=False), encoding="utf-8")
+        tts.generate_teacher(work, sp, synth=_never, hear=hear, check_similarity=False, align=_pause_align(again),
+                             phase="停頓", log=lambda s: None)
+        assert again, "舊快取裡被吞掉的錯誤要再試"
+
 if __name__ == "__main__":
     sys.exit(_run_all())
