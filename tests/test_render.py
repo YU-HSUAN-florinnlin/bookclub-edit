@@ -353,7 +353,19 @@ def test_build_decisions_mutes_gaps_between_student_chunks():
         try:
             w, items = _fake_with_student_records(Path(root))
             want = _expected_gaps(items)
-            assert want == [("T003", 51.6, 52.0)], want   # 假資料：學員1 的 T003 切成兩格；T005、T007 各一格；段落之間不算
+            # 10-03 第八批 #61 之後：同一個段落的格子頭尾相接（切點在停頓正中間），這份假資料不再有空隙。
+            # 空隙的規則（墊底噪、有老師的話保留）由 test_assemble 的 4 支與下面 build_audio 那一支繼續驗；
+            # 這裡改成確認「源頭沒有空隙時，組裝不會多出空隙動作」
+            if not want:
+                by_turn = {}
+                for i in sorted(items, key=lambda i: i["slot"][0]):
+                    by_turn.setdefault(i["段落"], []).append(i["slot"])
+                assert any(len(v) > 1 for v in by_turn.values())            # 至少有一個段落切成兩格以上
+                assert all(abs(a[1] - b[0]) < 1e-6 for v in by_turn.values() for a, b in zip(v, v[1:]))   # 頭尾相接
+                d = render.build_decisions(w, 0.0, 180.0)
+                assert not [e for e in d["動作"] if e["類型"] == assemble.GAP_KIND]
+                assert not [m for m in d["標記"] if m["類型"] == assemble.GAP_KEEP_KIND]
+                return
             d = render.build_decisions(w, 0.0, 180.0)
             gaps = [e for e in d["動作"] if e["類型"] == assemble.GAP_KIND]
             assert [(e["段落"], round(e["start"], 3), round(e["end"], 3)) for e in gaps] == want, gaps

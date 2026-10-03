@@ -116,6 +116,18 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
         mark_cut(rec, e)
         recs.append(rec)
 
+    # 10-03 第八批 #61、#104：切在講話中、內容問題（漏了一串字／結尾、開頭可能少念了字）寫進「做了什麼」並標要人聽
+    for rec, e in zip(recs, d.get("動作", [])):
+        if e.get("內容問題"):
+            rec["做了什麼"] += f"；{e['內容問題']}"
+            rec["內容問題"] = e["內容問題"]
+            rec["要人聽"] = True
+        if e.get("切在講話中"):
+            pts = [float(x) for x in e["切在講話中"]]
+            rec["做了什麼"] += "；切在講話中（找不到停頓）"
+            rec["切在講話中"] = [_r(x) for x in pts]
+            rec["要人聽"] = True
+
     for x, y in d.get("刪除", []):
         t = _ot(x, plist) if plist is None or _ot(x, plist) is not None else _ot(y, plist)
         recs.append({"類型": "刪除", "原片": [_r(x), _r(y)], "成品": [_r(t), _r(t)], "動到聲音": True, "要人聽": False,

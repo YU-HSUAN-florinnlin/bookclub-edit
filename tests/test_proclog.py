@@ -211,6 +211,18 @@ def test_render_check_chunked_matches_whole():
             assert got == whole, (block, got["檢查"], whole["檢查"])
     assert len(whole["未登記的變動"]) == 2
 
+def test_mid_speech_cut_and_content_problem_show_in_record():
+    """10-03 第八批 #61、#104：切在講話中、結尾可能少念了字 → 寫進「做了什麼」、標要人聽。"""
+    d = {"動作": [{"類型": "學員重念", "start": 10.0, "end": 20.0, "id": "T001_01", "學員": "學員1", "聲線": "女", "檔案": None,
+                  "text": "x", "切在講話中": [20.0], "內容問題": "結尾可能少念了字"},
+                 {"類型": "學員重念", "start": 20.0, "end": 30.0, "id": "T001_02", "學員": "學員1", "聲線": "女", "檔案": None, "text": "y"}]}
+    recs = proclog.build_records(d, None)
+    a, b = recs[0], recs[1]
+    assert a["要人聽"] and "切在講話中" in a["做了什麼"] and "結尾可能少念了字" in a["做了什麼"]
+    assert a["切在講話中"] == [20.0] and a["內容問題"] == "結尾可能少念了字"
+    assert not b["要人聽"] and "切在講話中" not in b["做了什麼"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

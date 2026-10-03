@@ -160,7 +160,10 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
              "檔案": fitted["檔案"], "來源檔案": fitted.get("來源檔案"), "放回做法": fitted["放回做法"],
              "差異比例": fitted["差異比例"], "要人聽": r.get("要人聽", False), "text": r["text"],
              "生成用文字": r.get("生成用文字") or r["text"], "轉回文字": _chosen_heard(r),
-             "生成秒數": _chosen_len(r), "文字來源": r.get("文字來源")}
+             "生成秒數": _chosen_len(r), "文字來源": r.get("文字來源"),
+             # 10-03 第八批 #61、#104：切在講話中的切點（原片秒）、選定那一次還有的內容問題 → 處理紀錄、第 5 步看得到
+             **({"切在講話中": r["切在講話中"]} if r.get("切在講話中") else {}),
+             **({"內容問題": r["內容問題"]} if r.get("內容問題") else {})}
         if (now_by.get(r["id"]) or r).get("疊放"):   # 10-01 B 方案：學員那一句跟老師那一句疊著放，不停格
             e.update({"疊放": True, "重疊": (now_by.get(r["id"]) or r).get("重疊")})
         elif fitted["放回做法"] == "標紅" and fitted["差異比例"] > 0 and fitted.get("來源檔案"):
@@ -183,6 +186,7 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
         if n["類型"] == "換聲音":
             edits.append({"類型": "名字整句換掉", "start": n["start"], "end": n["end"], "id": n["生成編號"],
                           "檔案": n["檔案"], "候選": n["候選"], "重疊項目": n.get("重疊項目") or [], "要人聽": n.get("要人聽", False), "text": r.get("text", n["文字"]),
+                          **({"內容問題": r["內容問題"]} if r.get("內容問題") else {}),
                           "生成用文字": r.get("生成用文字") or n["文字"], "轉回文字": _chosen_heard(r),
                           "生成秒數": _chosen_len(r), "放回做法": (r.get("放回時間格") or {}).get("放回做法"),
                           **({"疊放": True, "重疊": n["重疊"]} if n.get("疊放") else {})})
