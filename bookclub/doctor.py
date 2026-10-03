@@ -39,6 +39,7 @@ from bookclub.models import (
     PYANNOTE_CONFIG_FILENAME,
     PYANNOTE_REPOS,
     _hf_cached,
+    hf_cli_display,
 )
 
 
@@ -273,7 +274,7 @@ def check_hf_login() -> Check:
         "Hugging Face 登入", False, "無",
         "① 登入 huggingface.co（沒帳號先免費註冊）② 打開 "
         "huggingface.co/pyannote/segmentation-3.0 與 .../pyannote/speaker-diarization-3.1 各按一次同意 "
-        "③ Settings → Access Tokens 建一把 Read 金鑰，終端機執行 .venv/bin/hf auth login 貼上（金鑰不要貼給 AI）",
+        f"③ Settings → Access Tokens 建一把 Read 金鑰，終端機執行 {hf_cli_display()} auth login 貼上（金鑰不要貼給 AI）",
         required=False,
     )
 

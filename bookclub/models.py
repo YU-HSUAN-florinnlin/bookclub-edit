@@ -10,7 +10,7 @@ import os
 import time
 from pathlib import Path
 
-from bookclub.config import aligner_model_id, cosyvoice_model_dir
+from bookclub.config import aligner_model_id, cosyvoice_model_dir, repo_root
 
 COSYVOICE3_REPO = "FunAudioLLM/Fun-CosyVoice3-0.5B-2512"
 
@@ -45,13 +45,33 @@ PYANNOTE_CONFIG_FILENAME = "config.yaml"
 # pyannote 3.x 不用 Hugging Face 的預設快取，而是自己的資料夾（跟 pyannote/audio/core/model.py 的 CACHE_DIR 一致）
 PYANNOTE_CACHE_DIR = os.getenv("PYANNOTE_CACHE", os.path.expanduser("~/.cache/torch/pyannote"))
 
-HF_LOGIN_STEPS = """Hugging Face 三步驟（pyannote 是「受限模型」，需要帳號同意條款才能下載）：
+def hf_cli_display(root: Path | None = None, home: Path | None = None) -> str:
+    """終端機裡要打的 `hf` 指令路徑。10-03 第九批 #33：以前寫死在「下載」資料夾底下，裝在別的資料夾
+    照著打會找不到；改成從程式自己所在的倉庫推出來。在家目錄底下就用 ~/ 開頭（比較短）；路徑有空白等
+    特殊字元就整段加引號（加了引號 ~ 不會展開，所以這時候寫完整路徑）。"""
+    import re
+    import shlex
+
+    root = Path(root) if root is not None else repo_root()
+    home = Path(home) if home is not None else Path.home()
+    full = root / ".venv" / "bin" / "hf"
+    special = re.compile(r"""[\s'"$`\\!*?\[\]{}()<>|&;#~]""")   # 中文不用引號，shell 特殊字元才要
+    try:
+        rel = full.relative_to(home).as_posix()
+    except ValueError:
+        rel = None
+    if rel is not None and not special.search(rel):
+        return "~/" + rel
+    return str(full) if not special.search(str(full)) else shlex.quote(str(full))
+
+
+HF_LOGIN_STEPS = f"""Hugging Face 三步驟（pyannote 是「受限模型」，需要帳號同意條款才能下載）：
   ① 登入 huggingface.co（沒有帳號的話先免費註冊一個）
   ② 打開以下兩個頁面，各自把表單填一填、按「同意」：
        https://huggingface.co/pyannote/segmentation-3.0
        https://huggingface.co/pyannote/speaker-diarization-3.1
   ③ 到 Settings → Access Tokens 建一把 Read 權限的金鑰，然後在終端機執行：
-       ~/Downloads/bookclub-edit/.venv/bin/hf auth login
+       {hf_cli_display()} auth login
      貼上金鑰（金鑰不要貼給 AI、也不要寫進任何檔案）"""
 
 
