@@ -690,7 +690,7 @@ def voice_groups(workdir: str | Path, start: float | None = None, end: float | N
     out = []
     for ref in sorted({it["參考音檔"] for it in items}):
         group = [it for it in items if it["參考音檔"] == ref]
-        todo = [it for it in group if tts.needs_work(done.get(it["id"]), it, Path(ref))]   # 10-03 第九批 #18：停頓沒做成的再試
+        todo = [it for it in group if tts.needs_work(done.get(it["id"]), it, Path(ref), workdir)]   # #18 停頓沒做成、#19 檔案不在
         out.append({"參考音": ref, "名稱": voice_name(ref), "學員": sorted({it["學員"] for it in group}),
                     "段數": len(group), "要做": len(todo)})
     return out
@@ -751,7 +751,7 @@ def generate_students(
             if not p.is_file():
                 raise FileNotFoundError(f"找不到學員聲線參考音：{p}")
         ref_text = ref_txt.read_text(encoding="utf-8").strip()
-        todo = [it for it in group if tts.needs_work(done.get(it["id"]), it, ref_wav)]   # 10-03 第九批 #18：停頓沒做成的再試
+        todo = [it for it in group if tts.needs_work(done.get(it["id"]), it, ref_wav, workdir)]   # #18 停頓沒做成、#19 檔案不在
         log(f"[學員聲音] {voice_name(ref_wav)}（{'、'.join(sorted({it['學員'] for it in group}))}）："
             f"{len(group)} 段（{sum(it['slot_s'] for it in group):.0f} 秒），要生成 {len(todo)} 段")
         if not todo:

@@ -870,10 +870,29 @@ def pause_entry_failed(ent: dict, att: Attempt, has_audio: bool) -> str | None:
     return None
 
 
-def needs_work(rec: dict | None, it: dict, ref_wav: str | Path | None = None) -> bool:
+def output_missing(rec: dict | None, workdir: str | Path) -> bool:
+    """10-03 第九批 #19（全面檢查 C5）：紀錄說做過了，但選定檔、放回時間格的檔（含放回前的來源檔，停格補長用）不在
+    （清硬碟刪了、複製工作區沒帶到）。這樣的句子當成沒做過；重新生成時 `_嘗試快取.json` 對得上的那幾次照樣沿用。
+    沒有紀錄回傳 False（那由 record_stale 管）。"""
+    if not rec:
+        return False
+    fit = rec.get("放回時間格") or {}
+    for path in (rec.get("檔案"), fit.get("檔案") if isinstance(fit, dict) else None,
+                 fit.get("來源檔案") if isinstance(fit, dict) else None):
+        if path:
+            p = wd.localize(path, Path(workdir))
+            if p is None or not p.is_file():
+                return True
+    return False
+
+
+def needs_work(rec: dict | None, it: dict, ref_wav: str | Path | None = None,
+               workdir: str | Path | None = None) -> bool:
     """生成程式挑要做的句子：record_stale，加上上次停頓沒做成的（10-03 第九批 #18：這一步有跑就再試一次；
-    聲音沿用 `_嘗試快取.json`，不會重新生成）。第 4 步「做過沒有」仍只看 record_stale，停頓沒做成不擋流程。"""
-    return record_stale(rec, it, ref_wav) or bool((rec or {}).get("停頓沒做成"))
+    聲音沿用 `_嘗試快取.json`，不會重新生成）。第 4 步「做過沒有」仍只看 record_stale，停頓沒做成不擋流程。
+    給了 workdir 時，聲音檔不在的也要做（10-03 第九批 #19；第 4 步「做過沒有」也看這個）。"""
+    return (record_stale(rec, it, ref_wav) or bool((rec or {}).get("停頓沒做成"))
+            or (workdir is not None and output_missing(rec, workdir)))
 
 
 def _ctx_to_json(ctx: dict) -> dict:
@@ -1255,7 +1274,7 @@ def generate_teacher(
         log("參考音跟上次不同，全部重新生成。")
         done = {}
 
-    todo = [it for it in items if needs_work(done.get(it["id"]), it)]   # 10-03 第九批 #18：停頓沒做成的再試
+    todo = [it for it in items if needs_work(done.get(it["id"]), it, workdir=workdir)]   # #18 停頓沒做成、#19 檔案不在的再做
     log(f"[老師聲音] 共 {len(items)} 句，要生成 {len(todo)} 句（其他 {len(items) - len(todo)} 句沿用上次結果）")
     out_dir = teacher_out_dir(workdir)
     out_dir.mkdir(parents=True, exist_ok=True)

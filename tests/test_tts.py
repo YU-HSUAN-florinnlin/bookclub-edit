@@ -1035,5 +1035,48 @@ def test_old_cache_rechecked_with_new_rules_without_regenerating_same_attempt():
         assert len(calls) == 1 and r["選定"] == 2 and r["嘗試"][0]["內容問題"] == tts.TAIL_MISSING
 
 
+# ---------- 聲音檔不在當作沒做過（10-03 第九批 #19，全面檢查 C5） ----------
+
+def test_output_missing_checks_chosen_and_fitted_files():
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        (w / "生成").mkdir()
+        rec = {"檔案": "生成/A.wav", "放回時間格": {"檔案": "生成/A_放回時間格.wav", "來源檔案": "生成/A_第1次.wav"}}
+        assert tts.output_missing(rec, w)
+        for f in ("A.wav", "A_放回時間格.wav", "A_第1次.wav"):
+            (w / "生成" / f).write_bytes(b"RIFF")
+        assert not tts.output_missing(rec, w)
+        (w / "生成" / "A_第1次.wav").unlink()
+        assert tts.output_missing(rec, w)          # 停格補長用的來源檔不在也不行
+        assert not tts.output_missing(None, w)     # 沒有紀錄：交給 record_stale
+        it = {"id": "A", "text": "甲"}
+        assert not tts.needs_work({**rec, "text": "甲"}, it) and tts.needs_work({**rec, "text": "甲"}, it, workdir=w)
+
+
+def test_deleted_wavs_regenerated_reusing_attempt_cache():
+    """清硬碟刪了選定檔、放回時間格的檔：再跑一次會補回來（嘗試快取的聲音還在就沿用、不重新生成）；
+    連每一次生成的檔都刪了才真的重新生成。"""
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        text = "這個是我們今天課程的重點之一。"
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": text, "slot": [10.0, 10.0 + len(text) * 0.25]}],
+                                 ensure_ascii=False), encoding="utf-8")
+        calls: list = []
+        q = dict(hear=lambda p: text, check_similarity=False, use_pauses=False, log=lambda s: None)
+        r = tts.generate_teacher(work, sp, synth=_len_synth(calls), **q)["句子"][0]
+        assert len(calls) == 1
+        chosen, fitted = work / r["檔案"], work / r["放回時間格"]["檔案"]
+        chosen.unlink()
+        fitted.unlink()
+        calls.clear()
+        r = tts.generate_teacher(work, sp, synth=_len_synth(calls), **q)["句子"][0]
+        assert calls == [] and chosen.is_file() and fitted.is_file()     # 沿用快取，檔案補回來了
+        for f in tts.teacher_out_dir(work).glob("*.wav"):
+            f.unlink()
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), **q)
+        assert calls == [text] and chosen.is_file() and fitted.is_file()  # 快取的聲音也不在：重新生成
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())
