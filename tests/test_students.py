@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import _testtmp  # noqa: F401 — 10-01：這支測試建的暫存資料夾跑完自己清（要在 tempfile 之前）
 
+import json
 import sys
 from pathlib import Path
 
@@ -26,29 +27,54 @@ def _spans(chunks):
     return [(c[0]["start"], c[-1]["end"]) for c in chunks]
 
 
-def test_chunks_join_to_8_20_seconds_at_punctuation():
-    sents = [S(i, i * 3.0, i * 3.0 + 2.9, "一句話，") for i in range(10)]   # 每句 3 秒、都以逗號結尾
-    chunks = students.plan_chunks(sents)
-    for a, b in _spans(chunks):
-        assert 8 <= b - a <= 20, (a, b)
-    assert sum(len(c) for c in chunks) == 10
+def test_chunks_cut_only_at_real_pauses_not_punctuation():
+    # 10-03 #61：句子之間停頓 0.4 秒（≥ 0.3）→ 8 秒以上就切；標點不管
+    sents = [S(i, i * 3.0, i * 3.0 + 2.6, "沒有標點") for i in range(10)]
+    slots = students.plan_slots(sents)
+    for c in slots[:-1]:
+        a, b = c["slot"]
+        assert 8 <= b - a <= 25, (a, b)
+        assert not c["切在講話中"]
+    assert sum(len(c["句子"]) for c in slots) == 10
 
 
-def test_no_break_without_punctuation_until_max():
-    sents = [S(i, i * 3.0, i * 3.0 + 2.9, "沒有標點") for i in range(10)]
-    chunks = students.plan_chunks(sents)
-    # 不能在句中斷：一直接到超過 20 秒才硬斷
-    assert len(chunks[0]) >= 7
+def test_punctuation_alone_does_not_cut():
+    # 每句都有句號、但句子之間沒有停頓（0.1 秒）→ 不在 8 秒切，一直接到 25 秒上限
+    sents = [S(i, i * 3.0, i * 3.0 + 2.9, "一句話。") for i in range(12)]
+    slots = students.plan_slots(sents)
+    a, b = slots[0]["slot"]
+    assert b - a > 20, (a, b)
+    assert b - a <= 25 + 0.1
+    assert slots[0]["切在講話中"], "找不到停頓、切在講話中要標出來"
 
 
-def test_long_gap_allows_break():
-    sents = [S(0, 0, 4.9, "沒有標點"), S(1, 5, 9.9, "沒有標點"), S(2, 12, 16, "沒有標點"), S(3, 16.1, 20, "結尾。")]
-    chunks = students.plan_chunks(sents)
-    assert _spans(chunks)[0] == (0, 9.9)   # 9.9 秒之後停頓 2.1 秒，可以斷
+def test_adjacent_slots_share_cut_point_in_middle_of_pause():
+    # 10-03 下午：相鄰兩格頭尾相接，切點在停頓正中間
+    sents = [S(0, 0, 4.0, "甲"), S(1, 4.1, 8.5, "乙"), S(2, 9.5, 13, "丙"), S(3, 13.1, 18, "丁")]
+    slots = students.plan_slots(sents)
+    assert len(slots) == 2
+    assert slots[0]["slot"][1] == slots[1]["slot"][0] == 9.0   # 8.5–9.5 的正中間
+    assert slots[0]["slot"][0] == 0 and slots[1]["slot"][1] == 18
+
+
+def test_no_pause_found_falls_back_to_quietest_and_flags():
+    # 都沒有停頓：超過 25 秒前切在「最安靜」（這裡＝句子間隔最大）的交界，標切在講話中
+    sents = [S(0, 0, 9, "a"), S(1, 9.05, 18, "b"), S(2, 18.25, 24, "c"), S(3, 24.05, 30, "d")]
+    slots = students.plan_slots(sents)
+    assert [len(c["句子"]) for c in slots] == [2, 2]
+    assert slots[0]["slot"][1] == slots[1]["slot"][0] == 18.125
+    assert slots[0]["切在講話中"] == [18.125] and slots[1]["切在講話中"] == [18.125]
+
+
+def test_earlier_short_pause_used_before_cutting_mid_speech():
+    # 8 秒前有一個停頓、之後一直講到超過 25 秒：切在那個停頓（格子短一點也不要切在講話中）
+    sents = [S(0, 0, 5, "a"), S(1, 5.5, 15, "b"), S(2, 15.05, 24, "c"), S(3, 24.05, 33, "d")]
+    slots = students.plan_slots(sents)
+    assert slots[0]["slot"] == [0, 5.25] and not slots[0]["切在講話中"]
 
 
 def test_short_tail_merges_into_previous():
-    sents = [S(0, 0, 9, "第一句。"), S(1, 9, 12, "尾巴。")]
+    sents = [S(0, 0, 9, "第一句。"), S(1, 9.5, 12, "尾巴。")]
     chunks = students.plan_chunks(sents)
     assert len(chunks) == 1 and _spans(chunks) == [(0, 12)]
 
@@ -58,8 +84,38 @@ def test_single_short_turn_kept():
     assert _spans(chunks) == [(100, 107)]
 
 
+def test_quiet_map_finds_pause_from_audio_not_timestamps():
+    # 原片量音量：逐字稿說句子之間沒有間隔（4.0 接 4.0），但原片 3.8–4.4 真的安靜 → 切在 4.1
+    fs = 0.02
+    db = np.full(int(20 / fs), -25.0)
+    db[int(3.8 / fs):int(4.4 / fs)] = -80.0
+    db[int(10.0 / fs):int(10.2 / fs)] = -80.0   # 0.2 秒：不夠長，不算停頓
+    qm = students.QuietMap(db, 0.0)
+    b = qm.boundary(S(0, 0, 4.0, "a"), S(1, 4.0, 8, "b"))
+    assert b["停頓"] and abs(b["切點"] - 4.1) < 0.02, b
+    b2 = qm.boundary(S(0, 5, 10.1, "a"), S(1, 10.1, 15, "b"))
+    assert not b2["停頓"] and 9.8 <= b2["切點"] <= 10.4   # 沒有停頓：退回最安靜的一點
+    # 逐字稿有間隔、原片卻在講話（間隔是轉文字的誤差）→ 不算停頓
+    b3 = qm.boundary(S(0, 12, 13, "a"), S(1, 14, 15, "b"))
+    assert not b3["停頓"]
+
+
+def test_quiet_map_slots_all_cut_in_quiet():
+    fs = 0.02
+    db = np.full(int(60 / fs), -22.0)
+    pauses = [(8.9, 9.4), (17.3, 17.8), (29.2, 29.9)]
+    for a, b in pauses:
+        db[int(a / fs):int(b / fs)] = -75.0
+    sents = [S(0, 0, 9, "a"), S(1, 9.3, 17.4, "b"), S(2, 17.7, 29.3, "c"), S(3, 29.8, 40, "d")]
+    slots = students.plan_slots(sents, boundary=students.QuietMap(db, 0.0).boundary)
+    cuts = [c["slot"][1] for c in slots[:-1]]
+    assert cuts == [round((a + b) / 2, 3) for a, b in pauses], cuts
+    for c, d in zip(slots, slots[1:]):
+        assert c["slot"][1] == d["slot"][0]
+
+
 def test_cut_range_excluded_and_splits():
-    sents = [S(i, i * 3.0, i * 3.0 + 2.9, "一句話。") for i in range(10)]
+    sents = [S(i, i * 3.0, i * 3.0 + 2.5, "一句話。") for i in range(10)]
     chunks = students.plan_chunks(sents, cut_ranges=[(8.5, 15.5)])   # 蓋掉 s3、s4（中點 10.45、13.45）
     ids = [s["id"] for c in chunks for s in c]
     assert "s3" not in ids and "s4" not in ids
@@ -238,6 +294,34 @@ def test_voices_compare_by_name_and_reset_restores_auto():
             os.environ.pop("BOOKCLUB_DATA_DIR", None)
         else:
             os.environ["BOOKCLUB_DATA_DIR"] = old_env
+
+
+def test_build_items_slots_follow_audio_and_touch_within_turn():
+    # 10-03 #61：假工作區（句子之間原片安靜 0.4 秒）：同一段落的格子頭尾相接、切點在安靜處；老師段落不產生格子
+    import tempfile
+
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    import fake_workdir
+
+    with tempfile.TemporaryDirectory() as t:
+        w = fake_workdir.make(t)
+        items, _ = students.build_items(w)
+        sents = {s["id"]: s for s in json.loads((w / "說話者判斷.json").read_text(encoding="utf-8"))["sentences"]}
+        by_turn: dict = {}
+        for it in items:
+            if it.get("句子"):
+                by_turn.setdefault(it["段落"], []).append(it)
+        assert by_turn and all(k in ("T003", "T005", "T007") for k in by_turn)   # 只有學員段落
+        for its in by_turn.values():
+            its.sort(key=lambda x: x["slot"][0])
+            for a, b in zip(its, its[1:]):
+                assert a["slot"][1] == b["slot"][0], (a["slot"], b["slot"])
+                cut = a["slot"][1]
+                last, first = sents[a["句子"][-1]], sents[b["句子"][0]]
+                assert last["end"] <= cut <= first["start"], (last["end"], cut, first["start"])
+                assert "切在講話中" not in a
+            assert its[0]["slot"][0] == sents[its[0]["句子"][0]]["start"]
+            assert its[-1]["slot"][1] == sents[its[-1]["句子"][-1]]["end"]
 
 
 if __name__ == "__main__":

@@ -5,8 +5,10 @@
 
 - 參考音是匿名聲線（`~/讀書會剪輯資料/聲線/男聲_暫定.wav`／`女聲_暫定.wav`，Common Voice CC0），
   依學員分男女：名冊有性別就照名冊，沒有就用原音估基頻（中位數低於 165 Hz 算男聲）
-- 切段：學員段落照逐字稿的句子切，相鄰句子接成 8～20 秒一段，只在標點（或句子之間停頓 1.5 秒以上）
-  斷開；每段的時間格＝那幾句的起訖
+- 切段（10-03 第八批 #61，做法甲）：只在句子之間、原片真的安靜 0.3 秒以上的地方切（量原片聲音，不看標點），
+  切點放在停頓正中間；8 秒以上遇到停頓就切，找不到就往後接、最長約 25 秒，還是沒有就切在句子之間最安靜的一點，
+  標「切在講話中」。同一段裡相鄰兩格頭尾相接（前一格的結束＝後一格的開始＝切點），不留原聲空隙；
+  段落頭尾（隔著老師或別的段落、刪除範圍）照舊是句子的起訖
 - 文字：第 3 步覆核的校對稿；還沒確認的段落用「建議稿」（名冊本名換成代號的初稿，轉文字的錯字會照念）
 - 落在確認刪除段落裡的句子不生成
 - 放回時間格用學員規則（`fit.py`）：比較短補靜音、長 15% 以內微調語速、再長標紅（組裝時用畫面停格補長）
@@ -18,6 +20,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
@@ -25,10 +28,12 @@ import numpy as np
 
 from bookclub import workdir as wd
 
-END_PUNCT = "。！？!?…"
-CONT_PUNCT = "，,、；;：:"
-MIN_CHUNK_S, MAX_CHUNK_S = 8.0, 20.0
-GAP_BREAK_S = 1.5          # 句子之間停頓這麼久，沒有標點也可以斷
+MIN_CHUNK_S, MAX_CHUNK_S = 8.0, 25.0   # 10-03 #61：8 秒以上遇到停頓就切；找不到停頓最長放寬到 25 秒
+PAUSE_MIN_S = 0.3          # 10-03 #61：原片連續安靜這麼久才算真的停頓
+PAUSE_DROP_DB = 20.0       # 比這個學員段落講話音量（20 毫秒一格的第 90 百分位）低這麼多 dB 算安靜（同 names.PAUSE_DB_DROP）
+PAUSE_EDGE_TOL_S = 0.3     # 逐字稿的句子起訖會差零點幾秒：停頓可以落在句子交界前後這麼多秒內
+QUIET_FRAME_S = 0.02
+MID_SPEECH = "切在講話中"   # 生成紀錄、項目的欄位名：這一格的頭／尾切在沒有停頓的地方（原片秒的清單）
 MALE_F0_HZ = 165.0
 
 
@@ -82,26 +87,73 @@ def log_path(workdir: Path) -> Path:
 
 # ---------- 切段（純函式） ----------
 
-def _breakable(text: str) -> bool:
-    t = (text or "").strip()
-    return bool(t) and t[-1] in END_PUNCT + CONT_PUNCT
-
-
 def in_ranges(a: float, b: float, ranges: list[tuple[float, float]]) -> bool:
     """句子中點落在任何一個範圍裡。"""
     mid = (a + b) / 2
     return any(x <= mid <= y for x, y in ranges)
 
 
-def plan_chunks(sents: list[dict], cut_ranges: list[tuple[float, float]] = (),
-                min_s: float = MIN_CHUNK_S, max_s: float = MAX_CHUNK_S) -> list[list[dict]]:
-    """一個學員段落的句子 → 生成段落（每段是幾句的清單）。
+def gap_boundary(prev: dict, nxt: dict) -> dict:
+    """沒有原片聲音時（測試、聲音檔不在）的句子交界：用逐字稿的句子間隔代替量到的安靜。
+    回傳 {停頓: 有沒有 0.3 秒以上的停頓, 切點: 原片秒, 安靜: 越大越安靜（找不到停頓時挑最安靜的一點用）}。"""
+    gap = nxt["start"] - prev["end"]
+    return {"停頓": gap >= PAUSE_MIN_S, "切點": (prev["end"] + nxt["start"]) / 2, "安靜": gap}
 
-    - 落在刪除範圍裡的句子拿掉，前後不接在一起
-    - 累積到 min_s 秒以上、這句結尾是標點（或跟下一句中間停頓 ≥ GAP_BREAK_S）就斷
-    - 再接下一句會超過 max_s 時：這句結尾可以斷就斷；都不能斷的話超過 max_s 也硬斷（避免一段太長）
-    - 最後一段太短（< min_s）而且跟前一段接起來不超過 max_s → 併進前一段
+
+class QuietMap:
+    """一段原片的音量（20 毫秒一格的 dB）→ 句子交界有沒有真的停頓、切點放哪裡（純計算，不讀檔）。"""
+
+    def __init__(self, db: np.ndarray, t0: float, frame_s: float = QUIET_FRAME_S, thr: float | None = None):
+        self.db, self.t0, self.fs = np.asarray(db, dtype=float), float(t0), float(frame_s)
+        if thr is None:
+            thr = float(np.percentile(self.db, 90)) - PAUSE_DROP_DB if len(self.db) else 0.0
+        self.thr = thr
+        q = np.concatenate([[False], self.db <= thr, [False]])
+        d = np.diff(q.astype(np.int8))
+        self.runs = list(zip(np.where(d == 1)[0].tolist(), np.where(d == -1)[0].tolist()))   # [a, b) 格
+
+    def _f(self, t: float) -> int:
+        return int(round((t - self.t0) / self.fs))
+
+    def boundary(self, prev: dict, nxt: dict) -> dict:
+        lo_out, hi_out = self._f(prev["start"]), self._f(nxt["end"])   # 切點不能超出前一句開頭～後一句結尾
+        lo = max(lo_out, self._f(min(prev["end"], nxt["start"]) - PAUSE_EDGE_TOL_S))
+        hi = min(hi_out, self._f(max(prev["end"], nxt["start"]) + PAUSE_EDGE_TOL_S))
+        lo, hi = max(lo, 0), min(hi, len(self.db))
+        if hi - lo < 1:
+            return gap_boundary(prev, nxt)
+        need = int(round(PAUSE_MIN_S / self.fs))
+        best = None
+        for a, b in self.runs:
+            a2, b2 = max(a, lo_out, 0), min(b, hi_out, len(self.db))
+            if b2 <= lo or a2 >= hi or b2 - a2 < need:   # 要碰到句子交界附近、夠長
+                continue
+            if best is None or b2 - a2 > best[1] - best[0]:
+                best = (a2, b2)
+        if best:
+            return {"停頓": True, "切點": self.t0 + (best[0] + best[1]) / 2 * self.fs,
+                    "安靜": (best[1] - best[0]) * self.fs}
+        k = max(1, int(round(0.1 / self.fs)))   # 找不到停頓：交界附近 0.1 秒平均音量最小的一點
+        seg = self.db[lo:hi]
+        sm = np.convolve(seg, np.ones(k) / k, mode="same") if len(seg) >= k else seg
+        i = int(np.argmin(sm))
+        return {"停頓": False, "切點": self.t0 + (lo + i + 0.5) * self.fs, "安靜": -float(sm[i])}
+
+
+def plan_slots(sents: list[dict], cut_ranges: list[tuple[float, float]] = (),
+               min_s: float = MIN_CHUNK_S, max_s: float = MAX_CHUNK_S,
+               boundary: Callable[[dict, dict], dict] | None = None) -> list[dict]:
+    """一個學員段落的句子 → 生成格（10-03 第八批 #61）：[{句子: [...], slot: [起, 訖], 切在講話中: [原片秒]}]。
+
+    - 落在刪除範圍裡的句子拿掉，前後不接在一起（各自一串，串的頭尾照句子起訖）
+    - 只在句子之間切（第 3 步校對稿一句一句對應）；boundary(前一句, 後一句) 說那個交界有沒有真的停頓、切點在哪
+      （預設 `gap_boundary`；有原片聲音時用 `QuietMap.boundary`）
+    - 累積到 min_s 秒以上、遇到停頓就切；再接下一句會超過 max_s：前面有停頓就切在最後一個停頓，
+      都沒有就切在最安靜的交界，標「切在講話中」
+    - 同一串裡相鄰兩格頭尾相接：前一格的結束＝後一格的開始＝切點（停頓正中間）
+    - 最後一格太短（< min_s）而且跟前一格接起來不超過 max_s → 併進前一格
     """
+    boundary = boundary or gap_boundary
     runs: list[list[dict]] = [[]]
     for s in sorted(sents, key=lambda x: x["start"]):
         if in_ranges(s["start"], s["end"], list(cut_ranges)):
@@ -109,31 +161,89 @@ def plan_chunks(sents: list[dict], cut_ranges: list[tuple[float, float]] = (),
                 runs.append([])
             continue
         runs[-1].append(s)
-    chunks: list[list[dict]] = []
+    out: list[dict] = []
     for run in runs:
         if not run:
             continue
-        cur: list[dict] = []
-        start_idx = len(chunks)
-        for i, s in enumerate(run):
-            cur.append(s)
-            dur = cur[-1]["end"] - cur[0]["start"]
-            nxt = run[i + 1] if i + 1 < len(run) else None
-            if nxt is None:
-                break
-            gap = nxt["start"] - s["end"]
-            can = _breakable(s["text"]) or gap >= GAP_BREAK_S
-            too_long = nxt["end"] - cur[0]["start"] > max_s
-            if (dur >= min_s and can) or (too_long and (can or dur >= max_s)):
-                chunks.append(cur)
-                cur = []
-        if cur:
-            if len(chunks) > start_idx and cur[-1]["end"] - cur[0]["start"] < min_s \
-                    and cur[-1]["end"] - chunks[-1][0]["start"] <= max_s:
-                chunks[-1].extend(cur)
-            else:
-                chunks.append(cur)
-    return chunks
+        bnds = [boundary(run[i], run[i + 1]) for i in range(len(run) - 1)]
+        groups: list[tuple[int, int]] = []
+        i0 = 0
+        while i0 < len(run):
+            t0, i = (run[i0]["start"] if i0 == 0 else bnds[i0 - 1]["切點"]), i0   # 格子從切點開始算長度
+            while True:
+                if i == len(run) - 1:
+                    groups.append((i0, i))
+                    i0 = len(run)
+                    break
+                if run[i]["end"] - t0 >= min_s and bnds[i]["停頓"]:
+                    groups.append((i0, i))
+                    i0 = i + 1
+                    break
+                if run[i + 1]["end"] - t0 > max_s:
+                    cands = list(range(i0, i + 1))
+                    paused = [j for j in cands if bnds[j]["停頓"]]
+                    j = paused[-1] if paused else max(cands, key=lambda j: (bnds[j]["安靜"], j))
+                    groups.append((i0, j))
+                    i0 = j + 1
+                    break
+                i += 1
+        if len(groups) >= 2:
+            (pa, _), (la, lb) = groups[-2], groups[-1]
+            if run[lb]["end"] - run[la]["start"] < min_s and run[lb]["end"] - run[pa]["start"] <= max_s:
+                groups[-2:] = [(pa, lb)]
+        for k, (a, b) in enumerate(groups):
+            head = None if k == 0 else bnds[a - 1]
+            tail = None if k == len(groups) - 1 else bnds[b]
+            sa = run[a]["start"] if head is None else head["切點"]
+            sb = run[b]["end"] if tail is None else tail["切點"]
+            sb = max(sb, sa + 0.05)
+            if tail is not None:
+                tail["切點"] = sb   # 下一格從同一點開始（頭尾相接）
+            mid = [round(x["切點"], 3) for x in (head, tail) if x is not None and not x["停頓"]]
+            out.append({"句子": run[a:b + 1], "slot": [round(sa, 3), round(sb, 3)], MID_SPEECH: mid})
+    return out
+
+
+def plan_chunks(sents: list[dict], cut_ranges: list[tuple[float, float]] = (),
+                min_s: float = MIN_CHUNK_S, max_s: float = MAX_CHUNK_S,
+                boundary: Callable[[dict, dict], dict] | None = None) -> list[list[dict]]:
+    """`plan_slots` 只取每一格的句子。"""
+    return [c["句子"] for c in plan_slots(sents, cut_ranges, min_s, max_s, boundary)]
+
+
+def _turn_db(audio: Path, a: float, b: float) -> tuple[np.ndarray, float] | None:
+    """原片 [a, b] 的音量（20 毫秒一格的 dB）。同一支程式裡同一段只讀一次。"""
+    try:
+        st = audio.stat()
+    except OSError:
+        return None
+    return _turn_db_cached(str(audio), st.st_mtime_ns, st.st_size, round(a, 2), round(b, 2))
+
+
+@lru_cache(maxsize=256)
+def _turn_db_cached(path: str, _mtime: int, _size: int, a: float, b: float) -> tuple[np.ndarray, float] | None:
+    import soundfile as sf
+
+    from bookclub.roomtone import frame_db
+
+    try:
+        with sf.SoundFile(path) as f:
+            sr = f.samplerate
+            a = max(0.0, a)
+            f.seek(min(int(a * sr), f.frames))
+            x = f.read(max(0, int((b - a) * sr)), dtype="float32")
+    except Exception:  # noqa: BLE001 — 讀不到就退回用句子間隔
+        return None
+    if x.ndim > 1:
+        x = x.mean(axis=1)
+    db = frame_db(x, sr)
+    return (db, a) if len(db) else None
+
+
+def turn_quiet(workdir: Path, a: float, b: float) -> QuietMap | None:
+    """學員段落 [a, b]（前後各多讀 1 秒）的安靜地圖；原片聲音不在就回傳 None（改用句子間隔）。"""
+    got = _turn_db(wd.audio_path(Path(workdir)), a - 1.0, b + 1.0)
+    return QuietMap(got[0], got[1]) if got else None
 
 
 def clip_slot(a: float, b: float, cut_ranges: list[tuple[float, float]]) -> tuple[float, float]:
@@ -263,11 +373,14 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
                 })
             continue
         pieces = split_edited(t, all_sents) if edited else None
-        for k, group in enumerate(plan_chunks(sents, cuts), start=1):
+        qm = turn_quiet(workdir, t["start"], t["end"]) if len(sents) > 1 else None
+        for k, chunk in enumerate(plan_slots(sents, cuts, boundary=qm.boundary if qm else None), start=1):
+            group = chunk["句子"]
             raw = "".join(s["text"] for s in group)
             src = "".join(pieces[s["id"]] for s in group) if pieces else raw
             text, changes = review.replace_real_names(src, table)
-            a, b = clip_slot(group[0]["start"], group[-1]["end"], cuts)
+            a, b = clip_slot(*chunk["slot"], cuts)
+            mid = {MID_SPEECH: chunk[MID_SPEECH]} if chunk[MID_SPEECH] else {}
             if not text.strip():
                 # 校對時這幾句的字全刪了：不生成，組裝時整格消音（見 empty_chunks）
                 if keep_empty:
@@ -279,7 +392,7 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
             items.append({
                 "id": f"{t['id']}_{k:02d}", "段落": t["id"], "學員": who,
                 "text": text, "原文": raw, "slot": [a, b], "slot_s": b - a, "句子": [s["id"] for s in group],
-                "換成代號": len(changes), "文字來源": "校對稿" if pieces else "建議稿",
+                "換成代號": len(changes), "文字來源": "校對稿" if pieces else "建議稿", **mid,
             })
     if not keep_empty:
         items += overlap_items(workdir, items, spans, kept, cuts, table, lo, hi, only)
@@ -643,7 +756,8 @@ def generate_students(
             f"{len(group)} 段（{sum(it['slot_s'] for it in group):.0f} 秒），要生成 {len(todo)} 段")
         if not todo:
             continue
-        extra = {it["id"]: {k: it[k] for k in ("段落", "學員", "聲線", "聲線名稱", "句子", "換成代號", "文字來源", "重疊", "疊放")
+        extra = {it["id"]: {k: it[k] for k in ("段落", "學員", "聲線", "聲線名稱", "句子", "換成代號", "文字來源", "重疊", "疊放",
+                                                     MID_SPEECH)
                             if k in it} for it in todo}
 
         def save_group() -> None:
