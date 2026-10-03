@@ -597,6 +597,51 @@ def test_redo_returned_regenerates_only_returned_then_step5_unseen():
     assert prog["步驟"]["組裝"]["狀態"] == "跳過" and rendered == [1]
 
 
+def test_reassemble_only_keeps_generation_then_step5_unseen():
+    """10-03 第八批 #23：第 4 步「只重新組裝」：退回的那幾筆記進重做中，但不清生成紀錄、快取、聲音檔，不記新版本、
+    不換種子；只跑組裝這一步；組裝做完回到第 5 步還沒看、標「重做過（只重新組裝）」。"""
+    from bookclub import finalcheck, proclog
+
+    w = _fresh()
+    items = _all_generated(w)
+    target = items[0]
+    log = {"產生時間": "t1", "片段": None, "紀錄": [
+        {"類型": "學員重念", "原片": list(target["slot"]), "成品": list(target["slot"]), "做了什麼": "學員1 用女聲 AI 重念",
+         "檔案": "a.wav", "覆核項目": [f"學員段落:{target['段落']}"], "文字": target["text"]}]}
+    wd.write_json(proclog.log_path(w), log)
+    k1 = finalcheck.record_key(log["紀錄"][0])
+    finalcheck.decide_record(w, k1, "退回重做", "開頭有雜音")
+    od = students.out_dir(w)
+    before = {f.name: f.read_bytes() for f in od.iterdir() if f.is_file()}
+    stu_log = wd.read_json(students.log_path(w))
+    ran = []
+
+    def render(wk, ctx):
+        ran.append("組裝")
+        assert finalcheck.redo_pending(wk) == []                              # 只重新組裝的不算「還沒生成好」
+        wd.write_json(proclog.log_path(wk), {**log, "產生時間": "t2"})
+
+    runners = {"老師名字": lambda wk, c: ran.append("老師名字"), "學員重念": lambda wk, c: ran.append("學員重念"),
+               "保留原聲學員名字": lambda wk, c: ran.append("保留原聲學員名字"), "組裝": render}
+    checks = {k: (lambda wk, c: (True, "假的")) for k in runners}
+    prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, redo_returned=True,
+                               reassemble_only=True, log=lambda s: None)
+    assert ran == ["組裝"] and prog["步驟"]["組裝"]["狀態"] == "做完" and prog["步驟"]["學員重念"]["狀態"] == "略過"
+    after = {f.name: f.read_bytes() for f in od.iterdir() if f.is_file()}
+    assert after == before and not list(od.glob("重做前_*"))                  # 生成檔、快取都沒動，沒有備份資料夾
+    assert wd.read_json(students.log_path(w)) == stu_log                      # 生成紀錄（含種子）沒動
+    assert not (od / tts.REDO_VERSIONS).exists()                              # 沒記新版本
+    chk = wd.read_json(finalcheck.check_path(w))
+    assert k1 not in chk["逐筆"] and "重做中" not in chk and chk["重做過"]["只重新組裝"] is True
+    got = {r["鍵"]: r["重做過"] for r in finalcheck.page_data(w)["紀錄"]}
+    assert got[k1]["做法"] == "只重新組裝" and got[k1]["標籤"] == "重做過（只重新組裝）" and got[k1]["原因"] == "開頭有雜音"
+    # 沒有退回的時候按「只重新組裝」：照樣重新組裝一次（組裝做過了也不跳過）
+    ran.clear()
+    prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, redo_returned=True,
+                               reassemble_only=True, log=lambda s: None)
+    assert ran == ["組裝"] and prog["步驟"]["組裝"]["狀態"] == "做完"
+
+
 def test_redo_list_warns_when_text_and_range_unchanged():
     """10-02：退回的那一句文字、範圍都沒改：第 4 步寫清楚會換一種念法重新生成、是第幾版；改了字就照改過的。"""
     from bookclub import finalcheck, proclog

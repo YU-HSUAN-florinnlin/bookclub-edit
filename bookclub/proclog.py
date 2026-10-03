@@ -36,6 +36,8 @@ MERGE_GAP_S = 0.2         # 兩處變動中間隔不到 0.2 秒，併成一處�
 # 會動到聲音的紀錄類型（檢查只拿這些當「有登記」）；模糊是畫面、重疊標記只是說明，不算
 AUDIO_KINDS = ("學員重念", "名字整句換掉", "名字消音", "局部消音", "學員名字消音", "學員名字換代號", "刪除", "停格",
                "換聲音", "消音")
+# 10-03 第八批 #23：換聲音類（生成的聲音放進原片）＋停格（重念的後半截）：接縫做法改了，這幾類的成品聲音跟著變
+SEAM_KINDS = ("學員重念", "名字整句換掉", "換聲音", "學員名字換代號", "停格")
 
 
 def log_path(workdir: Path) -> Path:
@@ -81,6 +83,7 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
                 rec["做了什麼"] += f"；比時間格長，加快 {e['加快'] - 1:.0%}"
             if e.get("停格秒"):
                 rec["做了什麼"] += f"；結尾停格 {e['停格秒']:.2f} 秒"
+                rec["停格秒"] = _r(e["停格秒"])   # 10-03 第八批 #23：內容指紋用（不用從「做了什麼」拆）
                 if rec["成品"][1] is not None:
                     rec["成品"][1] = _r(rec["成品"][1] + e["停格秒"])
         elif kind == "名字整句換掉":
@@ -121,7 +124,7 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
             items = [k for a, b, k in links.get("重疊", []) if abs(b - f["at"]) <= 0.05 or a <= f["at"] <= b]
         recs.append({"類型": "停格", "原片": [_r(f["at"]), _r(f["at"])], "成品": [_r(t), _r(t + f["dur"]) if t is not None else None],
                      "動到聲音": True, "要人聽": False, "檔案": None, "文字": None, "覆核項目": items,
-                     "做了什麼": f"停格 {f['dur']:.2f} 秒：{f.get('原因', '')}"})
+                     "停格秒": _r(f["dur"]), "做了什麼": f"停格 {f['dur']:.2f} 秒：{f.get('原因', '')}"})
 
     if d.get("模糊"):
         s, e = d["模糊"]
@@ -320,6 +323,38 @@ def check_render_files(orig_path: Path, new_path: Path, plist: list[dict], a: fl
 
 # ---------- 讀寫工作區 ----------
 
+def file_print(path: Path) -> str | None:
+    """生成檔的內容指紋（sha1 前 16 碼）：同一個路徑換了新檔也認得出來。讀不到回 None。"""
+    import hashlib
+
+    try:
+        h = hashlib.sha1()
+        with open(path, "rb") as f:
+            for block in iter(lambda: f.read(1 << 20), b""):
+                h.update(block)
+        return h.hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def stamp_contents(workdir: Path, recs: list[dict]) -> list[dict]:
+    """10-03 第八批 #23：每一筆補內容指紋要的兩樣（第 5 步 `finalcheck.content_print` 用）——
+    `檔案指紋`（用了生成檔的才有）、`接縫做法版本`（換聲音類與停格，`assemble.SEAM_VERSION`）。直接改傳進來的。"""
+    from bookclub.assemble import SEAM_VERSION
+
+    cache: dict[str, str | None] = {}
+    for r in recs:
+        f = r.get("檔案")
+        if f:
+            if f not in cache:
+                cache[f] = file_print(Path(workdir) / f)
+            if cache[f]:
+                r["檔案指紋"] = cache[f]
+        if r.get("類型") in SEAM_KINDS:
+            r["接縫做法版本"] = SEAM_VERSION
+    return recs
+
+
 def collect_links(workdir: Path, d: dict) -> dict:
     """對回第 3 步覆核項目要的對照表（讀學員紀錄、覆核決定、重疊）。"""
     from bookclub import overlap as overlap_mod
@@ -350,7 +385,7 @@ def write_render_log(workdir: str | Path, d: dict, plist: list[dict], orig_path:
                      tag: str) -> dict:
     """`render video` 組完聲音之後呼叫（一行）：寫 `生成/處理紀錄.json`。"""
     workdir = Path(workdir)
-    recs = build_records(d, plist, collect_links(workdir, d))
+    recs = stamp_contents(workdir, build_records(d, plist, collect_links(workdir, d)))
     a = d["範圍"][0]
     chk = check_render_files(orig_path, new_path, plist, a, recs)   # 09-30：分段讀、分段比，不整條讀進來
     return _write(workdir, {"版本": 1, "來源": f"render video {tag}", "範圍": d["範圍"],
@@ -362,7 +397,7 @@ def write_render_log(workdir: str | Path, d: dict, plist: list[dict], orig_path:
 def write_audio_log(workdir: str | Path, edits: list[dict], orig_path: Path, new_path: Path) -> dict:
     """`render audio` 組完新聲音軌之後呼叫（一行）：寫 `生成/處理紀錄.json`。"""
     workdir = Path(workdir)
-    recs = records_from_edl(edits)
+    recs = stamp_contents(workdir, records_from_edl(edits))
     chk = check_files(orig_path, new_path, recs)
     return _write(workdir, {"版本": 1, "來源": "render audio", "範圍": None,
                             "產生時間": datetime.now().isoformat(timespec="seconds"),

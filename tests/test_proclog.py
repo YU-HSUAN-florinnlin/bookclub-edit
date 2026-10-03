@@ -132,6 +132,33 @@ def test_build_records_links_to_review_items():
     assert (0.0, 30.0) not in proclog.audio_spans(recs)
 
 
+def test_stamp_contents_file_print_and_seam_version():
+    """10-03 第八批 #23：處理紀錄每一筆補檔案內容指紋（同一個路徑換了新檔認得出來）與接縫做法版本（只有換聲音類、停格）。"""
+    from bookclub import assemble
+
+    w = Path(tempfile.mkdtemp())
+    (w / "生成").mkdir()
+    (w / "生成" / "a.wav").write_bytes(b"first")
+    recs = [{"類型": "學員重念", "檔案": "生成/a.wav"}, {"類型": "刪除", "檔案": None},
+            {"類型": "停格", "檔案": None}, {"類型": "學員重念", "檔案": "生成/沒有這個檔.wav"}]
+    proclog.stamp_contents(w, recs)
+    first = recs[0]["檔案指紋"]
+    assert first and recs[0]["接縫做法版本"] == assemble.SEAM_VERSION and recs[2]["接縫做法版本"] == assemble.SEAM_VERSION
+    assert "接縫做法版本" not in recs[1] and "檔案指紋" not in recs[1] and "檔案指紋" not in recs[3]
+    (w / "生成" / "a.wav").write_bytes(b"second")
+    again = proclog.stamp_contents(w, [{"類型": "學員重念", "檔案": "生成/a.wav"}])
+    assert again[0]["檔案指紋"] != first
+
+
+def test_build_records_keeps_freeze_seconds():
+    d = {"動作": [{"類型": "學員重念", "id": "T001_1", "start": 10.0, "end": 12.0, "檔案": "b.wav", "來源檔案": "a.wav",
+                 "停格秒": 0.4, "text": "x"}],
+         "停格": [{"at": 12.0, "dur": 0.4, "edit": "T001_1", "原因": "長"}]}
+    plist = render.pieces(0.0, 20.0, [], d["停格"])
+    recs = proclog.build_records(d, plist)
+    assert [r.get("停格秒") for r in recs] == [0.4, 0.4]
+
+
 def test_check_files_streams():
     x = _speech(130.0)
     y = x.copy()

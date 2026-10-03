@@ -110,11 +110,108 @@ def test_refresh_drops_stale_results_after_rerender():
     chk = _check(逐筆={k1: {"結果": "退回重做", "指紋": fc.record_print(LOG["紀錄"][0])},
                      k2: {"結果": "通過", "指紋": fc.record_print(LOG["紀錄"][1])}},
                  看過區段=[[0, 100]], 處理紀錄產生時間="t1")
-    assert fc.refresh(chk, LOG) == chk                      # 紀錄沒重寫：不動
+    same = fc.refresh(chk, LOG)                             # 紀錄沒重寫：結果、看過的都不動（只補新格式的欄位）
+    assert same["逐筆"] == chk["逐筆"] and same["看過區段"] == chk["看過區段"] and same["看過區段原片"] == [[0.0, 100.0]]
     new = {**LOG, "產生時間": "t2", "紀錄": [{**LOG["紀錄"][0], "檔案": "b.wav"}, LOG["紀錄"][1]]}
     out = fc.refresh(chk, new)
     assert k1 not in out["逐筆"] and out["逐筆"][k2]["結果"] == "通過"   # 重做過的那筆要重看，沒變的保留
-    assert out["看過區段"] == [] and out["處理紀錄產生時間"] == "t2"      # 新的成品要重新看完
+    assert out["看過區段"] == [] and out["處理紀錄產生時間"] == "t2"      # 舊格式（沒有原片時間）：這一次歸零
+
+
+# ---------- 10-03 第八批 #23：重新組裝後，沒變的不用重看 ----------
+
+REC = {"類型": "學員重念", "原片": [50.0, 58.0], "成品": [50.0, 58.0], "做了什麼": "學員1 重念", "檔案": "生成/a.wav",
+       "檔案指紋": "aaaa", "覆核項目": ["學員段落:T003"], "文字": "稿子", "接縫做法版本": 1}
+CUT = {"類型": "刪除", "原片": [80.0, 85.0], "成品": [80.0, 80.0], "做了什麼": "刪除 5 秒", "檔案": None, "覆核項目": ["刪除段落:S1"]}
+
+
+def _log(stamp: str, recs: list, plist: list) -> dict:
+    return {"產生時間": stamp, "片段": plist, "紀錄": recs, "未登記的變動": []}
+
+
+def test_content_print_ignores_output_time_but_sees_content():
+    p = fc.content_print(REC)
+    assert fc.content_print({**REC, "成品": [40.0, 48.0]}) == p              # 成品時間位移不算變了
+    assert fc.content_print({**REC, "檔案指紋": "bbbb"}) != p                # 同一個路徑換了新檔
+    assert fc.content_print({**REC, "原片": [50.0, 58.5]}) != p
+    assert fc.content_print({**REC, "文字": "改過"}) != p
+    assert fc.content_print({**REC, "停格秒": 0.4}) != p
+    assert fc.content_print({**REC, "接縫做法版本": 2}) != p                  # 接縫做法改了：換聲音類要重聽
+    no_ver = {k: v for k, v in REC.items() if k != "接縫做法版本"}
+    assert fc.content_print(no_ver) == p                                     # 舊處理紀錄沒寫＝第 1 版
+    assert fc.content_print({**CUT, "接縫做法版本": 2}) == fc.content_print(CUT)   # 刪除、消音類不看接縫做法
+    old = {k: v for k, v in REC.items() if k != "檔案指紋"}
+    assert fc.content_print(old) != p and "生成/a.wav" in fc.content_print(old)   # 沒有檔案指紋：退回用路徑
+
+
+def test_watched_source_roundtrip_with_cut_and_freeze():
+    plist = [{"src": [0.0, 10.0], "freeze": 0.0}, {"src": [20.0, 30.0], "freeze": 1.5}, {"src": [30.0, 40.0], "freeze": 0.0}]
+    src, pts = fc.watched_to_source([[5.0, 21.5]], plist)                   # 跨過剪點、整段停格都看過
+    assert src == [[5.0, 10.0], [20.0, 30.0]] and pts == [30.0]
+    assert fc.watched_from_source(src, pts, plist) == [[5.0, 21.5]]
+    src, pts = fc.watched_to_source([[5.0, 20.5]], plist)                   # 停格只看了一部分：不記
+    assert pts == [] and fc.watched_from_source(src, pts, plist) == [[5.0, 20.0]]
+    # 換一份片段表（前面多剪 5 秒、停格拿掉）：原片時間對回新的成品時間
+    new = [{"src": [0.0, 5.0], "freeze": 0.0}, {"src": [20.0, 40.0], "freeze": 0.0}]
+    assert fc.watched_from_source([[0.0, 10.0], [20.0, 30.0]], [30.0], new) == [[0.0, 15.0]]
+    assert fc.watched_to_source([[1, 2]], None) == ([[1.0, 2.0]], [])
+    assert fc.near_output_time(7.0, new) == 5.0 and fc.near_output_time(25.0, new) == 10.0
+
+
+def test_refresh_cut_earlier_keeps_later_results_and_shifts_watched():
+    plist1 = [{"src": [0.0, 100.0], "freeze": 0.0}]
+    log1 = _log("t1", [REC], plist1)
+    chk = _check(逐筆={fc.record_key(REC): {"結果": "通過", "指紋": fc.record_print(REC)}}, 處理紀錄產生時間="t1",
+                 整片退回=[{"id": "R001", "成品秒": 70.0, "原片秒": 70.0, "原因": "聲音怪", "覆核項目": []}])
+    chk = fc.refresh(chk, log1)
+    fc._set_watched(chk, [[0.0, 100.0]], plist1)                             # add_watched 存的樣子
+    # 重新組裝：前面多剪 10–20 秒（新出現一筆刪除），學員重念的成品時間往前 10 秒，內容沒變
+    plist2 = [{"src": [0.0, 10.0], "freeze": 0.0}, {"src": [20.0, 100.0], "freeze": 0.0}]
+    cut = {**CUT, "原片": [10.0, 20.0], "成品": [10.0, 10.0]}
+    log2 = _log("t2", [cut, {**REC, "成品": [40.0, 48.0]}], plist2)
+    out = fc.refresh(chk, log2)
+    assert out["逐筆"][fc.record_key(REC)]["結果"] == "通過"                   # 後面通過的保留
+    assert out["看過區段"] == [[0.0, 8.0], [12.0, 90.0]]                      # 跟著位移；只有新的剪點前後 2 秒要重看
+    assert out["整片退回"][0]["成品秒"] == 60.0 and out["整片退回"][0]["原片秒"] == 70.0   # 整片退回還在，成品秒重算
+    assert out["處理紀錄產生時間"] == "t2" and fc.record_key(cut) in out["處理紀錄快照"]
+
+
+def test_refresh_new_file_resets_only_that_record():
+    plist = [{"src": [0.0, 100.0], "freeze": 0.0}]
+    k1, k2 = fc.record_key(REC), fc.record_key(CUT)
+    chk = _check(逐筆={k1: {"結果": "通過", "指紋": fc.record_print(REC)}, k2: {"結果": "通過", "指紋": fc.record_print(CUT)}},
+                 處理紀錄產生時間="t1")
+    chk = fc.refresh(chk, _log("t1", [REC, CUT], plist))
+    fc._set_watched(chk, [[0.0, 100.0]], plist)
+    out = fc.refresh(chk, _log("t2", [{**REC, "檔案指紋": "bbbb"}, CUT], plist))   # 換了生成檔（路徑一樣）
+    assert k1 not in out["逐筆"] and out["逐筆"][k2]["結果"] == "通過"
+    assert out["看過區段"] == [[0.0, 48.0], [60.0, 100.0]]                    # 那一筆的範圍前後各 2 秒要重看
+    # 接縫做法改了（#60）：換聲音類回到還沒看、範圍要重看；刪除照舊保留
+    chk2 = fc.refresh({**chk, "逐筆": {k1: {"結果": "通過", "指紋": fc.record_print(REC)},
+                                      k2: {"結果": "通過", "指紋": fc.record_print(CUT)}}},
+                      _log("t3", [{**REC, "接縫做法版本": 2}, {**CUT, "接縫做法版本": 2}], plist))
+    assert k1 not in chk2["逐筆"] and k2 in chk2["逐筆"] and chk2["看過區段"] == [[0.0, 48.0], [60.0, 100.0]]
+
+
+def test_old_check_file_upgrades_prints_and_watched():
+    """舊格式（10-03 以前）的成品檢查檔：舊指紋對得上就換新指紋；處理紀錄沒重寫時看過區段補原片時間，之後重新組裝照樣保留。"""
+    plist = [{"src": [0.0, 100.0], "freeze": 0.0}]
+    old_rec = {k: v for k, v in REC.items() if k not in ("檔案指紋", "接縫做法版本")}
+    old_cut = dict(CUT)
+    log1 = _log("t1", [old_rec, old_cut], plist)
+    k1, k2 = fc.record_key(old_rec), fc.record_key(old_cut)
+    chk = {"版本": 1, "逐筆": {k1: {"結果": "退回重做", "原因": "開頭雜音", "指紋": fc.legacy_print(old_rec)},
+                             k2: {"結果": "通過", "指紋": fc.legacy_print(old_cut)}},
+           "整片退回": [], "未登記確認": {}, "看過區段": [[0.0, 100.0]], "成品長度": 100.0, "處理紀錄產生時間": "t1"}
+    up = fc.refresh(chk, log1)
+    assert up["指紋版本"] == fc.PRINT_VERSION and up["逐筆"][k2]["指紋"] == fc.content_print(old_cut)
+    assert up["逐筆"][k1]["指紋"] == fc.content_print(old_rec) and up["看過區段原片"] == [[0.0, 100.0]]
+    # 只重新組裝（新程式寫的處理紀錄：多了檔案指紋、接縫做法版本 → 學員重念算變了；刪除沒變）
+    out = fc.refresh(up, _log("t2", [REC, CUT], plist))
+    assert k1 not in out["逐筆"] and out["逐筆"][k2]["結果"] == "通過" and out["看過區段"] == [[0.0, 48.0], [60.0, 100.0]]
+    # 處理紀錄已經換過才第一次打開（舊指紋含成品時間）：沒位移的照樣對得上
+    out2 = fc.refresh(chk, _log("t2", [old_rec, old_cut], plist))
+    assert out2["逐筆"][k2]["結果"] == "通過" and out2["看過區段"] == []      # 沒有原片時間：這一次歸零
 
 
 # ---------- 存檔（假工作區） ----------
@@ -170,6 +267,30 @@ def test_save_flow_sendback_and_export():
     assert r["看過比例"] == 1.0 and r["看過區段"] == [[0.0, 10.0]]
     out = fc.export_final(w)
     assert (w / out["檔案"]).is_file() and out["檔案"] == "輸出/最終成品_0-0_sw.mp4"
+
+
+def test_whole_flags_survive_rerender_until_redone():
+    """10-03 第八批 #23：整片看時退回的，重新組裝不清掉；送回重做、組裝做完（finish_redo）的那幾筆才拿掉，
+    重做過的那幾筆看過的範圍要重看，其他看過的保留。"""
+    if not shutil.which("ffmpeg"):
+        return
+    w = _workdir()
+    fc.page_data(w)
+    fc.add_whole_redo(w, 2.0, "這裡卡一下")
+    fc.add_whole_redo(w, 7.0, "這裡也怪")
+    fc.add_watched(w, [[0.0, 10.0]])
+    log = proclog.load(w)
+    wd.write_json(proclog.log_path(w), {**log, "產生時間": "t-重新組裝"})
+    d = fc.page_data(w)
+    assert [x["id"] for x in d["整片退回"]] == ["R001", "R002"] and d["看過區段"] == [[0.0, 10.0]]
+    chk = fc.load_check(w)
+    chk["重做中"] = {"時間": "x", "項目": [{"鍵": "R001", "來源": "整片看", "原片": [2.0, 2.0], "生成": [], "只重新組裝": True}]}
+    fc._save(w, chk)
+    wd.write_json(proclog.log_path(w), {**log, "產生時間": "t-重做完"})
+    back = fc.finish_redo(w)
+    assert back["只重新組裝"] is True
+    d = fc.page_data(w)
+    assert [x["id"] for x in d["整片退回"]] == ["R002"] and d["看過區段"] == [[4.0, 10.0]]
 
 
 def test_watched_rejects_other_product():

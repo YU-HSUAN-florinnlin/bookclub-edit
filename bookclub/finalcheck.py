@@ -29,6 +29,7 @@ from bookclub import workdir as wd
 
 PASS, REDO = "通過", "退回重做"
 UNLOGGED_OK = "沒問題"
+REASSEMBLE_ONLY = "只重新組裝"   # 10-03 第八批 #23：第 4 步「只重新組裝」（不重新生成）的退回項目
 FULL_WATCH_SLACK_S = 0.5     # 看過比例：沒看到的地方加起來不超過 0.5 秒就算看完（播放器最後一格、四捨五入）
 CONTEXT_S = 2.0              # 處理前／處理後試聽，前後各多 2 秒
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".webm", ".mkv")
@@ -77,8 +78,37 @@ def record_key(r: dict) -> str:
     return f"{r['類型']}@{s:.2f}" if s is not None else f"{r['類型']}#{'、'.join(r.get('覆核項目') or [])}"
 
 
+PRINT_VERSION = 2            # 成品檢查檔 `指紋版本`：2＝content_print（10-03 第八批 #23）；沒寫的是舊指紋（legacy_print）
+WATCH_CLEAR_PAD_S = 2.0      # 重新組裝後，內容變了的那幾筆成品範圍前後各多 2 秒裡看過的部分要重看
+
+
+def content_print(r: dict) -> str:
+    """處理紀錄一筆的**內容指紋**（10-03 第八批 #23；之後「修改需求紀錄」#90 沿用，純函式）。
+
+    內容一樣＝成品這一段聽起來一樣，之前的通過／退回／看過照算；不一樣就要重看。含：
+    - `做了什麼`：處理方式（學員重念、整句換掉、消音、剪掉⋯⋯與加快、停格的說明）
+    - 檔案：用了哪個生成檔，看**檔案內容**（處理紀錄的 `檔案指紋`，`proclog.stamp_contents` 寫）——同一個路徑換了新檔也算變了；
+      舊的處理紀錄沒有 `檔案指紋` 時退回用路徑
+    - `原片` 起訖、`文字`（要念的字）、`停格秒`
+    - 接縫做法版本（`接縫做法版本`，`assemble.SEAM_VERSION`）：只算換聲音類與停格（`proclog.SEAM_KINDS`）；
+      舊的處理紀錄沒寫的當第 1 版。刪除、消音類不受接縫做法影響，不算進去
+    **不含成品時間**：前面多剪一段、停格秒數變，後面每一筆的成品時間都位移，但聲音內容沒變，不算變了。"""
+    import json
+
+    kind = r.get("類型")
+    seam = r.get("接縫做法版本", 1) if kind in proclog.SEAM_KINDS else None
+    parts = {"類型": kind, "做了什麼": r.get("做了什麼"), "檔案": r.get("檔案指紋") or r.get("檔案"),
+             "原片": r.get("原片"), "文字": r.get("文字"), "停格秒": r.get("停格秒"), "接縫": seam}
+    return json.dumps(parts, ensure_ascii=False, sort_keys=True)
+
+
 def record_print(r: dict) -> str:
-    """這一筆的內容指紋：重組之後內容變了（換了生成檔、時間變了），之前的通過／退回就不算數。"""
+    """這一筆的內容指紋（第 5 步逐筆結果用）：見 `content_print`。"""
+    return content_print(r)
+
+
+def legacy_print(r: dict) -> str:
+    """10-03 以前的指紋（做了什麼＋檔案路徑＋成品時間＋文字）。只拿來認舊的成品檢查檔：對得上就換成新指紋。"""
     return "|".join(str(x) for x in (r.get("做了什麼"), r.get("檔案"), r.get("成品"), r.get("文字")))
 
 
@@ -108,6 +138,123 @@ def to_output_time(t: float, plist: list[dict] | None) -> float | None:
     from bookclub.render import to_output_time as f
 
     return f(t, plist)
+
+
+def near_output_time(t: float, plist: list[dict] | None) -> float:
+    """原片時間 → 成品時間；落在剪掉的範圍裡的，算剪點（後面那一段的開頭）。整片退回、拿掉的紀錄換算用（純函式）。"""
+    if not plist:
+        return t
+    acc = 0.0
+    for p in plist:
+        s, e = p["src"]
+        if t < s:
+            return acc
+        if t <= e:
+            return acc + (t - s)
+        acc += (e - s) + p["freeze"]
+    return acc
+
+
+def watched_to_source(ranges: list, plist: list[dict] | None) -> tuple[list[list[float]], list[float]]:
+    """看過區段（成品時間）→（原片時間的區段, 整段看過的停格點）（10-03 第八批 #23，純函式）。
+    跨過剪點的一段拆成好幾段原片；停格整段都看過才記那一個停格點（原片時間），只看了一部分的不記。"""
+    ranges = merge_ranges(ranges)
+    if not plist:
+        return ranges, []
+    src: list[list[float]] = []
+    pts: list[float] = []
+    eps = 1e-3
+    for x, y in ranges:
+        acc = 0.0
+        for p in plist:
+            s, e = p["src"]
+            n = e - s
+            lo, hi = max(x, acc), min(y, acc + n)
+            if hi > lo:
+                src.append([s + (lo - acc), s + (hi - acc)])
+            acc += n
+            if p["freeze"]:
+                if x <= acc + eps and y >= acc + p["freeze"] - eps:
+                    pts.append(round(e, 3))
+                acc += p["freeze"]
+    return merge_ranges(src), sorted(set(pts))
+
+
+def watched_from_source(src: list, points: list, plist: list[dict] | None) -> list[list[float]]:
+    """原片時間的看過區段＋看過的停格點 → 新片段表的成品時間（10-03 第八批 #23，純函式）。
+    原片被剪掉的部分不會出現；新的停格只有記過那一點（前後 1 毫秒內）才算看過。"""
+    if not plist:
+        return merge_ranges(src)
+    out: list[list[float]] = []
+    acc = 0.0
+    for p in plist:
+        s, e = p["src"]
+        for a, b in src:
+            lo, hi = max(a, s), min(b, e)
+            if hi > lo:
+                out.append([acc + (lo - s), acc + (hi - s)])
+        acc += e - s
+        if p["freeze"]:
+            if any(abs(e - q) <= 1e-3 for q in points or []):
+                out.append([acc, acc + p["freeze"]])
+            acc += p["freeze"]
+    return merge_ranges(out)
+
+
+def subtract_ranges(ranges: list, holes: list) -> list[list[float]]:
+    """區段扣掉另一組區段（純函式）。"""
+    out = merge_ranges(ranges)
+    for a, b in merge_ranges(holes):
+        nxt = []
+        for s, e in out:
+            if e <= a or s >= b:
+                nxt.append([s, e])
+                continue
+            if s < a:
+                nxt.append([s, a])
+            if e > b:
+                nxt.append([b, e])
+        out = nxt
+    return [[round(s, 3), round(e, 3)] for s, e in out if e > s]
+
+
+def _set_watched(check: dict, ranges: list, plist: list[dict] | None) -> None:
+    """看過區段（成品時間）跟原片時間的那一份一起存（重新組裝後用原片時間換回新的成品時間）。"""
+    check["看過區段"] = merge_ranges(ranges)
+    src, pts = watched_to_source(check["看過區段"], plist)
+    check["看過區段原片"] = [[round(a, 3), round(b, 3)] for a, b in src]
+    check["看過停格原片"] = pts
+
+
+def snapshot(log: dict | None) -> dict:
+    """處理紀錄每一筆的 {鍵: {指紋, 原片}}：下一次重新組裝時比對哪幾筆內容變了、哪幾筆不見了。"""
+    return {record_key(r): {"指紋": content_print(r), "原片": r.get("原片")} for r in (log or {}).get("紀錄", [])}
+
+
+def changed_windows(log: dict, old: dict) -> list[list[float]]:
+    """重新組裝後，內容變了（或新出現、不見了）的那幾筆的成品範圍，前後各多 2 秒（純函式）。
+    `old` 是上一份處理紀錄的 `snapshot`。不見了的那一筆用它的原片時間換到新的成品時間。"""
+    plist = log.get("片段")
+    pad = WATCH_CLEAR_PAD_S
+    out: list[list[float]] = []
+    now = set()
+    for r in log.get("紀錄", []):
+        k = record_key(r)
+        now.add(k)
+        if (old.get(k) or {}).get("指紋") == content_print(r):
+            continue
+        c = r.get("成品") or [None, None]
+        if c[0] is not None and c[1] is not None:
+            out.append([c[0] - pad, c[1] + pad])
+        elif r.get("原片"):
+            t = near_output_time(r["原片"][0], plist)
+            out.append([t - pad, t + pad])
+    for k, v in old.items():
+        if k in now or not v.get("原片"):
+            continue
+        a, b = (near_output_time(t, plist) for t in v["原片"])
+        out.append([a - pad, b + pad])
+    return merge_ranges([[max(0.0, a), b] for a, b in out])
 
 
 def needs_look(r: dict, d: dict | None = None) -> bool:
@@ -339,24 +486,62 @@ def items_near(log: dict | None, t_out: float, pad: float = 1.0) -> list[str]:
     return keys
 
 
+def upgrade_prints(check: dict, log: dict | None) -> None:
+    """舊的成品檢查檔（10-03 以前，指紋含成品時間）：照舊指紋跟這份處理紀錄比一次，對得上就換成新指紋（直接改傳進來的）。
+    對不上的留著舊指紋（之後重新組裝時會被當成內容變了）。重做中、重做過記的指紋也一起換。"""
+    if check.get("指紋版本") == PRINT_VERSION or not log:
+        return
+    by_key = {record_key(r): r for r in log.get("紀錄", [])}
+
+    def up(key: str, v: dict) -> None:
+        r = by_key.get(key)
+        if r is not None and v.get("指紋") is not None and v["指紋"] == legacy_print(r):
+            v["指紋"] = content_print(r)
+
+    for k, v in check.get("逐筆", {}).items():
+        up(k, v)
+    for part in ("重做中", "重做過"):
+        for e in (check.get(part) or {}).get("項目") or []:
+            up(e.get("鍵"), e)
+    check["指紋版本"] = PRINT_VERSION
+
+
 def refresh(check: dict, log: dict | None) -> dict:
-    """處理紀錄重寫過（重新組裝）：內容變了的那幾筆，之前的通過／退回不算數；成品變了，看過區段歸零
-    （新的成品要重新看完）。回傳整理過的 check（不改傳進來的）。"""
+    """處理紀錄重寫過（重新組裝）時整理成品檢查（回傳整理過的 check，不改傳進來的）。10-03 第八批 #23 起：
+    - 逐筆：內容指紋（`content_print`，不含成品時間）變了的那幾筆，之前的通過／退回不算數；其他保留
+    - 看過區段：用存著的原片時間（`看過區段原片`、`看過停格原片`）換到新的成品時間，只扣掉內容變了（含新出現、不見了）
+      的那幾筆成品範圍前後各 2 秒；舊檔沒有原片時間的，這一次歸零（只會發生一次）
+    - 整片退回：照存著的原片秒保留，成品秒用新的片段表重算（送回重做、組裝做完才拿掉，見 `finish_redo`）
+    處理紀錄沒重寫時：只補新格式要的欄位（舊指紋換新、看過區段補原片時間、處理紀錄快照）。"""
     import copy
 
     check = copy.deepcopy(check)
     if not log:
         return check
+    plist = log.get("片段")
     stamp = log.get("產生時間")
     if check.get("處理紀錄產生時間") == stamp:
+        upgrade_prints(check, log)   # 這份處理紀錄就是舊指紋當時的那一份
+        if "看過區段原片" not in check:
+            _set_watched(check, check.get("看過區段", []), plist)
+        check.setdefault("處理紀錄快照", snapshot(log))
         return check
-    prints = {record_key(r): record_print(r) for r in log.get("紀錄", [])}
+    upgrade_prints(check, log)   # 處理紀錄已經換了：舊指紋（含成品時間）只有完全沒位移的對得上
+    prints = {record_key(r): content_print(r) for r in log.get("紀錄", [])}
     check["逐筆"] = {k: v for k, v in check.get("逐筆", {}).items() if prints.get(k) == v.get("指紋")}
     keep_un = {unlogged_key(u) for u in log.get("未登記的變動", [])}
     check["未登記確認"] = {k: v for k, v in check.get("未登記確認", {}).items() if k in keep_un}
     if check.get("處理紀錄產生時間"):
-        check["看過區段"] = []
-        check["整片退回"] = []
+        old = check.get("處理紀錄快照")
+        if old is None or "看過區段原片" not in check:
+            _set_watched(check, [], plist)
+        else:
+            ranges = watched_from_source(check["看過區段原片"], check.get("看過停格原片") or [], plist)
+            _set_watched(check, subtract_ranges(ranges, changed_windows(log, old)), plist)
+        for x in check.get("整片退回", []):
+            if x.get("原片秒") is not None:
+                x["成品秒"] = round(near_output_time(float(x["原片秒"]), plist), 3)
+    check["處理紀錄快照"] = snapshot(log)
     check["處理紀錄產生時間"] = stamp
     return check
 
@@ -400,9 +585,10 @@ def _current(workdir: Path) -> tuple[dict | None, dict]:
     log = proclog.load(workdir)
     check = refresh(load_check(workdir), log)
     prods = products(workdir)
+    plist = (log or {}).get("片段")
     if check.get("成品影片") not in prods:
         check["成品影片"] = prods[0] if prods else None
-        check["看過區段"] = []
+        _set_watched(check, [], plist)
     if check["成品影片"]:
         # 10-02 第七批（C2）：重新組裝後檔名一樣、長度變了 → 成品檔換新（大小或修改時間不同）或處理紀錄換新就重新量；
         # 看過的區段超出新長度的截掉（以前只在沒量過時量一次，「整片看過幾 %」一直用舊長度算）
@@ -411,7 +597,7 @@ def _current(workdir: Path) -> tuple[dict | None, dict]:
         if not check.get("成品長度") or check.get("成品檔指紋") != fp or check.get("量長度時的處理紀錄") != stamp:
             length = round(probe_duration(Path(workdir) / check["成品影片"]), 3)
             check.update({"成品長度": length, "成品檔指紋": fp, "量長度時的處理紀錄": stamp})
-            check["看過區段"] = clip_ranges(check["看過區段"], length)
+            _set_watched(check, clip_ranges(check["看過區段"], length), plist)
     return log, check
 
 
@@ -485,8 +671,9 @@ def choose_product(workdir: str | Path, rel: str) -> dict:
     with _lock:
         log, check = _current(workdir)
         if check["成品影片"] != rel:
-            check.update({"成品影片": rel, "看過區段": [], "成品長度": round(probe_duration(workdir / rel), 3),
+            check.update({"成品影片": rel, "成品長度": round(probe_duration(workdir / rel), 3),
                           "成品檔指紋": product_print(workdir / rel), "量長度時的處理紀錄": (log or {}).get("產生時間")})
+            _set_watched(check, [], (log or {}).get("片段"))
         _save(workdir, check)
     return {"ok": True}
 
@@ -577,7 +764,8 @@ def add_watched(workdir: str | Path, ranges: list, product: str | None = None) -
         log, check = _current(workdir)
         if product and product != check["成品影片"]:
             raise ValueError("播放中的影片不是目前要檢查的成品，重新整理再看")
-        check["看過區段"] = merge_ranges(check["看過區段"] + [[float(a), float(b)] for a, b in ranges])
+        # 10-03 第八批 #23：同時存原片時間（用現在這份處理紀錄的片段表換），重新組裝後換得回新的成品時間
+        _set_watched(check, check["看過區段"] + [[float(a), float(b)] for a, b in ranges], (log or {}).get("片段"))
         _save(workdir, check)
         st = status(log, check)
         return {"ok": True, "看過比例": st["看過比例"], "看過區段": check["看過區段"], "狀態": st}
@@ -634,7 +822,9 @@ def redo_list(workdir: str | Path) -> dict:
     index = _index(workdir)
     ctx = _redo_ctx(workdir) if items else {}
     logs: dict = {}
-    doing_keys = {e["鍵"] for e in (check.get("重做中") or {}).get("項目") or []}
+    doing_items = (check.get("重做中") or {}).get("項目") or []
+    doing_keys = {e["鍵"] for e in doing_items if not e.get(REASSEMBLE_ONLY)}
+    doing_only = {e["鍵"] for e in doing_items if e.get(REASSEMBLE_ONLY)}   # 10-03：上次「只重新組裝」沒做完的
     pending = set(redo_pending(workdir, ctx=ctx)) if doing_keys else set()
     for it in items:
         it["建議指令"] = suggest_command(workdir, it)
@@ -649,6 +839,10 @@ def redo_list(workdir: str | Path) -> dict:
         it["沒改"] = bool(it["生成"]) and all(_same_as_last(workdir, u, ctx, logs) for u in it["生成"])
         if it["生成"]:
             it["第幾版"] = max(int((_last_rec(workdir, u, logs) or {}).get("第幾版") or 1) for u in it["生成"]) + 1
+        if it["鍵"] in doing_only:
+            it.update({"做法": REASSEMBLE_ONLY, "沒改": False, "接著做": True,
+                       "說明": "上次「只重新組裝」還沒做完：生成的聲音不動，再組裝一次"})
+            continue
         if it["生成"] and it["鍵"] in doing_keys:
             # 10-02 第五批：上次重做到一半停下來的：這一版已經記過（`_重新生成版本.json`），接著做同一版，不會再跳一版
             it["接著做"] = True
@@ -908,12 +1102,33 @@ def redo_plan(workdir: str | Path, a: float | None = None, b: float | None = Non
 
 
 def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = None,
-                 log=print) -> dict | None:
-    """第 4 步開始之前：把退回的那幾句清掉（見 clear_generated），記在 `覆核/成品檢查.json` 的 `重做中`。沒有退回的回傳 None。"""
+                 log=print, reassemble_only: bool = False) -> dict | None:
+    """第 4 步開始之前：把退回的那幾句清掉（見 clear_generated），記在 `覆核/成品檢查.json` 的 `重做中`。沒有退回的回傳 None。
+
+    reassemble_only（10-03 第八批 #23）：「只重新組裝」——退回的那幾筆一樣記進 `重做中`（組裝做完照 `finish_redo`
+    回到還沒看），但**不清生成、不記新版本、不換種子**（跳過 `note_versions`、`clear_generated`），每一筆標 `只重新組裝`。
+    給「生成的聲音沒問題、要改的是組裝」用（例如接縫做法改了）。"""
     workdir = Path(workdir)
     plan = redo_plan(workdir, a, b)
     if not plan:
         return None
+    if reassemble_only:
+        doing = {e["鍵"] for e in (load_check(workdir).get("重做中") or {}).get("項目") or []}
+        plan = [e for e in plan if e["鍵"] not in doing]   # 上次沒做完的照上次的做法接著做
+        if not plan:
+            return {"項目": [], "清掉": {}, "接著做": True}
+        stamp = _now()
+        for e in plan:
+            e.update({REASSEMBLE_ONLY: True, "做法": REASSEMBLE_ONLY, "沒改": False,
+                      "說明": "只重新組裝：生成的聲音不動（不重新生成、不換念法），照現在的做法重新放回去"})
+        with _lock:
+            _log, check = _current(workdir)
+            old = check.get("重做中") or {}
+            have = {e["鍵"] for e in plan}
+            check["重做中"] = {"時間": stamp, "項目": [e for e in old.get("項目", []) if e["鍵"] not in have] + plan}
+            _save(workdir, check)
+        log(f"[AI 執行] 第 5 步退回的 {len(plan)} 筆只重新組裝：生成的聲音不動，組裝做完回到第 5 步「還沒看」")
+        return {"項目": plan, "清掉": {}, REASSEMBLE_ONLY: True}
     # 10-02 第五批：上次重做到一半停下來（停止、記憶體或硬碟門檻、失敗）的那幾筆，清過了、版本也記過了：
     # 不再清一次（不然已經生成好、還沒寫回紀錄的那一句會被當成沒做，已經寫回的會變成「以前的版本」又跳一版）。
     # 這次只清新退回的；接著做的那幾筆，生成紀錄裡沒有的會照常生成（已經生成過的從快取沿用）
@@ -959,7 +1174,7 @@ def redo_pending(workdir: str | Path, a: float | None = None, b: float | None = 
     組裝前用：還有沒做好的就不組（組進去會是原本的聲音，名字還在）。只讀。"""
     workdir = Path(workdir)
     doing = load_check(workdir).get("重做中") or {}
-    units = [u for e in doing.get("項目") or [] for u in e.get("生成") or []]
+    units = [u for e in doing.get("項目") or [] if not e.get(REASSEMBLE_ONLY) for u in e.get("生成") or []]
     if not units:
         return []
     ctx = _redo_ctx(workdir) if ctx is None else ctx
@@ -992,11 +1207,29 @@ def finish_redo(workdir: str | Path) -> dict | None:
         doing = check.pop("重做中", None)
         if not doing:
             return None
+        keys = {e["鍵"] for e in doing["項目"]}
         for e in doing["項目"]:
             check["逐筆"].pop(e["鍵"], None)
             check["未登記確認"].pop(e["鍵"], None)
+        # 10-03 第八批 #23：整片看時退回的，送回重做、組裝做完才拿掉（重新組裝本身不再清空整片退回）
+        check["整片退回"] = [x for x in check.get("整片退回", []) if x.get("id") not in keys]
+        # 重做過的那幾筆，成品範圍前後各 2 秒裡看過的部分要重看（內容沒變的只重新組裝也一樣，退回過就要再聽一次）
+        plist = (log or {}).get("片段")
+        holes = []
+        recs = {record_key(r): r for r in (log or {}).get("紀錄", [])}
+        for e in doing["項目"]:
+            r = recs.get(e["鍵"])
+            c = (r or {}).get("成品") or [None, None]
+            if c[0] is not None and c[1] is not None:
+                holes.append([c[0] - WATCH_CLEAR_PAD_S, c[1] + WATCH_CLEAR_PAD_S])
+            elif e.get("原片") and e["原片"][0] is not None:
+                t0, t1 = (near_output_time(float(t), plist) for t in e["原片"])
+                holes.append([t0 - WATCH_CLEAR_PAD_S, t1 + WATCH_CLEAR_PAD_S])
+        if holes:
+            _set_watched(check, subtract_ranges(check["看過區段"], holes), plist)
         check.pop("送回AI重做", None)
-        check["重做過"] = {"時間": _now(), "處理紀錄產生時間": (log or {}).get("產生時間"), "項目": doing["項目"]}
+        check["重做過"] = {"時間": _now(), "處理紀錄產生時間": (log or {}).get("產生時間"), "項目": doing["項目"],
+                        **({REASSEMBLE_ONLY: True} if any(e.get(REASSEMBLE_ONLY) for e in doing["項目"]) else {})}
         _save(workdir, check)
     return check["重做過"]
 
@@ -1032,6 +1265,8 @@ def redone_info(rec: dict, check: dict, log: dict | None) -> dict | None:
         if e.get("鍵") == key or (keys & set(e.get("覆核項目") or []) and close):
             return {"時間": done["時間"], "原因": e.get("原因", ""), "做法": e.get("做法"),
                     "第幾版": e.get("第幾版"), "換一種念法": bool(e.get("沒改")),   # 10-02 第四批
+                    REASSEMBLE_ONLY: bool(e.get(REASSEMBLE_ONLY)),   # 10-03 第八批 #23
+                    "標籤": "重做過（只重新組裝）" if e.get(REASSEMBLE_ONLY) else "重做過",
                     "新版本": (record_print(rec) != e["指紋"]) if e.get("指紋") else None}
     return None
 

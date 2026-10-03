@@ -829,7 +829,8 @@ class BookclubServer(ThreadingHTTPServer):
                 prog = run_execute(self.workdir, start=parse_time(opts["start"]) if opts.get("start") else None,
                                    end=parse_time(opts["end"]) if opts.get("end") else None,
                                    methods=opts.get("methods") or None, skip_precheck=True,
-                                   redo_returned=True)   # 10-01 第三批：第 5 步退回的一起重做（沒有退回的就照常）
+                                   redo_returned=True,   # 10-01 第三批：第 5 步退回的一起重做（沒有退回的就照常）
+                                   reassemble_only=bool(opts.get("只重新組裝")))   # 10-03 第八批 #23：第 4 步「只重新組裝」
             with self.run_lock:
                 self.exec_state["stopped"] = bool((prog or {}).get("停止"))
         except Exception as e:  # noqa: BLE001 — 背景執行緒要把失敗記下來給網頁看
