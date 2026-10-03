@@ -1076,3 +1076,20 @@ def video_file(workdir: str | Path) -> Path:
     if not check.get("成品影片"):
         raise FileNotFoundError("還沒有成品影片（輸出/成品_*），先在第 4 步組裝")
     return workdir / check["成品影片"]
+
+
+def goto_output_time(workdir: str | Path, t_src: float) -> dict:
+    """`GET /api/final/goto?src=原片秒數`（10-03 第八批 #64）：第 5 步「跳到」框選原片時間時，換成成品時間。
+    換算用 `to_output_time`（跟頁面其他地方同一支）；落在剪掉的範圍裡，跳到剪掉之後第一個留下來的地方並說明。
+    回傳 {成品秒, 說明}；成品秒是 None 表示原片這個時間之後都剪掉了。"""
+    log = proclog.load(Path(workdir)) or {}
+    plist = log.get("片段")
+    t_src = float(t_src)
+    out = to_output_time(t_src, plist)
+    if out is not None:
+        return {"成品秒": round(out, 3), "說明": ""}
+    nxt = next((p for p in plist or [] if p["src"][0] > t_src), None)
+    if nxt is None:
+        return {"成品秒": None, "說明": "原片這個時間之後都剪掉了，成品裡沒有"}
+    return {"成品秒": round(to_output_time(nxt["src"][0], plist), 3),
+            "說明": "原片這個時間在成品裡剪掉了，跳到剪掉之後的地方"}

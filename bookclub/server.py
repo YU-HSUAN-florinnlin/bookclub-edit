@@ -1088,6 +1088,10 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub import finalcheck
 
             self._serve_file(finalcheck.clip(server.workdir, query["which"][0], query["key"][0]), content_type="audio/wav")
+        elif path == "/api/final/goto":   # 10-03 第八批 #64：第 5 步「跳到」框，原片時間 → 成品時間（後端換算）
+            from bookclub import finalcheck
+
+            self._send_json(200, finalcheck.goto_output_time(server.workdir, float(query["src"][0])))
         elif path == "/api/run/status":
             self._send_json(200, server.run_status())
         elif path == "/api/execute":
