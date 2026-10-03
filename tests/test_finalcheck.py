@@ -354,6 +354,26 @@ def test_retime_target_kinds():
     assert not _rt("模糊示範", [])["可以"]
 
 
+def test_retime_target_same_card_names_not_many():
+    """10-04 #113：同一張卡（併進主卡的候選）的好幾處不算「好幾個名字」，改的是主卡；真的是不同卡照舊擋、每張只列一次。"""
+    idx = {**IDX,
+           "名字:5": {**IDX["名字:1"], "名稱": "老師提到名字 00:01:17", "id": "5", "start": 77.0, "end": 77.4,
+                     "第3步": "名字:1", "併進": "1"},
+           "名字:6": {**IDX["名字:2"], "名稱": "老師提到名字 00:02:01", "id": "6", "start": 121.0, "end": 121.4,
+                     "第3步": "名字:2", "併進": "2"}}
+    rt = lambda items: fc.retime_target({"類型": "名字整句換掉", "原片": [75.0, 78.0], "覆核項目": items}, idx)  # noqa: E731
+    for items in (["名字:1", "名字:5"], ["名字:5", "名字:1"], ["名字:5"]):
+        t = rt(items)
+        assert t["可以"] and t["方式"] == "重念範圍" and t["id"] == "1" and t["第3步"] == "名字:1", (items, t)
+        assert (t["start"], t["end"]) == (75.0, 78.0)
+    t = rt(["名字:1", "名字:5", "名字:2", "名字:6"])           # 兩張不同的卡 → 照舊擋，每張卡只列一次
+    assert not t["可以"] and "好幾個名字" in t["原因"]
+    assert t["原因"].count("〈老師提到名字 00:01:16〉") == 1 and t["原因"].count("〈老師提到名字 00:02:00〉") == 1
+    assert "00:01:17" not in t["原因"] and "00:02:01" not in t["原因"]
+    t = fc.retime_target({"類型": "名字消音", "原片": [76.0, 77.4], "覆核項目": ["名字:1", "名字:5"]}, idx)
+    assert t["可以"] and t["id"] == "1"                          # 直接消音同一張卡的好幾處也一樣
+
+
 def test_retime_saved_with_redo_and_step4_told():
     if not shutil.which("ffmpeg"):
         return

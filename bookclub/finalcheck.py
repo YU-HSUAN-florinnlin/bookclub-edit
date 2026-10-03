@@ -326,6 +326,14 @@ def retime_target(rec: dict, index: dict) -> dict:
 
     go = f"到第 3 步〈{base['名稱']}〉" if first else "到第 3 步找原片這個時間附近的那一筆"
     names = [k for k in keys if k.startswith("名字:")]
+    # 10-04 #113：同一張卡（同一處、同一句同代號，併進主卡的候選）的好幾處只算一個名字，改的是那張主卡；
+    # 真的是好幾張不同的卡才算「好幾個名字」，而且每張卡只列一次
+    by_card: dict[str, str] = {}
+    for k in names:
+        by_card.setdefault((index.get(k) or {}).get("第3步") or k, k)
+    if len(by_card) == 1:
+        card, k0 = next(iter(by_card.items()))
+        names = [card if editable(card) else k0]
     ovs = [k for k in keys if k.startswith("重疊:") or (k.startswith("學員段落:") and (index.get(k) or {}).get("類型") == "重疊")]
     if kind == "停格":
         return no("停格是自動加的：重念的聲音比原本長，畫面停一下補長，不能單獨改範圍", f"{go}改範圍或要念的字")
@@ -340,8 +348,9 @@ def retime_target(rec: dict, index: dict) -> dict:
     if ovs and any((index.get(k) or {}).get("疊放") for k in ovs):
         return no("這一處重疊選了兩邊都重新生成：老師和學員各有自己的起訖", f"{go}的「改做法」裡改兩邊各自的起訖")
     if kind in ("名字整句換掉", "換聲音"):
-        if len(names) > 1:
-            return no("這一句同時換掉好幾個名字（" + "、".join(f"〈{item_name(index, k)}〉" for k in names)
+        if len(by_card) > 1:
+            return no("這一句同時換掉好幾個名字（" + "、".join(f"〈{item_name(index, c if c in index else k)}〉"
+                                                       for c, k in by_card.items())
                       + "），重念範圍是合起來的", "到第 3 步這幾張卡片各自改重念範圍")
         if names and ovs:
             return no("這一句同時是名字重念和重疊的老師那一句", f"{go}改重念範圍")
