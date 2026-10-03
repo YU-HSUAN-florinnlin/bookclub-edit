@@ -440,9 +440,24 @@ SMOKE_SCRIPTS = [
 ]
 
 
-def _ensure_samples() -> bool:
+def samples_ready() -> bool:
     out_dir = repo_root() / "tests" / "smoke" / "out"
-    if (out_dir / "one.wav").is_file() and (out_dir / "two.wav").is_file():
+    return (out_dir / "one.wav").is_file() and (out_dir / "two.wav").is_file()
+
+
+def can_make_samples(system: str | None = None) -> bool:
+    """測試音檔要用 macOS 內建的 say 產生（10-03 第九批 #32）。Linux／WSL2 沒有 say。"""
+    system = system or platform.system()
+    return system == "Darwin" and shutil.which("say") is not None
+
+
+SMOKE_MAC_ONLY = ("--smoke 這一項只在 Mac 上跑，這次跳過（不算失敗）：測試用的假錄音要用 macOS 內建的 say 產生，"
+                  "{system} 上沒有。要在這台試跑的話，從跑過 --smoke 的 Mac 把 tests/smoke/out/ 裡的 one.wav、two.wav "
+                  "複製到這台工具資料夾的 tests/smoke/out/，再跑一次 bookclub doctor --smoke。")
+
+
+def _ensure_samples() -> bool:
+    if samples_ready():
         return True
     print("找不到測試用音檔，先產生（tests/smoke/make_sample.py，用 macOS 內建的 say）...")
     script = repo_root() / "tests" / "smoke" / "make_sample.py"
@@ -452,6 +467,10 @@ def _ensure_samples() -> bool:
 
 def run_smoke() -> dict:
     print()
+    if not samples_ready() and not can_make_samples():
+        # 10-03 第九批 #32：以前在 Linux／WSL2 一定失敗（找不到 say），改成講清楚、跳過
+        print(SMOKE_MAC_ONLY.format(system=platform.system() or "這個系統"))
+        return {"ok": None, "skipped": "只在 Mac 上跑（沒有測試音檔、也沒有 say 可以產生）"}
     print("開始跑試跑腳本（--smoke）：會實際載入三個模型、各處理一小段測試音檔，需要幾分鐘。")
     if not _ensure_samples():
         print("⚠️ 測試音檔產生失敗，略過 --smoke")

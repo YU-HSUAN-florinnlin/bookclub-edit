@@ -307,6 +307,76 @@ def test_install_skill_link_respects_existing_and_no_skill():
         assert r.returncode == 0 and "--no-skill" in r.stdout and not (Path(tmp) / ".claude").exists()
 
 
+# ── #32：doctor --smoke 在 Linux 不因為沒有 say 而失敗 ───────────────
+
+
+def test_smoke_skips_on_linux_without_samples():
+    out = io.StringIO()
+    with mock.patch.object(dr, "samples_ready", return_value=False), \
+            mock.patch.object(dr.platform, "system", return_value="Linux"), \
+            mock.patch.object(dr.subprocess, "run") as run, \
+            contextlib.redirect_stdout(out):
+        res = dr.run_smoke()
+    run.assert_not_called()   # 不去跑 make_sample、也不載入模型
+    assert res["ok"] is None and "skipped" in res
+    text = out.getvalue()
+    assert "只在 Mac 上跑" in text and "不算失敗" in text and "one.wav" in text and "Linux" in text
+    # doctor 的結束代碼只看必要檢查，--smoke 跳過不影響
+    with mock.patch.object(dr, "run_checks", return_value=[]), \
+            mock.patch.object(dr, "print_report", return_value=True), \
+            mock.patch.object(dr, "run_smoke", return_value=res), \
+            contextlib.redirect_stdout(io.StringIO()):
+        assert dr.main(["--smoke"]) == 0
+
+
+def test_can_make_samples():
+    with mock.patch.object(dr.shutil, "which", return_value="/usr/bin/say"):
+        assert dr.can_make_samples("Darwin") is True
+        assert dr.can_make_samples("Linux") is False
+    with mock.patch.object(dr.shutil, "which", return_value=None):
+        assert dr.can_make_samples("Darwin") is False
+
+
+def test_smoke_on_linux_runs_when_samples_copied_over():
+    """從 Mac 複製測試音檔過來後，Linux 也照常跑（這裡把跑模型的子程式換成假的）。"""
+    import subprocess
+    import tempfile
+
+    fake = subprocess.CompletedProcess([], 0, stdout='{"ok": true}\n', stderr="")
+    with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.object(dr, "samples_ready", return_value=True), \
+            mock.patch.object(dr.platform, "system", return_value="Linux"), \
+            mock.patch.object(dr, "data_dir", return_value=Path(tmp)), \
+            mock.patch.object(dr.subprocess, "run", return_value=fake) as run, \
+            contextlib.redirect_stdout(io.StringIO()):
+        res = dr.run_smoke()
+    assert run.call_count == len(dr.SMOKE_SCRIPTS)
+    assert all(r["ok"] for r in res["results"].values())
+
+
+def test_smoke_on_mac_still_makes_samples():
+    out = io.StringIO()
+    with mock.patch.object(dr, "samples_ready", return_value=False), \
+            mock.patch.object(dr, "can_make_samples", return_value=True), \
+            mock.patch.object(dr, "_ensure_samples", return_value=False) as ens, \
+            contextlib.redirect_stdout(out):
+        res = dr.run_smoke()
+    ens.assert_called_once()
+    assert res["ok"] is False
+
+
+def test_make_sample_without_say_explains():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("make_sample", REPO_ROOT / "tests" / "smoke" / "make_sample.py")
+    ms = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ms)
+    err = io.StringIO()
+    with mock.patch("shutil.which", return_value=None), contextlib.redirect_stderr(err):
+        assert ms.main() == 1
+    assert "只在 Mac 上跑" in err.getvalue()
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:
