@@ -600,7 +600,7 @@ async function renderProfile() {
       </details></div>
     <h2>設定包（給協作夥伴）</h2>
     <div class="card">
-      <p>匯出：名冊、敏感詞、名字排除清單、發音對照表、進階設定打包成一個 zip。名冊含學員本名，只傳給協作夥伴。</p>
+      <p>匯出：名冊、敏感詞、名字排除清單、發音對照表、進階設定，與第 4 步學員重念用的替代聲音，打包成一個 zip。名冊含學員本名，只傳給協作夥伴。</p>
       <p><a href="/api/profile/export.zip"><button>匯出設定包</button></a></p>
       <p style="margin-top:18px">匯入：每個清單以第一欄當鑰匙，新的加進去、已經有的不動；同一鑰匙內容不同，保留這台電腦的並列出衝突。</p>
       <p><input type="file" id="profFile" accept=".zip"> <button id="profImport" class="secondary">匯入設定包</button></p>
@@ -617,7 +617,8 @@ async function renderProfile() {
       if (!res.ok) throw new Error(r.error || "匯入失敗");
       const lines = Object.entries(r["檔案"]).map(([name, v]) => `<li>${esc(name)}：新增 ${v["新增"]} 筆${v["衝突"].length
         ? `，衝突 ${v["衝突"].length} 筆（保留這台電腦的）：${esc(v["衝突"].map((c) => c["鑰匙"]).join("、"))}` : ""}</li>`).join("");
-      msg.innerHTML = `<p><span class="badge done">匯入完成</span> 新增 ${r["新增"]} 筆、衝突 ${r["衝突數"]} 筆</p><ul>${lines}</ul>`;
+      const voice = r["匿名聲線"] ? `<li>${esc(r["匿名聲線"]["說明"])}</li>` : "";   // 10-03（#7）
+      msg.innerHTML = `<p><span class="badge done">匯入完成</span> 新增 ${r["新增"]} 筆、衝突 ${r["衝突數"]} 筆</p><ul>${lines}${voice}</ul>`;
       const keep = msg.innerHTML;
       await renderProfile();
       document.getElementById("profMsg").innerHTML = keep;

@@ -4,9 +4,9 @@
 `settings.toml`，匿名聲線（`聲線/`）。**名冊只要一份、不分期**：同一支影片裡同一人同一代號就好，
 不同影片之間代號可以指不同人（09-26 宇軒）。
 
-設定包是一個 zip（四個 CSV＋`settings.toml`＋說明）。匯入用**同一條合併規則**：每個 CSV 以第一欄當鑰匙，
+設定包是一個 zip（四個 CSV＋`settings.toml`＋第 4 步會用到的匿名聲線＋說明）。匯入用**同一條合併規則**：每個 CSV 以第一欄當鑰匙，
 新的加進去、已經有的不動；同一鑰匙內容不同，保留本機的並列出衝突。`settings.toml` 本機沒有才放進去，
-不一樣就列成衝突。AI 之後發現新的念偏詞、排除詞照舊寫進 `~/讀書會剪輯資料/` 的 CSV，夥伴匯入新的設定包就更新。
+不一樣就列成衝突。匿名聲線（10-03 加，#7）同一條規則：本機沒有才放，內容一樣略過，內容不同保留本機並列成衝突。AI 之後發現新的念偏詞、排除詞照舊寫進 `~/讀書會剪輯資料/` 的 CSV，夥伴匯入新的設定包就更新。
 
 隱私：名冊含學員本名。畫面與回報只顯示代號與筆數，衝突清單裡的名冊也用代號標示，不顯示本名。
 """
@@ -28,10 +28,12 @@ VOICE_DIR = "聲線"
 AUDIO_EXTS = (".wav", ".flac", ".mp3", ".m4a")
 README = """讀書會剪輯工具｜設定包
 
-內容：名冊、敏感詞、名字排除清單、發音對照表（CSV）與 settings.toml。
+內容：名冊、敏感詞、名字排除清單、發音對照表（CSV）與 settings.toml；
+      第 4 步學員重念用的匿名聲線（聲線/ 資料夾，每個聲音一個 .wav 加同名逐字稿 .txt）。
 匯入：在網頁「0 初始化設定」按「匯入設定包」，或在終端機跑
     .venv/bin/bookclub profile import <這個 zip>
 合併規則：每個 CSV 以第一欄當鑰匙，新的加進去、已經有的不動；同一鑰匙內容不同，保留你電腦上的並列出衝突。
+匿名聲線也是同一條規則：你電腦上沒有才放進去，已經有、內容一樣略過，內容不同保留你電腦上的並列出衝突。
 名冊含學員本名，這個檔案只傳給協作夥伴，不要公開。
 """
 
@@ -72,21 +74,50 @@ def summary(root: Path | None = None) -> dict:
             "匿名聲線": {"數量": len(voices), "狀態": f"{len(voices)} 個（{detail}）" if voices else "還沒做"}}
 
 
+def export_voices(root: Path) -> dict[str, list[Path]]:
+    """10-03（#7）：設定包要帶的匿名聲線＝第 4 步 `students.voice_pool` 真的會用的那些
+    （候選資料夾裡沒被跳過的男 N、女 N；某個性別沒有候選時才是暫定聲線）。回傳 {男: [wav], 女: [wav]}。"""
+    from bookclub.students import voice_pool
+
+    base = root / VOICE_DIR
+    return voice_pool(base) if base.is_dir() else {"男": [], "女": []}
+
+
+def voice_count_text(counts: dict[str, int]) -> str:
+    """「匿名聲線：男 N 個、女 N 個」；一個都沒有時明講。"""
+    if not any(counts.values()):
+        return "匿名聲線：設定包裡沒有（第 4 步學員重念需要，請跟給你設定包的人要含聲線的新版，或自己放進聲線資料夾）"
+    return f"匿名聲線：男 {counts.get('男', 0)} 個、女 {counts.get('女', 0)} 個"
+
+
 def export_profile(out: str | Path | None = None, root: Path | None = None) -> dict:
-    """打包設定包 zip，回傳 {檔案, 內含}。預設存在 `~/讀書會剪輯資料/設定包/設定包_<時間>.zip`。"""
+    """打包設定包 zip，回傳 {檔案, 內含, 匿名聲線}。預設存在 `~/讀書會剪輯資料/設定包/設定包_<時間>.zip`。
+    10-03（#7）：第 4 步會用到的匿名聲線（各帶同名 .txt）放進 zip 的 `聲線/`，路徑照本機；跳過不用的不打包。"""
     root = Path(root or data_dir())
     out = Path(out).expanduser() if out else root / "設定包" / f"設定包_{datetime.now():%Y%m%d-%H%M%S}.zip"
     out.parent.mkdir(parents=True, exist_ok=True)
     inside = []
+    pool = export_voices(root)
+    counts = {g: len(fs) for g, fs in pool.items()}
+    voice_names = []
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for name in (*CSV_FILES, SETTINGS_FILE):
             p = root / name
             if p.exists():
                 z.write(p, name)
                 inside.append(name)
-        z.writestr("說明.txt", README)
+        for g in ("男", "女"):
+            for wav in pool.get(g, []):
+                for f in (wav, wav.with_suffix(".txt")):
+                    z.write(f, f.relative_to(root).as_posix())
+                voice_names.append(wav.stem)
+        listing = f"\n{voice_count_text(counts)}" + (f"（{'、'.join(voice_names)}）" if voice_names else "") + "\n"
+        z.writestr("說明.txt", README + listing)
+    if voice_names:
+        inside.append(f"{VOICE_DIR}（{'、'.join(voice_names)}）")
     print(f"[設定包] 已匯出：{out}（{'、'.join(inside)}）")
-    return {"檔案": str(out), "內含": inside}
+    print(f"[設定包] {voice_count_text(counts)}")
+    return {"檔案": str(out), "內含": inside, "匿名聲線": counts}
 
 
 def merge_rows(local_header: list[str], local: list[dict], incoming: list[dict], label_col: str | None = None) -> dict:
@@ -158,7 +189,50 @@ def import_profile(zip_path: str | Path, root: Path | None = None) -> dict:
                 report[SETTINGS_FILE] = {"新增": 0, "衝突": [{"鑰匙": SETTINGS_FILE, "本機": "保留", "匯入": "內容不同"}]}
             else:
                 report[SETTINGS_FILE] = {"新增": 0, "衝突": []}
+        voices = _import_voices(z, root)
     added = sum(v["新增"] for v in report.values())
-    conflicts = sum(len(v["衝突"]) for v in report.values())
+    conflicts = sum(len(v["衝突"]) for v in report.values()) + len(voices["衝突"])
     print(f"[設定包] 匯入完成：新增 {added} 筆、衝突 {conflicts} 筆（衝突保留本機的）")
-    return {"檔案": report, "新增": added, "衝突數": conflicts}
+    print(f"[設定包] {voices['說明']}")
+    return {"檔案": report, "新增": added, "衝突數": conflicts, "匿名聲線": voices}
+
+
+VOICE_EXTS = (".wav", ".txt")
+
+
+def _import_voices(z: zipfile.ZipFile, root: Path) -> dict:
+    """10-03（#7）：設定包裡 `聲線/` 底下的檔放到本機同樣的位置。本機沒有才放；已經有、內容一樣略過；
+    內容不同保留本機並列成衝突（跟 CSV 同一條規則）。只收 .wav／.txt，路徑不能跑出聲線資料夾。
+    回傳 {男, 女（設定包裡的聲線數）, 新增, 略過（檔案數）, 衝突: [相對路徑], 說明}。"""
+    import re
+
+    base = (root / VOICE_DIR).resolve()
+    counts = {"男": 0, "女": 0}
+    added = skipped = 0
+    conflicts: list[str] = []
+    for name in sorted(z.namelist()):
+        if not name.startswith(VOICE_DIR + "/") or name.endswith("/"):
+            continue
+        rel = Path(name)
+        if rel.is_absolute() or ".." in rel.parts or rel.suffix.lower() not in VOICE_EXTS:
+            continue
+        dest = root / rel
+        if base not in dest.resolve().parents:
+            continue
+        if rel.suffix.lower() == ".wav":
+            m = re.match(r"(男|女)", rel.stem)
+            if m:
+                counts[m.group(1)] += 1
+        data = z.read(name)
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+            added += 1
+        elif dest.read_bytes() == data:
+            skipped += 1
+        else:
+            conflicts.append(rel.as_posix())
+    text = voice_count_text(counts)
+    if conflicts:
+        text += f"；{len(conflicts)} 個檔跟這台電腦的內容不同，保留這台的：{'、'.join(conflicts)}"
+    return {**counts, "新增": added, "略過": skipped, "衝突": conflicts, "說明": text}

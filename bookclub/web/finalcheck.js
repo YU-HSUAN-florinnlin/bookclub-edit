@@ -24,7 +24,7 @@ const fcSourceName = (src) => String(src || "").replace(/^render video\s*/, "成
 // 09-29 宇軒：2 倍速以下播過的才算「看過」（快轉看完不算有人完整看過）
 const FC_MAX_RATE = 2;
 
-const fc = { seen: [], seg: null, data: null, video: null, audio: null, cur: null, mode: "逐筆", sentRanges: "", timer: null, redoOpen: false, lastT: 0 };
+const fc = { seen: [], seg: null, data: null, video: null, audio: null, cur: null, mode: "逐筆", sentRanges: "", timer: null, redoOpen: false, lastT: 0, ab: null };
 let fcBackKey = null;   // 10-01 第三批 13：從第 3 步按「回第 5 步成品檢查」回來時，回到出發的那一筆（影片跳到那裡、卡片捲進畫面）
 
 function fcFmt(t, d = 1) { return typeof rvFmt === "function" ? rvFmt(t, d) : String(t); }
@@ -73,6 +73,9 @@ async function renderFinal() {
           ${prodSel}
           <video id="fc-video" controls preload="metadata" src="${esc(d["影片網址"])}?v=${encodeURIComponent(d["成品影片"])}"></video>
           <div class="rv-timebar"><span class="rv-clock"><b id="fc-clock">0:00</b> ／ ${esc(fcFmt(d["成品長度"], 0))}（成品時間）</span>
+            <span class="nowrap"><input id="fc-goto" class="rv-goto" placeholder="跳到 38:26" aria-label="跳到時間（例如 38:26，按 Enter）">
+              <select id="fc-goto-kind" aria-label="輸入的是成品時間還是原片時間"><option value="成品">成品時間</option><option value="原片">原片時間</option></select></span>
+            <span class="rv-meta" id="fc-goto-msg" role="status"></span>
             <span class="rv-warnline" id="fc-ratewarn" hidden>超過 2 倍速播的不算看過</span>
             <select id="fc-rate" aria-label="播放速度"><option value="1">1 倍速</option><option value="1.25">1.25 倍速</option><option value="1.5">1.5 倍速</option><option value="2">2 倍速</option></select></div>
           <div class="rv-tl fc-tl" id="fc-tl" title="點一下或拖拉，跳到那個時間"></div>
@@ -95,6 +98,13 @@ async function renderFinal() {
   document.getElementById("fc-sendback").addEventListener("click", fcSendBack);
   document.getElementById("fc-export").addEventListener("click", fcExport);
   document.getElementById("fc-rate").addEventListener("change", (e) => { fc.video.playbackRate = Number(e.target.value); });
+  document.getElementById("fc-goto").addEventListener("keydown", (e) => {   // 10-03 第八批 #64：照第 3 步的「跳到」框
+    if (e.key !== "Enter" || e.isComposing) return;
+    e.preventDefault();
+    fcGoto(e.target, document.getElementById("fc-goto-kind").value);
+  });
+  fc.ab = null;
+  fc.audio.addEventListener("ended", () => { if (fc.ab && fc.ab.which === "前") fcStopAB(); });
   const prod = document.getElementById("fc-prod");
   if (prod) prod.addEventListener("change", async () => { await apiPost("/api/final/product", { "成品影片": prod.value }); fc.sentRanges = ""; renderFinal(); });
   fcBindVideo();
@@ -197,6 +207,7 @@ function fcBindVideo() {
     const clock = document.getElementById("fc-clock");
     if (!clock) return;   // 已經換到別的步驟（影片還在送事件）
     clock.textContent = fcFmt(v.currentTime, 1);
+    fcAbTick(v.currentTime);
     fcMoveHead();
     fcFollow(v.currentTime);
     fcTrack();
@@ -220,7 +231,7 @@ function fcBindVideo() {
 function fcFollow(t) {   // 逐筆看：影片照常播、跨過某一筆的起點，右邊換到那一筆（正在寫原因時不換）
   const prev = fc.lastT;
   fc.lastT = t;
-  if (fc.mode !== "逐筆" || fc.redoOpen || t < prev || t - prev > 2) return;
+  if (fc.mode !== "逐筆" || fc.redoOpen || fc.ab || t < prev || t - prev > 2) return;   // 試聽中不換（前後多播的 2 秒會碰到隔壁那筆）
   const hit = fcRecs().filter((r) => fcHasTime(r) && r["成品"][0] > prev && r["成品"][0] <= t).pop();
   if (hit && hit["鍵"] !== fc.cur) { fc.cur = hit["鍵"]; fcRenderRight(); fcRenderTimeline(); fcMarkRow(); }
 }
@@ -313,7 +324,7 @@ function fcRenderRight() {
         ${fcRetimeHtml(r)}
       </div></article>`;
   box.querySelectorAll("[data-ab]").forEach((b) => b.addEventListener("click", () => fcPlayAB(r, b.dataset.ab)));
-  const stop = document.getElementById("fc-ab-stop"); if (stop) stop.addEventListener("click", () => fc.audio.pause());
+  const stop = document.getElementById("fc-ab-stop"); if (stop) stop.addEventListener("click", () => { fc.audio.pause(); fcStopAB(); });
   document.getElementById("fc-pass").addEventListener("click", () => fcDecide(r, r["結果"] === "通過" ? null : "通過"));
   document.getElementById("fc-redo").addEventListener("click", () => { fc.redoOpen = !fc.redoOpen; fcRenderRight(); if (fc.redoOpen) document.getElementById("fc-reason").focus(); });
   document.getElementById("fc-redo-cancel").addEventListener("click", () => { fc.redoOpen = false; fcRenderRight(); });
@@ -451,11 +462,74 @@ function fcBindRetime(r) {
   teRender(ctx);
 }
 
+// 10-03 第八批 #63：試聽怎麼播（純函式，tests/test_finalcheck_web.py 用 node 跑）。前後各多 2 秒（跟後端 clip 一樣）。
+// 處理後：影片本身從那一筆起點前 2 秒播到終點後 2 秒（聲音就是成品）；
+// 處理前：播原聲（後端 clip），影片從同一筆的成品起點前 2 秒同步播、靜音（剪掉的那種成品裡沒有，影片不動）。
+const FC_AB_CONTEXT = 2;
+function fcAbPlan(r, which) {
+  const p = r["成品"], o = r["原片"];
+  const has = p && p[0] != null;
+  const from = has ? Math.max(0, p[0] - FC_AB_CONTEXT) : null;
+  if (which === "後") {
+    if (!has) return null;
+    const end = p[1] != null ? p[1] : p[0];
+    return { video: { from, to: end + FC_AB_CONTEXT, muted: false }, audio: null };
+  }
+  const url = `/api/final/clip?which=${encodeURIComponent("前")}&key=${encodeURIComponent(r["鍵"])}`;
+  const len = o && o[1] != null ? o[1] - o[0] + 2 * FC_AB_CONTEXT : null;
+  return { video: has ? { from, to: len != null ? from + len : null, muted: true } : null, audio: url };
+}
+
 function fcPlayAB(r, which) {
-  fc.video.pause();
-  fc.audio.src = `/api/final/clip?which=${encodeURIComponent(which)}&key=${encodeURIComponent(r["鍵"])}`;
-  fc.audio.play().catch(() => {});
+  const plan = fcAbPlan(r, which);
+  if (!plan) return;
+  fcStopAB();
+  fc.audio.pause();
+  const v = fc.video;
+  fc.ab = { which, from: plan.video ? plan.video.from : null, to: plan.video ? plan.video.to : null, muted: v.muted };   // 記住原本有沒有靜音，播完還原
+  if (plan.video) {
+    v.muted = plan.video.muted;
+    fcSeek(plan.video.from);
+    v.play().catch(() => {});
+  } else v.pause();
+  if (plan.audio) { fc.audio.src = plan.audio; fc.audio.play().catch(() => {}); }
   document.querySelectorAll("[data-ab]").forEach((b) => b.classList.toggle("on", b.dataset.ab === which));
+}
+
+// 試聽結束（按停、原聲播完、影片播到終點後 2 秒）：原聲停、影片停下、靜音還原。pause=false：影片照播（自己拖走了）
+function fcStopAB(pause = true) {
+  const ab = fc.ab;
+  if (!ab) return;
+  fc.ab = null;
+  fc.audio.pause();
+  if (pause) fc.video.pause();
+  fc.video.muted = ab.muted;
+  document.querySelectorAll("[data-ab]").forEach((b) => b.classList.remove("on"));
+}
+
+// 每次 timeupdate：播到試聽終點就停；自己拖到別的地方（範圍外超過 1 秒）就不算試聽了，原聲停、靜音還原、影片照播
+function fcAbTick(t) {
+  const ab = fc.ab;
+  if (!ab || ab.from == null) return;
+  if (t < ab.from - 1 || (ab.to != null && t >= ab.to + 1)) fcStopAB(false);
+  else if (ab.to != null && t >= ab.to) fcStopAB();
+}
+
+// 10-03 第八批 #64：「跳到」框。成品時間直接跳；原片時間請後端換算（finalcheck.goto_output_time，跟頁面其他地方同一支）
+async function fcGoto(box, kind) {
+  const msg = document.getElementById("fc-goto-msg");
+  const t = rvParseTime(box.value);
+  box.classList.toggle("bad", t == null);
+  if (msg) msg.textContent = "";
+  if (t == null) return;
+  if (kind !== "原片") { fcSeek(t); box.blur(); return; }
+  try {
+    const r = await apiGet(`/api/final/goto?src=${t}`);
+    if (r["成品秒"] == null) { if (msg) msg.textContent = r["說明"]; return; }
+    fcSeek(r["成品秒"]);
+    if (msg) msg.textContent = r["說明"] ? `${r["說明"]}（成品 ${fcFmt(r["成品秒"])}）` : `原片 ${fcFmt(t)}＝成品 ${fcFmt(r["成品秒"])}`;
+    box.blur();
+  } catch (e) { if (msg) msg.textContent = e.message; }
 }
 
 function fcSelect(key, seek = true) {
@@ -475,6 +549,15 @@ function fcStep(dir) {
   if (n) fcSelect(n["鍵"]);
 }
 
+// 10-03 第八批 #65（純函式）：目前這一筆之後第一筆還沒看的；後面都看了才繞回前面找；全部看了回傳 null。
+// only：只在這幾個鍵裡找（「只看要人聽的」），null＝全部。
+function fcNextUnseen(recs, curKey, only = null) {
+  const ok = (x) => !x["結果"] && x["鍵"] !== curKey && (!only || only.includes(x["鍵"]));
+  const i = recs.findIndex((x) => x["鍵"] === curKey);
+  const hit = recs.slice(i + 1).find(ok) || recs.slice(0, Math.max(0, i)).find(ok);
+  return hit ? hit["鍵"] : null;
+}
+
 async function fcDecide(r, result, reason = "") {
   try {
     const res = await apiPost("/api/final/item", { "鍵": r["鍵"], "結果": result, "原因": reason });
@@ -484,8 +567,9 @@ async function fcDecide(r, result, reason = "") {
   } catch (e) { alert(e.message); return; }
   fc.redoOpen = false;
   if (result === "通過") {   // 通過了就換下一筆還沒看的（影片不跳，照常播）
-    const next = fcRecs().find((x) => !x["結果"]);
-    if (next) fc.cur = next["鍵"];
+    // 10-03 第八批 #65：從目前這一筆往後找（以前從頭找，前面跳過沒看的會一直被拉回去）；開了「只看要人聽的」只在那幾筆裡找
+    const next = fcNextUnseen(fcRecs(), r["鍵"], fcOnlyLook() ? fcShown().map((x) => x["鍵"]) : null);
+    if (next) fc.cur = next;
   }
   fcRenderTop(); fcRenderRight(); fcRenderTimeline(); fcRenderLower();
 }
@@ -575,7 +659,7 @@ function fcMarkRow() {
 function fcTrack() {   // 每次 timeupdate：這一小段是正常播過去的就接上，跳過、快轉、暫停就斷開
   const v = fc.video;
   const t = v.currentTime;
-  const ok = !v.paused && !v.seeking && v.playbackRate <= FC_MAX_RATE;
+  const ok = !v.paused && !v.seeking && v.playbackRate <= FC_MAX_RATE && !(fc.ab && fc.ab.which === "前");   // 試聽處理前時影片是靜音的，不算看過
   if (ok && fc.seg && t >= fc.seg[1] && t - fc.seg[1] < 1.0) { fc.seg[1] = t; return; }
   fcEndSeg();
   if (ok) fc.seg = [t, t];
