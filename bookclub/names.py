@@ -305,8 +305,10 @@ def _trim_stretched(audio: np.ndarray, sr: int, spans: list[tuple[float, float]]
     （安靜 TRIM_PAUSE_S 秒以上）或頭尾一大段安靜時，回傳縮短後的 (起, 訖)；不用縮回傳 None。
 
     根本原因：轉文字送 Groq 前挖掉靜音，一個字橫跨接縫時，換算回原片就把挖掉的靜音整段包進去（舊工作區的逐字稿
-    都是這樣；新轉的已經在 `transcribe._map_word` 擋掉）。名字的字是連著念的，所以挑「跟正常長度的字重疊最多」的
-    那一段有聲音的地方；名字的字全都被拉長時，挑聲音最長的那一段。"""
+    都是這樣；新轉的已經在 `transcribe._map_word` 擋掉）。名字的字是連著念的，所以只留
+    有聲音的地方：保留跟所有正常長度的字重疊的有聲段（從第一段的開頭到最後一段的結尾，慢慢念、字中間有停頓的
+    名字不會被縮成只剩一個字）。名字的字全都被拉長時，只有一段有聲音才縮；拿不準就回傳 None 沿用原本範圍——
+    寧可消音範圍長，不可漏掉名字的一部分。"""
     a, b = spans[0][0], spans[-1][1]
     if b - a <= STRETCHED_CHAR_S * len(spans):
         return None
@@ -314,13 +316,16 @@ def _trim_stretched(audio: np.ndarray, sr: int, spans: list[tuple[float, float]]
     if not islands:
         return None
     normal = [(x, y) for x, y in spans if y - x <= STRETCHED_CHAR_S]
-
-    def score(isl):
-        ov = sum(max(0.0, min(isl[1], y) - max(isl[0], x)) for x, y in normal)
-        return (ov, isl[1] - isl[0])
-
-    best = max(islands, key=score)
-    lo, hi = max(a, best[0]), min(b, best[1])
+    if normal:
+        hit = [isl for isl in islands if any(min(isl[1], y) > max(isl[0], x) for x, y in normal)]
+        if not hit or any(not any(min(isl[1], y) > max(isl[0], x) for isl in islands) for x, y in normal):
+            return None   # 有正常長度的字碰不到任何有聲段 → 拿不準
+        lo, hi = hit[0][0], hit[-1][1]
+    elif len(islands) == 1:
+        lo, hi = islands[0]
+    else:
+        return None
+    lo, hi = max(a, lo), min(b, hi)
     if hi - lo < 0.05 or (lo - a < TRIM_PAUSE_S and b - hi < TRIM_PAUSE_S):
         return None
     return lo, hi

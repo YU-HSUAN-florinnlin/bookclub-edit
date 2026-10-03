@@ -108,6 +108,24 @@ def test_build_plan_uses_extended_range_and_words():
     assert old["生成"][0]["slot"] == [2.05, 3.5] and "範圍" not in old["生成"][0]
 
 
+def test_extension_does_not_swallow_other_name_cards():
+    """審查 4：前一句有卡 2 的名字（選直接消音）→ 延伸不能把它包進來重念、吃掉卡 2 的消音。"""
+    c1, c2 = _cand(2.3, 2.8), _cand(1.0, 1.4, sid="s1", matched="我們", code="Tom")
+    plan = nameplan.build_plan([c1, c2], {"2": {"做法": "直接消音"}}, _sents(), words=WORDS, extend=True)
+    g = plan["生成"][0]
+    assert g["slot"][0] == 2.05 and g["slot"][1] == 3.9      # 前面那一邊不延伸，後面照樣延伸
+    assert "我們" not in g["text"]
+    assert [m["候選"] for m in plan["消音"]] == [2]
+    # 保留原聲學員的名字候選也一樣不能碰
+    plan = nameplan.build_plan([c1], {}, _sents(), words=WORDS, extend=True, avoid=[(3.6, 3.8)])
+    assert plan["生成"][0]["slot"] == [0.8, 3.5]
+
+
+def test_other_ranges_excludes_itself():
+    c1, c2 = _cand(2.3, 2.8), _cand(1.0, 1.4)
+    assert nameplan.other_ranges([c1, c2], c1, [(9.0, 9.5)]) == [(1.0, 1.4), (9.0, 9.5)]
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:
