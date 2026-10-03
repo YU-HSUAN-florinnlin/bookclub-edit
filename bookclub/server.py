@@ -819,6 +819,8 @@ class BookclubServer(ThreadingHTTPServer):
             pre = precheck(self.workdir)
             if not pre["可以開始"]:
                 return {"started": False, "error": "還不能開始：" + "；".join(pre["缺"])}
+            if not opts.get("只重新組裝") and not groq_key_ready():   # 10-04 #110：沒金鑰就不檢查念對沒有，先擋下
+                return {"started": False, "error": "生成時要用 Groq 檢查念對沒有，現在讀不到金鑰。" + GROQ_KEY_MISSING}
             from bookclub.execute import final_check
 
             fc = final_check(self.workdir)   # 10-01：開始前總檢查

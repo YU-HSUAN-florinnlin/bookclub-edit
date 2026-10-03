@@ -1318,6 +1318,21 @@ def keep_awake(log: Callable[[str], None] = print):
     return stop
 
 
+def execute_key_problem(*, reassemble_only: bool = False, only_steps: list[str] | None = None,
+                        allow: bool = False, env: dict | None = None) -> str | None:
+    """10-04 #110：第 4 步要生成、卻讀不到 Groq 金鑰時回傳要給人看的說明（可以開始就回傳 None）。
+
+    從終端機直接跑（不是雙擊啟動）常讀不到金鑰，「念對沒有」的檢查整晚都不會做。只跑組裝不用金鑰。"""
+    env = os.environ if env is None else env
+    if allow or reassemble_only or env.get("GROQ_API_KEY"):
+        return None
+    if only_steps is not None and not [s for s in only_steps if s != "組裝"]:
+        return None
+    return ("讀不到 Groq 金鑰（GROQ_API_KEY），生成時沒辦法檢查「念對沒有」，先不開始。"
+            "Mac 請雙擊「啟動.command」開網頁再按開始執行，或用 /bin/zsh -ic '…' 跑這個指令；"
+            "確定不檢查也要跑（每一句都標要人聽）就加 --allow-no-key")
+
+
 def run_execute(workdir: str | Path, *, start: float | None = None, end: float | None = None,
                 methods: list[str] | None = None, redo: bool = False, only_steps: list[str] | None = None,
                 runners: dict | None = None, checks: dict | None = None, skip_precheck: bool = False,

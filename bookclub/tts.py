@@ -537,8 +537,12 @@ def _paused_version(src: Path, text: str, ctx: dict, align: Align, dst: Path) ->
 def _run_attempt(
     item: dict, n: int, seed: int, speed: float, out_dir: Path,
     synth: Synth, hear: Hear | None, similar: Similar | None, log: Callable[[str], None],
+    check_wanted: bool = False,
 ) -> Attempt:
-    """生成一次並做內容、聲紋檢查。"""
+    """生成一次並做內容、聲紋檢查。
+
+    check_wanted（10-04 #110）：要檢查念對沒有、但沒有 hear（讀不到 Groq 金鑰）→ 記成「內容檢查沒做成」、標要人聽，
+    之後讀得到金鑰時會補做檢查；以前這種情況紀錄會顯示內容通過。"""
     sid, text, slot_s = item["id"], item["text"], item.get("slot_s")
     t = time.time()
     wav, sr = synth(item.get("生成用文字") or text, seed, speed)
@@ -549,7 +553,7 @@ def _run_attempt(
     audio_s = len(wav) / sr
     path = out_dir / f"{sid}_第{n}次.wav"
     _save_wav(path, wav, sr)
-    heard, check_failed = None, False
+    heard, check_failed = None, bool(check_wanted and not hear)
     if hear:
         try:
             heard = hear(path)
@@ -962,8 +966,10 @@ def run_generation(
         load_s += time.time() - t
         return s
 
+    no_key = False
     if hear is None and check_content:
         hear = make_groq_hear()
+        no_key = hear is None
         if hear is None:
             log("⚠️ 沒有設定 GROQ_API_KEY，這次不檢查念得對不對，每句都要人聽。")
     want_similar = similar is None and check_similarity and phase != "停頓"   # 10-01：要生成時才載入
@@ -1029,7 +1035,10 @@ def run_generation(
         if hit:
             say(f"  第 {n} 次生成：沿用上次生成好的聲音")
             att = Attempt(**{k: v for k, v in hit.items() if k in ATTEMPT_FIELDS}).check(it["text"])
-            if att.check_failed and hear:   # 上次內容檢查沒做成（網路）：聲音不用重新生成，補檢查就好
+            if no_key and att.heard is None:   # 10-04 #110：這次也讀不到金鑰，沒檢查過的維持要人聽
+                att.check_failed = True
+            # 上次內容檢查沒做成（網路），或上次讀不到金鑰根本沒檢查（10-04 #110）：聲音不用重新生成，補檢查就好
+            if (att.check_failed or att.heard is None) and hear:
                 try:
                     att.heard = hear(out_dir / f"{it['id']}_第{n}次.wav")
                     att.content = content_score(it["text"], att.heard)
@@ -1050,7 +1059,7 @@ def run_generation(
         if want_similar:
             want_similar = False
             similar = make_similarity(workdir)
-        att = _run_attempt(it, n, seed, speed, out_dir, synth, hear, similar, log)
+        att = _run_attempt(it, n, seed, speed, out_dir, synth, hear, similar, log, check_wanted=check_content)
         save_entry(key, att, wav)
         return att
 

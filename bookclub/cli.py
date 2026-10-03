@@ -87,6 +87,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="只重新組裝（10-03）：第 5 步退回的那幾筆不重新生成、不換念法，生成的聲音照舊重新放回去；"
                                 "組裝做完回到第 5 步「還沒看」、標「重做過（只重新組裝）」（網頁第 4 步「只重新組裝」那顆）")
 
+    ex_parser.add_argument("--allow-no-key", action="store_true",
+                           help="讀不到 Groq 金鑰也照跑（10-04 #110）：「念對沒有」不檢查，生成的每一句都標要人聽；"
+                                "不加這個旗標、又讀不到金鑰時會直接停下來")
+
     part_parser = run_sub.add_parser(
         "part", help="第 4 步內部用（10-01）：「AI 執行」一支程式只跑一段、只載入一個模型；平常不用自己打，run execute 會開")
     part_parser.add_argument("workdir", help="工作區路徑")
@@ -292,9 +296,14 @@ def main(argv: list[str] | None = None) -> int:
                             end=args.end, tag=args.tag,
                             methods=[m.strip() for m in args.methods.split(",") if m.strip()] if args.methods else None)
         if args.run_command == "execute":
-            from bookclub.execute import PartFailed, run_execute
+            from bookclub.execute import PartFailed, execute_key_problem, run_execute
             from bookclub.review import parse_time
 
+            only = [x.strip() for x in args.only.split(",") if x.strip()] if args.only else None
+            why = execute_key_problem(reassemble_only=args.reassemble_only, only_steps=only, allow=args.allow_no_key)
+            if why:
+                print(f"⚠️ {why}")
+                return 1
             try:
                 run_execute(args.workdir, start=parse_time(args.start) if args.start else None,
                             end=parse_time(args.end) if args.end else None,
