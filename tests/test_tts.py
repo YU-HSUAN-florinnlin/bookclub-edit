@@ -816,5 +816,53 @@ def test_pause_cache_redone_when_source_file_changed():
                              phase="停頓", log=lambda s: None)
         assert again, "來源聲音檔換過，插入停頓要重做"
 
+
+# ---------- 10-03 第九批 #20：停頓／收尾補做內容檢查，補出「不過」不讓整步失敗 ----------
+
+def test_recheck_fail_in_later_programs_does_not_stop_step():
+    def broken(path):
+        raise ConnectionError("連不上")
+
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": "甲乙丙丁"}, {"id": "B", "text": "戊己庚辛", "slot_s": 1.0}],
+                                 ensure_ascii=False), encoding="utf-8")
+        calls: list = []
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=broken, check_similarity=False,
+                             use_pauses=False, phase="生成", log=lambda s: None)
+        assert len(calls) == 2
+        # Groq 恢復了，但補做的檢查發現第 1 次沒念對；第 2 次（收尾換一種念法）念對了
+        wrong_first = lambda p: "完全不對的內容" if "第1次" in Path(p).name else {"A": "甲乙丙丁", "B": "戊己庚辛"}[Path(p).name[0]]  # noqa: E731
+        msgs: list = []
+        out = tts.generate_teacher(work, sp, synth=_never, hear=wrong_first, check_similarity=False,
+                                   use_pauses=False, phase="停頓", log=msgs.append)
+        assert out == {} and any("補做的檢查沒過" in m for m in msgs), msgs
+        calls.clear()
+        r = {x["id"]: x for x in tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=wrong_first,
+                                                       check_similarity=False, use_pauses=False, phase="收尾",
+                                                       log=lambda s: None)["句子"]}
+        # 沒有時間格的 A：不重新生成，標要人聽；有時間格的 B：收尾那一支換一種念法再念，念對了
+        assert r["A"]["要人聽"] and len(r["A"]["嘗試"]) == 1 and not r["A"]["嘗試"][0]["內容通過"]
+        assert [a["種子"] for a in r["B"]["嘗試"]] == [42, 1] and r["B"]["選定"] == 2 and not r["B"]["要人聽"]
+        assert calls == ["戊己庚辛"]
+
+
+def test_recheck_fail_in_one_program_regenerates():
+    def broken(path):
+        raise ConnectionError("連不上")
+
+    with tempfile.TemporaryDirectory() as d:
+        work = _ref_work(Path(d))
+        sp = work / "句子.json"
+        sp.write_text(json.dumps([{"id": "A", "text": "甲乙丙丁"}], ensure_ascii=False), encoding="utf-8")
+        calls: list = []
+        tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=broken, check_similarity=False,
+                             use_pauses=False, log=lambda s: None)
+        wrong_first = lambda p: "完全不對的內容" if "第1次" in Path(p).name else "甲乙丙丁"  # noqa: E731
+        r = tts.generate_teacher(work, sp, synth=_len_synth(calls), hear=wrong_first, check_similarity=False,
+                                 use_pauses=False, redo=True, log=lambda s: None)["句子"][0]
+        assert len(calls) == 2 and r["選定"] == 2 and not r["要人聽"]   # 照一般「內容沒過」：換一種念法重念
+
 if __name__ == "__main__":
     sys.exit(_run_all())

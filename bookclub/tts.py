@@ -226,6 +226,7 @@ class Attempt:
     similarity: float | None = None
     paused_s: float | None = None   # 照原片停頓插入空白後的長度；沒做就是 None
     check_failed: bool = False      # 09-30：要檢查內容但沒做成（網路、Groq 有問題）→ 這一句標要人聽
+    rechecked: bool = False         # 10-03 第九批 #20：內容檢查是事後（停頓／收尾那一支）補做的
 
     def content_ok(self) -> bool:
         return self.content is None or self.content >= CONTENT_MIN
@@ -872,6 +873,7 @@ def run_generation(
                     att.heard = hear(out_dir / f"{it['id']}_第{n}次.wav")
                     att.content = content_score(it["text"], att.heard)
                     att.check_failed = False
+                    att.rechecked = True
                     save_entry(key, att, wav)
                     log(f"  第 {n} 次生成：補做念對沒有的檢查，念的字對了 {att.content:.0%}")
                 except Exception as exc:  # noqa: BLE001
@@ -898,7 +900,16 @@ def run_generation(
         if avoid[it["id"]] and not h:
             say(f"  第 {len(versions[it['id']].get('以前的版本') or []) + 1} 版：上一版退回重做、文字和範圍沒改，換一種念法重新生成")
         while (nxt := next_attempt(h, None, tolerance, avoid[it["id"]])) is not None:
-            h.append(attempt(it, len(h) + 1, *nxt))
+            try:
+                h.append(attempt(it, len(h) + 1, *nxt))
+            except NotGeneratedYet:
+                # 10-03 第九批 #20：生成當下 Groq 沒連上、這一支（停頓／收尾）補做檢查才發現沒念對。這一支不載入生成模型，
+                # 不要讓整步失敗：先照現有的幾次往下做（沒念對的會標要人聽；有時間格的，收尾那一支會換一種念法再念）
+                if not (h and h[-1].rechecked and not h[-1].content_ok()):
+                    raise
+                log(f"  ⚠️ 第 {it['id']} 句補做的檢查沒過（念的字對了 {h[-1].content:.0%}）："
+                    "這一支程式不重新生成，先照現有的往下做，沒念對的會標要人聽")
+                break
     if phase == "生成":
         log(f"[{tag}] 這一支程式只生成：{len(todo)} 句做完；插入停頓、放回時間格交給下一支程式")
         return load_s
@@ -1010,7 +1021,9 @@ def run_generation(
              and next_attempt(histories[it["id"]], it["slot_s"], tolerance, avoid[it["id"]]) is not None]
     if retry:
         for it in retry:
-            log(f"[{tag}] 第 {it['id']} 句長度跟原本差太多，調整說話快慢再念一次")
+            log(f"[{tag}] 第 {it['id']} 句" + ("念的字不對（補做的檢查沒過），換一種念法再念一次"
+                                               if not histories[it["id"]][-1].content_ok()
+                                               else "長度跟原本差太多，調整說話快慢再念一次"))
             h = histories[it["id"]]
             while (nxt := next_attempt(h, it["slot_s"], tolerance, avoid[it["id"]])) is not None:
                 h.append(attempt(it, len(h) + 1, *nxt))
