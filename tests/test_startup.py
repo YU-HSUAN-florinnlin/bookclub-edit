@@ -245,6 +245,68 @@ def test_groq_message_per_platform():
         assert dr.key_file() in mac
 
 
+# ── #31：install.sh 的 skill 捷徑 ─────────────────────────────────
+# 只抽出 [10/11] 這一段、在假的 HOME 裡跑（不執行整支 install.sh、不碰真的 ~/.claude）。
+
+
+def _run_skill_step(home: Path, no_skill: bool = False):
+    import os
+    import shlex
+    import subprocess
+
+    text = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
+    section = text.split("# ── [10/11]", 1)[1].split("\n", 1)[1].split("# ── [11/11]", 1)[0]   # 去掉標題那一行的剩餘
+    script = ("set -euo pipefail\nstep() { echo \"== $*\"; }\n"
+              f"SCRIPT_DIR={shlex.quote(str(REPO_ROOT))}\nNO_SKILL={int(no_skill)}\n" + section)
+    env = dict(os.environ, HOME=str(home))
+    return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=20)
+
+
+def test_install_skill_link_creates_skills_folder():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp)
+        (home / ".claude").mkdir()   # 裝過 Claude Code，但還沒有 skills 這一層
+        r = _run_skill_step(home)
+        assert r.returncode == 0, r.stderr
+        link = home / ".claude" / "skills" / "bookclub-edit"
+        assert link.is_symlink() and link.resolve() == (REPO_ROOT / "skills" / "bookclub-edit").resolve()
+        assert "已建立" in r.stdout
+        r2 = _run_skill_step(home)   # 重跑不會出錯
+        assert r2.returncode == 0 and "捷徑已存在" in r2.stdout
+
+
+def test_install_skill_link_without_claude_prints_how_to_add_later():
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp)
+        r = _run_skill_step(home)
+        assert r.returncode == 0, r.stderr
+        assert not (home / ".claude").exists()   # 沒裝 Claude Code 就不替它建資料夾
+        assert "mkdir -p ~/.claude/skills && ln -s" in r.stdout
+        assert str(REPO_ROOT / "skills" / "bookclub-edit") in r.stdout
+
+
+def test_install_skill_link_respects_existing_and_no_skill():
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp)
+        skills = home / ".claude" / "skills"
+        skills.mkdir(parents=True)
+        os.symlink(home / "不存在的地方", skills / "bookclub-edit")   # 壞掉的捷徑：以前會讓 ln 失敗、整支中斷
+        r = _run_skill_step(home)
+        assert r.returncode == 0, r.stderr
+        assert "不是指到這個倉庫" in r.stdout
+        assert os.readlink(skills / "bookclub-edit") == str(home / "不存在的地方")
+    with tempfile.TemporaryDirectory() as tmp:
+        r = _run_skill_step(Path(tmp), no_skill=True)
+        assert r.returncode == 0 and "--no-skill" in r.stdout and not (Path(tmp) / ".claude").exists()
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:
