@@ -1051,7 +1051,7 @@ class Handler(BaseHTTPRequestHandler):
             out = profile.export_profile()
             self._serve_file(Path(out["檔案"]), content_type="application/zip")
         elif path == "/api/projects":
-            self._send_json(200, {**list_projects(server._workdir), "轉文字金鑰": groq_key_ready()})
+            self._send_json(200, {**list_projects(server._workdir), "轉文字金鑰": groq_key_ready(), "轉文字金鑰說明": GROQ_KEY_MISSING})
         elif path == "/api/browse":
             self._send_json(200, browse((query.get("path") or [None])[0]))
         elif path == "/api/refs":

@@ -39,7 +39,13 @@ README = """讀書會剪輯工具｜設定包
 
 
 def _read_csv(data: bytes | str) -> tuple[list[str], list[dict]]:
-    text = data.decode("utf-8-sig") if isinstance(data, bytes) else data.lstrip("﻿")
+    if isinstance(data, bytes):   # 10-03 #35：Excel 另存的 Big5 也讀得了
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = data.decode("cp950")
+    else:
+        text = data.lstrip("﻿")
     reader = csv.DictReader(io.StringIO(text))
     rows = [{k: (v or "").strip() for k, v in r.items() if k is not None} for r in reader]
     return list(reader.fieldnames or []), [r for r in rows if any(r.values())]

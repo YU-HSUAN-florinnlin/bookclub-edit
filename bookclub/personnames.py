@@ -17,10 +17,12 @@
 from __future__ import annotations
 
 import json
+import io
 import re
 import time
 from pathlib import Path
 
+from bookclub import csvfile
 from bookclub import workdir as wd
 
 KINDS = ("學員", "老師本人", "書中人物或作者", "其他人", "不確定")
@@ -193,7 +195,7 @@ def add_to_roster(name: str, alts: list[str], code: str) -> bool:
             tail = f.read()[-1:]
     header = ["中文名", "其他寫法", "性別"]
     if not new_file:
-        with open(path, encoding="utf-8-sig", newline="") as f:
+        with io.StringIO(csvfile.read_text(path), newline="") as f:   # 10-03 #35：Excel 另存的 Big5 也讀得了
             header = next(csv.reader(f), None) or header
     row = {"中文名": name, "其他寫法": "、".join(a for a in alts if a != name), "英文代號": code}
     with open(path, "a", encoding="utf-8", newline="") as f:

@@ -384,7 +384,7 @@ async function renderExecuteBody() {
       <b>第 2 步的老師參考音也要選好</b>，會出現的名字都要有英文代號（沒有的按下面「幫還沒代號的自動配」）。
       能省掉的是第 3 步逐筆覆核的人工：沒覆核的話，照第 1 步的建議做（名字的那一句老師重念、學員段落全部學員重念、建議剪掉的段落不剪）。</div>
     ${pre["缺"].length ? `<div class="card"><b>還不能開始：</b><ul>${pre["缺"].map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
-      ${pre["缺代號"] ? `<button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">配常用英文名，之後在第 3 步 ②③ 可以改</span>` : ""}</div>` : ""}
+      ${pre["缺代號"] ? `<button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">從代號名單配（外國人名的中文寫法），之後在第 3 步 ②③ 可以改</span>` : ""}</div>` : ""}
     ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
     <h2>要修改的項目</h2>
     <div class="card" id="execStats">${execStatsHtml(d)}</div>
@@ -473,7 +473,7 @@ async function renderExecuteBody() {
     auto.disabled = true;
     try {
       const r = await apiPost("/api/codes/auto", {});
-      if (r["代號不夠"]) alert("常用英文名不夠用，剩下的請到第 3 步 ②③ 自己打新代號。");
+      if (r["代號不夠"]) alert("代號名單不夠用，剩下的請到第 3 步 ②③ 自己打新代號。");
     } catch (e) { return; }
     await renderExecuteBody();
   });
@@ -575,7 +575,7 @@ async function renderProfile() {
   contentEl.innerHTML = "<p>載入中…</p>";
   const d = await apiGet("/api/profile");
   const desc = {
-    "名冊.csv": "學員本名、其他寫法（認得出誰是誰）。只要一份、不分期；英文代號每一集在第 3 步自己選",
+    "名冊.csv": "學員本名、其他寫法（認得出誰是誰）。只要一份、不分期；代號每一集在第 3 步自己選",
     "敏感詞.csv": "公司名、地名等要換掉的詞，與替代詞",
     "名字排除清單.csv": "確認不是名字的詞（地名、疊字誤抓），之後自動不列入候選",
     "發音對照表.csv": "老師 AI 聲音念偏的詞，換成接近台灣口音的寫法",
@@ -659,7 +659,7 @@ async function renderOverview() {
       <td>${p["路徑"] === projects["目前"] ? "" : `<button class="secondary pj-switch" data-path="${esc(p["路徑"])}">切換</button>`}</td></tr>`).join("");
   contentEl.innerHTML = `
     <h1>總覽</h1>
-    ${projects["轉文字金鑰"] === false ? `<div class="hint">這個網頁伺服器讀不到 Groq 金鑰，新影片沒辦法轉文字（已經轉好文字的專案不受影響）。關掉這個伺服器，改用雙擊「啟動.command」重開。</div>` : ""}
+    ${projects["轉文字金鑰"] === false ? `<div class="hint">${esc(projects["轉文字金鑰說明"] || "這個網頁伺服器讀不到 Groq 金鑰，新影片沒辦法轉文字。關掉這個伺服器，改用雙擊「啟動.command」重開。")}（已經轉好文字的專案不受影響）</div>` : ""}
     <div class="card pick">
       <h2 style="margin-top:0">選影片</h2>
       <p class="muted">選一支影片，按「開始分析」才會在影片旁邊建這支影片的工作資料夾（<code>影片檔名_剪輯工作區</code>）。同一支影片已經做到一半的，會接著做（做完的步驟自動跳過）。</p>

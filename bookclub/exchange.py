@@ -16,12 +16,14 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import subprocess
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
+from bookclub import csvfile
 from bookclub import workdir as wd
 
 FORMAT_VERSION = 1
@@ -44,7 +46,7 @@ def _roster_gender() -> dict[str, str]:
     path = data_dir() / "名冊.csv"
     if not path.is_file():
         return {}
-    with open(path, encoding="utf-8-sig", newline="") as f:
+    with io.StringIO(csvfile.read_text(path), newline="") as f:   # 10-03 #35：Excel 另存的 Big5 也讀得了
         return {(r.get("英文代號") or "").strip(): (r.get("性別") or "").strip()
                 for r in csv.DictReader(f) if (r.get("英文代號") or "").strip()}
 

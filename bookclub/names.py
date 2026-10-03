@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import re
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from bookclub import csvfile
 from bookclub.workdir import fingerprint, name_candidates_dir, names_path, read_json, write_json
 
 # ---------- 讀音放寬（照 spikes/nametest/name_test_ab.py 驗證過的做法） ----------
@@ -76,7 +78,7 @@ def load_roster(path: Path) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    with open(path, encoding="utf-8-sig", newline="") as f:
+    with io.StringIO(csvfile.read_text(path), newline="") as f:   # 10-03 #35：Excel 另存的 Big5 也讀得了
         for row in csv.DictReader(f):
             canonical = (row.get("中文名") or "").strip()
             code = (row.get("英文代號") or "").strip()
@@ -98,7 +100,7 @@ def roster_duplicate_spellings(path: Path) -> list[dict]:
     if not path.exists():
         return []
     rows: dict[str, list[int]] = {}
-    with open(path, encoding="utf-8-sig", newline="") as f:
+    with io.StringIO(csvfile.read_text(path), newline="") as f:   # 10-03 #35：Excel 另存的 Big5 也讀得了
         for n, row in enumerate(csv.DictReader(f), start=2):
             canonical = (row.get("中文名") or "").strip()
             if not canonical:
@@ -115,7 +117,7 @@ def load_sensitive_words(path: Path) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    with open(path, encoding="utf-8-sig", newline="") as f:
+    with io.StringIO(csvfile.read_text(path), newline="") as f:   # 10-03 #35：Excel 另存的 Big5 也讀得了
         for row in csv.DictReader(f):
             orig = (row.get("原詞") or "").strip()
             repl = (row.get("替代詞") or "").strip()
@@ -133,7 +135,7 @@ def load_exclusion_list(path: Path) -> list[dict]:
     if not path.exists():
         return []
     out = []
-    with open(path, encoding="utf-8-sig", newline="") as f:
+    with io.StringIO(csvfile.read_text(path), newline="") as f:   # 10-03 #35：Excel 另存的 Big5 也讀得了
         for row in csv.DictReader(f):
             term = (row.get("詞") or "").strip()
             reason = (row.get("原因") or "").strip()
