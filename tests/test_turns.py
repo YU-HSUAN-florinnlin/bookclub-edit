@@ -265,6 +265,73 @@ def test_get_text_turns_caches_and_skips_claude():
         assert calls[0] == 2                                           # 句數對不上：重新判斷
 
 
+def _chunk_ids(prompt):
+    ids = [int(line.split("|")[0]) for line in prompt.split("逐字稿：\n")[1].splitlines()]
+    return ids[0], ids[-1]
+
+
+def test_empty_chunk_is_retried_then_fails():
+    """10-03 第八批（#4）：某一塊回 {"段落": []}（格式對、內容空）算失敗：重送一次成功時段落完整；兩次都空 → 丟例外。"""
+    sents = [{"start": i * 2.0, "end": i * 2.0 + 1, "text": f"第{i}句"} for i in range(500)]
+    old_wait = turns.RETRY_WAIT_S
+    turns.RETRY_WAIT_S = 0
+    try:
+        for empty_times, ok in ((1, True), (2, False)):
+            seen = {}
+
+            def fake_call(prompt, model):
+                a, b = _chunk_ids(prompt)
+                seen[a] = seen.get(a, 0) + 1
+                if a == 200 and seen[a] <= empty_times:          # 第 2 塊回空
+                    return json.dumps({"段落": []})
+                return json.dumps({"段落": [{"起": a, "迄": b, "說話者": "老師"}]})
+
+            if ok:
+                out = turns.text_turns(sents, "x", log=lambda *_: None, call=fake_call)
+                assert seen[200] == 2 and turns.turn_gaps(out, 500) == []
+                assert out[0]["起"] == 0 and out[-1]["迄"] == 499
+            else:
+                try:
+                    turns.text_turns(sents, "x", log=lambda *_: None, call=fake_call)
+                    raise AssertionError("兩次都空還沒出錯")
+                except ValueError as e:
+                    assert "空" in str(e) and "200–419" in str(e)
+    finally:
+        turns.RETRY_WAIT_S = old_wait
+
+
+def test_stitch_gap_detected():
+    """10-03 第八批（#4）：接起來有缺口 → 丟例外，寫哪幾行、原片幾分。"""
+    sents = [{"start": i * 60.0, "end": i * 60.0 + 30, "text": "x"} for i in range(10)]
+    out = turns.stitch_chunks([[{"起": 0, "迄": 3}], [], [{"起": 7, "迄": 9}]])
+    assert turns.turn_gaps(out, 10) == [(4, 6)]
+    try:
+        turns.check_turns_cover(out, sents)
+        raise AssertionError("有缺口沒抓到")
+    except ValueError as e:
+        assert "第 4–6 行" in str(e) and "00:04:00" in str(e) and "00:06:30" in str(e)
+    turns.check_turns_cover([{"起": 0, "迄": 9}], sents)
+
+
+def test_get_text_turns_does_not_reuse_cache_with_gap():
+    """10-03 第八批（#4）：`段落_文字.json` 有缺口 → 不沿用，重新送。"""
+    sents = [_sent(i, "老師") for i in range(5)]
+    calls = [0]
+
+    def fake_call(prompt, model):
+        calls[0] += 1
+        return json.dumps({"段落": [{"起": 0, "迄": 4, "說話者": "老師", "內容類型": "導讀"}]})
+
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        p = turns.text_turns_path(w)
+        p.parent.mkdir(parents=True)
+        p.write_text(json.dumps({"段落": [{"起": 0, "迄": 1, "句子": ["s0", "s1"]}], "句數": 5}), encoding="utf-8")
+        a = turns.get_text_turns(w, sents, model="x", log=lambda *_: None, call=fake_call)
+        assert calls[0] == 1 and a["段落"][0]["迄"] == 4
+        assert json.loads(p.read_text(encoding="utf-8"))["段落"][0]["迄"] == 4
+
+
 def test_voice_role_uses_original_voice_label():
     ss = [{**_sent(0, "老師"), "聲紋判斷": "不是老師"}, _sent(1, "不是老師")]
     assert turns._voice_role(ss) == "學員"

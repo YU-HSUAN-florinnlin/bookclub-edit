@@ -136,6 +136,58 @@ def test_claude_steps_failed_are_visible():
     assert not pre["可以開始"] and any("人名清單沒跑成功" in m for m in pre["缺"])
 
 
+def test_empty_turns_reply_is_a_claude_failure():
+    """10-03 第八批（#4）：段落分析每一次都回 {"段落": []}（格式對、內容空）→ 不再默默留缺口：
+    重送一次還是空 → 寫進「Claude沒跑成功」，不產生 段落_文字.json。"""
+    from bookclub import analyze, roomtone, students
+    from bookclub import turns as turns_mod
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        video = root / "假影片.wav"
+        tm._make_audio(video)
+        w = root / "工作區"
+        (w / "transcript").mkdir(parents=True)
+        (w / "transcript" / "merged.json").write_text(json.dumps(tm._merged(), ensure_ascii=False), encoding="utf-8")
+        tm._make_audio(w / "audio.flac")
+        calls = [0]
+
+        def empty_claude(prompt, model, timeout_s=600):
+            if prompt.startswith(turns_mod.PROMPT):
+                calls[0] += 1
+                return '{"段落": []}'
+            raise RuntimeError("claude -p 失敗：假的逾時")
+
+        patches = [
+            (refpick, "_load_embed_model", lambda: tm._FakeInference()),
+            (refpick, "_transcribe_candidate_text", lambda client, wav, data=None: "假的逐字稿初稿"),
+            (refpick, "GROQ_CALL_INTERVAL_S", 0.0),
+            (turns_mod, "call_claude", empty_claude),
+            (turns_mod, "RETRY_WAIT_S", 0),
+            (students, "estimate_pitches", lambda *a, **k: None),
+            (roomtone, "ensure_info", lambda *a, **k: None),
+        ]
+        olds = [(m, n, getattr(m, n)) for m, n, _ in patches]
+        old_key = os.environ.get("GROQ_API_KEY")
+        os.environ["GROQ_API_KEY"] = "gsk_假的金鑰"
+        try:
+            for m, n, v in patches:
+                setattr(m, n, v)
+            analyze.run_analyze(video, w, skip_overlap=True, ref_n=2)
+        finally:
+            for m, n, v in olds:
+                setattr(m, n, v)
+            if old_key is None:
+                os.environ.pop("GROQ_API_KEY", None)
+            else:
+                os.environ["GROQ_API_KEY"] = old_key
+
+        saved = json.loads((w / "分析結果.json").read_text(encoding="utf-8"))
+        turn_fail = [f for f in saved["Claude沒跑成功"] if f["步驟"] == "段落分析"]
+        assert turn_fail and "空" in turn_fail[0]["原因"], saved["Claude沒跑成功"]
+        assert calls[0] >= 2 and not turns_mod.text_turns_path(w).exists()
+
+
 def test_start_analyze_says_when_claude_missing():
     """網頁按開始分析前先看找不找得到 claude：找不到 → 不開始、畫面拿得到說明；確定要開始再送一次才開始。"""
     from bookclub import server

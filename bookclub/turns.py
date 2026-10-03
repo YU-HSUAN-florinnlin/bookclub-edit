@@ -138,6 +138,48 @@ def stitch_chunks(chunks: list[list[dict]]) -> list[dict]:
     return all_turns
 
 
+RETRY_WAIT_S = 5   # 某一塊沒成功時，等幾秒再重送（測試改成 0）
+
+
+def _span_time(sentences: list[dict], a: int, b: int) -> str:
+    """第 a 到第 b 行在原片幾分到幾分（只寫時間，不寫逐字稿文字）。"""
+    if not sentences:
+        return "?"
+    a, b = max(0, min(a, len(sentences) - 1)), max(0, min(b, len(sentences) - 1))
+    return f"{wd.fmt_time(sentences[a]['start'])}–{wd.fmt_time(sentences[b].get('end', sentences[b]['start']))}"
+
+
+def turn_gaps(turns: list[dict], n: int) -> list[tuple[int, int]]:
+    """第 0 到第 n-1 行裡，沒有屬於任何段落的行 → [(起, 迄), ...]（純函式）。"""
+    covered = [False] * n
+    for t in turns:
+        a, b = t.get("起"), t.get("迄")
+        if not isinstance(a, int) or not isinstance(b, int):
+            continue
+        for i in range(max(0, a), min(n - 1, b) + 1):
+            covered[i] = True
+    gaps, i = [], 0
+    while i < n:
+        if covered[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and not covered[j + 1]:
+            j += 1
+        gaps.append((i, j))
+        i = j + 1
+    return gaps
+
+
+def check_turns_cover(turns: list[dict], sentences: list[dict]) -> None:
+    """10-03 第八批（#4）：每一句都要屬於某一段；有缺口就丟例外，寫哪幾行、原片幾分到幾分。"""
+    gaps = turn_gaps(turns, len(sentences))
+    if gaps:
+        where = "、".join(f"第 {a}–{b} 行（原片 {_span_time(sentences, a, b)}）" for a, b in gaps[:5])
+        more = f" 等 {len(gaps)} 處" if len(gaps) > 5 else ""
+        raise ValueError(f"段落分析有缺口：{where}{more} 不屬於任何段落")
+
+
 def text_turns(sentences: list[dict], model: str, log=print, workers: int = PARALLEL_CALLS,
                call=None) -> list[dict]:
     """整支逐字稿分塊交給 Claude，**同時送出**（預設 4 塊一起），全部回來再依順序接起來。
@@ -156,12 +198,17 @@ def text_turns(sentences: list[dict], model: str, log=print, workers: int = PARA
         for attempt in (1, 2):   # Claude 偶爾回傳格式壞掉的 JSON、或同時送太多被拒，重送一次
             try:
                 raw = parse_json(call(PROMPT + "\n逐字稿：\n" + format_lines(sentences[start:end], start), model))
+                raw_turns = raw.get("段落", []) if isinstance(raw, dict) else []
+                chunk = normalize_turns(raw_turns if isinstance(raw_turns, list) else [], start, end - 1)
+                # 10-03 第八批（#4）：格式對、內容空（或沒蓋到這一塊頭尾）也算這一塊失敗，跟格式壞掉一樣重送
+                if not chunk or chunk[0]["起"] != start or chunk[-1]["迄"] != end - 1:
+                    raise ValueError(f"Claude 回的段落是空的（第 {k + 1} 塊，{start}–{end - 1} 行，"
+                                     f"原片 {_span_time(sentences, start, end - 1)}）")
                 break
             except (ValueError, RuntimeError, subprocess.TimeoutExpired):
                 if attempt == 2:
                     raise
-                time.sleep(5)
-        chunk = normalize_turns(raw.get("段落", []), start, end - 1)
+                time.sleep(RETRY_WAIT_S)
         for t in chunk:
             if t.get("學員編號"):
                 t["學員編號"] = f"C{k}-{t['學員編號']}"
@@ -170,7 +217,9 @@ def text_turns(sentences: list[dict], model: str, log=print, workers: int = PARA
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         chunks = list(pool.map(one, range(len(ranges))))
-    return stitch_chunks(chunks)
+    out = stitch_chunks(chunks)
+    check_turns_cover(out, sentences)
+    return out
 
 
 def get_text_turns(workdir: str | Path, sentences: list[dict], *, model: str | None = None, log=print,
@@ -183,8 +232,13 @@ def get_text_turns(workdir: str | Path, sentences: list[dict], *, model: str | N
     path = text_turns_path(workdir)
     cached = wd.read_json(path)
     if cached and cached.get("句數") == len(sentences):
-        log(f"[段落] 已有 {path.name}（{len(cached['段落'])} 段），不再呼叫 Claude")
-        return cached
+        gaps = turn_gaps(cached.get("段落") or [], len(sentences))
+        if not gaps:
+            log(f"[段落] 已有 {path.name}（{len(cached['段落'])} 段），不再呼叫 Claude")
+            return cached
+        # 10-03 第八批（#4）：舊檔有缺口（某一塊當初回空）就不沿用，重新送
+        log(f"⚠️ [段落] {path.name} 有 {len(gaps)} 處缺口（第一處：第 {gaps[0][0]}–{gaps[0][1]} 行），"
+            "不沿用，重新交給 Claude")
     if model is None:
         from bookclub.config import load_settings
 
