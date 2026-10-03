@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import html
+import json
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -473,7 +474,7 @@ def coverers(workdir: Path, dec: dict, turns: list[dict]) -> list[dict]:
         plan = nameplan.compute_plan(Path(workdir))
     except Exception:  # noqa: BLE001 — 排不出老師的計畫（例如還沒有名字候選）：只看學員段落與剪掉的片段
         plan = {"生成": []}
-    nd = wd.read_json(name_decisions_path(Path(workdir)), default={}) or {}
+    nd = effective_name_decisions(Path(workdir))   # 10-03 補修：一張卡通過，同一句同代號的每一處都算通過
     for g in plan["生成"]:
         ok = all((nd.get(str(c)) or {}).get("已確認") for c in g.get("候選", [])) \
             and all(dec["重疊"].get(o, {}).get("已確認") for o in g.get("重疊項目", []))
@@ -565,11 +566,14 @@ def item_index(workdir: str | Path, dec: dict | None = None, turns: list[dict] |
             學員生成=gen.get(oid))
     names = wd.read_json(wd.names_path(workdir), default=None) or {}
     ndec = wd.read_json(name_decisions_path(workdir), default={}) or {}
-    for i, c in enumerate(effective_name_candidates(workdir, names.get("candidates", []), ndec), start=1):
+    ncands = effective_name_candidates(workdir, names.get("candidates", []), ndec)
+    cards = card_of(ncands)   # 10-03 補修：併進別張卡的（同一處、同一句同代號），第 3 步那一張是主卡
+    for i, c in enumerate(ncands, start=1):
         cid = str(c.get("id") or i)
         whole = bool(c.get("老師整段"))
         put([f"名字:{cid}"], "名字", cid, f"{'老師重念' if whole else '老師提到名字'} {wd.fmt_time(c['start'])}",
-            c["start"], c["end"], f"名字:{cid}", "名字", 老師整段=whole)
+            c["start"], c["end"], f"名字:{cards.get(cid, cid)}", "名字", 老師整段=whole,
+            **({"併進": cards[cid]} if cards.get(cid, cid) != cid else {}))
     for c in dec["刪除段落"]:
         card = f"刪除段落:{c.get('建議id') or c['id']}"
         put([card, f"刪除段落:{c['id']}"], "刪除段落", c.get("建議id") or c["id"], f"剪掉 {wd.fmt_time(c['start'])}",
@@ -654,6 +658,142 @@ def same_spot_groups(candidates: list[dict], decisions: dict) -> dict[int, int]:
     return out
 
 
+CARD_SYNC_KEYS = ("做法", "tags", "已確認", "整句起訖", "改稿")   # 一張卡的決定套到這一句同代號每一處的欄位
+
+
+def _decision_sig(d: dict) -> tuple:
+    from bookclub import nameplan
+
+    return (d.get("做法") or nameplan.WHOLE, tuple(sorted(d.get("tags") or [])), (d.get("改稿") or "").strip(),
+            tuple(d.get("整句起訖") or ()))
+
+
+def name_card_groups(cands: list[dict], decisions: dict) -> dict[int, dict]:
+    """10-03 第八批補修（#12）：同一句（`sentence_id`）、同一個代號的名字候選合成一張卡（純函式）。
+
+    `cands` 是自動抓到的候選（順位＝id，`同一處` 已經標好的不算；敏感詞、沒有代號的不併）。
+    同一組裡時間疊在一起（重疊超過 SAME_SPOT_TOL_S）的算「同一處」（同一個名字比中好幾次），其他的是「這一句裡的另一處」。
+    主卡＝最早那一處裡最準的一筆（精確＞A1＞A2；聽到的字跟寫法一樣的優先；再照順序；不看有沒有確認過，卡片編號才不會跳）。
+    已確認的成員做法不一樣（做法、標記、改稿、重念範圍）→ `分開`（沿用各自的決定，直到人在這張卡上重新按通過）。
+    回傳 {主卡順位: {"成員": [...], "處": [[順位...], ...]（每一處第一個是帶頭的）, "分開": bool, "帶頭": 決定的來源順位}}。"""
+    def rank(x: tuple[int, dict]) -> tuple:
+        return (_LEVEL_RANK.get(x[1].get("比對層級"), 3), 0 if x[1].get("matched_text") == x[1].get("name") else 1, x[0])
+
+    def confirmed(i: int) -> bool:
+        return bool((decisions.get(str(i)) or {}).get("已確認"))
+
+    by: dict[tuple, list[tuple[int, dict]]] = {}
+    for i, c in enumerate(cands, start=1):
+        if c.get("同一處") or c.get("敏感詞") or c.get("人工新增") or c.get("sentence_id") is None \
+                or not (c.get("代號") or "").strip() or "start" not in c or "end" not in c:
+            continue
+        by.setdefault((str(c["sentence_id"]), c["代號"].strip()), []).append((i, c))
+    out: dict[int, dict] = {}
+    for g in by.values():
+        if len(g) < 2:
+            continue
+        g.sort(key=lambda x: (float(x[1]["start"]), x[0]))
+        spots: list[dict] = []
+        for i, c in g:
+            s = spots[-1] if spots else None
+            if s and float(c["start"]) < s["end"] - SAME_SPOT_TOL_S:
+                s["成員"].append((i, c))
+                s["end"] = max(s["end"], float(c["end"]))
+            else:
+                spots.append({"成員": [(i, c)], "end": float(c["end"])})
+        groups = [[x[0] for x in sorted(s["成員"], key=rank)] for s in spots]
+        main = groups[0][0]
+        members = [i for i, _c in g]
+        sigs = {_decision_sig(decisions.get(str(i)) or {}) for i in members if confirmed(i)}
+        lead = main if confirmed(main) else next((i for i in members if confirmed(i)), main)
+        out[main] = {"成員": members, "處": groups, "分開": len(sigs) > 1, "帶頭": lead}
+    return out
+
+
+def _mark_name_cards(out: list[dict], decisions: dict) -> None:
+    """把 `name_card_groups` 的結果標在候選上（就地改 out 的自動候選）：
+    每個成員 `同一張卡`＝主卡 id；主卡帶 `這一句的處`（每一處的起訖、編號）、`決定帶頭`，做法不一樣的帶 `分開決定過`；
+    沒有分開決定過的，同一處裡帶頭以外的標 `同一處`（處理計畫照帶頭那一筆處理，不重複換）。"""
+    auto = [c for c in out if "id" not in c]
+    for main, g in name_card_groups(auto, decisions).items():
+        key = str(main)
+        for i in g["成員"]:
+            out[i - 1] = {**out[i - 1], "同一張卡": key}
+        if not g["分開"]:
+            for spot in g["處"]:
+                for i in spot[1:]:
+                    out[i - 1] = {**out[i - 1], "同一處": str(spot[0])}
+        spots = []
+        for spot in g["處"]:
+            cs = [out[i - 1] for i in spot]
+            spots.append({"id": str(spot[0]), "候選": [str(i) for i in spot], "start": round(min(float(c["start"]) for c in cs), 3),
+                          "end": round(max(float(c["end"]) for c in cs), 3)})
+        extra: dict = {"這一句的處": spots, "同一張卡候選": [str(i) for i in g["成員"]], "決定帶頭": str(g["帶頭"])}
+        if g["分開"]:
+            from bookclub import nameplan
+
+            extra["分開決定過"] = [{"id": str(i), "start": round(float(out[i - 1]["start"]), 3),
+                                  "end": round(float(out[i - 1]["end"]), 3),
+                                  "做法": (decisions.get(str(i)) or {}).get("做法") or nameplan.WHOLE,
+                                  "tags": list((decisions.get(str(i)) or {}).get("tags") or []),
+                                  "已確認": bool((decisions.get(str(i)) or {}).get("已確認"))} for i in g["成員"]]
+        out[main - 1] = {**out[main - 1], **extra}
+
+
+def card_decisions(cands: list[dict], decisions: dict) -> dict:
+    """10-03 第八批補修（#12）：一張卡的決定套到這一句同代號的每一處（純函式，只在讀的時候算，不寫檔）。
+    `cands` 是 `effective_name_candidates` 的結果。沒有分開決定過的組：每個成員的 CARD_SYNC_KEYS 換成帶頭那一筆的
+    （帶頭＝主卡已確認就是主卡，不然是第一筆已確認的，都沒有就是主卡）；分開決定過的組照各自的決定。"""
+    out = dict(decisions)
+    for i, c in enumerate(cands, start=1):
+        key = c.get("同一張卡")
+        if not key or "id" in c:
+            continue
+        main = cands[int(key) - 1]
+        if main.get("分開決定過"):
+            continue
+        lead, cid = main.get("決定帶頭") or key, str(i)
+        if lead == cid:
+            continue
+        src = decisions.get(lead) or {}
+        own = dict(decisions.get(cid) or {})
+        for k in CARD_SYNC_KEYS:
+            if k in src:
+                own[k] = src[k]
+            else:
+                own.pop(k, None)
+        out[cid] = own
+    return out
+
+
+def effective_name_decisions(workdir: str | Path) -> dict:
+    """`名字覆核決定.json`＋一張卡的決定套到同一句同代號的每一處（`card_decisions`）。只讀。"""
+    workdir = Path(workdir)
+    decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
+    cands = (wd.read_json(wd.names_path(workdir), default=None) or {}).get("candidates", [])
+    if not cands:
+        return decisions
+    return card_decisions(effective_name_candidates(workdir, cands, decisions), decisions)
+
+
+def card_of(cands: list[dict]) -> dict[str, str]:
+    """每一筆名字候選 → 第 3 步顯示它的那一張卡的 id（同一處、同一句同代號併掉的指到主卡）。純函式。"""
+    ids = [str(c.get("id") or i) for i, c in enumerate(cands, start=1)]
+    by_id = dict(zip(ids, cands))
+    out = {}
+    for cid, c in zip(ids, cands):
+        k, seen = cid, set()
+        while k not in seen:
+            seen.add(k)
+            cc = by_id.get(k) or {}
+            nxt = cc.get("同一處") or (cc.get("同一張卡") if cc.get("同一張卡") != k else None)
+            if not nxt or nxt not in by_id:
+                break
+            k = nxt
+        out[cid] = k
+    return out
+
+
 def anchor_name_decisions(workdir: str | Path) -> dict:
     """老師名字的覆核決定照「第幾筆」存（09-29 檢查 #6）：`名字候選.json` 整份重算、順序變了，決定會套到別筆。
 
@@ -732,6 +872,7 @@ def effective_name_candidates(workdir: Path, candidates: list[dict], decisions: 
             also.append({"canonical": a.get("canonical"), "name": a.get("name"), "代號": a.get("代號", ""),
                          "比對層級": a.get("比對層級", "")})
         out[main - 1] = {**c, "也可能是": also, "同一處候選": [str(k) for k, v in sorted(merged.items()) if v == main]}
+    _mark_name_cards(out, decisions)   # 10-03 第八批補修（#12）：同一句、同一個代號只出一張卡
     for m in load_decisions(Path(workdir))["人工名字"]:
         out.append({"id": m["id"], "start": m["start"], "end": m["end"], "sentence_id": m.get("sentence_id"),
                     "sentence": m.get("sentence", ""), "matched_text": m.get("matched_text", ""),
@@ -755,11 +896,15 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     table = replace_table(workdir)
     words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words") or []
     cands = effective_name_candidates(workdir, result.get("candidates", []), decisions)
+    raw_decisions, decisions = decisions, card_decisions(cands, decisions)   # 10-03 補修：一張卡的決定套到同一句同代號每一處
     for i, c in enumerate(cands, start=1):
         cid = str(c.get("id") or i)
         if c.get("同一處"):   # 10-03 第八批（#12）：同一處比中好幾個人，併進主卡（主卡寫「也可能是」）
             continue
+        if c.get("同一張卡") and c["同一張卡"] != cid:   # 10-03 補修：同一句、同一個代號的另一處，併進主卡
+            continue
         d = decisions.get(cid, {}) or {}
+        mates = [cands[int(k) - 1] for k in c.get("同一張卡候選") or [] if k != cid and not cands[int(k) - 1].get("同一處")]
         group = nameplan.expand_sentence(ordered, pos[c["sentence_id"]]) if c.get("sentence_id") in pos else []
         if group and c.get("改過時間"):   # 跟 nameplan.build_plan 一樣：改時間納進來的句子一起重念
             group = [g for g in ordered if g["end"] > min(c["start"], group[0]["start"]) + 0.05
@@ -769,7 +914,7 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
         replaced = None
         if group:
             texts = {g["id"]: g["text"] for g in group}
-            new = nameplan.replace_name(texts[c["sentence_id"]], c)
+            new = _replace_each(texts[c["sentence_id"]], c, mates)
             if new is not None:
                 texts[c["sentence_id"]] = new
                 replaced = "".join(texts[g["id"]] for g in group)
@@ -782,7 +927,7 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
                 ws["範圍"] = "逐字"   # 跟 nameplan.build_plan 一樣：句子裡找不到，改用逐字時間的字（17 號 2-7）
             if ws["範圍"]:
                 whole_text = nameplan.range_words(words, ws["start"], ws["end"])
-                replaced = nameplan.replace_name(whole_text, c)
+                replaced = _replace_each(whole_text, c, mates)
             whole = {"start": ws["start"], "end": ws["end"], "原文": whole_text, "換成代號": replaced,
                      "改稿": d.get("改稿", ""), "範圍": ws["範圍"], "原本整句": ws["整句"]}
         if c.get("老師整段"):
@@ -806,9 +951,26 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
             "已確認": bool(d.get("已確認")), "人工新增": bool(c.get("人工新增")), **_align_info(c), **_align_info(d),
             **({"也可能是": c["也可能是"], "選的人": c.get("選的人") or "", "本名": c.get("canonical", "")}
                if c.get("也可能是") else {}),
+            # 10-03 補修：同一句、同一個代號的每一處（N>1 時卡片寫「這一句裡有 N 處」，每一處可以點去聽）
+            **({"這一句的處": c["這一句的處"], "同一張卡候選": c.get("同一張卡候選", [])} if c.get("這一句的處") else {}),
         })
+        if c.get("分開決定過"):   # 以前分開決定過、做法不一樣：沿用各自的決定，全部都通過才算這張卡通過
+            items[-1]["分開決定過"] = c["分開決定過"]
+            items[-1]["已確認"] = all(bool((raw_decisions.get(k) or {}).get("已確認")) for k in c.get("同一張卡候選", []))
     mark_name_covers(items, decisions)
     return items
+
+
+def _replace_each(text: str, c: dict, mates: list[dict]) -> str | None:
+    """名字換成代號，同一張卡的其他幾處（同一句同代號）也一起換（找不到的那一處跳過）；主卡自己的找不到回傳 None。"""
+    from bookclub import nameplan
+
+    new = nameplan.replace_name(text, c)
+    if new is None:
+        return None
+    for m in mates:
+        new = nameplan.replace_name(new, m) or new
+    return new
 
 
 def mark_name_covers(items: list[dict], decisions: dict) -> None:
@@ -1226,21 +1388,40 @@ def progress(items: list[dict], dec: dict, duration: float) -> dict:
 
 def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
     """`POST /api/review/name`：做法、標記（不是名字／是地名／切點削到旁邊的字）、備註、已確認。
-    標「不是名字」「是地名」時，跟舊的名字覆核頁一樣把抓到的字加進排除清單。"""
+    標「不是名字」「是地名」時，跟舊的名字覆核頁一樣把抓到的字加進排除清單。
+
+    10-03 補修（#12）：同一句、同一個代號合成一張卡的，決定（CARD_SYNC_KEYS）照樣每筆候選各存一份，
+    一起寫進這一句同代號的每一筆（`同一張卡候選`）。以前分開決定過、做法不一樣的：只改主卡，
+    等人在這張卡上按通過時才全部統一成主卡的決定。`選的人` 只改主卡（代號變了，下次讀會重新分組）。"""
     workdir = Path(workdir)
     cid = str(cid)
     anchor_name_decisions(workdir)
     cands = (wd.read_json(wd.names_path(workdir), default=None) or {}).get("candidates", [])
+    eff = effective_name_candidates(workdir, cands, wd.read_json(name_decisions_path(workdir), default={}) or {}) \
+        if cands else []
+    me = next((c for i, c in enumerate(eff, start=1) if str(c.get("id") or i) == cid), None) or {}
+    mates = [k for k in me.get("同一張卡候選") or [] if k != cid] if me.get("同一張卡") == cid else []
+    split = bool(me.get("分開決定過"))
+    sync = bool(mates) and (not split or bool(fields.get("已確認")))
+    lead = me.get("決定帶頭") or cid
     with _lock:
         decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
         d = decisions.setdefault(cid, {"tags": [], "note": ""})
+        if sync and not split and lead != cid:   # 卡片顯示的是帶頭那一筆（已確認的）的決定：先對齊，再套這次改的
+            src = decisions.get(lead) or {}
+            for k in CARD_SYNC_KEYS:
+                if k in src:
+                    d[k] = src[k]
+                else:
+                    d.pop(k, None)
         if cid.isdigit() and 1 <= int(cid) <= len(cands):
             d["候選指紋"] = name_fingerprint(cands[int(cid) - 1])
         if "做法" in fields:
             if fields["做法"] not in NAME_HOWS:
                 raise ValueError(f"名字的做法只能是：{'、'.join(NAME_HOWS)}")
             d["做法"] = fields["做法"]
-        was_not_name = any(t in ("是地名", "不是名字") for t in d.get("tags", []))
+        was_not_name = {k: any(t in ("是地名", "不是名字") for t in (decisions.get(k) or {}).get("tags", []))
+                        for k in [cid] + (mates if sync else [])}
         if "tags" in fields:
             d["tags"] = [t for t in fields["tags"] if t in NAME_TAGS]
         if "note" in fields:
@@ -1269,57 +1450,84 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
             else:
                 d.pop("改稿", None)
         d["更新時間"] = _now()
+        synced = [cid]
+        if sync:   # 10-03 補修：同一句同代號的每一筆都存同一份決定（各自帶自己的候選指紋）
+            for k in mates:
+                dm = decisions.setdefault(k, {"tags": [], "note": ""})
+                for key in CARD_SYNC_KEYS:
+                    if key in d:
+                        dm[key] = json.loads(json.dumps(d[key], ensure_ascii=False))
+                    else:
+                        dm.pop(key, None)
+                if k.isdigit() and 1 <= int(k) <= len(cands):
+                    dm["候選指紋"] = name_fingerprint(cands[int(k) - 1])
+                dm["更新時間"] = d["更新時間"]
+                synced.append(k)
         wd.write_json(name_decisions_path(workdir), decisions)
+
+    def undo(key: str, value=None) -> None:
+        with _lock:
+            dd = wd.read_json(name_decisions_path(workdir), default={}) or {}
+            for k in synced:
+                if key == "已確認":
+                    dd.setdefault(k, {"tags": [], "note": ""})["已確認"] = False
+                else:
+                    dd.get(k, {}).pop(key, None)
+            wd.write_json(name_decisions_path(workdir), dd)
+
     if fields.get("整句起訖"):
-        c = next((c for i, c in enumerate(effective_name_candidates(workdir, cands, wd.read_json(name_decisions_path(workdir), default={}) or {}), start=1)
-                  if str(c.get("id") or i) == cid), None)
+        now = effective_name_candidates(workdir, cands, wd.read_json(name_decisions_path(workdir), default={}) or {})
         a, b = d["整句起訖"]
-        if c and not (a <= c["start"] + 0.05 and c["end"] - 0.05 <= b):
-            with _lock:
-                decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
-                decisions.get(cid, {}).pop("整句起訖", None)
-                wd.write_json(name_decisions_path(workdir), decisions)
-            raise ValueError(f"重念範圍要包住名字（{wd.fmt_time(c['start'])}–{wd.fmt_time(c['end'])}）")
+        for c in [c for i, c in enumerate(now, start=1) if str(c.get("id") or i) in synced and not c.get("同一處")]:
+            if not (a <= c["start"] + 0.05 and c["end"] - 0.05 <= b):
+                undo("整句起訖")
+                many = "（這一句同一個名字的每一處都要包住）" if len(synced) > 1 else ""
+                raise ValueError(f"重念範圍要包住名字（{wd.fmt_time(c['start'])}–{wd.fmt_time(c['end'])}）{many}")
     if fields.get("已確認"):
         # 09-30：按了通過，但這一筆其實處理不了（句子裡找不到名字、換不了代號）→ 成品會照原聲念出名字。擋下來
         from bookclub import nameplan
 
         plan = nameplan.compute_plan(workdir)
-        stuck = next((m for m in plan["要人處理"] if str(m["候選"]) == cid), None)
+        stuck = next((m for m in plan["要人處理"] if str(m["候選"]) in synced), None)
         if not stuck:   # 10-01：要念的字比那段時間逐字稿少太多 → 這一段其他的話會不見
-            g = next((g for g in plan["生成"] if cid in {str(x) for x in g.get("候選", [])}), None)
-            if g and nameplan.too_short(g["text"], words_text(workdir, *g["slot"])):
-                stuck = {"原因": f"要念的字（{nameplan.say_count(g['text'])} 字）不到重念範圍逐字稿"
-                                 f"（{nameplan.say_count(words_text(workdir, *g['slot']))} 字）的一半，這一段其他的話會不見。"
-                                 "請把重念範圍改小，或把話補齊"}
+            for g in [g for g in plan["生成"] if set(synced) & {str(x) for x in g.get("候選", [])}]:
+                if nameplan.too_short(g["text"], words_text(workdir, *g["slot"])):
+                    stuck = {"原因": f"要念的字（{nameplan.say_count(g['text'])} 字）不到重念範圍逐字稿"
+                                     f"（{nameplan.say_count(words_text(workdir, *g['slot']))} 字）的一半，這一段其他的話會不見。"
+                                     "請把重念範圍改小，或把話補齊"}
+                    break
         if stuck:
-            with _lock:
-                decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
-                decisions.setdefault(cid, d)["已確認"] = False
-                wd.write_json(name_decisions_path(workdir), decisions)
+            undo("已確認")
             raise ValueError(f"這一筆還不能通過：{stuck['原因']}。先在卡片上把「老師 AI 聲音要重念的句子」改好（名字寫成代號），"
                              "或在「改做法」選直接消音。不處理的話，成品會照原聲念出名字。")
     added = removed = False
-    is_not_name = any(t in ("是地名", "不是名字") for t in d.get("tags", []))
-    if "tags" in fields and is_not_name != was_not_name:
+    for k in synced:   # 10-03 補修：同一張卡的每一筆各自把抓到的字加進／拿出排除清單
+        dk = (wd.read_json(name_decisions_path(workdir), default={}) or {}).get(k) or {}
+        is_not_name = any(t in ("是地名", "不是名字") for t in dk.get("tags", []))
+        if "tags" not in fields or is_not_name == was_not_name.get(k, False):
+            continue
         from bookclub.server import _append_exclusion, _remove_exclusion
 
-        idx = int(cid) - 1 if cid.isdigit() else -1     # 人工補的名字（NM001…）不在候選清單裡
+        idx = int(k) - 1 if k.isdigit() else -1     # 人工補的名字（NM001…）不在候選清單裡
         term = cands[idx].get("matched_text") if 0 <= idx < len(cands) else None
+        a_k = r_k = False
         if is_not_name and term:
-            added = _append_exclusion(term, "、".join(t for t in d["tags"] if t in ("是地名", "不是名字")))
+            a_k = _append_exclusion(term, "、".join(t for t in dk["tags"] if t in ("是地名", "不是名字")))
         elif not is_not_name:   # 09-30：取消「不是名字」，連排除清單一起拿掉（不然以後這個寫法永遠抓不到）
-            removed = _remove_exclusion(d.get("排除的詞") or term or "")
+            r_k = _remove_exclusion(dk.get("排除的詞") or term or "")
         with _lock:
             decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
-            dd = decisions.setdefault(cid, d)
-            if added:
+            dd = decisions.setdefault(k, dk)
+            if a_k:
                 dd["排除的詞"] = term
-            elif removed or not is_not_name:
+            elif r_k or not is_not_name:
                 dd.pop("排除的詞", None)
             wd.write_json(name_decisions_path(workdir), decisions)
+        if k == cid:
             d = dd
-    return {"ok": True, "id": cid, "決定": d, "已加入排除清單": added, "已從排除清單拿掉": removed}
+        added, removed = added or a_k, removed or r_k
+    return {"ok": True, "id": cid, "決定": d, "已加入排除清單": added, "已從排除清單拿掉": removed,
+            **({"一起存的": synced[1:]} if len(synced) > 1 else {})}
 
 
 def save_overlap(workdir: str | Path, oid: str, fields: dict) -> dict:

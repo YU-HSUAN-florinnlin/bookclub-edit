@@ -309,6 +309,11 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             if replace_name(range_words(words, lo_, hi_), c) is not None:
                 _add_ranged(ranged, manual, c, i, d, {"start": lo_, "end": hi_, "範圍": "逐字", "整句": [lo_, hi_]}, words)
                 continue
+        if new is None and item and _same_card_in(item, c, candidates):
+            # 10-03 補修：同一張卡（同一句同代號）的另一處已經在這一句裡換好了（名字疊在一起、字已經換掉）→ 併進那一句
+            item["候選"].append(i)
+            item["slot"] = [min(item["slot"][0], c["start"]), max(item["slot"][1], c["end"])]
+            continue
         if new is None and not edited and not (item and item.get("改稿")):
             manual.append({"候選": i, "原因": "句子裡找不到比對到的字，無法自動換成代號"})
             continue
@@ -382,12 +387,28 @@ def _apply_covers(plan: dict, candidates: list[dict], decisions: dict, default_h
         plan["涵蓋"] = out
 
 
+def _same_card_in(item: dict, c: dict, candidates: list[dict]) -> bool:
+    """這一筆跟生成項目裡已經有的某一筆是同一張卡（同一句、同一個代號，`review._mark_name_cards` 標的）。"""
+    key = c.get("同一張卡")
+    if not key:
+        return False
+    by_id = {str(x.get("id", k)): x for k, x in enumerate(candidates, start=1)}
+    return any((by_id.get(str(k)) or {}).get("同一張卡") == key for k in item.get("候選", []))
+
+
 def _names_in(text: str, cands: list[dict]) -> str | None:
-    """範圍裡的字，名字一個一個換成代號；有任何一個找不到就回傳 None。"""
+    """範圍裡的字，名字一個一個換成代號；有任何一個找不到就回傳 None。
+    10-03 補修：同一張卡（同一句同代號）的另一處已經換到的，這一處找不到不算（字已經換成代號了）。"""
+    done: set[str] = set()
     for c in cands:
-        text = replace_name(text, c)
-        if text is None:
+        new = replace_name(text, c)
+        if new is None:
+            if c.get("同一張卡") and c["同一張卡"] in done:
+                continue
             return None
+        text = new
+        if c.get("同一張卡"):
+            done.add(c["同一張卡"])
     return text
 
 
@@ -559,6 +580,7 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     decisions = wd.read_json(workdir / DECISIONS_FILE_NAME, default={}) or {}
     candidates = names.get("candidates", [])
     candidates = review.effective_name_candidates(workdir, candidates, decisions)   # 人工補的、改過時間的
+    decisions = review.card_decisions(candidates, decisions)   # 10-03 補修：一張卡的決定套到同一句同代號的每一處
     if only:
         candidates = [c for c in candidates if "id" not in c]     # 測試只處理幾筆時，人工補的先不做
         keep = set(only)

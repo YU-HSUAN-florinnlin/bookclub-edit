@@ -164,6 +164,169 @@ def test_same_spot_groups_pure():
     assert review.same_spot_groups(cands, {"1": {"已確認": True}, "3": {"已確認": True}}) == {2: 1}
 
 
+# ---------- 10-03 第八批補修（#12）：同一句、同一個代號只出一張卡 ----------
+
+def _set_text(w: Path, sid: str, text: str) -> None:
+    sp = wd.read_json(wd.speakers_path(w))
+    for s in sp["sentences"]:
+        if s["id"] == sid:
+            s["text"] = text
+    wd.write_json(wd.speakers_path(w), sp)
+
+
+def _add_cands(w: Path, *extra: dict) -> None:
+    """在第 1 筆（小美／Amy，第 19 句 76.3–76.9）後面加幾筆（照第 1 筆改欄位）。"""
+    data = wd.read_json(wd.names_path(w))
+    c1 = data["candidates"][0]
+    for e in extra:
+        data["candidates"].append({**c1, **e})
+    wd.write_json(wd.names_path(w), data)
+
+
+def _two_spots(w: Path, gap: float) -> None:
+    """第 19 句講了兩次小美：第 3 筆在第 1 筆後面 gap 秒（0＝時間相鄰）。"""
+    _set_text(w, "00_019", "剛剛小美說，小美分享得很好，")
+    _add_cands(w, {"start": 76.9 + gap, "end": 77.4 + gap, "位置": "句中"})
+
+
+def _plan_cands(plan: dict, kind: str) -> list[str]:
+    return sorted(str(x["候選"]) for x in plan[kind])
+
+
+def test_same_time_same_code_one_card_even_if_confirmed():
+    """情況一：同一個時間、同一個代號比中 3 筆（精確、A2、A2），舊程式上 3 筆都按過通過 → 只出一張卡。"""
+    w = _fresh()
+    _add_cands(w, {"比對層級": "A2", "信心": "中"}, {"比對層級": "A2", "信心": "中"})
+    dp = review.name_decisions_path(w)
+    wd.write_json(dp, {k: {"tags": [], "note": "", "做法": "整句換掉", "已確認": True} for k in ("1", "3", "4")})
+    before = json.loads(dp.read_text(encoding="utf-8"))
+    cards = _names(w)
+    assert set(cards) == {"1", "2"}, set(cards)
+    assert cards["1"]["已確認"] and len(cards["1"]["這一句的處"]) == 1 and "分開決定過" not in cards["1"]
+    plan = nameplan.compute_plan(w)
+    assert not plan["要人處理"], plan["要人處理"]
+    assert {str(s["候選"]): s.get("同一處") for s in plan["略過"] if s.get("同一處")} == {"3": "1", "4": "1"}
+    assert sum(1 for g in plan["生成"] if "Amy" in g["text"]) == 1
+    after = json.loads(dp.read_text(encoding="utf-8"))                 # 讀的時候合併，不改決定（只補候選指紋）
+    assert {k: {kk: vv for kk, vv in v.items() if kk != "候選指紋"} for k, v in after.items()} == before
+    idx = review.item_index(w)                                          # 處理紀錄的 名字:3、名字:4 對得回第 1 張卡
+    assert idx["名字:3"]["第3步"] == "名字:1" and idx["名字:4"]["第3步"] == "名字:1" and idx["名字:1"]["第3步"] == "名字:1"
+    from bookclub import safeview                                       # bookclub inspect 印得出併進哪一張
+    lines = [x for x in safeview.run([str(w), "名字", "--id", "3"]) if x.startswith("id=3 ")]
+    assert lines and "同一處=1" in lines[0] and "同一張卡=1" in lines[0] and "小美" not in lines[0], lines
+
+
+def test_adjacent_and_twice_in_sentence_one_card():
+    """情況二（時間相鄰）、情況三（同一句講兩次）：一張卡寫「這一句裡有 2 處」；決定套到每一處。"""
+    for gap in (0.0, 0.8):
+        w = _fresh()
+        _two_spots(w, gap)
+        cards = _names(w)
+        assert set(cards) == {"1", "2"}, (gap, set(cards))
+        spots = cards["1"]["這一句的處"]
+        assert [s["id"] for s in spots] == ["1", "3"] and spots[1]["start"] == round(76.9 + gap, 3), spots
+        assert cards["1"]["整句"]["換成代號"].count("Amy") == 2 and "小美" not in cards["1"]["整句"]["換成代號"]
+
+        # 整句換掉：整句念一次、兩處都換成代號
+        review.save_name(w, "1", {"已確認": True})
+        dec = json.loads(review.name_decisions_path(w).read_text(encoding="utf-8"))
+        assert dec["3"]["已確認"] and dec["3"]["候選指紋"] == review.name_fingerprint(wd.read_json(wd.names_path(w))["candidates"][2])
+        plan = nameplan.compute_plan(w)
+        whole = [g for g in plan["生成"] if 1 in g["候選"]]
+        assert len(whole) == 1 and 3 in whole[0]["候選"] and whole[0]["text"].count("Amy") == 2, plan["生成"]
+        assert not plan["要人處理"]
+        assert _names(w)["1"]["已確認"]
+
+        # 直接消音：每一處各自消音（各自的起訖）
+        review.save_name(w, "1", {"做法": "直接消音"})
+        plan = nameplan.compute_plan(w)
+        assert _plan_cands(plan, "消音") == ["1", "3"], plan["消音"]
+        m3 = next(m for m in plan["消音"] if str(m["候選"]) == "3")
+        assert abs(m3["start"] - (76.9 + gap - 0.05)) < 1e-6
+        # 只換名字：每一處各念一次代號
+        review.save_name(w, "1", {"做法": "只換名字"})
+        plan = nameplan.compute_plan(w)
+        assert sorted(g["id"] for g in plan["生成"] if g["id"].startswith("N")) == ["N001", "N003"]
+        # 不是名字：整張卡一起標
+        review.save_name(w, "1", {"tags": ["不是名字"]})
+        plan = nameplan.compute_plan(w)
+        assert {str(s["候選"]) for s in plan["略過"] if "不是名字" in s.get("原因", "")} == {"1", "3"}
+        review.save_name(w, "1", {"tags": []})
+
+
+def test_different_code_same_sentence_two_cards():
+    w = _fresh()
+    _set_text(w, "00_019", "剛剛小美說，阿明分享得很好，")
+    _add_cands(w, {"start": 77.3, "end": 77.8, "name": "阿明", "canonical": "阿明", "代號": "Tom", "matched_text": "阿明"})
+    cards = _names(w)
+    assert set(cards) == {"1", "2", "3"} and "這一句的處" not in cards["1"]
+
+
+def test_pick_other_person_regroups():
+    """同一處比中兩位（小美 Amy／林小美 Mia），同一句後面又講一次小美（Amy）：先合成一張；改用 Mia → 後面那一處自己一張。"""
+    w = _fresh()
+    _two_spots(w, 0.8)                                                   # 第 3 筆：Amy，另一處
+    _add_cands(w, {"name": "小美", "canonical": "林小美", "代號": "Mia"})  # 第 4 筆：第 1 筆同一處、另一位
+    cards = _names(w)
+    assert set(cards) == {"1", "2"} and len(cards["1"]["這一句的處"]) == 2 and cards["1"]["也可能是"]
+    review.save_name(w, "1", {"選的人": "林小美"})
+    cards = _names(w)
+    assert set(cards) == {"1", "2", "3"}, set(cards)
+    assert cards["1"]["代號"] == "Mia" and "這一句的處" not in cards["1"] and cards["3"]["代號"] == "Amy"
+    review.save_name(w, "1", {"選的人": ""})
+    assert set(_names(w)) == {"1", "2"}
+
+
+def test_split_decisions_not_overwritten_until_pass():
+    """同一組以前分開決定過、做法不一樣：不自動覆蓋，卡片寫分開決定過，沿用各自的；在這張卡上按通過才統一。"""
+    w = _fresh()
+    _two_spots(w, 0.8)
+    dp = review.name_decisions_path(w)
+    wd.write_json(dp, {"1": {"tags": [], "note": "", "做法": "整句換掉", "已確認": True},
+                       "3": {"tags": [], "note": "", "做法": "直接消音", "已確認": True}})
+    before = json.loads(dp.read_text(encoding="utf-8"))
+    card = _names(w)["1"]
+    assert [(x["id"], x["做法"]) for x in card["分開決定過"]] == [("1", "整句換掉"), ("3", "直接消音")]
+    assert card["已確認"]
+    plan = nameplan.compute_plan(w)
+    assert _plan_cands(plan, "消音") == ["3"] and any(1 in g["候選"] and 3 not in g["候選"] for g in plan["生成"])
+    after = json.loads(dp.read_text(encoding="utf-8"))
+    assert {k: {kk: vv for kk, vv in v.items() if kk != "候選指紋"} for k, v in after.items()} == before
+
+    review.save_name(w, "1", {"做法": "只換名字"})                         # 還沒按通過：只改主卡，第 3 筆不動
+    assert json.loads(dp.read_text(encoding="utf-8"))["3"]["做法"] == "直接消音"
+    review.save_name(w, "1", {"已確認": True})                             # 在這張卡上按通過：統一
+    dec = json.loads(dp.read_text(encoding="utf-8"))
+    assert dec["3"]["做法"] == "只換名字" and dec["3"]["已確認"]
+    card = _names(w)["1"]
+    assert "分開決定過" not in card and card["已確認"]
+    assert sorted(g["id"] for g in nameplan.compute_plan(w)["生成"] if g["id"].startswith("N")) == ["N001", "N003"]
+
+
+def test_one_confirmed_member_carries_card():
+    """舊工作區只有另一處（第 3 筆）按過通過：卡片照那一筆的決定、算通過，處理計畫兩處都照那一筆。"""
+    w = _fresh()
+    _two_spots(w, 0.8)
+    wd.write_json(review.name_decisions_path(w), {"3": {"tags": [], "note": "", "做法": "直接消音", "已確認": True}})
+    card = _names(w)["1"]
+    assert card["已確認"] and card["做法"] == "直接消音"
+    assert _plan_cands(nameplan.compute_plan(w), "消音") == ["1", "3"]
+    review.save_name(w, "1", {"note": "看過"})                             # 卡片上改別的欄位，不會把第 3 筆的通過蓋掉
+    dec = json.loads(review.name_decisions_path(w).read_text(encoding="utf-8"))
+    assert dec["1"]["已確認"] and dec["1"]["做法"] == "直接消音" and dec["3"]["已確認"]
+
+
+def test_name_card_groups_pure():
+    base = {"sentence_id": "a", "start": 1.0, "end": 1.5, "matched_text": "小美", "name": "小美", "代號": "Amy",
+            "比對層級": "精確"}
+    cands = [{**base, "比對層級": "A2"}, {**base}, {**base, "start": 1.5, "end": 2.0},     # 1、2 同一處；3 相鄰
+             {**base, "start": 4.0, "end": 4.4, "代號": "Tom"}, {**base, "sentence_id": "b"}]
+    g = review.name_card_groups(cands, {})
+    assert g == {2: {"成員": [1, 2, 3], "處": [[2, 1], [3]], "分開": False, "帶頭": 2}}, g
+    g = review.name_card_groups(cands, {"1": {"已確認": True, "做法": "直接消音"}, "3": {"已確認": True}})
+    assert g[2]["分開"] and g[2]["帶頭"] == 1
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0

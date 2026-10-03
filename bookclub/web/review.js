@@ -938,6 +938,7 @@ function rvBodyHtml(it) {
           ${w["字太少"] ? `<p class="rv-warnline">要念 ${w["字數"][0]} 個字，重念範圍的逐字稿有 ${w["字數"][1]} 個字：這一段其他的話會不見。請把重念範圍改小，或把話補齊（不然不能通過）。</p>` : ""}
           ${w["實際會念"] ? `<p class="rv-warnline">句子裡還有名冊上的名字，生成時會自動換成代號。實際會念：${esc(w["實際會念"])}</p>` : ""}</div>` : ""}
       <p class="rv-meta">代號 ${esc(it["代號"] || "（沒有）")}${it["信心"] === "低" ? "　低信心，先聽清楚是不是名字" : ""}</p>
+      ${rvSpotsHtml(it)}
       ${rvAlsoHtml(it)}`;
   }
   if (t === "改成老師") {
@@ -973,7 +974,7 @@ function rvBindBody(it) {
   }
   const ta = document.getElementById("rv-text");
   if (ta) ta.addEventListener("blur", () => rvSaveTurnText(it));
-  if (it["類型"] === "名字") rvBindAlso(it);
+  if (it["類型"] === "名字") { rvBindAlso(it); rvBindSpots(it); }
   const say = document.getElementById("rv-namesay");   // 09-29：名字整句的重念稿
   if (say) say.addEventListener("blur", async () => {
     const v = say.value.trim();
@@ -985,6 +986,26 @@ function rvBindBody(it) {
     const st = document.getElementById("rv-namesay-st");
     if (st) st.textContent = txt ? RV_ST_EDITED : RV_ST_AUTO;
   });
+}
+
+// 10-03 第八批補修（#12）：同一句、同一個代號的名字只出一張卡；每一處列出來（可以點去聽），決定套到每一處
+function rvSpotsHtml(it) {
+  const spots = it["這一句的處"] || [];
+  if (spots.length < 2) return "";
+  const btns = spots.map((s, i) => `<button class="ghost small rv-segplay" data-t="${s.start}" data-e="${s.end}">第 ${i + 1} 處 ${esc(rvFmt(s.start, 1))}–${esc(rvFmt(s.end, 1))}</button>`).join(" ");
+  const split = it["分開決定過"];
+  const note = split
+    ? `<p class="rv-warnline">這一句的 ${spots.length} 處以前分開決定過，做法不一樣：${esc(split.map((x) => `${rvFmt(x.start, 1)} ${x.tags && x.tags.length ? x.tags.join("、") : rvHowLabel(x["做法"])}${x["已確認"] ? "（已通過）" : "（還沒通過）"}`).join("；"))}。
+        現在照各自的決定處理；在這張卡上按「通過」，就全部改成這張卡的做法。</p>`
+    : `<p class="rv-meta">這張卡的決定套用到每一處：整句換掉是整句念一次、每一處都換成代號；只換名字、直接消音是每一處各自處理。</p>`;
+  return `<p class="rv-meta">這一句裡有 ${spots.length} 處（同一個代號，合成這一張）：</p>
+    <div class="rv-field rv-row">${btns}</div>${note}`;
+}
+
+function rvBindSpots(it) {
+  document.querySelectorAll(".rv-segplay[data-e]").forEach((b) => b.addEventListener("click", () => {
+    rv.stopAt = Number(b.dataset.e) + 0.3; rvSeek(Math.max(0, Number(b.dataset.t) - 0.5), true);
+  }));
 }
 
 // 10-03 第八批（#12）：同一處比中好幾個人（名冊同一個寫法在兩列、讀音相近），合成一張卡；另一位寫在這裡，代號由人選
