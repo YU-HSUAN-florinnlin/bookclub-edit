@@ -67,11 +67,14 @@ VOCAB = {
 }
 ENUM_KEYS = {"狀態", "類型", "做法", "排法", "放回做法", "版本", "建議做法", "結果", "方式", "內容類型", "信心", "label", "role",
              "文字判斷", "聲音判斷", "比對層級", "位置", "切點信心", "聲線", "角色", "文字來源", "來源", "判斷依據", "建議類型",
-             "決定", "對齊到", "答案", "段落外答案", "tags", "聲音", "改法", "範圍類型", "保留原因", "內容問題"}
+             "決定", "對齊到", "答案", "段落外答案", "tags", "聲音", "改法", "範圍類型", "保留原因", "內容問題",
+             "自動處理"}   # 10-04 #111：重疊自動處理（值是「學員段落」）
 ID_KEYS = {"id", "鍵", "key", "段落", "sentence_id", "區域", "候選", "覆核項目", "句子", "重疊項目", "生成編號", "建議id",
            "來源段落", "edit", "第3步", "生成", "聽過", "編號", "前一格", "後一格",
            # 10-03 第八批補修（#12）：名字候選併進哪一張卡（同一處、同一句同代號）
-           "同一處", "同一張卡", "決定帶頭", "同一處候選", "同一張卡候選", "併進"}
+           "同一處", "同一張卡", "決定帶頭", "同一處候選", "同一張卡候選", "併進",
+           # 10-04 #111：學員段落裡自動處理的重疊落在哪一段
+           "學員段落"}
 SPEAKER_KEYS = {"說話者", "學員", "學員說話者", "文字學員編號", "學員猜的"}
 # 10-02 第七批：代號（艾瑪、Emma 這類）不是個資，但值只有在新舊代號名單裡才印（自己打的、其他字照樣遮）
 CODE_KEYS = {"代號", "建議代號", "舊", "建議", "新"}
@@ -287,16 +290,22 @@ def topic_words(w: Path, f: Filter, out: list[str], limit: int) -> None:
 def topic_overlaps(w: Path, f: Filter, out: list[str]) -> None:
     from bookclub import review
 
-    ov = _read(wd.overlap_path(w)) or {"overlaps": []}
+    from bookclub import turns as turns_mod
+
     dec = review.load_decisions(w)
+    # 10-04 #111：跟第 3 步一樣套上不用重跑的過濾（邊界誤差、學員段落裡兩邊都沒有老師），`自動處理` 欄位看得出是哪一種
+    tdata = turns_mod.page_data(w)
+    turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
+    ov = review.load_overlaps(w, dec, turns)
     rows = review.effective_overlaps(w, ov.get("overlaps", []), dec)
-    out.append(f"重疊 {len(rows)} 處（含人工補的）")
+    n_auto = sum(1 for o in rows if o.get("自動處理") and not dec["重疊"].get(review.overlap_id(o), {}).get("救回"))
+    out.append(f"重疊 {len(rows)} 處（含人工補的）；學員段落裡自動處理 {n_auto} 處")
     for o in rows:
         oid = review.overlap_id(o)
         row = {"id": oid, **{k: v for k, v in o.items() if k not in ("id", "speakers")},
                "角色": [s.get("role") for s in o.get("speakers", [])], **flat(dec["重疊"].get(oid, {}), "決定")}
         if f.ok(row):
-            out.append(fmt_row(row, ("id", "start", "end", "length", "已自動跳過", "決定.做法", "決定.已確認")))
+            out.append(fmt_row(row, ("id", "start", "end", "length", "已自動跳過", "自動處理", "決定.做法", "決定.已確認")))
 
 
 def _name_rows(w: Path) -> list[dict]:
@@ -367,6 +376,9 @@ def topic_final_check(w: Path, f: Filter, out: list[str]) -> None:
     s = fc.get("摘要") or {}
     out.append(f"摘要：自動算處理好 {len(s.get('自動算處理好') or [])} 筆、要生成 {s.get('要生成秒數')} 秒、預估 {s.get('預估秒數')} 秒、"
                f"硬碟可用 {s.get('硬碟可用GB')} GB")
+    auto = s.get("學員段落裡自動處理") or []   # 10-04 #111
+    out.append(f"學員段落裡自動處理的重疊 {len(auto)} 處" + ("：" + "、".join(
+        f"{x['id']} {timemap.t1(x['start'])}–{timemap.t1(x['end'])}" for x in auto if safe_id(x["id"])) if auto else ""))
 
 
 def _gen_logs(w: Path) -> dict[str, Path]:

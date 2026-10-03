@@ -417,21 +417,91 @@ def overlap_choice(o: dict, d: dict, sents: list[dict], turns: list[dict], voice
     return {"做法": d.get("做法") or sug["做法"], "排法": d.get("排法") or sug.get("排法"), "學員": who}
 
 
+# 10-04 #111：人在卡片上做過這些事的重疊，照樣出卡（不自動處理）。做法選「不用改」「只留學員」（第 3 步在學員段落裡的建議）
+# 跟自動處理的結果一樣（學員那邊本來就整段重念），照樣自動處理；決定留在 覆核決定.json 裡不動，救回時卡片照原樣回來。
+OVERLAP_SAME_AS_AUTO = ("不用改", "只留學員")
+OVERLAP_HUMAN_KEYS = ("改過的起訖", "備註", "老師整句改稿")
+
+
+def overlap_has_own_decision(d: dict) -> bool:
+    """這一處重疊人自己做過會影響結果的決定（純函式）：選了別的做法、改過時間、寫了備註、改了老師整句。"""
+    return bool((d.get("做法") and d["做法"] not in OVERLAP_SAME_AS_AUTO)
+                or any(d.get(k) for k in OVERLAP_HUMAN_KEYS))
+
+
+def mark_student_turn_overlaps(ov: dict, dec: dict, turns: list[dict], sents: list[dict],
+                               kept: set | None = None) -> list[dict]:
+    """10-04 #111（宇軒定做法 A）：落在會整段重念的學員段落裡、兩邊都沒有老師的重疊，在記憶體裡標成已自動跳過
+    （`原因`＝固定說法、`自動處理`＝「學員段落」、`學員段落`＝那一段的 id），跟其他自動跳過的一樣：不出卡、
+    不算進要處理的筆數、組裝與排生成計畫都不另外處理（學員那一段整段重念就蓋掉了），第 3 步「設定」可以救回。
+    不寫檔（重疊.json、覆核決定.json 都不動）。判斷見 `overlap.student_turn_home`；人自己做過決定的不動
+    （`overlap_has_own_decision`）。`kept`：保留原聲的學員，沒給就照覆核決定。回傳這次標上的那幾筆。"""
+    from bookclub import overlap as overlap_mod
+
+    if kept is None:
+        kept = {k for k, v in (dec.get("學員聲音") or {}).items() if v == "保留原聲"}
+    by_id = {s["id"]: s for s in sents if s.get("id") is not None}
+    out = []
+    for o in ov.get("overlaps", []):
+        if o.get("已自動跳過"):
+            continue
+        if overlap_has_own_decision(dec["重疊"].get(overlap_id(o), {})):
+            continue
+        t = overlap_mod.student_turn_home(o, turns, by_id, kept)
+        if t is None:
+            continue
+        o.update({"已自動跳過": True, "原因": overlap_mod.STUDENT_TURN_REASON,
+                  "自動處理": overlap_mod.STUDENT_TURN_TAG, "學員段落": t["id"]})
+        out.append(o)
+    if out:
+        ovs = ov.get("overlaps", [])
+        ov["已自動跳過數"] = sum(1 for o in ovs if o.get("已自動跳過"))
+        ov["要人決定數"] = len(ovs) - ov["已自動跳過數"]
+    return out
+
+
+def load_overlaps(workdir: Path, dec: dict, turns: list[dict], sents: list[dict] | None = None,
+                  kept: set | None = None) -> dict:
+    """讀 重疊.json（沒有就是空的）＋不用重跑的過濾規則（邊界誤差、#111 學員段落裡的），只在記憶體裡套，不改檔。"""
+    from bookclub import overlap as overlap_mod
+
+    ov = wd.read_json(wd.overlap_path(Path(workdir)), default=None) or {"overlaps": []}
+    ov.setdefault("overlaps", [])
+    overlap_mod.apply_simple_filters(ov)
+    if turns:
+        if sents is None:
+            sents = (wd.read_json(wd.speakers_path(Path(workdir)), default={}) or {}).get("sentences", [])
+        mark_student_turn_overlaps(ov, dec, turns, sents, kept)
+    return ov
+
+
+def student_turn_overlaps(workdir: Path, dec: dict, turns: list[dict]) -> list[dict]:
+    """只讀：#111 自動處理（學員段落裡、兩邊都沒有老師）而且沒被救回的重疊 [{id, start, end, length, 學員段落}]，照時間排。
+    開始前總檢查「請看一眼」用。"""
+    ov = load_overlaps(Path(workdir), dec, turns)
+    out = []
+    for o in ov["overlaps"]:
+        oid = overlap_id(o)
+        if o.get("自動處理") == "學員段落" and not dec["重疊"].get(oid, {}).get("救回"):
+            out.append({"id": oid, "start": o["start"], "end": o["end"], "length": o.get("length", o["end"] - o["start"]),
+                        "學員段落": o.get("學員段落")})
+    return sorted(out, key=lambda x: x["start"])
+
+
 def overlap_choices(workdir: str | Path, voices: dict | None = None) -> list[dict]:
     """每一處要處理的重疊（自動跳過、沒救回的不算）最後照哪個做法：[{id, start, end, 做法, 學員, 老師整句改稿}]。
     組裝（`render.build_decisions`）與排老師生成計畫（`nameplan.compute_plan`）共用，兩邊看到的一定一樣。
     `voices`：學員聲音設定，沒給就讀覆核決定（測試「保留原聲的也照樣換」時傳 {}）。"""
-    from bookclub import overlap as overlap_mod
     from bookclub import turns as turns_mod
 
     workdir = Path(workdir)
     dec = load_decisions(workdir)
-    ov = wd.read_json(wd.overlap_path(workdir), default=None) or {}
-    overlap_mod.apply_simple_filters(ov)
     tdata = turns_mod.page_data(workdir)
     turns = tdata.get("段落", []) if not tdata.get("尚未準備") else []
     sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
     voices = dec["學員聲音"] if voices is None else voices
+    # 10-04 #111：學員段落裡、兩邊都沒有老師的重疊自動處理（跟第 3 步不出卡是同一個判斷）
+    ov = load_overlaps(workdir, dec, turns, sents, kept={k for k, v in voices.items() if v == "保留原聲"})
     out = []
     for o in effective_overlaps(workdir, ov.get("overlaps", []), dec):   # 含覆核時人工補的、改過時間的
         oid = overlap_id(o)
@@ -498,10 +568,7 @@ def overlap_cover(o: dict, oid: str, covs: list[dict]) -> tuple[dict | None, dic
 
 def covered_overlaps(workdir: Path, dec: dict, turns: list[dict]) -> list[dict]:
     """只讀：哪幾處重疊自動算處理好（被已通過的那一筆涵蓋）。開始前總檢查用（不寫任何檔）。"""
-    from bookclub import overlap as overlap_mod
-
-    ov = wd.read_json(wd.overlap_path(Path(workdir)), default=None) or {"overlaps": []}
-    overlap_mod.apply_simple_filters(ov)
+    ov = load_overlaps(Path(workdir), dec, turns)   # 10-04 #111：學員段落裡自動處理的另外列（student_turn_overlaps），這裡不算
     covs = coverers(Path(workdir), dec, turns)
     out = []
     for o in effective_overlaps(Path(workdir), ov.get("overlaps", []), dec):
@@ -547,8 +614,7 @@ def item_index(workdir: str | Path, dec: dict | None = None, turns: list[dict] |
                     t["start"], t["end"], f"改成老師:{t['id']}", "學員發言")
             continue
         put([key], "學員段落", t["id"], f"學員段落 {wd.fmt_time(t['start'])}", t["start"], t["end"], key, "學員發言")
-    ov = wd.read_json(wd.overlap_path(workdir), default=None) or {"overlaps": []}
-    overlap_mod.apply_simple_filters(ov)
+    ov = load_overlaps(workdir, dec, turns)   # 10-04 #111：學員段落裡自動處理的沒有卡片（第3步＝None）
     try:   # 10-01 第三批：生成學員聲音（不在學員段落裡）換掉的範圍，第 5 步改範圍改的是這個
         gen = {c["id"]: c for c in overlap_choices(workdir)}
         slots = student_slots(workdir)
@@ -1147,13 +1213,15 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         choices = {c["id"]: c for c in overlap_choices(workdir)}
         lacking = {k: overlap_gen_problem(c, slots) for k, c in choices.items()}
         overlap_mod.apply_simple_filters(ov)   # 只在記憶體裡套，不改檔
+        # 10-04 #111：學員段落裡、兩邊都沒有老師的重疊不出卡（收到「已自動跳過的重疊」，可以救回）；只在記憶體裡標
+        mark_student_turn_overlaps(ov, dec, turns, sents)
         for o in effective_overlaps(workdir, ov.get("overlaps", []), dec):
             oid = overlap_id(o)
             d = dec["重疊"].get(oid, {})
             base = {"id": oid, "start": o["start"], "end": o["end"], "length": o["length"],
                     "角色": [s["role"] for s in o.get("speakers", [])]}
             if o.get("已自動跳過") and not d.get("救回"):
-                skipped.append({**base, "原因": o.get("原因")})
+                skipped.append({**base, "原因": o.get("原因"), "自動處理": o.get("自動處理"), "學員段落": o.get("學員段落")})
                 continue
             defaults = _overlap_defaults(o, sents, turns)
             who = d.get("學員說話者", defaults["學員說話者"])

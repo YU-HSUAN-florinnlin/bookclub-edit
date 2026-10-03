@@ -1409,7 +1409,7 @@ function rvRenderList() {
     <nav class="rv-filters" aria-label="篩選">${RV_FILTERS.map(([f, label]) =>
       `<button class="${rv.filter === f ? "on" : ""}" data-f="${esc(f)}">${esc(label)} <span>${count(f)}</span></button>`).join("")}</nav>
     <ol class="rv-list" id="rv-list">${rows || `<li class="empty">這個篩選沒有項目。</li>`}</ol>
-    ${(rv.data["已自動跳過的重疊"] || []).length ? `<p class="rv-foot">另外有 ${rv.data["已自動跳過的重疊"].length} 處重疊自動跳過（兩位學員之間、短附和、邊界誤差），在「設定」裡可以救回。</p>` : ""}`;
+    ${(rv.data["已自動跳過的重疊"] || []).length ? `<p class="rv-foot">另外有 ${rv.data["已自動跳過的重疊"].length} 處重疊自動跳過（兩位學員之間、短附和、邊界誤差、學員段落裡沒有老師的），在「設定」裡可以救回。</p>` : ""}`;
   lower.querySelectorAll(".rv-filters button").forEach((b) => b.addEventListener("click", () => { rv.filter = b.dataset.f; rvRenderList(); }));
   lower.querySelectorAll(".rv-list li[data-key]").forEach((li) => li.addEventListener("click", () => rvSelect(li.dataset.key)));
   rvMarkListRow(true);
@@ -2063,7 +2063,7 @@ function rvRenderSettings() {
       <button class="ghost small rv-voice-all" data-v="保留原聲">全部保留原聲</button>
       <span class="rv-meta">保留原聲只給已經同意的學員</span></section>
     <section><h3>已自動跳過的重疊（${list.length} 處）</h3>
-      <p class="rv-meta">兩位學員之間的重疊、老師講話時學員的短附和、不到 0.05 秒的邊界誤差，自動不處理。覺得要處理的按「救回」。</p>
+      <p class="rv-meta">兩位學員之間的重疊、老師講話時學員的短附和、不到 0.05 秒的邊界誤差、落在會整段重念的學員段落裡而且兩邊都沒有老師（跟著那一段整段重念），自動不處理。覺得要處理的（例如聽到其實是老師插話）按「救回」。</p>
       <ul class="rv-skips">${list.map((o) => `<li><span class="tm">${esc(rvFmt(o.start, 1))}</span> ${o.length.toFixed(2)} 秒　${esc(o["原因"] || "")}
         <button class="ghost small rv-segplay" data-t="${o.start - 2}">試聽</button> <button class="ghost small rv-rescue" data-id="${esc(o.id)}">救回</button></li>`).join("")}</ul></section>`;
   el.querySelectorAll(".rv-segplay").forEach((b) => b.addEventListener("click", () => rvSeek(Number(b.dataset.t), true)));
