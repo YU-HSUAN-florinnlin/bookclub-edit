@@ -106,6 +106,7 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
             rec["檔案"] = e.get("檔案")
         else:
             rec["做了什麼"] = kind
+        mark_cut(rec, e)
         recs.append(rec)
 
     for x, y in d.get("刪除", []):
@@ -150,6 +151,15 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
     return recs
 
 
+def mark_cut(rec: dict, e: dict) -> None:
+    """10-03 第八批 #60：聲音比時間格長又沒停格、結尾被切掉的（組裝時記在動作的 `結尾切掉秒`）：
+    「做了什麼」加一句、要人聽。"""
+    if e.get("結尾切掉秒"):
+        rec["結尾切掉秒"] = round(float(e["結尾切掉秒"]), 2)
+        rec["做了什麼"] = (rec.get("做了什麼") or "") + f"；聲音比時間格長，結尾被切掉 {rec['結尾切掉秒']:.2f} 秒"
+        rec["要人聽"] = True
+
+
 def student_name_text(e: dict) -> str:
     who = e.get("學員") or "學員"
     if e["類型"] == "學員名字消音":
@@ -179,6 +189,7 @@ def records_from_edl(edits: list[dict]) -> list[dict]:
                      "做了什麼": mute_text(e) if local else student_name_text(e) if stu
                      else "老師提到名字：用老師 AI 聲音重念、名字換成代號" if swap
                      else "老師提到名字：名字消音（墊環境底噪）"})
+        mark_cut(recs[-1], e)
     for i, r in enumerate(recs, start=1):
         r["編號"] = i
     return recs

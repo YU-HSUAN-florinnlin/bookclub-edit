@@ -158,6 +158,12 @@ def test_build_records_keeps_freeze_seconds():
     recs = proclog.build_records(d, plist)
     assert [r.get("停格秒") for r in recs] == [0.4, 0.4]
 
+    # 10-03 第八批 #60：比時間格長又沒停格、結尾被切掉（組裝時記在動作上）→ 做了什麼標出來、要人聽
+    cut = {"動作": [{"類型": "名字整句換掉", "id": "V1", "start": 30.0, "end": 32.0, "檔案": "c.wav", "候選": ["3"],
+                    "text": "y", "結尾切掉秒": 0.25}]}
+    r = proclog.build_records(cut, None)[0]
+    assert "結尾被切掉 0.25 秒" in r["做了什麼"] and r["要人聽"] is True and r["結尾切掉秒"] == 0.25
+
 
 def test_check_files_streams():
     x = _speech(130.0)
