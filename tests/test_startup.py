@@ -64,6 +64,187 @@ def test_doctor_hf_fix_uses_same_path():
     assert not c.ok and f"{models.hf_cli_display()} auth login" in c.fix
 
 
+# ── #30：埠被占用（連點兩次啟動）不印 Python 錯誤 ─────────────────
+
+
+def _serve_capture(**kwargs):
+    """在暫存工作區上呼叫 serve()，抓印出來的字與回傳值（stderr 一起抓，確認沒有 Traceback）。"""
+    import tempfile
+
+    from bookclub import server as sv
+
+    out = io.StringIO()
+    with tempfile.TemporaryDirectory() as tmp, \
+            mock.patch.object(sv, "_mark_interrupted") as marked, \
+            contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        rc = sv.serve(workdir=Path(tmp) / "工作區", **kwargs)
+    return rc, out.getvalue(), marked
+
+
+@contextlib.contextmanager
+def _occupied_port(ours: bool):
+    """開一個臨時埠（不是 8766）。ours=True：假裝是讀書會剪輯工具（/api/projects 回這個工具才有的欄位）。"""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            body = json.dumps({"轉文字金鑰": True} if ours else {"hello": 1}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):  # noqa: ANN002
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", 0), H)
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        yield httpd.server_address[1]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_port_in_use_by_bookclub_says_already_open():
+    from bookclub import server as sv
+
+    with _occupied_port(ours=True) as port, \
+            mock.patch.object(sv, "browser_plan", return_value="open"), \
+            mock.patch.object(sv.webbrowser, "open", return_value=True) as wb:
+        rc, text, marked = _serve_capture(port=port, open_browser=True)
+    assert rc == 0
+    assert "Traceback" not in text and "OSError" not in text
+    assert "已經開著了" in text and f"http://127.0.0.1:{port}/" in text and "Ctrl+C" in text
+    wb.assert_called_once_with(f"http://127.0.0.1:{port}/")   # Mac：直接打開舊的那一個
+    marked.assert_not_called()   # 第二個沒拿到埠，不能把第一個跑到一半的進度改成「中斷」
+    assert len([ln for ln in text.splitlines() if ln.strip()]) <= 4, text
+
+
+def test_port_in_use_by_other_program():
+    from bookclub import server as sv
+
+    with _occupied_port(ours=False) as port, \
+            mock.patch.object(sv, "browser_plan", return_value="open"), \
+            mock.patch.object(sv.webbrowser, "open") as wb:
+        rc, text, marked = _serve_capture(port=port, open_browser=True)
+    assert rc == 1
+    assert "Traceback" not in text
+    assert f"{port} 埠被占用" in text and f"--port {port + 1}" in text
+    wb.assert_not_called()
+    marked.assert_not_called()
+
+
+def test_port_in_use_on_wsl_points_to_windows_localhost():
+    from bookclub import server as sv
+
+    with _occupied_port(ours=True) as port, \
+            mock.patch.object(sv, "browser_plan", return_value="wsl"), \
+            mock.patch.object(sv.webbrowser, "open") as wb:
+        rc, text, _ = _serve_capture(port=port, open_browser=True)
+    assert rc == 0 and f"http://localhost:{port}/" in text
+    wb.assert_not_called()
+
+
+def test_other_bind_errors_still_raise():
+    import errno
+
+    from bookclub import server as sv
+
+    err = OSError(errno.EACCES, "Permission denied")
+    with mock.patch.object(sv, "BookclubServer", side_effect=err):
+        try:
+            _serve_capture(port=1, open_browser=False)
+        except OSError as exc:
+            assert exc.errno == errno.EACCES
+        else:
+            raise AssertionError("不是埠被占用的錯誤不該被吞掉")
+
+
+def test_cli_serve_passes_exit_code():
+    from bookclub import cli
+    from bookclub import server as sv
+
+    with mock.patch.object(sv, "serve", return_value=1):
+        assert cli.main(["serve", "--no-open"]) == 1
+    with mock.patch.object(sv, "serve", return_value=None):
+        assert cli.main(["serve", "--no-open"]) == 0
+
+
+# ── #29：WSL2 不自動開瀏覽器、金鑰訊息依平台 ───────────────────────
+
+
+def test_browser_plan():
+    from bookclub import server as sv
+
+    assert sv.browser_plan("Darwin", wsl=False, env={}) == "open"
+    assert sv.browser_plan("Linux", wsl=True, env={"DISPLAY": ":0"}) == "wsl"   # WSLg 也有 DISPLAY，仍走 Windows 瀏覽器
+    assert sv.browser_plan("Linux", wsl=False, env={}) == "manual"
+    assert sv.browser_plan("Linux", wsl=False, env={"WAYLAND_DISPLAY": "wayland-0"}) == "open"
+    # 不帶 wsl：從 /proc/version 判斷
+    with mock.patch.object(sv, "_is_wsl", return_value=True):
+        assert sv.browser_plan("Linux", env={}) == "wsl"
+
+
+class _FakeServer:
+    def __init__(self, *a, **k):  # noqa: ANN002, ANN003
+        pass
+
+    def serve_forever(self):
+        raise KeyboardInterrupt
+
+    def server_close(self):
+        pass
+
+
+def test_wsl_start_prints_windows_url_and_does_not_open():
+    from bookclub import server as sv
+
+    with mock.patch.object(sv, "BookclubServer", _FakeServer), \
+            mock.patch.object(sv, "browser_plan", return_value="wsl"), \
+            mock.patch.object(sv.threading, "Timer") as timer, \
+            mock.patch.object(sv.webbrowser, "open") as wb:
+        rc, text, _ = _serve_capture(port=8766, open_browser=True)
+    assert rc == 0
+    assert "Windows 的瀏覽器" in text and "http://localhost:8766/" in text
+    timer.assert_not_called()
+    wb.assert_not_called()
+
+
+def test_mac_start_still_opens_browser():
+    from bookclub import server as sv
+
+    with mock.patch.object(sv, "BookclubServer", _FakeServer), \
+            mock.patch.object(sv, "browser_plan", return_value="open"), \
+            mock.patch.object(sv.threading, "Timer") as timer:
+        rc, text, _ = _serve_capture(port=8766, open_browser=True)
+    assert rc == 0 and "http://127.0.0.1:8766/" in text
+    timer.assert_called_once()
+    # 開不起來（例如沒有預設瀏覽器）就印網址
+    open_fn = timer.call_args[0][1]
+    out = io.StringIO()
+    with mock.patch.object(sv.webbrowser, "open", return_value=False), contextlib.redirect_stdout(out):
+        open_fn()
+    assert "請在瀏覽器開 http://127.0.0.1:8766/" in out.getvalue()
+
+
+def test_groq_message_per_platform():
+    from bookclub import server as sv
+
+    mac = sv.groq_key_missing_message("Darwin")
+    linux = sv.groq_key_missing_message("Linux")
+    assert "啟動.command" in mac and "~/.zshrc" in mac
+    assert "啟動.command" not in linux and "~/.profile" in linux and "~/.bashrc" in linux
+    # 跟 doctor 說的金鑰檔一致
+    with mock.patch("platform.system", return_value="Linux"):
+        assert dr.key_file() in linux
+    with mock.patch("platform.system", return_value="Darwin"):
+        assert dr.key_file() in mac
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

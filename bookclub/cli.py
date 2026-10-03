@@ -257,8 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         from bookclub.server import serve
 
-        serve(args.workdir, video=args.video, port=args.port, open_browser=not args.no_open)
-        return 0
+        return serve(args.workdir, video=args.video, port=args.port, open_browser=not args.no_open) or 0
 
     if args.command == "bench":
         return _not_yet("bench", 5)
