@@ -582,7 +582,9 @@ async function renderProfile() {
   };
   const rows = Object.entries(d["檔案"]).map(([name, f]) => `<tr>
       <td><b>${esc(name.replace(".csv", ""))}</b><div class="muted">${esc(desc[name] || "")}</div>
-        ${name === "名冊.csv" && (f["代號"] || []).length ? `<div class="muted">代號：${esc(f["代號"].join("、"))}${f["沒有代號的筆數"] ? `（另有 ${f["沒有代號的筆數"]} 筆還沒有代號）` : ""}</div>` : ""}</td>
+        ${name === "名冊.csv" && (f["代號"] || []).length ? `<div class="muted">代號：${esc(f["代號"].join("、"))}${f["沒有代號的筆數"] ? `（另有 ${f["沒有代號的筆數"]} 筆還沒有代號）` : ""}</div>` : ""}
+        ${f["範例列"] ? `<div class="muted">裡面還有範本的範例列 ${f["範例列"]} 筆（範例學員、範例公司名稱這類示範資料），用不到可以從檔案刪掉；匯出設定包不會帶</div>` : ""}
+        ${(f["重複寫法列"] || []).length ? `<div class="rv-warnline">同一個寫法出現在兩列以上：${esc(f["重複寫法列"].map((g) => `第 ${g.join("、")} 列`).join("；"))}（標題列算第 1 列）。同一處名字會同時比中這幾列的人；是同一人的話到名冊把重複的那一列刪掉或合併，不是同一人就留著，第 3 步卡片上再選是哪一位。</div>` : ""}</td>
       <td>${f["有檔案"] ? `${f["筆數"]} 筆` : "還沒有檔案"}</td>
       <td>${esc(f["最後修改"] || "—")}</td></tr>`).join("");
   const st = d["settings.toml"];
@@ -602,7 +604,7 @@ async function renderProfile() {
     <div class="card">
       <p>匯出：名冊、敏感詞、名字排除清單、發音對照表、進階設定，與第 4 步學員重念用的替代聲音，打包成一個 zip。名冊含學員本名，只傳給協作夥伴。</p>
       <p><a href="/api/profile/export.zip"><button>匯出設定包</button></a></p>
-      <p style="margin-top:18px">匯入：每個清單以第一欄當鑰匙，新的加進去、已經有的不動；同一鑰匙內容不同，保留這台電腦的並列出衝突。</p>
+      <p style="margin-top:18px">匯入：每個清單以第一欄當鑰匙，新的加進去、已經有的不動；同一鑰匙內容不同，保留這台電腦的並列出衝突。這台電腦表頭沒有的欄位不會匯入，匯入結果會列出來；範本的範例列不匯入。</p>
       <p><input type="file" id="profFile" accept=".zip"> <button id="profImport" class="secondary">匯入設定包</button></p>
       <div id="profMsg"></div>
     </div>`;
@@ -618,7 +620,8 @@ async function renderProfile() {
       const lines = Object.entries(r["檔案"]).map(([name, v]) => `<li>${esc(name)}：新增 ${v["新增"]} 筆${v["衝突"].length
         ? `，衝突 ${v["衝突"].length} 筆（保留這台電腦的）：${esc(v["衝突"].map((c) => c["鑰匙"]).join("、"))}` : ""}</li>`).join("");
       const voice = r["匿名聲線"] ? `<li>${esc(r["匿名聲線"]["說明"])}</li>` : "";   // 10-03（#7）
-      msg.innerHTML = `<p><span class="badge done">匯入完成</span> 新增 ${r["新增"]} 筆、衝突 ${r["衝突數"]} 筆</p><ul>${lines}${voice}</ul>`;
+      const notes = (r["提醒"] || []).map((n) => `<li>${esc(n)}</li>`).join("");   // 10-03 第九批（#34、#96）：沒匯入的欄位、範例列、名冊重複寫法
+      msg.innerHTML = `<p><span class="badge done">匯入完成</span> 新增 ${r["新增"]} 筆、衝突 ${r["衝突數"]} 筆</p><ul>${lines}${notes}${voice}</ul>`;
       const keep = msg.innerHTML;
       await renderProfile();
       document.getElementById("profMsg").innerHTML = keep;

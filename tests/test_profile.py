@@ -208,5 +208,101 @@ def test_import_ignores_voice_paths_escaping_folder():
     assert r["匿名聲線"]["新增"] == 0
 
 
+# ---------- 10-03 第九批 #34：範例列、沒有匯入的欄位；#96：名冊重複寫法 ----------
+
+TEMPLATE_ROSTER = "中文名,其他寫法,聲線,性別\n範例學員,範例同學,女聲A,女\n範例學員二,,男聲A,男\n"
+
+
+def test_example_keys_come_from_template():
+    assert profile.example_keys("名冊.csv") == {"範例學員", "範例學員二"}
+    assert profile.example_keys("敏感詞.csv") == {"範例公司名稱", "範例地名"}
+    assert profile.example_keys("發音對照表.csv") == set()     # 愉快→魚快 是真的念偏詞
+
+
+def test_export_leaves_out_template_example_rows():
+    a = _dir({"名冊.csv": TEMPLATE_ROSTER + "陳大文,大文,,男\n",
+              "敏感詞.csv": "原詞,替代詞\n範例公司名稱,某公司\n範例地名,某地\n真公司,一家公司\n"})
+    out = profile.export_profile(a / "包.zip", root=a)
+    assert out["略過範例列"] == 4
+    with zipfile.ZipFile(out["檔案"]) as z:
+        roster = z.read("名冊.csv").decode("utf-8")
+        sens = z.read("敏感詞.csv").decode("utf-8")
+    assert "範例" not in roster and "陳大文" in roster and roster.startswith("中文名,其他寫法,聲線,性別")
+    assert "範例" not in sens and "真公司" in sens
+    assert "範例學員" in (a / "名冊.csv").read_text(encoding="utf-8")   # 本機的檔不動
+
+
+def test_import_skips_example_rows_from_old_package():
+    a = _dir({})
+    zp = a / "舊.zip"
+    with zipfile.ZipFile(zp, "w") as z:   # 舊版匯出的設定包：範例列跟著進去了
+        z.writestr("名冊.csv", TEMPLATE_ROSTER + "陳大文,大文,,男\n")
+    b = _dir({"名冊.csv": "中文名,其他寫法,聲線,性別\n"})          # 夥伴已經把範例列刪掉
+    r = profile.import_profile(zp, root=b)
+    f = r["檔案"]["名冊.csv"]
+    assert f["新增"] == 1 and f["略過範例列"] == 2
+    assert [x["中文名"] for x in _rows(b / "名冊.csv")] == ["陳大文"]
+    assert any("範例列 2 筆" in n for n in r["提醒"])
+
+
+def test_summary_counts_remaining_example_rows():
+    d = _dir({"名冊.csv": TEMPLATE_ROSTER, "敏感詞.csv": "原詞,替代詞\n範例地名,某地\n"})
+    s = profile.summary(d)
+    assert s["檔案"]["名冊.csv"]["範例列"] == 2 and s["檔案"]["敏感詞.csv"]["範例列"] == 1
+    assert s["檔案"]["發音對照表.csv"].get("範例列", 0) == 0
+
+
+def test_import_lists_columns_missing_from_local_header():
+    a = _dir({"名冊.csv": "中文名,其他寫法,英文代號,聲線,性別,備註\n陳大文,,David,,男,第二期\n",
+              "敏感詞.csv": "原詞,替代詞\n某公司,一家公司\n"})
+    out = profile.export_profile(a / "包.zip", root=a)
+    b = _dir({"名冊.csv": "中文名,其他寫法,聲線,性別\n", "敏感詞.csv": "原詞,替代詞\n"})
+    r = profile.import_profile(out["檔案"], root=b)
+    d = r["檔案"]["名冊.csv"]["沒有匯入的欄位"]
+    assert d["欄位"] == ["英文代號", "備註"] and "表頭沒有" in d["原因"]
+    assert r["檔案"]["敏感詞.csv"]["沒有匯入的欄位"] is None
+    assert any(n.startswith("名冊.csv：英文代號、備註 欄沒有匯入") for n in r["提醒"])
+    assert "David" not in str(r) and "陳大文" not in str(r)            # 結果不帶代號內容、本名
+
+
+def test_import_old_roster_code_column_says_why():
+    a = _dir({"名冊.csv": ROSTER})
+    out = profile.export_profile(a / "包.zip", root=a)
+    b = _dir({"名冊.csv": "中文名,其他寫法,聲線,性別\n"})
+    d = profile.import_profile(out["檔案"], root=b)["檔案"]["名冊.csv"]["沒有匯入的欄位"]
+    assert d["欄位"] == ["英文代號"] and "第 3 步選" in d["原因"]
+
+
+def test_import_into_empty_folder_drops_nothing():
+    a = _dir({"名冊.csv": ROSTER})
+    out = profile.export_profile(a / "包.zip", root=a)
+    r = profile.import_profile(out["檔案"], root=_dir({}))
+    assert r["檔案"]["名冊.csv"]["沒有匯入的欄位"] is None and r["提醒"] == []
+
+
+def test_import_and_summary_warn_duplicate_spellings_by_row_number():
+    a = _dir({"名冊.csv": "中文名,其他寫法,聲線,性別\n陳大文,小文,,男\n林小文,,,女\n"})
+    out = profile.export_profile(a / "包.zip", root=a)
+    b = _dir({"名冊.csv": "中文名,其他寫法,聲線,性別\n王小美,小美,,女\n"})
+    r = profile.import_profile(out["檔案"], root=b)
+    assert r["檔案"]["名冊.csv"]["重複寫法列"] == []                    # 「小文」跟「林小文」不是同一個寫法
+    c = _dir({"名冊.csv": "中文名,其他寫法,聲線,性別\n王小美,小美,,女\n"})
+    zp = c / "包.zip"
+    with zipfile.ZipFile(zp, "w") as z:
+        z.writestr("名冊.csv", "中文名,其他寫法,聲線,性別\n張小美,小美,,女\n")
+    r = profile.import_profile(zp, root=c)
+    assert r["檔案"]["名冊.csv"]["重複寫法列"] == [[2, 3]]            # 標題列算第 1 列
+    note = [n for n in r["提醒"] if "同一個寫法" in n]
+    assert note and "第 2、3 列" in note[0] and "小美" not in note[0]   # 只給列號，不給寫法（本名）
+    s = profile.summary(c)
+    assert s["檔案"]["名冊.csv"]["重複寫法列"] == [[2, 3]] and "小美" not in str(s["檔案"]["名冊.csv"])
+
+
+def test_duplicate_rows_merge_same_row_groups():
+    """同兩列有兩個寫法都重複（中文名與其他寫法都一樣）→ 只提醒一次。"""
+    d = _dir({"名冊.csv": "中文名,其他寫法,聲線,性別\n王小美,小美,,女\n王小美,小美,,女\n"})
+    assert profile.roster_duplicate_rows(d / "名冊.csv") == [[2, 3]]
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

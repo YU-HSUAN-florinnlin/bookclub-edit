@@ -6,7 +6,8 @@
 
 設定包是一個 zip（四個 CSV＋`settings.toml`＋第 4 步會用到的匿名聲線＋說明）。匯入用**同一條合併規則**：每個 CSV 以第一欄當鑰匙，
 新的加進去、已經有的不動；同一鑰匙內容不同，保留本機的並列出衝突。`settings.toml` 本機沒有才放進去，
-不一樣就列成衝突。匿名聲線（10-03 加，#7）同一條規則：本機沒有才放，內容一樣略過，內容不同保留本機並列成衝突。AI 之後發現新的念偏詞、排除詞照舊寫進 `~/讀書會剪輯資料/` 的 CSV，夥伴匯入新的設定包就更新。
+不一樣就列成衝突。10-03 第九批：範本的範例列匯出不帶、匯入略過（#34）；本機表頭沒有的欄位不匯入但列出來（#34）；
+名冊同一個寫法出現在兩列，匯入結果與第 0 步提醒列號（#96）。匿名聲線（10-03 加，#7）同一條規則：本機沒有才放，內容一樣略過，內容不同保留本機並列成衝突。AI 之後發現新的念偏詞、排除詞照舊寫進 `~/讀書會剪輯資料/` 的 CSV，夥伴匯入新的設定包就更新。
 
 隱私：名冊含學員本名。畫面與回報只顯示代號與筆數，衝突清單裡的名冊也用代號標示，不顯示本名。
 """
@@ -26,6 +27,8 @@ CSV_FILES = ("名冊.csv", "敏感詞.csv", "名字排除清單.csv", "發音對
 SETTINGS_FILE = "settings.toml"
 VOICE_DIR = "聲線"
 AUDIO_EXTS = (".wav", ".flac", ".mp3", ".m4a")
+EXAMPLE_DIR = Path(__file__).resolve().parent.parent / "profile.example"
+EXAMPLE_FILES = ("名冊.csv", "敏感詞.csv")   # 發音對照表的「愉快」是真的念偏詞，不算範例列
 README = """讀書會剪輯工具｜設定包
 
 內容：名冊、敏感詞、名字排除清單、發音對照表（CSV）與 settings.toml；
@@ -34,6 +37,8 @@ README = """讀書會剪輯工具｜設定包
     .venv/bin/bookclub profile import <這個 zip>
 合併規則：每個 CSV 以第一欄當鑰匙，新的加進去、已經有的不動；同一鑰匙內容不同，保留你電腦上的並列出衝突。
 匿名聲線也是同一條規則：你電腦上沒有才放進去，已經有、內容一樣略過，內容不同保留你電腦上的並列出衝突。
+範本裡示範用的範例列（範例學員、範例公司名稱這類）不會打包，也不會匯入。
+你電腦上的表頭沒有的欄位不會匯入，匯入結果會列出是哪個檔的哪幾欄。
 名冊含學員本名，這個檔案只傳給協作夥伴，不要公開。
 """
 
@@ -51,6 +56,45 @@ def _read_csv(data: bytes | str) -> tuple[list[str], list[dict]]:
     return list(reader.fieldnames or []), [r for r in rows if any(r.values())]
 
 
+def example_keys(name: str) -> set[str]:
+    """10-03 第九批（#34）：範本（`profile.example/`）裡示範用的假資料列——install.sh 把範本複製到
+    `~/讀書會剪輯資料/`，名冊有「範例學員」「範例學員二」、敏感詞有「範例公司名稱」「範例地名」。
+    回傳這些列第一欄的值；匯出不帶、匯入略過、第 0 步提醒刪掉。只認名冊與敏感詞。"""
+    p = EXAMPLE_DIR / name
+    if name not in EXAMPLE_FILES or not p.is_file():
+        return set()
+    header, rows = _read_csv(p.read_bytes())
+    return {r.get(header[0], "") for r in rows if header and r.get(header[0])}
+
+
+def _is_example(name: str, header: list[str], row: dict, keys: set[str] | None = None) -> bool:
+    keys = example_keys(name) if keys is None else keys
+    return bool(header) and row.get(header[0], "") in keys
+
+
+def roster_duplicate_rows(path: Path) -> list[list[int]]:
+    """10-03 第九批（#96）：名冊裡同一個寫法出現在兩列以上 → [[列號…], …]（標題列算第 1 列）。
+    呼叫 `names.roster_duplicate_spellings`（第 3 步 ③ 同一個算法）；第 0 步與匯入只給列號，不給寫法（本名）。"""
+    from bookclub.names import roster_duplicate_spellings
+
+    seen, out = set(), []
+    for d in roster_duplicate_spellings(Path(path)):
+        k = tuple(d["列"])
+        if k not in seen:
+            seen.add(k)
+            out.append(d["列"])
+    return out
+
+
+def duplicate_rows_text(groups: list[list[int]]) -> str:
+    """「名冊裡同一個寫法出現在兩列：第 2、5 列；第 3、7 列（標題列算第 1 列）…」；沒有就空字串。"""
+    if not groups:
+        return ""
+    where = "；".join(f"第 {'、'.join(str(n) for n in g)} 列" for g in groups)
+    return (f"名冊裡同一個寫法出現在兩列以上：{where}（標題列算第 1 列）。同一處名字會同時比中這幾列的人；"
+            "是同一人的話到名冊把重複的那一列刪掉或合併，不是同一人就留著，第 3 步卡片上再選是哪一位。")
+
+
 def _mtime(p: Path) -> str | None:
     return datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M") if p.exists() else None
 
@@ -65,7 +109,10 @@ def summary(root: Path | None = None) -> dict:
         if p.exists():
             header, rows = _read_csv(p.read_bytes())
             info["筆數"] = len(rows)
+            keys = example_keys(name)
+            info["範例列"] = sum(1 for r in rows if _is_example(name, header, r, keys))   # #34
             if name == "名冊.csv":
+                info["重複寫法列"] = roster_duplicate_rows(p)   # #96：只給列號
                 info["代號"] = sorted({r.get("英文代號", "") for r in rows if r.get("英文代號")})
                 info["沒有代號的筆數"] = sum(1 for r in rows if not r.get("英文代號"))
         files[name] = info
@@ -107,11 +154,26 @@ def export_profile(out: str | Path | None = None, root: Path | None = None) -> d
     counts = {g: len(fs) for g, fs in pool.items()}
     voice_names = []
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        skipped_examples = 0
         for name in (*CSV_FILES, SETTINGS_FILE):
             p = root / name
-            if p.exists():
-                z.write(p, name)
-                inside.append(name)
+            if not p.exists():
+                continue
+            keys = example_keys(name)
+            if keys:   # 10-03 第九批（#34）：範本的範例列不帶出去
+                header, rows = _read_csv(p.read_bytes())
+                keep = [r for r in rows if not _is_example(name, header, r, keys)]
+                if len(keep) != len(rows):
+                    skipped_examples += len(rows) - len(keep)
+                    buf = io.StringIO()
+                    w = csv.DictWriter(buf, fieldnames=header, extrasaction="ignore", lineterminator="\n")
+                    w.writeheader()
+                    w.writerows(keep)
+                    z.writestr(name, buf.getvalue())
+                    inside.append(name)
+                    continue
+            z.write(p, name)
+            inside.append(name)
         for g in ("男", "女"):
             for wav in pool.get(g, []):
                 for f in (wav, wav.with_suffix(".txt")):
@@ -123,7 +185,9 @@ def export_profile(out: str | Path | None = None, root: Path | None = None) -> d
         inside.append(f"{VOICE_DIR}（{'、'.join(voice_names)}）")
     print(f"[設定包] 已匯出：{out}（{'、'.join(inside)}）")
     print(f"[設定包] {voice_count_text(counts)}")
-    return {"檔案": str(out), "內含": inside, "匿名聲線": counts}
+    if skipped_examples:
+        print(f"[設定包] 範本的範例列（範例學員、範例公司名稱這類示範資料）{skipped_examples} 筆沒有放進去")
+    return {"檔案": str(out), "內含": inside, "匿名聲線": counts, "略過範例列": skipped_examples}
 
 
 def merge_rows(local_header: list[str], local: list[dict], incoming: list[dict], label_col: str | None = None) -> dict:
@@ -177,13 +241,19 @@ def import_profile(zip_path: str | Path, root: Path | None = None) -> dict:
             if name not in names:
                 continue
             in_header, incoming = _read_csv(z.read(name))
+            keys = example_keys(name)   # 10-03 第九批（#34）：舊版設定包可能帶著範本的範例列，不當真的名字收進來
+            examples = [r for r in incoming if _is_example(name, in_header, r, keys)]
+            incoming = [r for r in incoming if not _is_example(name, in_header, r, keys)]
             p = root / name
             local_header, local = _read_csv(p.read_bytes()) if p.exists() else ([], [])
             header = local_header or in_header
             r = merge_rows(local_header, local, incoming, label_col="英文代號" if name == "名冊.csv" else None)
             if r["新增"]:
                 _append_rows(p, header, r["新增"], new_file=not p.exists())
-            report[name] = {"新增": len(r["新增"]), "衝突": r["衝突"]}
+            report[name] = {"新增": len(r["新增"]), "衝突": r["衝突"], "略過範例列": len(examples),
+                            "沒有匯入的欄位": _dropped_columns(name, local_header, in_header, incoming)}
+            if name == "名冊.csv":   # 10-03 第九批（#96）
+                report[name]["重複寫法列"] = roster_duplicate_rows(p)
         if SETTINGS_FILE in names:
             p = root / SETTINGS_FILE
             data = z.read(SETTINGS_FILE)
@@ -198,9 +268,44 @@ def import_profile(zip_path: str | Path, root: Path | None = None) -> dict:
         voices = _import_voices(z, root)
     added = sum(v["新增"] for v in report.values())
     conflicts = sum(len(v["衝突"]) for v in report.values()) + len(voices["衝突"])
+    notes = import_notes(report)
     print(f"[設定包] 匯入完成：新增 {added} 筆、衝突 {conflicts} 筆（衝突保留本機的）")
+    for line in notes:
+        print(f"[設定包] {line}")
     print(f"[設定包] {voices['說明']}")
-    return {"檔案": report, "新增": added, "衝突數": conflicts, "匿名聲線": voices}
+    return {"檔案": report, "新增": added, "衝突數": conflicts, "匿名聲線": voices, "提醒": notes}
+
+
+def _dropped_columns(name: str, local_header: list[str], in_header: list[str], incoming: list[dict]) -> dict | None:
+    """10-03 第九批（#34）：設定包裡有、這台電腦的表頭沒有的欄位（合併只照這台的表頭寫，這幾欄的內容不會進來）。
+    回傳 {欄位: [...], 原因: 文字}；沒有就 None。本機還沒有這個檔（照設定包的表頭新建）不會丟欄位。"""
+    if not local_header:
+        return None
+    cols = [h for h in in_header if h and h not in local_header]
+    if not cols:
+        return None
+    filled = [h for h in cols if any(r.get(h) for r in incoming)]
+    if name == "名冊.csv" and cols == ["英文代號"]:
+        why = "這台電腦的名冊沒有「英文代號」欄（新版的代號每一集在第 3 步選），設定包裡的代號沒有匯入"
+    else:
+        why = (f"這台電腦的 {name} 表頭沒有這幾欄，匯入只照這台的表頭寫"
+               + ("（這幾欄在設定包裡是空的）" if not filled else "，這幾欄的內容沒有進來；要用這幾欄，請跟給你設定包的人拿原本的檔案對照"))
+    return {"欄位": cols, "原因": why}
+
+
+def import_notes(report: dict) -> list[str]:
+    """匯入結果要人知道的事（每點一句）：沒有匯入的欄位、略過的範例列、名冊重複寫法。"""
+    notes = []
+    for name, v in report.items():
+        d = v.get("沒有匯入的欄位")
+        if d:
+            notes.append(f"{name}：{'、'.join(d['欄位'])} 欄沒有匯入——{d['原因']}")
+        if v.get("略過範例列"):
+            notes.append(f"{name}：範本的範例列 {v['略過範例列']} 筆（示範用的假資料）沒有匯入")
+    dup = duplicate_rows_text((report.get("名冊.csv") or {}).get("重複寫法列") or [])
+    if dup:
+        notes.append(dup)
+    return notes
 
 
 VOICE_EXTS = (".wav", ".txt")
