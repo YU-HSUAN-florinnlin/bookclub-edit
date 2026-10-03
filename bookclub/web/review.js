@@ -937,7 +937,8 @@ function rvBodyHtml(it) {
           <span class="rv-meta" id="rv-namesay-st">${w["改稿"] ? RV_ST_EDITED : w["換成代號"] ? RV_ST_AUTO : "句子裡找不到比對到的字，要人改（把名字改成代號才能通過）"}</span>
           ${w["字太少"] ? `<p class="rv-warnline">要念 ${w["字數"][0]} 個字，重念範圍的逐字稿有 ${w["字數"][1]} 個字：這一段其他的話會不見。請把重念範圍改小，或把話補齊（不然不能通過）。</p>` : ""}
           ${w["實際會念"] ? `<p class="rv-warnline">句子裡還有名冊上的名字，生成時會自動換成代號。實際會念：${esc(w["實際會念"])}</p>` : ""}</div>` : ""}
-      <p class="rv-meta">代號 ${esc(it["代號"] || "（沒有）")}${it["信心"] === "低" ? "　低信心，先聽清楚是不是名字" : ""}</p>`;
+      <p class="rv-meta">代號 ${esc(it["代號"] || "（沒有）")}${it["信心"] === "低" ? "　低信心，先聽清楚是不是名字" : ""}</p>
+      ${rvAlsoHtml(it)}`;
   }
   if (t === "改成老師") {
     return `<p class="rv-who">這一段你改成老師了：照老師原聲留著，不重念、不用處理</p>
@@ -972,6 +973,7 @@ function rvBindBody(it) {
   }
   const ta = document.getElementById("rv-text");
   if (ta) ta.addEventListener("blur", () => rvSaveTurnText(it));
+  if (it["類型"] === "名字") rvBindAlso(it);
   const say = document.getElementById("rv-namesay");   // 09-29：名字整句的重念稿
   if (say) say.addEventListener("blur", async () => {
     const v = say.value.trim();
@@ -983,6 +985,24 @@ function rvBindBody(it) {
     const st = document.getElementById("rv-namesay-st");
     if (st) st.textContent = txt ? RV_ST_EDITED : RV_ST_AUTO;
   });
+}
+
+// 10-03 第八批（#12）：同一處比中好幾個人（名冊同一個寫法在兩列、讀音相近），合成一張卡；另一位寫在這裡，代號由人選
+function rvAlsoHtml(it) {
+  const also = it["也可能是"] || [];
+  if (!also.length) return "";
+  const btns = also.map((a) => `<button class="ghost small rv-alsopick" data-who="${esc(a.canonical || "")}">改用 ${esc(a["代號"] || "（沒有代號）")}（${esc(a.canonical || "")}）</button>`).join(" ");
+  const back = it["選的人"] ? ` <button class="ghost small rv-alsopick" data-who="">回到自動選的</button>` : "";
+  return `<p class="rv-meta">也可能是：${esc(also.map((a) => `${a["代號"] || "（沒有代號）"}（${a.canonical || ""}）`).join("、"))}
+    ——同一個地方比中好幾位，已合成這一張。現在用 ${esc(it["代號"] || "（沒有）")}（${esc(it["本名"] || "")}）${it["選的人"] ? "，是你選的" : "，是自動選的（比對最準的）"}；不對的話選另一位：</p>
+    <div class="rv-field rv-row">${btns}${back}</div>`;
+}
+
+function rvBindAlso(it) {
+  document.querySelectorAll(".rv-alsopick").forEach((b) => b.addEventListener("click", async () => {
+    try { await apiPost("/api/review/name", { id: it.id, "選的人": b.dataset.who || "" }); } catch (err) { alert(err.message); return; }
+    await rvReload();
+  }));
 }
 
 function rvRadios(name, options, current, cls) {
@@ -1577,6 +1597,14 @@ function rvDupHtml() {
   return `<p class="rv-warnline">同一集有人用了同一個代號，成品裡會分不出是誰：${dup.map(([c, rs]) => `${esc(c)}（${esc(rs.join("、"))}）`).join("；")}。如果其實是同一個人（轉錯字、暱稱），不用改，或在「③」選「是上面的學員」合併；不同人的話，學員在「② 辨識學員聲音是誰」右欄改，其他人在「③ 辨識其他名稱如何替換」改。</p>`;
 }
 
+// 10-03 第八批（#12）：名冊裡同一個寫法出現在兩列 → 同一處名字會比中兩個人；讓人決定是不是同一人（改名冊）
+function rvRosterDupHtml() {
+  const dups = rv.data["名冊重複寫法"] || [];
+  if (!dups.length) return "";
+  return `<p class="rv-warnline" id="rvRosterDup">名冊裡同一個寫法出現在兩列：${esc(dups.map((d) => `「${d["寫法"]}」第 ${d["列"].join("、")} 列`).join("；"))}（標題列算第 1 列）。
+    同一處名字會同時比中這幾列的人，卡片合成一張、寫「也可能是」。是同一人的話到名冊把重複的那一列刪掉或合併；不是同一人，卡片上自己選是哪一位。</p>`;
+}
+
 function rvPrepNamesHtml() {
   // 09-29 宇軒：③「辨識其他名稱如何替換」——這一集被提到的每個人名都列（名冊上有沒有都一樣）。
   // ② 已經選成本名的只顯示結果；每次出現都在確認刪除段落裡的收起來
@@ -1613,7 +1641,7 @@ function rvPrepNamesHtml() {
   // 10-02 第七批（A3）：Claude 那一步沒跑成功，名冊上沒有的名字這裡看不到
   const peopleWarn = rv.data["人名清單沒跑成功"] ? `<p class="rv-warnline" id="rvPeopleMissing">人名清單沒跑成功（第 1 步用 Claude 找這一集提到的人名）：名冊上沒有的名字這裡看不到，成品可能照原聲念出來。到第 1 步按「重新分析（做完的會跳過）」，或命令列 bookclub run people &lt;工作區&gt;；跑成功之前 ③ 不能標完成。</p>` : "";
   if (!all.length) return peopleWarn || `<p class="rv-meta">這一集沒有找到被提到的人名（第 1 步人名清單還沒跑，或真的沒有）。</p>`;
-  return `${peopleWarn}${rvDupHtml()}${rvAutoHtml()}<p class="rv-meta">這一集被提到的所有人名（老師或學員講到的），每個決定被提到時換成什麼：
+  return `${peopleWarn}${rvRosterDupHtml()}${rvDupHtml()}${rvAutoHtml()}<p class="rv-meta">這一集被提到的所有人名（老師或學員講到的），每個決定被提到時換成什麼：
     名冊上的人預設「換成代號」，代號每一集自己選（或按上面自動配）；其實是 ② 某位學員（轉錯字、暱稱）選「是上面的學員」；家人、朋友、沒登記的人選「換成代號」；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
     <p class="rv-meta">${un.length} 個要看，${un.filter((u) => !u["已決定"]).length} 個還沒確認。</p>
     <ul class="rv-people">${unRows}${twoBlock}${cutBlock}</ul>`;

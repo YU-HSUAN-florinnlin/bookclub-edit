@@ -613,6 +613,47 @@ def name_fingerprint(c: dict) -> str:
     return f"{c.get('sentence_id')}|{round(float(c.get('start', 0)), 1)}|{c.get('matched_text', '')}"
 
 
+SAME_SPOT_TOL_S = 0.05   # 10-03 第八批（#12）：兩筆名字候選起訖都差不到這麼多秒、同一句 → 同一處
+_LEVEL_RANK = {"精確": 0, "A1": 1, "A2": 2}
+
+
+def same_spot_groups(candidates: list[dict], decisions: dict) -> dict[int, int]:
+    """10-03 第八批（#12）：同一處（同一句、同一段時間）比中好幾個人的名字候選，合成一張（純函式）。
+
+    名冊同一個寫法出現在兩列、或讀音相近，同一處會比中 2–4 個人、出 2–4 張卡；第一張整句換掉後，後面幾張
+    在句子裡找不到比對到的字，按不到通過。每一組留最準的一筆當主卡（精確＞A1＞A2；聽到的字跟寫法一樣的優先；
+    再來照順序），其他併進主卡（`也可能是`）。
+
+    已經按過通過的決定不動：組裡已通過的優先當主卡；其他已通過的照舊自己一張，不併。敏感詞不併。
+    candidates 用 `名字候選.json` 原本的起訖（不是改過的），回傳 {被併掉的順位（1 起算）: 主卡順位}。"""
+    def confirmed(i: int) -> bool:
+        return bool((decisions.get(str(i)) or {}).get("已確認"))
+
+    pool = [(i, c) for i, c in enumerate(candidates, start=1)
+            if not c.get("敏感詞") and c.get("sentence_id") is not None and "start" in c and "end" in c]
+    pool.sort(key=lambda x: (str(x[1]["sentence_id"]), float(x[1]["start"]), x[0]))
+    groups: list[list[tuple[int, dict]]] = []
+    for i, c in pool:
+        g = groups[-1] if groups else None
+        if g and g[0][1]["sentence_id"] == c["sentence_id"] \
+                and abs(float(g[0][1]["start"]) - float(c["start"])) <= SAME_SPOT_TOL_S \
+                and abs(float(g[0][1]["end"]) - float(c["end"])) <= SAME_SPOT_TOL_S:
+            g.append((i, c))
+        else:
+            groups.append([(i, c)])
+    out: dict[int, int] = {}
+    for g in groups:
+        if len(g) < 2:
+            continue
+        rank = lambda x: (0 if confirmed(x[0]) else 1, _LEVEL_RANK.get(x[1].get("比對層級"), 3),   # noqa: E731
+                          0 if x[1].get("matched_text") == x[1].get("name") else 1, x[0])
+        main = min(g, key=rank)[0]
+        for i, _c in g:
+            if i != main and not confirmed(i):
+                out[i] = main
+    return out
+
+
 def anchor_name_decisions(workdir: str | Path) -> dict:
     """老師名字的覆核決定照「第幾筆」存（09-29 檢查 #6）：`名字候選.json` 整份重算、順序變了，決定會套到別筆。
 
@@ -667,11 +708,30 @@ def effective_name_candidates(workdir: Path, candidates: list[dict], decisions: 
     這樣重跑找名字、候選變多也不會跟人工補的撞號。對齊過的時間已經留過停頓，建議緩衝歸零。
     `nameplan.compute_plan` 與覆核工作台共用，兩邊看到的名字一樣。"""
     out = []
+    merged = same_spot_groups(candidates, decisions)   # 10-03 第八批（#12）：同一處只出一張卡
     for i, c in enumerate(candidates, start=1):
         d = decisions.get(str(i), {}) or {}
         if d.get("改過的起訖"):
             c = {**c, "start": d["改過的起訖"][0], "end": d["改過的起訖"][1], "建議緩衝秒數": 0.0, "改過時間": True}
+        if i in merged:
+            c = {**c, "同一處": str(merged[i])}
         out.append(c)
+    for main in sorted(set(merged.values())):
+        alts = [candidates[i - 1] for i in sorted(k for k, v in merged.items() if v == main)]
+        c = out[main - 1]
+        pick = ((decisions.get(str(main)) or {}).get("選的人") or "").strip()
+        chosen = next((a for a in alts if pick and a.get("canonical") == pick and a.get("canonical") != c.get("canonical")), None)
+        if chosen:   # 人在卡片上改用「也可能是」的另一位：名字、本名、代號換成那一位的（抓到的字、時間不變）
+            alts = [candidates[main - 1]] + [a for a in alts if a is not chosen]
+            c = {**c, **{k: chosen.get(k) for k in ("name", "canonical", "代號")}, "選的人": chosen.get("canonical")}
+        seen, also = {c.get("canonical")}, []
+        for a in alts:
+            if a.get("canonical") in seen:
+                continue
+            seen.add(a.get("canonical"))
+            also.append({"canonical": a.get("canonical"), "name": a.get("name"), "代號": a.get("代號", ""),
+                         "比對層級": a.get("比對層級", "")})
+        out[main - 1] = {**c, "也可能是": also, "同一處候選": [str(k) for k, v in sorted(merged.items()) if v == main]}
     for m in load_decisions(Path(workdir))["人工名字"]:
         out.append({"id": m["id"], "start": m["start"], "end": m["end"], "sentence_id": m.get("sentence_id"),
                     "sentence": m.get("sentence", ""), "matched_text": m.get("matched_text", ""),
@@ -697,6 +757,8 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     cands = effective_name_candidates(workdir, result.get("candidates", []), decisions)
     for i, c in enumerate(cands, start=1):
         cid = str(c.get("id") or i)
+        if c.get("同一處"):   # 10-03 第八批（#12）：同一處比中好幾個人，併進主卡（主卡寫「也可能是」）
+            continue
         d = decisions.get(cid, {}) or {}
         group = nameplan.expand_sentence(ordered, pos[c["sentence_id"]]) if c.get("sentence_id") in pos else []
         if group and c.get("改過時間"):   # 跟 nameplan.build_plan 一樣：改時間納進來的句子一起重念
@@ -742,8 +804,32 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
             "建議做法": c.get("建議做法", ""), "敏感詞": bool(c.get("敏感詞")),
             "做法": d.get("做法") or nameplan.WHOLE, "tags": d.get("tags", []), "note": d.get("note", ""),
             "已確認": bool(d.get("已確認")), "人工新增": bool(c.get("人工新增")), **_align_info(c), **_align_info(d),
+            **({"也可能是": c["也可能是"], "選的人": c.get("選的人") or "", "本名": c.get("canonical", "")}
+               if c.get("也可能是") else {}),
         })
+    mark_name_covers(items, decisions)
     return items
+
+
+def mark_name_covers(items: list[dict], decisions: dict) -> None:
+    """10-03 第八批（#12）：還沒通過的名字卡，整個落在另一張已通過、整句換掉的卡的重念範圍裡
+    → 帶 `涵蓋`（已由那一張處理，不用再按）。那一張改做法或退回（取消通過）時，下次讀就不再帶，回到要處理。
+    `nameplan.build_plan` 用同一個規則把這一筆併進那一句（不列「要人處理」）。就地改 items。"""
+    from bookclub import nameplan
+
+    def plain_whole(it: dict) -> bool:
+        d = decisions.get(str(it["id"]), {}) or {}
+        return (d.get("做法") or nameplan.WHOLE) == nameplan.WHOLE and not (set(d.get("tags", [])) & nameplan.SKIP_TAGS)
+
+    done = [k for k in items if k["類型"] == "名字" and k.get("已確認") and k.get("整句") and plain_whole(k)]
+    for it in items:
+        if it["類型"] != "名字" or it.get("已確認") or it.get("老師整段") or not plain_whole(it):
+            continue
+        k = next((k for k in done if k is not it and k["整句"]["start"] - SAME_SPOT_TOL_S <= it["start"]
+                  and it["end"] <= k["整句"]["end"] + SAME_SPOT_TOL_S), None)
+        if k:
+            it["涵蓋"] = {"類型": "名字", "id": k["id"], "名稱": f"老師提到名字 {wd.fmt_time(k['start'])}",
+                         "start": round(k["整句"]["start"], 3), "end": round(k["整句"]["end"], 3), "重疊項目": []}
 
 
 def effective_overlaps(workdir: Path, overlaps: list[dict], dec: dict | None = None) -> list[dict]:
@@ -1036,6 +1122,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "這一集代號": ep_codes,   # 09-29：名冊拿掉代號欄，② ③ 顯示用這張
         "還沒代號": epcodes.missing(workdir),
         "提到的名字": mentioned,
+        "名冊重複寫法": _roster_dups(),   # 10-03 第八批（#12）：③ 上面提醒「名冊裡同一個寫法出現在兩列」
         "項目": items,
         "已還原": restored,                         # 10-01 第三批：還原的剪掉、消音（不在清單、不算筆數）
         "已刪除": list(dec.get("已刪除") or []),     # 10-01 第三批：刪掉的人工新增項目（留紀錄）
@@ -1067,6 +1154,17 @@ def _remember_cover(workdir: Path, seen: dict, gone: dict) -> None:
                 changed = True
         if changed:
             _save_decisions(workdir, dec)
+
+
+def _roster_dups() -> list[dict]:
+    """名冊裡同一個寫法出現在兩列以上（列號，標題列算第 1 列）；讀不到就當沒有。"""
+    from bookclub import names
+    from bookclub.config import data_dir
+
+    try:
+        return names.roster_duplicate_spellings(data_dir() / "名冊.csv")
+    except Exception:  # noqa: BLE001 — 提醒算不出來不擋工作台
+        return []
 
 
 def _dup_codes(workdir: Path, tdata: dict) -> dict:
@@ -1158,6 +1256,12 @@ def save_name(workdir: str | Path, cid: str, fields: dict) -> dict:
                 d["整句起訖"] = [round(a, 3), round(b, 3)]
             else:
                 d.pop("整句起訖", None)
+        if "選的人" in fields:   # 10-03 第八批（#12）：同一處比中好幾個人，人選是哪一位（空白＝回到自動選的）
+            who = str(fields["選的人"] or "").strip()
+            if who:
+                d["選的人"] = who
+            else:
+                d.pop("選的人", None)
         if "改稿" in fields:   # 09-29：要重念的句子人直接改（空白＝回到自動換好的）
             txt = str(fields["改稿"] or "").strip()
             if txt:
