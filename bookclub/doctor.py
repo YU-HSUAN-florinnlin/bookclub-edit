@@ -57,6 +57,14 @@ class Check:
         return f"❌ {self.name}：{self.detail}{arrow}"
 
 
+def tool_version() -> str:
+    """工具版本（跟 bookclub/__init__.py 的 __version__ 一致）。10-03 第九批 #25：夥伴回報問題時先看這一行，
+    才知道他手上是哪一版。"""
+    from bookclub import __version__
+
+    return __version__
+
+
 # ── 系統資訊（純顯示，不影響總結）────────────────────────────
 
 
@@ -520,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--claude", action="store_true", help="額外實際呼叫一次 claude -p 測試有沒有反應")
     args = parser.parse_args(argv)
 
-    print(f"bookclub doctor — {datetime.now().astimezone().isoformat(timespec='seconds')}")
+    print(f"bookclub doctor — 工具版本 {tool_version()} — {datetime.now().astimezone().isoformat(timespec='seconds')}")
     print()
     checks = run_checks(include_claude_call=args.claude)
     ok = print_report(checks)
