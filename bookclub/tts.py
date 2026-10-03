@@ -637,6 +637,19 @@ def _fingerprint(path: str, _mtime_ns: int, _size: int) -> str:
     return hashlib.sha1(Path(path).read_bytes()).hexdigest()[:12]
 
 
+def file_fingerprint(path: str | Path) -> str | None:
+    """生成檔內容的指紋（10-03 第九批 #21）：每次都重算（不靠修改時間，同一秒內覆寫也分得出來）。"""
+    p = Path(path)
+    return hashlib.sha1(p.read_bytes()).hexdigest()[:12] if p.is_file() else None
+
+
+def text_fingerprint(text: str) -> str:
+    return hashlib.sha1((text or "").strip().encode("utf-8")).hexdigest()[:12]
+
+
+ATTEMPT_FIELDS = frozenset(Attempt.__dataclass_fields__)
+
+
 def same_ref_file(rec: dict, ref_wav: str | Path) -> bool:
     """紀錄裡的參考音跟現在的是不是同一個。紀錄有指紋就只比內容（10-01：工作區複製到別的資料夾，
     路徑不同但內容一樣，不該整批重新生成）；沒有指紋的舊紀錄才比路徑。"""
@@ -801,6 +814,7 @@ def run_generation(
     cache_path = out_dir / ATTEMPT_CACHE
     cache = wd.read_json(cache_path, default=None) or {}
     ref_fp = ref_fingerprint(ref_wav)
+    ref_text_fp = text_fingerprint(ref_text)
 
     def akey(it: dict, n: int, seed: int, speed: float, legacy: bool = False) -> str:
         return f"{it['id']}|{n}|{seed}|{speed}|{it.get('生成用文字') or it['text']}|{ref_key(ref_wav, ref_fp, legacy)}"
@@ -822,20 +836,43 @@ def run_generation(
             return key_new, cache[key_new]
         return key_new, None
 
+    def save_entry(key: str, att: Attempt, wav: Path) -> None:
+        """記進 `_嘗試快取.json`，連同聲音檔內容和參考音逐字稿的指紋（10-03 第九批 #21：沿用前核對）。"""
+        cache[key] = {**att.__dict__, "檔案指紋": file_fingerprint(wav), "參考音逐字稿指紋": ref_text_fp}
+        wd.write_json(cache_path, cache)
+
+    def hit_usable(it: dict, n: int, hit: dict, wav: Path) -> bool:
+        """10-03 第九批 #21：`<句子>_第<N>次.wav` 是同一個檔名，文字 A→B→A、聲線 男1→男2→男1 時，
+        A／男1 的快取還在，但檔案已經被 B／男2 蓋掉了。沿用前核對檔案內容是不是當時記下的那一個。"""
+        if not wav.is_file():
+            return False
+        if hit.get("參考音逐字稿指紋") and hit["參考音逐字稿指紋"] != ref_text_fp:
+            return False   # 參考音檔一樣、逐字稿改了
+        fp = hit.get("檔案指紋")
+        if fp:
+            return fp == file_fingerprint(wav)
+        # 舊快取沒記指紋：這一句這一次只生成過一種（文字、聲線、參考音都一樣）才沿用；有過別種，檔案可能被蓋掉，重新生成
+        prefix = f"{it['id']}|{n}|"
+        return len({normalize_cache_key(k) for k in cache if k.startswith(prefix)}) <= 1
+
     def attempt(it: dict, n: int, seed: int, speed: float) -> Attempt:
         """生成一次；同一句同一種子語速文字已經生成過（上次中斷），直接沿用檔案與檢查結果。"""
         nonlocal synth, similar, want_similar
         key, hit = cache_hit(akey(it, n, seed, speed), akey(it, n, seed, speed, legacy=True))
-        if hit and (out_dir / f"{it['id']}_第{n}次.wav").is_file():
+        wav = out_dir / f"{it['id']}_第{n}次.wav"
+        if hit and not hit_usable(it, n, hit, wav):
+            if wav.is_file():
+                say(f"  第 {n} 次生成：上次的聲音檔已經被別的文字或聲線蓋掉了，重新生成")
+            hit = None
+        if hit:
             say(f"  第 {n} 次生成：沿用上次生成好的聲音")
-            att = Attempt(**hit)
+            att = Attempt(**{k: v for k, v in hit.items() if k in ATTEMPT_FIELDS})
             if att.check_failed and hear:   # 上次內容檢查沒做成（網路）：聲音不用重新生成，補檢查就好
                 try:
                     att.heard = hear(out_dir / f"{it['id']}_第{n}次.wav")
                     att.content = content_score(it["text"], att.heard)
                     att.check_failed = False
-                    cache[key] = att.__dict__.copy()
-                    wd.write_json(cache_path, cache)
+                    save_entry(key, att, wav)
                     log(f"  第 {n} 次生成：補做念對沒有的檢查，念的字對了 {att.content:.0%}")
                 except Exception as exc:  # noqa: BLE001
                     log(f"  ⚠️ 補做念對沒有的檢查還是沒成（{type(exc).__name__}），維持要人聽")
@@ -850,8 +887,7 @@ def run_generation(
             want_similar = False
             similar = make_similarity(workdir)
         att = _run_attempt(it, n, seed, speed, out_dir, synth, hear, similar, log)
-        cache[key] = att.__dict__.copy()
-        wd.write_json(cache_path, cache)
+        save_entry(key, att, wav)
         return att
 
     # 階段一：生成到內容通過（長度先不管，下一階段插入停頓可能就過了）
@@ -877,9 +913,13 @@ def run_generation(
         return f"{akey(it, bi + 1, a.seed, a.speed, legacy)}|{it.get('原文')}|{it['slot']}"
 
     def pkey_ok(ent: dict | None, it: dict, bi: int) -> bool:
-        """停頓快取對不對得上（10-01：舊寫法的鍵也算）。"""
-        return bool(ent) and (ent.get("鍵") in (pkey(it, bi), pkey(it, bi, legacy=True))
-                              or normalize_cache_key(ent.get("鍵") or "") == pkey(it, bi))   # 10-02 第五批：複製來的工作區
+        """停頓快取對不對得上（10-01：舊寫法的鍵也算）。10-03 第九批 #21：有記來源聲音檔的指紋就核對
+        （那個檔被別的文字、聲線重新生成過，插入停頓要重做）。"""
+        if not ent or not (ent.get("鍵") in (pkey(it, bi), pkey(it, bi, legacy=True))
+                           or normalize_cache_key(ent.get("鍵") or "") == pkey(it, bi)):   # 10-02 第五批：複製來的工作區
+            return False
+        fp = ent.get("來源指紋")
+        return not fp or fp == file_fingerprint(out_dir / f"{it['id']}_第{bi + 1}次.wav")
 
     def use_entry(it: dict, ent: dict) -> None:
         sid = it["id"]
@@ -931,7 +971,8 @@ def run_generation(
                     if not fresh_pauses and pkey_ok(ent, it, bi):
                         use_entry(it, ent)
                         continue
-                ent = {"鍵": pkey(it, bi), "ctx": None, "插入停頓": None}
+                ent = {"鍵": pkey(it, bi), "ctx": None, "插入停頓": None,
+                       "來源指紋": file_fingerprint(out_dir / f"{sid}_第{bi + 1}次.wav")}
                 try:
                     ctx = prepare_original(workdir, it, out_dir, use_align)
                 except Exception as exc:
