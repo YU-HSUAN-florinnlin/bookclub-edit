@@ -51,17 +51,57 @@
 | 4 | Hugging Face 帳號與同意條款 | 分辨誰在說話（pyannote 是要先同意條款的模型） | ① 註冊／登入 [huggingface.co](https://huggingface.co) ② 打開 [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) 與 [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) 各按一次同意 ③ Settings → Access Tokens 建一把 **Read** 金鑰。登入指令在安裝完之後跑（見下一節） |
 | 5 | Claude Code（登入過） | 段落分析、建議刪除段落、人名清單（第 1 步） | macOS 裝好 Claude Code 即可。**✱ WSL2 要在 WSL2 裡面另外裝一份**（Windows 那份 WSL2 用不到）：`curl -fsSL https://claude.ai/install.sh \| bash`，裝完執行 `claude` 登入一次。沒裝的話第 1 步會跳過段落分析，第 3 步沒有學員段落可以覆核 |
 | 6 | 設定包（向宇軒拿） | 名冊、敏感詞、名字排除清單、發音對照表、**匿名聲線**（學員重念用的男聲、女聲） | 安裝完用 `bookclub profile import 設定包.zip` 匯入（見「怎麼用」第 0 步）。沒有設定包時，安裝會放範例檔，名冊要自己填、匿名聲線要另外準備 |
-| 7 | 影片檔 | 讀書會的 Zoom 錄影（.mp4） | **✱ WSL2 先把影片複製到 WSL2 自己的資料夾**（例如 `~/影片/`），不要直接讀 `/mnt/c/...`：跨系統讀寫慢很多，工作區也會建在影片旁邊 |
+| 7 | 影片檔 | 讀書會的 Zoom 錄影（.mp4） | 放進 `~/讀書會剪輯資料/影片/`（安裝時會建好這個資料夾）。工作區會建在影片旁邊，所以影片放哪裡，工作區就在哪裡。**✱ WSL2 一定要先把影片複製進 WSL2 自己的資料夾**，不要直接用 `/mnt/c/...` 底下的檔案：網頁只能選家目錄底下的檔案，跨系統讀寫也慢很多。怎麼複製進去、成品怎麼拿回 Windows，見下面「WSL2：影片放進去、成品拿出來」 |
 
 名冊欄位：`中文名`（學員本名）、`其他寫法`（同音字、暱稱、轉文字常聽錯的寫法，多個用「、」分隔）、`性別`（決定用男聲或女聲重念）。**代號不寫在名冊**：每一集在第 3 步選（代號是外國人名的中文寫法，例如「潔西」；同一集同一人同一個代號就好）。敏感詞欄位：`原詞`、`替代詞`。這幾份含真實姓名，放在 `~/讀書會剪輯資料/`，不要提交進任何 git 倉庫。
 
+### WSL2：影片放進去、成品拿出來
+
+WSL2 的 Ubuntu 有自己的檔案系統，Windows 的 C 槽在 WSL2 裡叫 `/mnt/c/`。下面的 `你的Windows使用者名稱` 換成你自己的（在 Windows 檔案總管打開「使用者」資料夾看得到）。這一段還沒在 WSL2 實測。
+
+**把影片從 Windows 複製進 WSL2**（例如影片在 Windows 的「下載」資料夾）：
+
+```bash
+cp "/mnt/c/Users/你的Windows使用者名稱/Downloads/第1堂.mp4" ~/讀書會剪輯資料/影片/
+```
+
+**把成品拿回 Windows**：第 5 步按「輸出成品」後，成品在影片旁邊的工作區 `輸出/` 底下，檔名開頭是 `最終成品_`：
+
+```bash
+cp ~/讀書會剪輯資料/影片/第1堂_剪輯工作區/輸出/最終成品_*.mp4 "/mnt/c/Users/你的Windows使用者名稱/Downloads/"
+```
+
+也可以用 Windows 的檔案總管直接開 WSL2 的資料夾，再用拖曳的方式複製：在 WSL2 終端機打下面這行（最後的 `.` 是「目前這個資料夾」）。
+
+```bash
+cd ~/讀書會剪輯資料/影片 && explorer.exe .
+```
+
 ## 4. 安裝
+
+### 下載程式
+
+程式放在 GitHub：<https://github.com/YU-HSUAN-florinnlin/bookclub-edit>。在終端機（WSL2 是 Ubuntu 的終端機）打：
+
+```bash
+cd ~
+git clone https://github.com/YU-HSUAN-florinnlin/bookclub-edit.git
+```
+
+程式會下載到家目錄底下的 `bookclub-edit/`（下面叫「工具資料夾」）。這份說明的指令都用 `~/bookclub-edit` 當例子；你放在別的位置的話，把 `~/bookclub-edit` 換成你的位置。WSL2 請放在 WSL2 自己的家目錄（`~` 底下），不要放在 `/mnt/c/...`。macOS 第一次打 `git` 時，如果跳出要安裝「命令列開發者工具」的視窗，按「安裝」，裝完再打一次。
+
+**下面所有 `.venv/bin/...` 開頭的指令，都要先進到工具資料夾再打**：
+
+```bash
+cd ~/bookclub-edit
+```
 
 ### 先檢查電腦裡已經有什麼
 
-安裝前先跑這一行，它只檢查、不裝任何東西：
+安裝前先跑這一行（在工具資料夾裡），它只檢查、不裝任何東西：
 
 ```bash
+cd ~/bookclub-edit
 bash install.sh --check-only
 ```
 
@@ -80,7 +120,7 @@ bash install.sh --force-download
 ### 正式安裝
 
 ```bash
-cd ~/Downloads/bookclub-edit    # 或你 clone 下來的位置
+cd ~/bookclub-edit
 bash install.sh
 ```
 
@@ -91,6 +131,8 @@ bash install.sh
 **WSL2**：2026-09-29 已在 Windows 11＋WSL2（Ubuntu 26.04）實測，4 分半全自動裝完、中間不用人介入。沒有 NVIDIA 顯示卡時，腳本會裝只用處理器的 torch（CUDA 版多下載約 2.8GB 用不到的套件）。`uv` 裝完如果找不到，開新終端機再重跑。ModelScope 限流時（`[403] 操作过于频繁`）腳本會重試後先略過，下一步 `models download` 會補上。
 
 ### 裝完之後（第一次才要做）
+
+以下都在工具資料夾裡打（先 `cd ~/bookclub-edit`）。
 
 1. **登入 Hugging Face**（用上一節第 4 項建的 Read 金鑰；金鑰不要貼給 AI）：
    ```bash
@@ -110,16 +152,94 @@ bash install.sh
    ```
    `--claude` 會實際叫一次 Claude，確認登入過、叫得到。
 
+### 更新到新版本
+
+每出一個新版本，請把程式**整個重新下載一次**，不要在舊的工具資料夾上更新。做法是：舊的工具資料夾改名留著 → 重新下載一份到原本的位置 → 再跑一次安裝。新版的變動寫在 [`CHANGELOG.md`](CHANGELOG.md)。
+
+**不會受影響的**（都不在工具資料夾裡）：
+
+- 設定與資料 `~/讀書會剪輯資料/`：名冊、敏感詞、名字排除清單、發音對照表、匿名聲線、`settings.toml`、專案清單（網頁「總覽」列的專案）
+- 每支影片的工作區：影片旁邊的 `<影片檔名>_剪輯工作區/`，做到一半的照樣接著做
+- AI 模型：`~/.cache/bookclub/`（聲音生成，約 5GB）、`~/.cache/huggingface/`（逐字對位）、`~/.cache/torch/pyannote/`（分辨誰在說話）。安裝時會認出已經下載好的，不會重新下載
+- 各種登入與金鑰：Hugging Face 登入、Groq 金鑰（`~/.zshrc` 或 `~/.profile`）、Claude Code 登入，都不用重做
+
+**會重新做的**（都在工具資料夾裡）：
+
+- 程式本身
+- Python 執行環境 `.venv/`（Mac 上約 1.3GB）：重新建立、重新裝套件。套件第一次安裝時已經下載過，會留在 `~/.cache/uv/`，重裝時大多直接從這裡拿，不用再從網路下載
+- 聲音生成引擎的原始碼 `third_party/CosyVoice/`（約 10MB，重新從 GitHub 抓）
+
+**大概多久**：2026-09-29 在 WSL2 第一次安裝（套件全部要下載、模型沿用）花 4 分半。重新下載時套件多半已經在電腦裡，應該會比這個快，但還沒實測過。舊的工具資料夾刪掉之前，硬碟要多留約 2GB。
+
+**步驟**（macOS 與 WSL2 一樣，差別寫在步驟裡）：
+
+1. **停掉網頁**：第 4 步正在跑的話，先按「停止」，等它停下來。再到跑網頁的那個終端機視窗按 `Ctrl＋C`（macOS 是雙擊「啟動.command」開出來的那個視窗）。
+2. **確認沒有上一次留下的舊版資料夾**：家目錄底下如果還有 `bookclub-edit-舊版`，先照第 7 步刪掉。
+3. **舊的工具資料夾改名留著**（新版有問題時還可以改回來）：
+
+   ```bash
+   cd ~
+   mv bookclub-edit bookclub-edit-舊版
+   ```
+
+4. **重新下載**，放回原本的位置（位置不變，Claude Code 的 skill 捷徑才會繼續指到對的地方）：
+
+   ```bash
+   cd ~
+   git clone https://github.com/YU-HSUAN-florinnlin/bookclub-edit.git
+   ```
+
+5. **安裝**：
+
+   ```bash
+   cd ~/bookclub-edit
+   bash install.sh
+   ```
+
+   最後會自動跑一次環境健檢，第一行印出現在的工具版本，確認是新的版本號；必要項目要全部 ✅。WSL2 如果畫面跳出密碼提示，輸入 Ubuntu 的登入密碼。
+6. **開網頁確認**：macOS 雙擊工具資料夾裡的「啟動.command」；WSL2 打下面兩行，再用 Windows 的瀏覽器開 <http://localhost:8766>：
+
+   ```bash
+   cd ~/bookclub-edit
+   .venv/bin/bookclub serve
+   ```
+
+   「總覽」看得到原本的專案、第 0 步的名冊筆數跟以前一樣，就是設定與資料都接上了。
+7. **用過一陣子確定新版沒問題，再刪掉舊版資料夾**：macOS 在 Finder 把家目錄底下的 `bookclub-edit-舊版` 丟到垃圾桶；WSL2 打下面這行（刪了就救不回來，確認名字是 `bookclub-edit-舊版` 再按 Enter）：
+
+   ```bash
+   rm -rf ~/bookclub-edit-舊版
+   ```
+
+**新版有問題、想先回到舊版**：停掉網頁，把新的改名、舊的改回來，再照第 6 步開網頁：
+
+```bash
+cd ~
+mv bookclub-edit bookclub-edit-新版有問題
+mv bookclub-edit-舊版 bookclub-edit
+```
+
+新版本改過工作區的檔案格式時，回到舊版可能讀不懂新版存過的工作區；會不會這樣，看 `CHANGELOG.md` 那一版的說明。
+
 ## 5. 怎麼用
 
 **平常操作都在網頁上**：
 
-1. 雙擊「啟動.command」（macOS；WSL2 在終端機跑 `.venv/bin/bookclub serve`），瀏覽器開 <http://localhost:8766>。伺服器記得上次在做哪支影片，重開後自動接回
-2. 「總覽」選影片、按「開始分析」（在影片旁邊建 `<影片檔名>_剪輯工作區/`；做到一半的會接著做）
+1. 開網頁：
+   - macOS：雙擊工具資料夾裡的「啟動.command」，瀏覽器會自動開 <http://localhost:8766>
+   - WSL2：在 Ubuntu 的終端機打下面兩行，再用 Windows 的瀏覽器開 <http://localhost:8766>（WSL2 不一定會自動開瀏覽器；這個終端機視窗要開著，關掉網頁就停了）。網頁在 WSL2 上還沒實測
+
+     ```bash
+     cd ~/bookclub-edit
+     .venv/bin/bookclub serve
+     ```
+
+   伺服器記得上次在做哪支影片，重開後自動接回
+2. 「總覽」選影片、按「開始分析」（在影片旁邊建 `<影片檔名>_剪輯工作區/`；做到一半的會接著做）。網頁只能選家目錄底下的影片
 3. 照左側步驟列走：0 初始化設定（人工，第一次才要）→ 1 影片分析（AI）→ 2 挑選老師參考聲音片段（人工）→ 3 覆核工作台（人工：先做開始前 4 件事，再逐筆通過）→ 4 AI 執行（AI：可以按「停止」，下次接著做；跑的時候第 3 步只能看不能改）→ 5 成品檢查（人工：全部通過、整片看過 100% 才能輸出）
 4. 存檔失敗時（例如伺服器被關掉），畫面最上面會出現紅色橫幅，重新整理再改一次
 
-下面是每一步的細節與終端機指令（測試、除錯用）。範例路徑請換成自己實際的檔案位置。指令都用虛擬環境裡的 `bookclub`：`.venv/bin/bookclub`。
+下面是每一步的細節與終端機指令（測試、除錯用）。範例路徑請換成自己實際的檔案位置：例子裡影片是 `~/讀書會剪輯資料/影片/第1堂.mp4`，它的工作區是旁邊的 `~/讀書會剪輯資料/影片/第1堂_剪輯工作區`。指令都用虛擬環境裡的 `bookclub`：`.venv/bin/bookclub`，要先進到工具資料夾（`cd ~/bookclub-edit`）再打。
 
 **環境健檢**：檢查有沒有裝好、模型在不在、金鑰有沒有設定。
 
@@ -130,19 +250,19 @@ bash install.sh
 **流程第 1 步一次跑完**：轉文字 → 段落分析（Claude）與認老師同時跑 → 合併判斷 → 找重疊 → 挑參考音 → 找姓名 → 學員段落認人，結果都寫進工作區資料夾。Claude 叫不到時會印警告、改用純聲紋判斷繼續跑。
 
 ```bash
-.venv/bin/bookclub run analyze ~/讀書會剪輯資料/影片/第1堂.mp4 ~/讀書會剪輯資料/工作區/第1堂 --roster ~/讀書會剪輯資料/名冊.csv --sensitive ~/讀書會剪輯資料/敏感詞.csv
+.venv/bin/bookclub run analyze ~/讀書會剪輯資料/影片/第1堂.mp4 ~/讀書會剪輯資料/影片/第1堂_剪輯工作區 --roster ~/讀書會剪輯資料/名冊.csv --sensitive ~/讀書會剪輯資料/敏感詞.csv
 ```
 
 **單獨挑老師參考音**（`run analyze` 已經包含這步，這是要單獨重跑或測試時用）：
 
 ```bash
-.venv/bin/bookclub ref pick ~/讀書會剪輯資料/影片/第1堂.mp4 ~/讀書會剪輯資料/工作區/第1堂
+.venv/bin/bookclub ref pick ~/讀書會剪輯資料/影片/第1堂.mp4 ~/讀書會剪輯資料/影片/第1堂_剪輯工作區
 ```
 
 **選定某一個參考音候選**，存成正式的 `ref.wav`／`ref.txt`（`<名次>` 是 `ref pick` 推薦清單裡的第幾名，逐字稿先聽過修正好存成檔案再帶進去）：
 
 ```bash
-.venv/bin/bookclub ref use ~/讀書會剪輯資料/工作區/第1堂 1 --text-file 修正後逐字稿.txt
+.venv/bin/bookclub ref use ~/讀書會剪輯資料/影片/第1堂_剪輯工作區 1 --text-file 修正後逐字稿.txt
 ```
 
 參考音候選（10-01 起）是 48kHz、16 位元、單聲道 WAV：保留原片 8000 赫茲以上的高音，雙聲道用平均合成單聲道，音量跟直接播原片一樣。以前的候選是 16kHz、雙聲道相加（高音被切掉、大聲 3 分貝）。挑選的方法、門檻、停頓壓縮都沒變。
@@ -150,8 +270,8 @@ bash install.sh
 **舊工作區的候選換成新格式**（不重挑、不呼叫 Groq、不載入模型；逐字稿不動）：
 
 ```bash
-.venv/bin/bookclub ref recut ~/讀書會剪輯資料/工作區/第1堂            # 原片預設用挑選紀錄.json 記的位置
-.venv/bin/bookclub ref recut ~/讀書會剪輯資料/工作區/第1堂 --video 原片.mp4
+.venv/bin/bookclub ref recut ~/讀書會剪輯資料/影片/第1堂_剪輯工作區            # 原片預設用挑選紀錄.json 記的位置
+.venv/bin/bookclub ref recut ~/讀書會剪輯資料/影片/第1堂_剪輯工作區 --video 原片.mp4
 ```
 
 - 照 `參考音/候選.json` 記的時間重切；舊的候選音檔先複製到 `參考音/舊候選備份_<時間>/`，不刪任何檔案。已經是新格式的略過，可以重跑
@@ -161,10 +281,11 @@ bash install.sh
 **開本機網頁**（第 0～5 步都可以操作；左側步驟列每步標 AI／人工，按「«」收合、「»」展開，會記得上次的狀態）：
 
 ```bash
+cd ~/bookclub-edit
 .venv/bin/bookclub serve
 ```
 
-網址預設是 <http://localhost:8766>，會自動開瀏覽器（加 `--no-open` 不自動開）。不帶工作區時，在「總覽」選影片（網頁內的資料夾瀏覽，只能選家目錄底下的檔案），按「開始分析」才在影片旁邊建 `<影片檔名>_剪輯工作區/` 開跑（專案清單記在 `~/讀書會剪輯資料/專案清單.json`）；同一支影片做到一半的，按開始分析會接著做。已有的專案在總覽點「切換」。舊用法 `bookclub serve <工作區>` 照樣能用。也可以雙擊「啟動.command」（macOS；WSL2 直接用上面的指令）。Groq 金鑰設在 `~/.zshrc` 的話，要從 zsh 終端機或「啟動.command」開，伺服器才讀得到金鑰；讀不到時總覽會提醒。
+網址預設是 <http://localhost:8766>。macOS 會自動開瀏覽器（加 `--no-open` 不自動開）；WSL2 不一定會自動開，請自己用 Windows 的瀏覽器開這個網址。不帶工作區時，在「總覽」選影片（網頁內的資料夾瀏覽，只能選家目錄底下的檔案），按「開始分析」才在影片旁邊建 `<影片檔名>_剪輯工作區/` 開跑（專案清單記在 `~/讀書會剪輯資料/專案清單.json`）；同一支影片做到一半的，按開始分析會接著做。已有的專案在總覽點「切換」。舊用法 `bookclub serve <工作區>` 照樣能用。macOS 也可以雙擊「啟動.command」；WSL2 用上面的指令。Groq 金鑰設在 `~/.zshrc` 的話，要從 zsh 終端機或「啟動.command」開，伺服器才讀得到金鑰；讀不到時總覽會提醒。
 
 **初始化設定與設定包**（第 0 步，跨專案共用，名冊只要一份）：
 
@@ -185,7 +306,7 @@ bash install.sh
 ```
 
 ```bash
-.venv/bin/bookclub gen teacher ~/讀書會剪輯資料/工作區/第1堂 句子.json
+.venv/bin/bookclub gen teacher ~/讀書會剪輯資料/影片/第1堂_剪輯工作區 句子.json
 ```
 
 每句用固定種子 42 生成，生成完用 Groq 轉回文字檢查：念錯、漏字就換種子重來。最多試 3 次，還是不過的標「要人聽」。
@@ -197,8 +318,8 @@ bash install.sh
 **處理老師提到名字的地方**（第 3 步覆核完之後）：照每筆的做法（直接消音／整句換掉／只換名字）排出計畫，需要生成的交給老師 AI 聲音，再組出新聲音軌：
 
 ```bash
-.venv/bin/bookclub gen names ~/讀書會剪輯資料/工作區/第1堂
-.venv/bin/bookclub render audio ~/讀書會剪輯資料/工作區/第1堂
+.venv/bin/bookclub gen names ~/讀書會剪輯資料/影片/第1堂_剪輯工作區
+.venv/bin/bookclub render audio ~/讀書會剪輯資料/影片/第1堂_剪輯工作區
 ```
 
 - 覆核標成「不是名字」「是地名」的會略過；同一句有好幾個名字要整句換掉時，合成一次生成
@@ -210,9 +331,9 @@ bash install.sh
 學員段落重念、組裝一段影片（0.1.7，測試版，終端機指令）：
 
 ```bash
-.venv/bin/bookclub gen students ~/讀書會剪輯資料/工作區/第1堂 --start 37:00 --end 55:23 --plan-only
-.venv/bin/bookclub gen students ~/讀書會剪輯資料/工作區/第1堂 --start 37:00 --end 55:23
-.venv/bin/bookclub render video ~/讀書會剪輯資料/工作區/第1堂 --start 37:00 --end 55:23 --label
+.venv/bin/bookclub gen students ~/讀書會剪輯資料/影片/第1堂_剪輯工作區 --start 37:00 --end 55:23 --plan-only
+.venv/bin/bookclub gen students ~/讀書會剪輯資料/影片/第1堂_剪輯工作區 --start 37:00 --end 55:23
+.venv/bin/bookclub render video ~/讀書會剪輯資料/影片/第1堂_剪輯工作區 --start 37:00 --end 55:23 --label
 ```
 
 - `gen students`：學員段落照句子接成 8～20 秒一段，用匿名聲線重念。聲線放在 `~/讀書會剪輯資料/聲線/候選_0928/`（`男1.wav`、`女1.wav`⋯，逐字稿同檔名 `.txt`，設定包會帶）；某個性別一個候選都沒有時，才用 `聲線/男聲_暫定.wav`、`女聲_暫定.wav`。每位學員照男女自動輪流配一個（同一集每位不同），男女照名冊性別，名冊沒有就用原音估音高；第 3 步「② 辨識學員聲音是誰」可以改。可以中斷續跑
@@ -242,7 +363,7 @@ bash install.sh
 兩區都處理完，才按「開始執行」。終端機的 `run execute` 要組裝時也會做同樣的檢查。
 
 ```bash
-.venv/bin/bookclub run execute ~/讀書會剪輯資料/工作區/第1堂
+.venv/bin/bookclub run execute ~/讀書會剪輯資料/影片/第1堂_剪輯工作區
 ```
 
 `run execute` 依序跑：老師名字 → 學員重念 → 保留原聲學員講到名字（選了換成代號的才生成）→ 組裝（預設整段軟體編碼）。
@@ -250,7 +371,7 @@ bash install.sh
 在第 3 步學員段落卡片上按「這段其實是老師」。
 
 ```bash
-.venv/bin/bookclub gen stunames ~/讀書會剪輯資料/工作區/第1堂
+.venv/bin/bookclub gen stunames ~/讀書會剪輯資料/影片/第1堂_剪輯工作區
 ```
 
 - **每一段各自一支程式跑**（10-01，8GB 的 Mac 用）：同一支程式裡換步驟、換聲線時，前一個模型佔的記憶體不一定還給系統，兩個模型疊在一起會把記憶體撐爆（10-01 夜間第一堂：系統拿硬碟頂替的量衝到 11 GB、程式沒留訊息就結束）。現在 `run execute`（網頁「開始執行」）自己不載入模型，一段一段開子程式（`bookclub run part`，平常不用自己打），那一段做完程式就結束、記憶體一定還回去；任何時候記憶體裡最多一個大模型：
@@ -286,7 +407,7 @@ bash install.sh
   - 終端機看要重做哪幾筆：
 
     ```bash
-    .venv/bin/bookclub redo list ~/讀書會剪輯資料/工作區/第1堂
+    .venv/bin/bookclub redo list ~/讀書會剪輯資料/影片/第1堂_剪輯工作區
     ```
 
     重做用 `.venv/bin/bookclub run execute <工作區> --redo-returned`
@@ -296,15 +417,15 @@ bash install.sh
 **把覆核結果交給夥伴**：網頁第 3 步最下面按「匯出覆核結果」，或
 
 ```bash
-.venv/bin/bookclub review export ~/讀書會剪輯資料/工作區/第1堂
+.venv/bin/bookclub review export ~/讀書會剪輯資料/影片/第1堂_剪輯工作區
 ```
 
 產出一個 zip（覆核結果、老師參考音、發音對照表、給夥伴的說明；不含原始逐字稿與學員本名）。還有沒確認的項目也能匯出，會提醒幾筆。夥伴在自己的電腦：
 
 ```bash
-.venv/bin/bookclub review import 覆核結果.zip ~/讀書會剪輯資料/工作區/第1堂 --video 第1堂.mp4
-.venv/bin/bookclub gen names ~/讀書會剪輯資料/工作區/第1堂
-.venv/bin/bookclub render audio ~/讀書會剪輯資料/工作區/第1堂
+.venv/bin/bookclub review import 覆核結果.zip ~/讀書會剪輯資料/影片/第1堂_剪輯工作區 --video 第1堂.mp4
+.venv/bin/bookclub gen names ~/讀書會剪輯資料/影片/第1堂_剪輯工作區
+.venv/bin/bookclub render audio ~/讀書會剪輯資料/影片/第1堂_剪輯工作區
 ```
 
 匯入會比對影片長度（差超過 1 秒就停下來），從影片抽聲音，放好參考音與發音對照表。
@@ -312,18 +433,19 @@ bash install.sh
 **單獨重跑段落分析**（`run analyze` 已經包含；Claude 當時叫不到才需要）：
 
 ```bash
-.venv/bin/bookclub run turns ~/讀書會剪輯資料/工作區/第1堂
+.venv/bin/bookclub run turns ~/讀書會剪輯資料/影片/第1堂_剪輯工作區
 ```
 
 ## 6. 產出在哪
 
-每支影片對應一個工作區資料夾（例如 `~/讀書會剪輯資料/工作區/第1堂/`），檔案結構與每個欄位的說明見 [`docs/工作區格式.md`](docs/工作區格式.md)。
+每支影片對應一個工作區資料夾（例如 `~/讀書會剪輯資料/影片/第1堂_剪輯工作區/`），檔案結構與每個欄位的說明見 [`docs/工作區格式.md`](docs/工作區格式.md)。
 
-工作區放在 `~/讀書會剪輯資料/` 底下，不在這個 git 倉庫的資料夾路徑內，正常操作不會被這個公開倉庫的 git 追蹤到。但如果自己手動搬動檔案，以下這幾個**含學員內容，不要外流、不要進 git**：
+工作區建在影片旁邊（`<影片檔名>_剪輯工作區/`），專案清單記在 `~/讀書會剪輯資料/專案清單.json`。09-27 以前的舊工作區在 `~/讀書會剪輯資料/工作區/` 底下，網頁「總覽」照樣列得出來。影片跟工作區都不要放進工具資料夾（這個 git 倉庫）裡，正常操作就不會被這個公開倉庫的 git 追蹤到。如果自己手動搬動檔案，以下這幾個**含學員內容，不要外流、不要進 git**：
 
 - `transcript/`（含 Groq 轉出來的逐字稿原文）
 - `說話者判斷.json`
-- `名字候選.json`、`名字候選/`（含逐句逐字稿與姓名候選的試聽片段）
+- `校對/`（段落、學員重念的校對稿、人名清單與人名決定）
+- `名字候選.json`、`名字候選/`（含逐句逐字稿與姓名候選的試聽片段）、`學員名字候選.json`
 - `名字覆核.html`（覆核用的靜態網頁，含整句逐字稿）
 - `名字覆核決定.json`
 - `生成/老師紀錄.json`（含要念的句子與轉回來的文字，可能有學員姓名）
@@ -368,8 +490,11 @@ WSL2 上找重疊比 M1 慢，是唯一的瓶頸（純本機運算）；聲音�
 
 ## 8. 隱私與授權
 
-- **影片、名冊、逐字稿都不進這個倉庫**：這些檔案根本不在倉庫資料夾路徑下，統一放在 `~/讀書會剪輯資料/`（見上面「產出在哪」）。
-- **雲端只用 Groq 語音辨識**：轉文字這一步會把音訊片段送到 Groq；`gen teacher` 的內容檢查會把生成出來的老師 AI 聲音送到 Groq 轉回文字（加 `--no-check` 就不送）。其餘步驟（分辨誰在說話、找重疊、找姓名候選、聲音生成本身）都在本機跑，不上傳。
+- **影片、名冊、逐字稿都不進這個倉庫**：設定放在 `~/讀書會剪輯資料/`，工作區建在影片旁邊，都不在工具資料夾裡（見上面「產出在哪」）。
+- **會送到外面的有兩家**：
+  - **Groq**（語音轉文字）：第 1 步轉文字、第 2 步挑參考音候選的逐字稿，會把聲音片段送到 Groq；第 4 步生成的 AI 聲音（老師重念、學員重念）會送到 Groq 轉回文字，檢查有沒有念錯（`gen teacher` 加 `--no-check` 就不送）
+  - **Claude**（透過 Claude Code）：第 1 步的段落分析、建議刪除段落、人名清單，會把**整支影片的逐字稿**（含學員說的話，可能有本名）送給 Claude
+- 其餘步驟（分辨誰在說話、找重疊、找姓名候選、聲音生成本身、組裝）都在本機跑，不上傳。影片檔本身不上傳。
 - **模型授權**：聲音生成引擎 CosyVoice3 是 Apache-2.0 授權；分辨誰在說話用的 pyannote 可商用；另一個原本評估過的聲音生成方案 F5-TTS 因為授權不可商用，所以沒有採用。
 - **倉庫本身**：這個程式碼倉庫用 [MIT License](LICENSE)。
 
@@ -377,8 +502,8 @@ WSL2 上找重疊比 M1 慢，是唯一的瓶頸（純本機運算）；聲音�
 
 工具跑不動或結果怪怪的時候：
 
-1. 先跑 `.venv/bin/bookclub doctor`，把**完整輸出**貼給 Claude Code。
-2. Claude Code 會照輸出裡每一項的「修法」協助排除；WSL2 安裝過程的問題也先交給 Claude Code 排錯（見上面「WSL2 注意事項」）。
+1. 先在工具資料夾裡跑 `.venv/bin/bookclub doctor`（先 `cd ~/bookclub-edit`），把**完整輸出**貼給 Claude Code。
+2. Claude Code 會照輸出裡每一項的「修法」協助排除；WSL2 安裝過程的問題也先交給 Claude Code 排錯（見第 4 節「正式安裝」底下的 WSL2 說明）。
 3. 還是不行的話，回報時請附上：
    - 錯誤訊息全文（不要只描述「壞掉了」，截圖或整段複製貼上）
    - 卡在哪一步（`doctor`／`run analyze`／`ref pick`／`serve` 的哪個階段，或網頁上哪一頁）
