@@ -214,6 +214,19 @@ def extend_enabled(merged: dict | None) -> bool:
     return bool((merged or {}).get("保留停頓秒數"))
 
 
+def other_ranges(candidates: list[dict], c: dict, extra=()) -> list[tuple[float, float]]:
+    """延伸重念範圍時不能碰到的範圍：c 以外每一個名字候選＋extra（保留原聲學員的名字候選）。"""
+    return [(float(x["start"]), float(x["end"])) for x in candidates if x is not c] + list(extra)
+
+
+def student_name_ranges(workdir: Path) -> list[tuple[float, float]]:
+    """保留原聲學員講到名字的候選（`studentnames`）的 (起, 訖)；還沒找過就是空的。"""
+    from bookclub import studentnames
+
+    data = wd.read_json(studentnames.cands_path(workdir), default=None) or {}
+    return [(float(x["start"]), float(x["end"])) for x in data.get("candidates", []) if "start" in x and "end" in x]
+
+
 def neighbors(ordered: list[dict], group: list[dict]) -> tuple[dict | None, dict | None]:
     """group（依時間排好的句子）前一句、後一句（純函式）。"""
     ids = [g.get("id") for g in ordered]
@@ -256,13 +269,15 @@ def _sent_words(words: list[dict], sent: dict) -> list[dict]:
 
 
 def extend_range(words: list[dict], lo: float, hi: float, before: dict | None, after: dict | None,
-                 group: list[dict]) -> tuple[float, float]:
+                 group: list[dict], avoid=()) -> tuple[float, float]:
     """10-04 #62 第 6 點（純函式）：整句換掉的範圍，起訖斷在話中間的話往前、往後延伸到標點或真的停頓
     （字跟字之間空 CLEAR_GAP_S 秒以上），切在空白的中間。
 
     句子變短後（轉文字保留停頓），Groq 的「一句」常斷在話中間（@3025.04、@3211.92 那種），照一句的起訖重念，
     接回去會聽到前後的話被切斷。只延伸進老師的句子；起訖本來就在標點或停頓上、或 EXTEND_MAX_S 秒內找不到
-    標點或停頓的那一邊不動。"""
+    標點或停頓的那一邊不動。
+    `avoid`：其他名字候選（老師的每一張卡，不管做法、確認了沒有；保留原聲學員的名字候選）的 (起, 訖)。延伸的那一邊
+    會碰到其中任何一個 → 那一邊不延伸（不然別張卡的名字會被包進來重念、那張卡的消音被吃掉）。"""
     ws = sorted(words or [], key=lambda w: w["start"])
     inside = [w for w in ws if lo - 0.05 <= (w["start"] + w["end"]) / 2 <= hi + 0.05]
     if not inside:
@@ -283,7 +298,7 @@ def extend_range(words: list[dict], lo: float, hi: float, before: dict | None, a
                     break
             if cut is None and lo - before["start"] <= EXTEND_MAX_S:
                 cut = min(before["start"], bw[0]["start"])   # 前一句整句（句子開頭就是邊界）
-            if cut is not None:
+            if cut is not None and not any(x < lo - 1e-3 and y > cut + 1e-3 for x, y in avoid):
                 a = min(a, cut)
     if after is not None and ok_teacher(after) and not _ends_closed(group[-1].get("text", "")):
         full = _sent_words(ws, after)
@@ -300,7 +315,7 @@ def extend_range(words: list[dict], lo: float, hi: float, before: dict | None, a
                     break
             if cut is None and after["end"] - hi <= EXTEND_MAX_S:
                 cut = max(after["end"], aw[-1]["end"])        # 後一句整句（句子結尾就是邊界）
-            if cut is not None:
+            if cut is not None and not any(x < cut - 1e-3 and y > hi + 1e-3 for x, y in avoid):
                 b = max(b, cut)
     return round(a, 3), round(b, 3)
 
@@ -312,7 +327,7 @@ def _ends_closed(text: str) -> bool:
 
 
 def whole_slot(c: dict, d: dict, group: list[dict], words: list[dict] | None,
-               around: tuple[dict | None, dict | None] | None = None) -> dict:
+               around: tuple[dict | None, dict | None] | None = None, avoid=()) -> dict:
     """「整句換掉」要重念的時間格（純函式；`build_plan` 與覆核工作台共用，兩邊一定一樣）。
 
     - 名字覆核決定有 `整句起訖`（人在卡片上改的）→ 照人改的
@@ -340,7 +355,7 @@ def whole_slot(c: dict, d: dict, group: list[dict], words: list[dict] | None,
         if nr and (not edited or closer(*nr)):
             return {**out, "start": nr[0], "end": nr[1], "範圍": "自動"}
     if around is not None:
-        a, b = extend_range(words, lo, hi, around[0], around[1], group)
+        a, b = extend_range(words, lo, hi, around[0], around[1], group, avoid)
         if (a < lo - 0.01 or b > hi + 0.01) and (not edited or closer(a, b)):
             return {**out, "start": a, "end": b, "範圍": "延伸"}
     return out
@@ -351,7 +366,7 @@ CUT_SKIP = "落在剪掉的片段裡（聲音和畫面都拿掉，不用處理�
 
 def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dict],
                default_how: str = WHOLE, words: list[dict] | None = None, cut: set | None = None,
-               extend: bool = False) -> dict:
+               extend: bool = False, avoid=()) -> dict:
     """純函式：候選＋覆核決定＋句子（id → {start, end, text}）→ 處理計畫。
 
     做法：覆核決定的 `做法` 優先；沒有就用 default_how（09-25 宇軒定案：預設整句換掉；
@@ -363,7 +378,8 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
     `words`（逐字時間）給了的話，整句太長時只重念名字所在的那一小句（`whole_slot`，10-01），
     這種項目帶 `範圍`（自動／人選）與 `整句`（原本整句的起訖），文字照範圍裡逐字稿的字。
     `cut`（10-01 第三批）：落在剪掉的片段裡的候選編號（字串）→ 放進略過，不生成、不消音（剪掉的地方本來就沒有聲音）。
-    `extend`（10-04 #62）：整句換掉的範圍斷在話中間時延伸到標點或真的停頓（`whole_slot` 的 around）。
+    `extend`（10-04 #62）：整句換掉的範圍斷在話中間時延伸到標點或真的停頓（`whole_slot` 的 around）；
+    延伸時不碰其他名字候選與 `avoid`（保留原聲學員的名字候選）的範圍。
     """
     gen, mutes, skipped, manual = [], [], [], []
     ranged: list[dict] = []       # 縮小範圍的（範圍疊在一起的名字併成一筆）
@@ -413,7 +429,8 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         if c.get("改過時間"):   # 09-29 宇軒：改時間把後面幾秒也納進來（逐字稿漏了第二次叫名字）→ 範圍內的句子一起重念
             group = [g for g in ordered if g["end"] > min(c["start"], group[0]["start"]) + 0.05
                      and g["start"] < max(c["end"], group[-1]["end"]) - 0.05 and (g in group or ok_teacher(g))] or group
-        ws = whole_slot(c, d, group, words, neighbors(ordered, group) if extend else None)
+        ws = whole_slot(c, d, group, words, neighbors(ordered, group) if extend else None,
+                        other_ranges(candidates, c, avoid) if extend else ())
         if ws["範圍"]:
             _add_ranged(ranged, manual, c, i, d, ws, words)
             continue
@@ -715,7 +732,9 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     # 剪掉的片段還原，下一次排計畫就回到要生成
     cuts = [(c["start"], c["end"]) for c in review.load_decisions(workdir)["刪除段落"] if c.get("狀態") != "還原"]
     cut = {str(c.get("id") or i) for i, c in enumerate(candidates, start=1) if review._in_ranges(c["start"], c["end"], cuts)}
-    plan = build_plan(candidates, decisions, sentences, words=words, cut=cut, extend=extend_enabled(merged))
+    extend = extend_enabled(merged)
+    plan = build_plan(candidates, decisions, sentences, words=words, cut=cut, extend=extend,
+                      avoid=student_name_ranges(workdir) if extend else ())
     if not only:   # 09-30：重疊選「生成老師聲音」的，老師整句一起排進生成清單
         choices = [o for o in review.overlap_choices(workdir) if not review._in_ranges(o["start"], o["end"], cuts)]
         picks = [o for o in choices if o["做法"] == "只留老師"]

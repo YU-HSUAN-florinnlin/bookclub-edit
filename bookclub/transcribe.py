@@ -143,71 +143,78 @@ def _pause_samples(segments: list[dict], keep_pause: float = KEEP_PAUSE_S) -> li
 
 
 def _compute_mapping(segments: list[dict], keep_pause: float = KEEP_PAUSE_S) -> list[dict]:
-    """segments 接起來後的時間對應表：[{concat_start, concat_end, original_start, pause}, ...]。
+    """segments 接起來後的時間對應表：[{concat_start, concat_end, original_start, pause, next_start}, ...]。
 
-    10-04 #62：段跟段之間補的空白（`pause` 秒）算前一段的延伸——`concat_end` 含空白，空白裡的時間
-    換算回原片＝這一段結尾之後的那一小段原片（原片真的安靜的地方，因為空白不超過原始間隔）。
-    （10-03 實驗漏了這一點：空白沒算進對應表，後面的時間全部往後錯、超出的被算到整塊最後，句子最長變成 1034 秒。）"""
+    10-04 #62：段跟段之間補的空白（`pause` 秒）算前一段的延伸——`concat_end` 含空白。`next_start`＝下一段在原片的
+    開頭（最後一段是 None），用來判斷空白後面還有沒有被挖掉的靜音（原始間隔比補的空白長）。
+    （10-03 實驗漏了空白：後面的時間全部往後錯、超出的被算到整塊最後，句子最長變成 1034 秒。）"""
     mapping: list[dict] = []
     cursor = 0.0
-    for seg, pad in zip(segments, _pause_samples(segments, keep_pause)):
+    pads = _pause_samples(segments, keep_pause)
+    for k, (seg, pad) in enumerate(zip(segments, pads)):
         dur = seg["end"] - seg["start"]
         p = pad / SR
-        mapping.append({"concat_start": cursor, "concat_end": cursor + dur + p,
-                        "original_start": seg["start"], "pause": p})
+        mapping.append({"concat_start": cursor, "concat_end": cursor + dur + p, "original_start": seg["start"],
+                        "pause": p, "next_start": segments[k + 1]["start"] if k + 1 < len(segments) else None})
         cursor += dur + p
     return mapping
+
+
+def _speech_len(m: dict) -> float:
+    return m["concat_end"] - m["concat_start"] - m["pause"]
+
+
+def _cut_after(m: dict) -> bool:
+    """這一段的空白後面，原片還有被挖掉的靜音（原始間隔比補的空白長）。"""
+    if m.get("next_start") is None:
+        return False
+    return m["next_start"] - (m["original_start"] + _speech_len(m) + m["pause"]) > 1e-3
+
+
+def _locate(mapping: list[dict], t: float, prefer: str) -> int:
+    """t 歸哪一段：起點（start）落在接縫上歸後一段；終點（end）落在接縫上歸前一段。"""
+    for k, m in enumerate(mapping):
+        if (t < m["concat_end"] - 1e-9) if prefer == "start" else (t <= m["concat_end"] + 1e-9):
+            return k
+    return len(mapping) - 1
 
 
 def _map_time_to_original(mapping: list[dict], t: float, prefer: str = "end") -> float:
     """接起來後音檔上的時間 t，換算回原始音檔時間。`prefer` 決定 t 剛好落在接縫上時
     歸給哪一段：`"start"`（字的開始時間）歸後一段開頭，`"end"`（字的結束時間）歸前
     一段結尾——接在長靜音後面的第一個字才不會被標成靜音開始的時間。
-    超出整塊的時間夾在最後一段（含空白）的結尾，不會往後外插。"""
+
+    10-04 #62：落在補的空白裡、空白後面原片還有被挖掉的靜音時——起點靠到下一段開頭（聲音一定在那之後），
+    終點照空白換算（前一段結尾之後、不超過 1 秒的安靜處）。整塊之外的時間夾在頭尾，不往外插。"""
     if not mapping:
         return t
-    if prefer == "start":
-        for m in mapping:
-            if t < m["concat_end"] - 1e-6:
-                return m["original_start"] + max(0.0, t - m["concat_start"])
-    else:
-        for m in mapping:
-            if m["concat_start"] - 0.05 <= t <= m["concat_end"] + 0.05:
-                return m["original_start"] + min(t - m["concat_start"], m["concat_end"] - m["concat_start"])
-    if t < mapping[0]["concat_start"]:
-        return mapping[0]["original_start"]
-    last = mapping[-1]
-    return last["original_start"] + max(0.0, min(t - last["concat_start"], last["concat_end"] - last["concat_start"]))
-
-
-def _seg_index(mapping: list[dict], t: float, prefer: str) -> int:
-    if prefer == "start":
-        for k, m in enumerate(mapping):
-            if t < m["concat_end"] - 1e-6:
-                return k
-        return len(mapping) - 1
-    for k, m in enumerate(mapping):
-        if m["concat_start"] - 0.05 <= t <= m["concat_end"] + 0.05:
-            return k
-    return 0 if t < mapping[0]["concat_start"] else len(mapping) - 1
+    m = mapping[_locate(mapping, t, prefer)]
+    off = min(max(0.0, t - m["concat_start"]), m["concat_end"] - m["concat_start"])
+    if prefer == "start" and off >= _speech_len(m) - 1e-9 and _cut_after(m):
+        return m["next_start"]
+    return m["original_start"] + off
 
 
 def _map_word(mapping: list[dict], s: float, e: float) -> tuple[float, float]:
-    """一個字的起訖換算回原片（10-04 #105）。
+    """一個字（或一句）的起訖換算回原片，保證 終點 ≥ 起點（10-04 #105）。
 
     字橫跨接縫、而接縫那裡有被挖掉的靜音時（換算回去的長度比接起來的長度多），以前起點算前一段、終點算後一段，
     字的時間就把挖掉的靜音整段包進去（第一堂 43:06.9–43:09.1 一個字 2.2 秒，裡面有 1.5 秒是挖掉的靜音）
-    → 找名字時名字範圍抓太長，直接消音消掉一大段。改成：字留在接起來時佔比較多的那一段，另一頭夾在那一段的邊上。"""
-    os_, oe = _map_time_to_original(mapping, s, prefer="start"), _map_time_to_original(mapping, e, prefer="end")
-    if not mapping or oe - os_ <= (e - s) + 0.05:
+    → 找名字時名字範圍抓太長，直接消音消掉一大段。改成：字留在人聲佔比較多的那一段（補的空白不算佔比），
+    另一頭夾在那一段人聲的邊上。整個落在補的空白裡的字，靠在下一段開頭（長度 0）。"""
+    os_ = _map_time_to_original(mapping, s, prefer="start")
+    oe = max(os_, _map_time_to_original(mapping, e, prefer="end"))
+    if not mapping or oe - os_ <= max(0.0, e - s) + 0.05:
         return os_, oe
-    i, j = _seg_index(mapping, s, "start"), _seg_index(mapping, e, "end")
+    i, j = _locate(mapping, s, "start"), _locate(mapping, e, "end")
     if i >= j:
         return os_, oe
     mi, mj = mapping[i], mapping[j]
-    if mi["concat_end"] - s >= e - mj["concat_start"]:   # 留在前一段：終點夾在前一段（含空白）的結尾
-        return os_, min(oe, mi["original_start"] + (mi["concat_end"] - mi["concat_start"]))
-    return max(os_, mj["original_start"]), oe          # 留在後一段：起點夾在後一段的開頭
+    share_i = max(0.0, mi["concat_start"] + _speech_len(mi) - s)
+    share_j = max(0.0, e - mj["concat_start"])
+    if share_i > share_j:   # 留在前一段：終點夾在前一段人聲的結尾
+        return os_, max(os_, min(oe, mi["original_start"] + _speech_len(mi)))
+    return max(os_, mj["original_start"]), oe   # 留在後一段：起點夾在後一段的開頭
 
 
 def _build_chunk_audio(audio: np.ndarray, segments: list[dict], out_path: Path,
@@ -264,10 +271,20 @@ def split_at_long_pauses(sentences: list[dict], words: list[dict], silence_map: 
         pieces = [dict(sent)]
         for g in gaps:
             cur = pieces[-1]
-            if not (cur["start"] < g["start"] and g["end"] < cur["end"]):
+            if g["end"] <= cur["start"] or g["start"] >= cur["end"]:
+                continue
+            if g["start"] <= cur["start"] or g["end"] >= cur["end"]:
+                # 停頓蓋住句子的開頭（或結尾）→ 句子的起點縮到停頓結束（終點縮到停頓開始）
+                if g["start"] <= cur["start"] and g["end"] < cur["end"]:
+                    cur["start"] = round(g["end"], 3)
+                    stats["縮邊"] += 1
+                elif g["end"] >= cur["end"] and g["start"] > cur["start"]:
+                    cur["end"] = round(g["start"], 3)
+                    stats["縮邊"] += 1
                 continue
             mid = (g["start"] + g["end"]) / 2
-            inside = [w for w in ws if cur["start"] - 0.05 <= (w["start"] + w["end"]) / 2 <= cur["end"] + 0.05]
+            # 字的中點落在句子裡才算這一句的（不放寬，前一句最後一個字不會被算進來）
+            inside = [w for w in ws if cur["start"] <= (w["start"] + w["end"]) / 2 <= cur["end"]]
             before = [w for w in inside if (w["start"] + w["end"]) / 2 < mid]
             after = [w for w in inside if (w["start"] + w["end"]) / 2 >= mid]
             if not before or not after:
@@ -278,8 +295,10 @@ def split_at_long_pauses(sentences: list[dict], words: list[dict], silence_map: 
                 stats["縮邊"] += 1 if (before or after) else 0
                 continue
             n_before = sum(_clean_len(w.get("word") or "") for w in before)
-            parts = _split_text(cur.get("text") or "", n_before)
-            if parts is None:
+            n_after = sum(_clean_len(w.get("word") or "") for w in after)
+            parts = _split_text(cur.get("text") or "", n_before) \
+                if n_before + n_after == _clean_len(cur.get("text") or "") else None
+            if parts is None:   # 字數跟句子文字對不上 → 不切（切了會切在錯的字上）
                 stats["對不上"] += 1
                 continue
             head = {**cur, "end": round(min(cur["end"], g["start"]), 3), "text": parts[0]}
@@ -376,6 +395,7 @@ def transcribe(
 
     merged_words: list[dict] = []
     merged_sentences: list[dict] = []
+    all_padded = True   # 每一塊都是補了空白轉的（混到舊塊級快取就不算，名字範圍延伸不開）
 
     for i, chunk_segments in enumerate(chunks):
         tag = f"{i:04d}"
@@ -409,13 +429,15 @@ def transcribe(
             print(f"[1/轉文字] 塊 {tag} 完成，{chunk_elapsed:.1f} 秒")
 
         # 塊級快取當時補了多少空白就照多少換算（舊快取沒記＝沒補空白）
-        mapping = _compute_mapping(chunk_segments, float(result.get(CACHE_PAUSE_KEY) or 0.0))
+        chunk_pause = float(result.get(CACHE_PAUSE_KEY) or 0.0)
+        all_padded = all_padded and chunk_pause == KEEP_PAUSE_S
+        mapping = _compute_mapping(chunk_segments, chunk_pause)
         for w in result.get("words") or []:
             s, e = _map_word(mapping, w.get("start", 0.0), w.get("end", 0.0))
             merged_words.append({"word": w.get("word"), "start": round(s, 3), "end": round(e, 3)})
         for j, seg in enumerate(result.get("segments") or []):
             s = _map_time_to_original(mapping, seg.get("start", 0.0), prefer="start")
-            e = _map_time_to_original(mapping, seg.get("end", 0.0), prefer="end")
+            e = max(s, _map_time_to_original(mapping, seg.get("end", 0.0), prefer="end"))
             merged_sentences.append({
                 "id": f"{tag}_{j:03d}",
                 "start": round(s, 3), "end": round(e, 3),
@@ -449,9 +471,10 @@ def transcribe(
         "sentences": merged_sentences,
         "words": merged_words,
         "silence_map": silence_map,
-        "保留停頓秒數": KEEP_PAUSE_S,   # 10-04 #62：有這個欄位＝送 Groq 時段跟段之間補了空白（句子比較短）
         "elapsed": elapsed,
     }
+    if all_padded and chunks:   # 10-04 #62：有這個欄位＝每一塊送 Groq 時段跟段之間都補了空白（句子比較短）
+        merged["保留停頓秒數"] = KEEP_PAUSE_S
     merged_path.write_text(json.dumps(merged, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"[1/轉文字] 完成：{len(merged_sentences)} 句、{len(merged_words)} 個字，"
           f"寫入 {merged_path}")

@@ -9,6 +9,7 @@ from __future__ import annotations
 import _testtmp  # noqa: F401 — 10-01：這支測試建的暫存資料夾跑完自己清（要在 tempfile 之前）
 
 import json
+import random
 import sys
 import tempfile
 from pathlib import Path
@@ -45,8 +46,8 @@ def test_group_into_chunks_empty_input():
 def test_compute_mapping_concat_offsets():
     segs = [{"start": 10.0, "end": 12.0}, {"start": 20.0, "end": 21.0}]
     mapping = tc._compute_mapping(segs, keep_pause=0.0)
-    assert mapping[0] == {"concat_start": 0.0, "concat_end": 2.0, "original_start": 10.0, "pause": 0.0}
-    assert mapping[1] == {"concat_start": 2.0, "concat_end": 3.0, "original_start": 20.0, "pause": 0.0}
+    assert mapping[0] == {"concat_start": 0.0, "concat_end": 2.0, "original_start": 10.0, "pause": 0.0, "next_start": 20.0}
+    assert mapping[1] == {"concat_start": 2.0, "concat_end": 3.0, "original_start": 20.0, "pause": 0.0, "next_start": None}
 
 
 def test_map_time_to_original_start_prefers_next_segment_after_gap():
@@ -118,12 +119,16 @@ def _quiet(t: float) -> bool:
 
 def test_time_inside_pause_maps_to_original_quiet_not_chunk_end():
     m = tc._compute_mapping(SEGS, keep_pause=1.0)
-    # 補的空白裡的時間：第一段空白（接起來 2.0–2.5）、第二段空白（3.5–4.5）
-    for t in (2.1, 2.3, 2.49, 3.6, 4.0, 4.49):
+    # 補的空白裡的時間：第一段空白（接起來 2.0–2.5，整段間隔補回去）→ 起點終點都照原片換算到安靜處
+    for t in (2.1, 2.3, 2.49):
         for prefer in ("start", "end"):
             o = tc._map_time_to_original(m, t, prefer=prefer)
-            assert _quiet(o), (t, prefer, o)
-            assert o < 20.0, f"空白裡的時間不能跑到後面的段落或整塊最後：{t} → {o}"
+            assert _quiet(o) and 12.0 <= o <= 12.5, (t, prefer, o)
+    # 第二段空白（3.5–4.5，後面還挖掉 5.5 秒）：終點換算到前一段結尾之後的安靜處；起點靠到下一段開頭（審查 1）
+    for t in (3.6, 4.0, 4.49):
+        o = tc._map_time_to_original(m, t, prefer="end")
+        assert _quiet(o) and 13.5 <= o <= 14.5, (t, o)
+        assert tc._map_time_to_original(m, t, prefer="start") == 20.0
     assert abs(tc._map_time_to_original(m, 4.0, prefer="end") - 14.0) < 1e-6   # 13.5 之後 0.5 秒，原片安靜處
     # 人聲裡的時間照舊
     assert abs(tc._map_time_to_original(m, 1.0, prefer="start") - 11.0) < 1e-6
@@ -171,8 +176,10 @@ def test_map_word_across_cut_silence_stays_on_one_side():
     s, e = tc._map_word(m, 4.3, 4.8)
     assert e - s <= 0.5 + 1e-6
     assert abs(s - 20.0) < 1e-6 and abs(e - 20.3) < 1e-6   # 後一段佔比較多 → 留在後一段
-    s, e = tc._map_word(m, 4.1, 4.6)
-    assert e - s <= 0.5 + 1e-6 and e <= 14.5 + 1e-6        # 前一段（含空白）佔比較多 → 留在前一段
+    s, e = tc._map_word(m, 4.1, 4.6)                        # 起點在補的空白裡 → 靠到後一段開頭（審查 1）
+    assert abs(s - 20.0) < 1e-6 and abs(e - 20.1) < 1e-6
+    s, e = tc._map_word(m, 3.2, 4.6)                        # 前一段人聲 0.3 秒 > 後一段 0.1 秒 → 留在前一段人聲裡
+    assert abs(s - 13.2) < 1e-6 and abs(e - 13.5) < 1e-6
     # 接縫沒有挖掉東西（間隔 0.5 秒整段補回去）→ 照舊
     s, e = tc._map_word(m, 2.3, 2.7)
     assert abs(s - 12.3) < 1e-6 and abs(e - 12.7) < 1e-6
@@ -285,6 +292,107 @@ def test_transcribe_old_chunk_cache_without_pause_uses_old_mapping():
         got = _fake_run(Path(d), res)
     w = got["words"][0]
     assert abs(w["start"] - 12.7) < 1e-6 and abs(w["end"] - 13.1) < 1e-6   # 沒補空白：2.2 → 12.5+0.2
+    assert "保留停頓秒數" not in got
+
+
+# ---------- 10-04 審查補修 ----------
+
+TWO = [{"start": 0.0, "end": 5.0}, {"start": 15.0, "end": 20.0}]   # 接起來：0–5 人聲、5–6 補的空白、6– 原片 15
+
+
+def test_start_inside_pause_snaps_to_next_segment():
+    """審查 1：字／句子的起點落在補的空白裡、原片停頓超過 1 秒 → 靠到下一段開頭，不是停頓剛開始的地方。"""
+    m = tc._compute_mapping(TWO, keep_pause=1.0)
+    assert tc._map_word(m, 5.0, 6.3) == (15.0, 15.3)
+    assert tc._map_time_to_original(m, 5.0, prefer="start") == 15.0      # 句子起點
+    assert tc._map_time_to_original(m, 5.4, prefer="start") == 15.0
+    assert abs(tc._map_time_to_original(m, 5.5, prefer="end") - 5.5) < 1e-9   # 終點：前一段結尾之後
+    # 整個落在空白裡的字：靠在下一段開頭，長度 0（不會 end < start）
+    assert tc._map_word(m, 5.2, 5.6) == (15.0, 15.0)
+    # 比較佔比時空白不算給前一段：人聲 0.05 秒在前一段、0.2 秒在後一段 → 留在後一段
+    s, e = tc._map_word(m, 4.95, 6.2)
+    assert abs(s - 15.0) < 1e-9 and abs(e - 15.2) < 1e-9
+
+
+def test_end_tolerance_never_before_start():
+    """審查 7：終點的 0.05 秒容許值會讓字的結束早於開始（接起來 6.00–6.04 → (15.0, 6.0)）。"""
+    m = tc._compute_mapping(TWO, keep_pause=1.0)
+    s, e = tc._map_word(m, 6.0, 6.04)
+    assert abs(s - 15.0) < 1e-9 and abs(e - 15.04) < 1e-9
+    assert tc._map_time_to_original(m, 6.04, prefer="end") >= 15.0
+    m0 = tc._compute_mapping(TWO, keep_pause=0.0)   # 舊快取（沒補空白）一樣
+    s, e = tc._map_word(m0, 5.0, 5.03)
+    assert e >= s and abs(s - 15.0) < 1e-9
+
+
+def test_split_shrinks_start_when_pause_covers_sentence_start():
+    """審查 2：句子起點等於停頓開頭時，以前不切也不縮邊。"""
+    out, st = tc.split_at_long_pauses([{"id": "0000_000", "start": 5.0, "end": 20.0, "text": "好"}],
+                                      [_w("好", 15.2, 15.6)], [{"start": 5.0, "end": 15.0}])
+    assert (out[0]["start"], out[0]["end"]) == (15.0, 20.0) and st["縮邊"] == 1
+    out, _ = tc.split_at_long_pauses([{"id": "0000_000", "start": 0.0, "end": 9.0, "text": "好"}],
+                                     [_w("好", 0.2, 0.6)], [{"start": 2.0, "end": 9.0}])
+    assert (out[0]["start"], out[0]["end"]) == (0.0, 2.0)
+
+
+def test_split_ignores_previous_sentence_word_and_checks_total():
+    """審查 3：前一句最後一個字（9.92–10.0）不能被算進這一句；總字數對不上就不切。"""
+    sents = [{"id": "0000_000", "start": 8.0, "end": 10.0, "text": "前"},
+             {"id": "0000_001", "start": 10.0, "end": 20.0, "text": "一二三四五六七八九十"}]
+    words = [_w("前", 9.92, 10.0), _w("一二三", 10.0, 13.0), _w("四五六七八九十", 16.3, 19.0)]
+    out, st = tc.split_at_long_pauses(sents, words, [{"start": 13.2, "end": 16.2}])
+    assert [x["text"] for x in out] == ["前", "一二三", "四五六七八九十"] and st["切開"] == 1
+    # 總字數對不上（字少了一個）→ 不切
+    words2 = [_w("一二三", 10.0, 13.0), _w("四五六七八九", 16.3, 19.0)]
+    out, st = tc.split_at_long_pauses(sents[1:], words2, [{"start": 13.2, "end": 16.2}])
+    assert len(out) == 1 and st["對不上"] == 1
+
+
+def test_mixed_old_and_new_chunk_cache_does_not_mark_pause_kept():
+    """審查 5：混到沒補空白的舊塊級快取時，不寫「保留停頓秒數」（名字範圍延伸就不會開）。"""
+    orig = tc.MAX_CHUNK_S
+    tc.MAX_CHUNK_S = 2.5    # 切成兩塊：[段 1]、[段 2＋段 3]
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            w = Path(d)
+            (w / "transcript").mkdir()
+            (w / "transcript" / "chunk_0001.json").write_text(json.dumps(
+                {"words": [{"word": "好", "start": 0.2, "end": 0.5}], "segments": []}), encoding="utf-8")
+            got = _fake_run(w, {tc.CACHE_PAUSE_KEY: 1.0, "words": [], "segments": []})
+        assert "保留停頓秒數" not in got   # 全部是舊快取的情況見 test_transcribe_old_chunk_cache_without_pause_uses_old_mapping
+    finally:
+        tc.MAX_CHUNK_S = orig
+
+
+def test_random_mapping_properties():
+    """隨機性質測試：人聲片段間隔含 0、<1 秒、>1 秒；字含落在空白裡、跨接縫的。換算後每個字 start ≤ end、
+    起點不倒退、[start, end] 跟某一段人聲有交集或緊貼著，或落在不超過 1 秒的間隔裡（不會整個落在長安靜中間）。"""
+    rng = random.Random(1004)
+    for trial in range(300):
+        segs, t = [], rng.uniform(0, 3)
+        for _ in range(rng.randint(1, 6)):
+            dur = rng.uniform(0.3, 4.0)
+            segs.append({"start": round(t, 3), "end": round(t + dur, 3)})
+            t += dur + rng.choice([0.0, rng.uniform(0.05, 0.99), rng.uniform(1.01, 30.0)])
+        keep = rng.choice([1.0, 0.0])
+        m = tc._compute_mapping(segs, keep_pause=keep)
+        total = m[-1]["concat_end"]
+        cur, words = 0.0, []
+        while cur < total + 0.2:
+            a = cur + rng.choice([0.0, rng.uniform(0, 0.4)])
+            b = a + rng.uniform(0.01, 1.5)
+            words.append((a, b))
+            cur = b
+        prev_s = -1.0
+        for a, b in words:
+            s, e = tc._map_word(m, a, b)
+            assert s <= e + 1e-9, (trial, a, b, s, e)
+            assert s >= prev_s - 1e-9, (trial, a, b, s, prev_s)
+            prev_s = s
+            touches = any(e >= g["start"] - 1e-6 and s <= g["end"] + 1e-6 for g in segs)
+            small_gap = any(segs[k]["end"] - 1e-6 <= s and e <= segs[k + 1]["start"] + 1e-6
+                            and segs[k + 1]["start"] - segs[k]["end"] <= 1.0 + 1e-6 for k in range(len(segs) - 1))
+            assert touches or small_gap, (trial, a, b, s, e, segs)
 
 
 def _run_all():
