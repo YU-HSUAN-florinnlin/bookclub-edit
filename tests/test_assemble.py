@@ -500,6 +500,56 @@ def test_short_mute_overlapping_slot_keeps_the_rest():
     assert ("學員名字消音", 51.6, 52.0) in [(e["類型"], e["start"], e["end"]) for e in kept2]
 
 
+def test_tiny_edge_overlap_between_swaps_trims_instead_of_muting():
+    """10-04 #61 補修：第一堂 T038_10（14.49 秒）跟沿用舊紀錄的 T038_11（23.08 秒）邊界疊 0.03 秒 →
+    以前較短的 T038_10 整格改成局部消音（14 秒學員的話變底噪）。現在只修齊邊界、兩格都是學員重念、時間不重疊。
+    同一類：兩個段落起訖差 0.004 秒（U001_01 跟 T047_01）。"""
+    a = {"類型": "學員重念", "id": "T038_10", "start": 3158.46, "end": 3172.95, "檔案": "a.wav"}
+    b = {"類型": "學員重念", "id": "T038_11", "start": 3172.92, "end": 3196.0, "檔案": "b.wav"}
+    details: list[dict] = []
+    kept, warn = assemble.resolve_overlaps([a, b], details=details)
+    assert [(e["類型"], e["id"]) for e in kept] == [("學員重念", "T038_10"), ("學員重念", "T038_11")], kept
+    assert kept[0]["end"] == kept[1]["start"] == 3172.92 and kept[0]["start"] == 3158.46 and kept[0]["檔案"] == "a.wav"
+    assert kept[0]["邊界修齊秒"] == 0.03 and not any("改成消音" in w for w in warn)
+    assert details == [{"警告類型": "跟別筆邊界差一點、修齊", "id": "T038_10", "類型": "學員重念", "start": 3158.46,
+                        "end": 3172.95, "蓋過的": ["T038_11"], "疊到的範圍": [3172.92, 3172.95], "疊到秒": 0.03,
+                        "處理": "修齊照做"}]
+    # 隱私：修齊後兩格之間沒有縫（沒有原聲露出來）
+    assert not assemble.subtract(3158.46, 3196.0, [(e["start"], e["end"]) for e in kept])
+    # 開頭疊到（U001_01 3.41 秒 vs T047_01 11.434 秒，疊 0.004 秒）：短的那一格的尾巴修齊
+    u = {"類型": "學員重念", "id": "U001_01", "start": 4643.32, "end": 4646.73}
+    t = {"類型": "學員重念", "id": "T047_01", "start": 4646.726, "end": 4658.16}
+    kept, _ = assemble.resolve_overlaps([u, t])
+    assert [(e["類型"], e["id"], e["start"], e["end"]) for e in kept] == [
+        ("學員重念", "U001_01", 4643.32, 4646.726), ("學員重念", "T047_01", 4646.726, 4658.16)]
+
+
+def test_real_overlaps_still_mute_like_before():
+    """10-04 #61 補修：修齊只給「頭或尾疊到 0.1 秒以內」的換聲音。真的大幅重疊（跟名字整句換掉疊 0.5 秒、
+    整筆被蓋、疊在中間）、局部消音跟學員重念重疊，行為跟以前一樣。"""
+    slot = {"類型": "學員重念", "id": "S1", "start": 40.0, "end": 51.6}
+    swap = {"類型": "名字整句換掉", "id": "N001", "start": 39.0, "end": 40.5, "候選": [1], "檔案": "x.wav"}
+    kept, warn = assemble.resolve_overlaps([slot, swap])
+    assert [(e["類型"], e["start"], e["end"]) for e in kept] == [("名字消音", 39.0, 40.0), ("學員重念", 40.0, 51.6)]
+    assert kept[0]["被蓋過改消音"] == "名字整句換掉" and "改成消音" in warn[0]
+    # 剛好超過 0.1 秒也照舊
+    kept, _ = assemble.resolve_overlaps([slot, {**swap, "start": 38.0, "end": 40.11}])
+    assert kept[0]["類型"] == "名字消音"
+    # 短的換聲音疊在長的中間（兩邊都被切）：照舊改消音
+    sn = {"類型": "學員名字換代號", "id": "SN1", "start": 44.0, "end": 46.0, "檔案": "y.wav", "候選": ["SN1"]}
+    kept, _ = assemble.resolve_overlaps([sn], [{"類型": "局部消音", "id": "M2", "start": 44.98, "end": 45.02}],
+                                        longest_first=False)
+    assert [(e["類型"], e["start"], e["end"]) for e in kept] == [
+        ("學員名字消音", 44.0, 44.98), ("局部消音", 44.98, 45.02), ("學員名字消音", 45.02, 46.0)], kept
+    # 局部消音跟學員重念重疊：消音只做沒疊到的部分，學員重念不動（跟以前一樣）
+    kept, warn = assemble.add_local_mutes([slot], [{"id": "M1", "start": 39.0, "end": 40.05, "方式": "墊底噪"}])
+    assert [(e["類型"], e["start"], e["end"]) for e in kept] == [("局部消音", 39.0, 40.0), ("學員重念", 40.0, 51.6)]
+    assert warn and "以那一筆為準" in warn[0]
+    # 消音類疊到一點點：照舊只扣疊到的部分（本來就不會整筆丟）
+    kept, _ = assemble.resolve_overlaps([slot, {"類型": "名字消音", "start": 39.35, "end": 40.03, "候選": [1]}])
+    assert [(e["類型"], e["start"], e["end"]) for e in kept] == [("名字消音", 39.35, 40.0), ("學員重念", 40.0, 51.6)]
+
+
 def test_names_left_blocks_uncovered_name():
     """10-02 第七批（A2）：名字還有超過 0.05 秒沒被任何動作（或剪掉）蓋到 → 列出來（組裝看到就不輸出）。"""
     names = [{"候選": 1, "start": 10.0, "end": 11.0}, {"候選": 2, "start": 20.0, "end": 20.5}]

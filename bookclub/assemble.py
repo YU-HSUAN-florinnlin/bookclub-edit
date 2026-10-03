@@ -100,34 +100,65 @@ def _as_mute(e: dict, s: float, t: float) -> dict:
     return out
 
 
+EDGE_TRIM_TOL_S = 0.1   # 10-04 #61 補修：換聲音類只在頭或尾跟別筆疊到這麼多秒以內 → 修齊邊界、整筆照做（不改成消音）
+
+
+def _ref_id(e: dict) -> str:
+    return str(e.get("id") or e.get("生成編號") or e["類型"])
+
+
 def resolve_overlaps(edits: list[dict], kept: list[dict] | None = None, *, longest_first: bool = True,
-                     label=None) -> tuple[list[dict], list[str]]:
+                     label=None, details: list[dict] | None = None) -> tuple[list[dict], list[str]]:
     """兩筆動作疊到時怎麼辦（純函式，10-02 第七批 A2）。以前疊到一點點，短的那筆整筆丟掉，名字會留在成品。
 
     - `kept` 是已經排好、優先的動作；`edits` 一筆一筆加進去（longest_first：長的先加）。
     - 疊到的（`stackable` 的那一對不算）：消音類只扣掉疊到的部分，剩下的照做；換聲音類不能只放一半，
       沒被蓋到的部分改成消音（`_as_mute`）。整筆都被蓋到的不重複處理。
+    - 10-04 #61 補修：換聲音類只有頭或尾跟別筆疊到 EDGE_TRIM_TOL_S 秒以內（例如沿用的舊格跟新切的鄰格差 0.03 秒、
+      兩個段落的起訖差 0.004 秒）→ 把這一筆的頭／尾修齊到那一筆的邊界、整筆照樣換聲音，不再整格變底噪。
+      疊到的那一點點由那一筆處理（換聲音或消音），不會留原聲。疊到的比這多、或疊在中間，照舊改成消音。
+    `details`：給一個清單就把每一筆警告的明細（警告類型、id、起訖、蓋過的、疊到秒、處理）加進去（`inspect 剪輯決策` 印）。
     回傳（依時間排序的動作、警告）。"""
-    label = label or (lambda e: str(e.get("id") or e.get("生成編號") or e["類型"]))
+    label = label or (lambda e: _ref_id(e))
     out, warnings = list(kept or []), []
     todo = sorted(edits, key=lambda e: -(e["end"] - e["start"])) if longest_first else list(edits)
+
+    def note(kind: str, e: dict, hits: list[dict], how: str) -> None:
+        if details is None:
+            return
+        spans = [[max(e["start"], k["start"]), min(e["end"], k["end"])] for k in hits]
+        details.append({"警告類型": kind, "id": _ref_id(e), "類型": e["類型"], "start": e["start"], "end": e["end"],
+                        "蓋過的": [_ref_id(k) for k in hits], "疊到的範圍": spans[0] if len(spans) == 1 else None,
+                        "疊到秒": round(sum(b - a for a, b in spans), 3), "處理": how})
+
     for e in todo:
-        block = [(k["start"], k["end"]) for k in out
-                 if e["start"] < k["end"] and k["start"] < e["end"] and not stackable(e, k)]
-        if not block:
+        hits = [k for k in out if e["start"] < k["end"] and k["start"] < e["end"] and not stackable(e, k)]
+        if not hits:
             out.append(e)
             continue
+        block = [(k["start"], k["end"]) for k in hits]
         parts = subtract(e["start"], e["end"], block)
         if not parts:
             warnings.append(f"{label(e)} 整筆落在別筆的範圍裡，跟著那一筆處理")
+            note("整筆落在別筆裡", e, hits, "跟著那一筆")
             continue
         left = sum(t - s for s, t in parts)
-        if e["類型"] in SWAP_KINDS or e["類型"] in SWAP_TO_MUTE:
+        covered = (e["end"] - e["start"]) - left
+        swap = e["類型"] in SWAP_KINDS or e["類型"] in SWAP_TO_MUTE
+        if swap and len(parts) == 1 and covered <= EDGE_TRIM_TOL_S + 1e-9:
+            s, t = parts[0]
+            out.append({**e, "start": s, "end": t, "邊界修齊秒": round(covered, 3)})
+            warnings.append(f"{label(e)} 跟別筆邊界疊到 {covered:.3f} 秒，頭尾修齊到那一筆，整筆照做")
+            note("跟別筆邊界差一點、修齊", e, hits, "修齊照做")
+            continue
+        if swap:
             out += [_as_mute(e, s, t) for s, t in parts]
             warnings.append(f"{label(e)} 跟別筆重疊，疊到的部分以那一筆為準，沒蓋到的 {left:.2f} 秒改成消音")
+            note("跟別筆重疊、以那一筆為準", e, hits, "改成消音")
         else:
             out += [{**e, "start": s, "end": t} for s, t in parts]
             warnings.append(f"{label(e)} 跟別筆重疊，疊到的部分以那一筆為準，其餘 {left:.2f} 秒照做")
+            note("跟別筆重疊、以那一筆為準", e, hits, "其餘照做")
     out.sort(key=lambda e: e["start"])
     return out, warnings
 
@@ -272,7 +303,8 @@ def local_mutes(dec: dict) -> list[dict]:
     return [m for m in dec.get("局部消音", []) if m.get("狀態") != "還原" and m.get("end", 0) > m.get("start", 0)]
 
 
-def add_local_mutes(edits: list[dict], mutes: list[dict], cuts: list[tuple[float, float]] = ()) -> tuple[list[dict], list[str]]:
+def add_local_mutes(edits: list[dict], mutes: list[dict], cuts: list[tuple[float, float]] = (),
+                    details: list[dict] | None = None) -> tuple[list[dict], list[str]]:
     """把局部消音加進剪輯決策（純函式，09-29 宇軒：局部消音保留，標了就要真的消）。
 
     - 跟刪除段落重疊的部分不用消（已經剪掉）
@@ -287,10 +319,19 @@ def add_local_mutes(edits: list[dict], mutes: list[dict], cuts: list[tuple[float
         if not free:
             if not ov:
                 warnings.append(f"局部消音 {m['id']} 整段落在刪除段落裡，不用消")
+                if details is not None:
+                    details.append({"警告類型": "局部消音落在剪掉的地方", "id": m["id"], "類型": "局部消音",
+                                    "start": m["start"], "end": m["end"]})
             continue
         parts = [p for s, e in free for p in subtract(s, e, taken)]
         if not ov and (len(parts) != len(free) or sum(e - s for s, e in parts) < sum(e - s for s, e in free) - 0.01):
             warnings.append(f"局部消音 {m['id']} 跟換聲音或名字的處理重疊，重疊的地方以那一筆為準")
+            if details is not None:
+                hits = [k for k in edits if k["start"] < m["end"] and m["start"] < k["end"]]
+                details.append({"警告類型": "局部消音跟別的處理重疊", "id": m["id"], "類型": "局部消音",
+                                "start": m["start"], "end": m["end"], "蓋過的": [_ref_id(k) for k in hits],
+                                "疊到秒": round(sum(min(k["end"], m["end"]) - max(k["start"], m["start"]) for k in hits), 3),
+                                "處理": "其餘照做"})
         for s, e in parts:
             out.append({"類型": "局部消音", "start": s, "end": e, "id": m["id"], "方式": m.get("方式", "墊底噪"),
                         "霧化": m.get("方式") == "霧化", "候選": [],
@@ -373,7 +414,7 @@ def student_name_edits(sp: dict) -> list[dict]:
 
 
 def add_student_name_edits(edits: list[dict], workdir: Path, a: float = 0.0, b: float = 1e12,
-                           cuts: list[tuple[float, float]] = ()) -> tuple[list[dict], list[str]]:
+                           cuts: list[tuple[float, float]] = (), details: list[dict] | None = None) -> tuple[list[dict], list[str]]:
     """把保留原聲學員講到名字的處理加進剪輯決策；跟既有動作重疊時以既有那筆為準（例如測試時學員整段重念）。"""
     from bookclub import studentgen, studentnames
 
@@ -381,7 +422,7 @@ def add_student_name_edits(edits: list[dict], workdir: Path, a: float = 0.0, b: 
     new = [e for e in student_name_edits(sp) + studentgen.swap_edits(workdir, sp) if e["start"] < b and a < e["end"]]
     new = [e for e in new if not any(x <= e["start"] and e["end"] <= y for x, y in cuts)]
     # 10-02 第七批（A2）：跟既有動作疊到時以既有那筆為準，但只扣掉疊到的部分（以前整筆丟掉，名字會留著）
-    return resolve_overlaps(new, edits, longest_first=False, label=lambda e: f"{e['類型']} {e['id']}")
+    return resolve_overlaps(new, edits, longest_first=False, label=lambda e: f"{e['類型']} {e['id']}", details=details)
 
 
 # ---------- 聲音處理（純函式） ----------

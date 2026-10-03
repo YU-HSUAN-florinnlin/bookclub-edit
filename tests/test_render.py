@@ -309,6 +309,63 @@ def test_build_decisions_name_mute_touching_student_slot_and_uncovered_name_bloc
                 os.environ["BOOKCLUB_DATA_DIR"] = old
 
 
+def test_build_decisions_reused_cell_lines_up_with_new_neighbour():
+    """10-04 #61 補修（第一堂 T038_10）：同一段落相鄰兩格，一格重新生成（新切點）、另一格沿用舊紀錄
+    （舊時間格跟現在差 0.03 秒，在 0.05 秒的沿用範圍內，所以沒重新生成）。以前組裝用紀錄的舊時間格 →
+    兩格疊 0.03 秒、較短那一格整格變「局部消音」。現在沿用的那一格放在現在的時間格：兩格都是學員重念、頭尾相接、不重疊。"""
+    import os
+    import tempfile
+
+    from bookclub import assemble, students
+    from bookclub import workdir as wdmod
+
+    with tempfile.TemporaryDirectory() as root:
+        old = os.environ.get("BOOKCLUB_DATA_DIR")
+        os.environ["BOOKCLUB_DATA_DIR"] = str(Path(root) / "資料")
+        try:
+            w, items = _fake_with_student_records(Path(root))
+            by_turn: dict[str, list[dict]] = {}
+            for it in sorted(items, key=lambda i: i["slot"][0]):
+                by_turn.setdefault(it["段落"], []).append(it)
+            p, n = next((v[0], v[1]) for v in by_turn.values() if len(v) >= 2)
+            cut = p["slot"][1]
+            assert abs(n["slot"][0] - cut) < 1e-9            # 新切格：頭尾相接
+            longer, shorter = (n, p) if n["slot"][1] - n["slot"][0] >= p["slot"][1] - p["slot"][0] else (p, n)
+            # 較長的那一格沿用舊紀錄：舊時間格往較短那一格多伸 0.03 秒（第一堂：T038_11 舊的開頭 52:52.920、新切點 52:52.950）
+            log = wdmod.read_json(students.log_path(w))
+            for r in log["句子"]:
+                if r["id"] == longer["id"]:
+                    r["slot"] = [cut - 0.03, r["slot"][1]] if longer is n else [r["slot"][0], cut + 0.03]
+            wdmod.write_json(students.log_path(w), log)
+
+            d = render.build_decisions(w, 0.0, 180.0)
+            mine = {e["id"]: e for e in d["動作"] if e.get("id") in (p["id"], n["id"])}
+            assert {k: e["類型"] for k, e in mine.items()} == {p["id"]: "學員重念", n["id"]: "學員重念"}, mine
+            assert mine[p["id"]]["end"] == mine[n["id"]]["start"] == cut                      # 頭尾相接、不重疊
+            assert mine[shorter["id"]]["start"] == shorter["slot"][0] and mine[shorter["id"]]["end"] == shorter["slot"][1]
+            assert mine[longer["id"]]["紀錄時間格差秒"] == 0.03
+            assert not [x for x in d["警告"] if "改成消音" in x or "以那一筆為準" in x], d["警告"]
+            assert not [e for e in d["動作"] if e.get("被蓋過改消音")]
+            # 隱私：這兩格合起來整段都有動作蓋到（沒有原聲露出來）
+            lo, hi = p["slot"][0], n["slot"][1]
+            assert not assemble.subtract(lo, hi, [(e["start"], e["end"]) for e in d["動作"]])
+            # 差超過 0.05 秒（要重新生成）：照舊那一格先消音，不放舊的
+            for r in log["句子"]:
+                if r["id"] == longer["id"]:
+                    r["slot"] = [cut - 0.2, r["slot"][1]] if longer is n else [r["slot"][0], cut + 0.2]
+            wdmod.write_json(students.log_path(w), log)
+            d = render.build_decisions(w, 0.0, 180.0)
+            assert [e["類型"] for e in d["動作"] if e.get("id") == longer["id"]] == ["局部消音"]
+            assert [e["類型"] for e in d["動作"] if e.get("id") == shorter["id"]] == ["學員重念"]
+            det = [x for x in d["警告明細"] if x["id"] == longer["id"]]
+            assert det and det[0]["警告類型"] == "時間格改過、還沒重新生成"
+        finally:
+            if old is None:
+                os.environ.pop("BOOKCLUB_DATA_DIR", None)
+            else:
+                os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
 def _fake_with_student_records(root: Path) -> tuple[Path, list[dict]]:
     """假工作區＋每一格學員重念都有生成紀錄（放回時間格）。"""
     sys.path.insert(0, str(REPO_ROOT / "tests"))

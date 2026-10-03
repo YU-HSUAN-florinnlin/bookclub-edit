@@ -120,6 +120,7 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     cuts = [(snap(c["start"]), snap(c["end"])) for c in dec["刪除段落"]
             if c.get("狀態") != "還原" and _in(c["start"], c["end"], a, b)]
     edits, marks, warnings = [], [], []
+    details: list[dict] = []   # 10-04 #61 補修：每一筆警告的明細（類型、id、起訖、蓋過的），存進剪輯決策給 inspect 印
 
     st = wd.read_json(students.log_path(workdir), default=None) or {}
     voices = st.get("學員聲線", {})
@@ -140,23 +141,32 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
             continue
         if turn_who and r.get("段落") in turn_who and turn_who[r["段落"]] != r.get("學員"):
             warnings.append(f"{r['id']}：段落 {r['段落']} 現在是{turn_who[r['段落']]}，舊的重念不用")
+            details.append({"警告類型": "段落改過、舊的重念不用", "id": r["id"], "start": r["slot"][0], "end": r["slot"][1]})
             continue
+        s0, s1 = r["slot"]
         if now_slots is not None:
             cur = now_slots.get(r["id"])
             if cur is None:
                 if _in(r["slot"][0], r["slot"][1], a, b):
                     warnings.append(f"{r['id']}：段落改過，這一筆舊的重念不用")
+                    details.append({"警告類型": "段落改過、舊的重念不用", "id": r["id"], "start": r["slot"][0], "end": r["slot"][1]})
                 continue
-            if abs(cur[0] - r["slot"][0]) > 0.05 or abs(cur[1] - r["slot"][1]) > 0.05:
+            if abs(cur[0] - r["slot"][0]) > tts.SLOT_TOLERANCE_S or abs(cur[1] - r["slot"][1]) > tts.SLOT_TOLERANCE_S:
                 if _in(cur[0], cur[1], a, b):
                     warnings.append(f"{r['id']}：時間格改過、還沒重新生成，這一格先消音（重新跑第 4 步的學員重念）")
+                    details.append({"警告類型": "時間格改過、還沒重新生成", "id": r["id"], "start": cur[0], "end": cur[1]})
                     stale_mutes.append({"id": r["id"], "start": max(cur[0], a), "end": min(cur[1], b), "方式": "墊底噪"})
                 continue
-        s0, s1 = r["slot"]
+            # 10-04 #61 補修：差 0.05 秒以內算沿用（不重新生成），但放回時用「現在的」時間格——
+            # 沿用的舊格跟新切的鄰格才會頭尾相接（以前用紀錄的舊時間格：T038_11 舊的開頭比新切的 T038_10 結尾早 0.03 秒，
+            # 疊到之後較短的 T038_10 整格變底噪；兩格反過來差的話會留 0.03 秒學員原聲）
+            s0, s1 = cur
         if not _in(s0, s1, a, b) or not r.get("放回時間格"):
             continue
         fitted = r["放回時間格"]
         e = {"類型": "學員重念", "start": s0, "end": s1, "id": r["id"], "學員": r.get("學員"), "聲線": r.get("聲線"),
+             **({"紀錄時間格差秒": round(max(abs(s0 - r["slot"][0]), abs(s1 - r["slot"][1])), 3)}
+                if max(abs(s0 - r["slot"][0]), abs(s1 - r["slot"][1])) >= 0.0005 else {}),
              "檔案": fitted["檔案"], "來源檔案": fitted.get("來源檔案"), "放回做法": fitted["放回做法"],
              "差異比例": fitted["差異比例"], "要人聽": r.get("要人聽", False), "text": r["text"],
              "生成用文字": r.get("生成用文字") or r["text"], "轉回文字": _chosen_heard(r),
@@ -215,10 +225,14 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
 
     # 重疊的動作：長的優先（跟 assemble 一樣）；10-02 第七批（A2）：短的只扣掉疊到的部分，
     # 換聲音沒被蓋到的部分改成消音（以前整筆丟掉，名字消音跟學員時間格疊 0.05 秒 → 名字留在成品）
-    kept, w = assemble.resolve_overlaps(edits, label=lambda e: str(e["id"]) if "id" in e else e["類型"])
+    kept, w = assemble.resolve_overlaps(edits, label=lambda e: str(e["id"]) if "id" in e else e["類型"], details=details)
     warnings += w
-    swapped = {e["id"] for e in kept if "id" in e and e["類型"] in assemble.SWAP_KINDS}
+    swapped = {e["id"]: e for e in kept if "id" in e and e["類型"] in assemble.SWAP_KINDS}
     freezes = [f for f in freezes if not f.get("edit") or f["edit"] in swapped]   # 被蓋過的那筆不停格
+    for f in freezes:   # 10-04 #61 補修：結尾修齊過的那一筆，停格點跟著移到新的結尾
+        e = swapped.get(f.get("edit"))
+        if e is not None and e.get("邊界修齊秒"):
+            f["at"] = snap(e["end"])
     # 落在刪除範圍裡的換聲音不用做；頭尾碰到刪除範圍（剪點對齊畫面格後差幾毫秒）的推到邊界
     kept = [e for e in kept if not any(x <= e["start"] and e["end"] <= y for x, y in cuts)]
     for e in kept:
@@ -231,10 +245,10 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     mutes += stale_mutes
     ov_marks = [m for m in marks if m["類型"] == "重疊"]
     mutes += assemble.overlap_mutes(ov_marks)   # 09-30：重疊處的學員原聲不能留在成品
-    kept, w = assemble.add_local_mutes(kept, mutes, cuts)
+    kept, w = assemble.add_local_mutes(kept, mutes, cuts, details=details)
     warnings += w
     # 保留原聲的學員自己講到名字（09-29）：直接消音、或用他自己的聲音生成代號短句
-    kept, w = assemble.add_student_name_edits(kept, workdir, a, b, cuts)
+    kept, w = assemble.add_student_name_edits(kept, workdir, a, b, cuts, details=details)
     warnings += w
     for e in kept:
         e["start"], e["end"] = clip_to_cuts(e["start"], e["end"], cuts)
@@ -263,7 +277,7 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     name_left = assemble.names_left(assemble.plan_name_ranges(plan, stu_plan), kept, cuts, a, b)
     blur = pick_blur(kept, cuts, a, b) if demo_blur else None   # 09-29：模糊只有測試示範才做，正式成品不模糊
     return {"範圍": [a, b], "刪除": cuts, "動作": kept, "停格": sorted(freezes, key=lambda f: f["at"]),
-            "模糊": blur, "標記": marks, "警告": warnings, "學員聲線": voices, "重疊沒處理": left,
+            "模糊": blur, "標記": marks, "警告": warnings, "警告明細": details, "學員聲線": voices, "重疊沒處理": left,
             "名字沒處理": name_left}
 
 
