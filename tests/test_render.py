@@ -309,6 +309,164 @@ def test_build_decisions_name_mute_touching_student_slot_and_uncovered_name_bloc
                 os.environ["BOOKCLUB_DATA_DIR"] = old
 
 
+def _fake_with_student_records(root: Path) -> tuple[Path, list[dict]]:
+    """假工作區＋每一格學員重念都有生成紀錄（放回時間格）。"""
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+    import fake_workdir
+    from bookclub import students
+    from bookclub import workdir as wdmod
+
+    w = fake_workdir.make(root)
+    items, _ = students.build_items(w)
+    recs = [{"id": it["id"], "段落": it["段落"], "學員": it["學員"], "text": it["text"], "slot": it["slot"], "聲線": "女",
+             "嘗試": [], "選定": 1,
+             "放回時間格": {"檔案": f"生成/學員/{it['id']}_放回時間格.wav", "放回做法": "補靜音", "差異比例": 0.0}}
+            for it in items]
+    wdmod.write_json(students.log_path(w), {"句子": recs, "學員聲線": {}})
+    return w, [it for it in items if not it.get("重疊")]
+
+
+def _expected_gaps(items: list[dict], skip: set = frozenset()) -> list[tuple]:
+    by: dict[str, list] = {}
+    for it in items:
+        if it["學員"] not in skip:
+            by.setdefault(it["段落"], []).append(it["slot"])
+    out = []
+    for tid, slots in by.items():
+        slots.sort()
+        out += [(tid, round(p[1], 3), round(n[0], 3)) for p, n in zip(slots, slots[1:]) if n[0] - p[1] > 0.001]
+    return sorted(out, key=lambda g: g[1])
+
+
+def test_build_decisions_mutes_gaps_between_student_chunks():
+    """10-03 第八批補修 #102：同一個學員段落裡兩格之間的空隙墊底噪、進處理紀錄（對到學員段落）；
+    段落頭尾、不同段落之間不動；空隙裡有老師的句子 → 保留原聲、處理紀錄要人聽；保留原聲的學員不動。"""
+    import os
+    import tempfile
+
+    from bookclub import assemble, finalcheck, proclog, review
+    from bookclub import workdir as wdmod
+
+    with tempfile.TemporaryDirectory() as root:
+        old = os.environ.get("BOOKCLUB_DATA_DIR")
+        os.environ["BOOKCLUB_DATA_DIR"] = str(Path(root) / "資料")
+        try:
+            w, items = _fake_with_student_records(Path(root))
+            want = _expected_gaps(items)
+            assert want == [("T003", 51.6, 52.0)], want   # 假資料：學員1 的 T003 切成兩格；T005、T007 各一格；段落之間不算
+            d = render.build_decisions(w, 0.0, 180.0)
+            gaps = [e for e in d["動作"] if e["類型"] == assemble.GAP_KIND]
+            assert [(e["段落"], round(e["start"], 3), round(e["end"], 3)) for e in gaps] == want, gaps
+            # 段落頭尾不動：每一筆空隙兩邊都是同一個段落的格子
+            first_last = {t: (min(i["slot"][0] for i in items if i["段落"] == t), max(i["slot"][1] for i in items if i["段落"] == t))
+                          for t in {i["段落"] for i in items}}
+            assert all(first_last[e["段落"]][0] < e["start"] and e["end"] < first_last[e["段落"]][1] for e in gaps)
+            recs = proclog.build_records(d, render.pieces(0.0, 180.0, d["刪除"], d["停格"]))
+            gr = [r for r in recs if r["類型"] == assemble.GAP_KIND]
+            assert len(gr) == len(gaps) and all(r["動到聲音"] and not r["要人聽"] for r in gr)
+            assert gr[0]["覆核項目"] == [f"學員段落:{gaps[0]['段落']}"]
+            assert gr[0]["做了什麼"] == f"學員段落裡兩格之間的空隙 {gaps[0]['end'] - gaps[0]['start']:.2f} 秒墊底噪（不留原聲）"
+            assert (gr[0]["原片"][0], gr[0]["原片"][1]) in proclog.audio_spans(recs)
+            # 第 5 步退回這一筆：沒有要重新生成的（只重新組裝）
+            ctx = {"學員": [{"id": i["id"], "段落": i["段落"], "slot": i["slot"]} for i in items], "老師": [], "保留原聲學員": []}
+            assert finalcheck.redo_units(gr[0], ctx) == []
+            assert not finalcheck.retime_target(gr[0], {})["可以"]
+
+            # 空隙裡有老師的話（說話者判斷裡 label 是老師的句子跟空隙重疊）→ 保留原片、處理紀錄要人聽
+            g0 = gaps[0]
+            sp = wdmod.read_json(wdmod.speakers_path(w))
+            sp["sentences"].append({"id": "99_000", "start": g0["start"] + 0.05, "end": g0["end"] - 0.05, "text": "嗯。",
+                                    "label": "老師", "sim": 0.9})
+            wdmod.write_json(wdmod.speakers_path(w), sp)
+            d = render.build_decisions(w, 0.0, 180.0)
+            gaps2 = [e for e in d["動作"] if e["類型"] == assemble.GAP_KIND]
+            assert [(e["start"], e["end"]) for e in gaps2] == [(e["start"], e["end"]) for e in gaps[1:]]
+            keep = [m for m in d["標記"] if m["類型"] == assemble.GAP_KEEP_KIND]
+            assert [(m["段落"], m["start"], m["保留原因"]) for m in keep] == [(g0["段落"], round(g0["start"], 3), "老師的話")]
+            recs = proclog.build_records(d, render.pieces(0.0, 180.0, d["刪除"], d["停格"]))
+            kr = [r for r in recs if r["類型"] == assemble.GAP_KEEP_KIND]
+            assert len(kr) == 1 and kr[0]["要人聽"] and not kr[0]["動到聲音"] and kr[0]["覆核項目"] == [f"學員段落:{g0['段落']}"]
+            assert kr[0]["做了什麼"].startswith("學員段落中間有老師的話，這 ") and kr[0]["做了什麼"].endswith("秒保留原聲，請聽有沒有學員的聲音")
+            assert finalcheck.redo_units(kr[0], ctx) == []
+            marks = render.build_marks(d, render.pieces(0.0, 180.0, d["刪除"], d["停格"]))
+            assert any(r["類型"] == assemble.GAP_KEEP_KIND and r["要人聽"] for r in marks)
+
+            # 保留原聲的學員：他的段落一筆空隙都不處理，也不標；別的學員保留原聲不影響這一段
+            sp["sentences"].pop()
+            wdmod.write_json(wdmod.speakers_path(w), sp)
+            review.set_voice(w, "學員2", "保留原聲")
+            d = render.build_decisions(w, 0.0, 180.0)
+            got = [(e["段落"], round(e["start"], 3), round(e["end"], 3)) for e in d["動作"] if e["類型"] == assemble.GAP_KIND]
+            assert got == want, got
+            review.set_voice(w, "學員1", "保留原聲")
+            d = render.build_decisions(w, 0.0, 180.0)
+            assert not [e for e in d["動作"] if e["類型"] == assemble.GAP_KIND]
+            assert not [m for m in d["標記"] if m["類型"] == assemble.GAP_KEEP_KIND]
+        finally:
+            if old is None:
+                os.environ.pop("BOOKCLUB_DATA_DIR", None)
+            else:
+                os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
+def test_build_audio_gap_has_only_room_tone_and_no_unlogged_change():
+    """#102 組聲音（render.build_audio，假資料、不讀真的影片）：兩格之間的空隙成品裡只有底噪、不含原片；
+    空隙有進處理紀錄，沒有「沒登記的變動」。空隙裡有老師的話時原片逐點保留。"""
+    import tempfile
+
+    import numpy as np
+    import soundfile as sf
+
+    from bookclub import assemble, proclog
+
+    sr = SR = render.SR
+    with tempfile.TemporaryDirectory() as root:
+        w = Path(root) / "工作區"
+        out = w / "輸出"
+        (w / "生成" / "學員").mkdir(parents=True)
+        out.mkdir()
+        rng = np.random.default_rng(3)
+        x = (0.001 * rng.standard_normal(SR * 12)).astype(np.float32)
+        t = np.arange(SR * 5) / SR
+        x[SR:SR * 6] += (0.3 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)      # 1–6 秒學員講話（含 3.0–3.5 的空隙）
+        tone = (0.1 * np.sin(2 * np.pi * 500 * np.arange(int(1.9 * SR)) / SR)).astype(np.float32)
+        for k in ("T003_01", "T003_02"):
+            sf.write(str(w / "生成" / "學員" / f"{k}.wav"), tone, SR, subtype="PCM_16")
+
+        def run(tag: str, with_gap: bool) -> tuple[np.ndarray, np.ndarray, dict]:
+            sf.write(str(out / f"原聲_{tag}.wav"), x, SR, subtype="PCM_16")
+            acts = [{"類型": "學員重念", "id": k, "start": s, "end": e, "檔案": f"生成/學員/{k}.wav", "學員": "學員1", "聲線": "女",
+                     "text": "假", "生成用文字": "假"} for k, s, e in (("T003_01", 1.0, 3.0), ("T003_02", 3.5, 5.5))]
+            marks = []
+            if with_gap:
+                new, marks = assemble.gap_edits(assemble.student_gaps(
+                    [{"id": a["id"], "段落": "T003", "slot": [a["start"], a["end"]]} for a in acts]), acts)
+            else:
+                new, marks = assemble.gap_edits(assemble.student_gaps(
+                    [{"id": a["id"], "段落": "T003", "slot": [a["start"], a["end"]]} for a in acts]), acts, teacher=[(3.0, 3.5)])
+            d = {"範圍": [0.0, 12.0], "動作": sorted(acts + new, key=lambda e: e["start"]), "刪除": [], "停格": [], "模糊": None,
+                 "標記": marks}
+            res = render.build_audio(w, Path(root) / "沒有影片.mp4", d, out, tag)
+            o, _ = sf.read(str(res["原聲"]), dtype="int16")
+            n, _ = sf.read(str(res["新聲音"]), dtype="int16")
+            recs = proclog.build_records(d, res["片段"])
+            chk = proclog.check_arrays(o.astype(np.float32) / 32768, n.astype(np.float32) / 32768, sr, recs)
+            return o, n, {"紀錄": recs, **chk}
+
+        s, e = int(3.0 * sr), int(3.5 * sr)
+        o, n, log = run("gap", True)
+        assert np.max(np.abs(n[s:e].astype(np.float32) / 32768)) < 0.02          # 空隙裡原片 0.3 的聲音一點都沒留
+        assert np.array_equal(n[:sr], o[:sr]) and np.array_equal(n[6 * sr:], o[6 * sr:])   # 段落外沒動
+        assert [r["類型"] for r in log["紀錄"]] == ["學員重念", assemble.GAP_KIND, "學員重念"]
+        assert log["未登記的變動"] == [], log["未登記的變動"]
+
+        o, n, log = run("keep", False)
+        assert np.array_equal(n[s:e], o[s:e])                                      # 老師的話：原片逐點保留
+        kinds = [(r["類型"], r["要人聽"]) for r in log["紀錄"]]
+        assert (assemble.GAP_KEEP_KIND, True) in kinds and assemble.GAP_KIND not in [k for k, _ in kinds]
+        assert log["未登記的變動"] == [], log["未登記的變動"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

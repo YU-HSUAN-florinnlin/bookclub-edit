@@ -175,6 +175,12 @@ def test_val_whitelist():
     assert safeview.val("聲線", "女3") == "女3"
     assert safeview.val("更新時間", "2026-10-02T18:00:00") == "2026-10-02T18:00:00"
     assert safeview.val("更新時間", "王大明") == "<文字 3 字>"
+    # 10-03 第八批補修 #102：學員段落空隙的新類型、欄位印得出來
+    assert safeview.val("類型", "學員空隙消音") == "學員空隙消音" and safeview.val("類型", "學員空隙保留原聲") == "學員空隙保留原聲"
+    assert safeview.val("鍵", "學員空隙消音@51.60") == "學員空隙消音@51.60"
+    assert safeview.val("id", "空隙:T003_01") == "空隙:T003_01" and safeview.val("前一格", "T003_01") == "T003_01"
+    assert safeview.val("保留原因", "老師的話") == "老師的話" and safeview.val("保留原因", "王大明") == "<文字 3 字>"
+    assert safeview.val("空隙秒", 0.4) == "0.4"
 
 
 def test_convert_matches_render_with_freeze():
