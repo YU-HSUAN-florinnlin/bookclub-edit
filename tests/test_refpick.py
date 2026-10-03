@@ -496,6 +496,130 @@ def test_groq_retry_on_flaky_network():
 
 
 
+def _rate_limit_error(retry_after: str | None):
+    import httpx
+    from groq import RateLimitError
+
+    req = httpx.Request("POST", "https://example.invalid/x")
+    headers = {"retry-after": retry_after} if retry_after else {}
+    return RateLimitError("額度用完", response=httpx.Response(429, request=req, headers=headers), body=None)
+
+
+def _always(exc, then=None, n_fail=10 ** 6):
+    state = {"n": 0}
+
+    def call():
+        state["n"] += 1
+        if state["n"] <= n_fail:
+            raise exc
+        return then
+    call.state = state
+    return call
+
+
+def test_groq_rate_limit_wait_is_capped_reported_and_stoppable():
+    """10-03 第九批（#17）：429 等待有上限、每分鐘印還要幾秒、等待中按停止有效（假的 sleep，不打 Groq）。"""
+    refpick._GROQ_BLOCKED_UNTIL = 0.0
+    slept, logs = [], []
+    # 等 150 秒後成功：切成 5 秒一段，紀錄看得到「在等 Groq 額度，還要 X」
+    r = refpick.groq_retry(_always(_rate_limit_error("150"), {"text": "好"}, n_fail=1),
+                           sleep=slept.append, log=logs.append, should_stop=lambda: False)
+    assert r == {"text": "好"} and sum(slept) == 150 and max(slept) <= refpick.GROQ_WAIT_SLICE_S
+    assert "在等 Groq 額度，還要 2 分鐘" in logs[0] or "在等 Groq 額度，還要 150 秒" in logs[0]
+    assert any("在等 Groq 額度，還要" in x for x in logs[1:])          # 等待中每分鐘再印一次
+    # 一直 429：累計超過上限就停，訊息寫額度用完、大概多久後再試
+    slept.clear(); logs.clear()
+    call = _always(_rate_limit_error("400"))
+    try:
+        refpick.groq_retry(call, sleep=slept.append, log=logs.append, max_rate_wait_s=1000)
+        raise AssertionError("超過上限應該停")
+    except refpick.GroqQuotaExhausted as e:
+        msg = str(e)
+        assert "額度用完" in msg and "7 分鐘" in msg and "已經等了 13 分鐘" in msg and "再按一次開始" in msg
+    assert sum(slept) == 800 and call.state["n"] == 3                   # 400＋400，第三次再等就超過 1000 秒
+    # 停下來之後，同一支程式再呼叫：不再等一輪，直接停（第 4 步一句一句檢查不會每句都等）
+    call2 = _always(_rate_limit_error("400"))
+    try:
+        refpick.groq_retry(call2, sleep=slept.append, log=logs.append)
+        raise AssertionError("應該直接停")
+    except refpick.GroqQuotaExhausted as e:
+        assert call2.state["n"] == 0 and "後再試" in str(e)
+    refpick._GROQ_BLOCKED_UNTIL = 0.0
+    # Groq 一開口就要等超過上限（每天額度用完）：一秒都不等
+    slept.clear()
+    try:
+        refpick.groq_retry(_always(_rate_limit_error("7200")), sleep=slept.append, log=logs.append)
+        raise AssertionError("應該停")
+    except refpick.GroqQuotaExhausted as e:
+        assert slept == [] and "2.0 小時" in str(e)
+    refpick._GROQ_BLOCKED_UNTIL = 0.0
+    # 等待中按停止：最多再等一小段（5 秒）就停
+    slept.clear()
+    flag = {"n": 0}
+
+    def stop_after_3():
+        flag["n"] += 1
+        return flag["n"] > 3
+
+    try:
+        refpick.groq_retry(_always(_rate_limit_error("600")), sleep=slept.append, log=logs.append, should_stop=stop_after_3)
+        raise AssertionError("按了停止應該停")
+    except refpick.GroqWaitStopped as e:
+        assert "按了停止" in str(e) and sum(slept) <= 3 * refpick.GROQ_WAIT_SLICE_S
+    # 第 4 步的做法：停止檢查自己丟例外（tts.StopRequested），原樣往外丟；用 set_groq_stop_check 設定
+    class Stop(Exception):
+        pass
+
+    def check():
+        raise Stop("按了停止")
+
+    refpick.set_groq_stop_check(check)
+    try:
+        try:
+            refpick.groq_retry(_always(_rate_limit_error("60")), sleep=slept.append, log=logs.append)
+            raise AssertionError("應該停")
+        except Stop:
+            pass
+    finally:
+        refpick.set_groq_stop_check(None)
+    # 斷線重試的等待也看停止
+    import httpx
+    from groq import APIConnectionError
+    try:
+        refpick.groq_retry(_always(APIConnectionError(request=httpx.Request("POST", "https://example.invalid/x"))),
+                           sleep=slept.append, log=logs.append, should_stop=lambda: len(slept) > 100)
+    except refpick.GroqWaitStopped:
+        pass
+    except APIConnectionError:
+        raise AssertionError("斷線等待中按停止應該停")
+    # 429 沒帶 retry-after：用預設秒數
+    assert refpick._retry_after_s(_rate_limit_error(None)) == refpick.GROQ_RETRY_DEFAULT_WAIT_S
+
+
+def test_run_part_sets_groq_stop_check():
+    """第 4 步的子程式：等 Groq 時看停止旗標（tts.check_stop），按了停止會丟 StopRequested。"""
+    import tempfile
+
+    from bookclub import execute, tts
+
+    w = Path(tempfile.mkdtemp())
+    try:
+        assert execute.run_part(w, "沒有這一步", log=lambda s: None) is None
+    except ValueError:
+        pass
+    try:
+        assert refpick._GROQ_STOP_CHECK is not None
+        refpick._GROQ_STOP_CHECK()                       # 沒按停止：不丟
+        execute.request_stop(w)
+        try:
+            refpick._GROQ_STOP_CHECK()
+            raise AssertionError("按了停止應該丟 StopRequested")
+        except tts.StopRequested:
+            pass
+    finally:
+        refpick.set_groq_stop_check(None)
+
+
 # ---------- 10-01：候選音檔改 48kHz、雙聲道平均 ----------
 
 import json

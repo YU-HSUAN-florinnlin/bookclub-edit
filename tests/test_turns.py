@@ -273,10 +273,10 @@ def _chunk_ids(prompt):
 def test_empty_chunk_is_retried_then_fails():
     """10-03 第八批（#4）：某一塊回 {"段落": []}（格式對、內容空）算失敗：重送一次成功時段落完整；兩次都空 → 丟例外。"""
     sents = [{"start": i * 2.0, "end": i * 2.0 + 1, "text": f"第{i}句"} for i in range(500)]
-    old_wait = turns.RETRY_WAIT_S
-    turns.RETRY_WAIT_S = 0
+    old_wait = turns.RETRY_WAITS_S
+    turns.RETRY_WAITS_S = (0, 0, 0)
     try:
-        for empty_times, ok in ((1, True), (2, False)):
+        for empty_times, ok in ((1, True), (4, False)):   # 10-03 第九批（#9）：重送 3 次（共送 4 次）都空才失敗
             seen = {}
 
             def fake_call(prompt, model):
@@ -297,7 +297,70 @@ def test_empty_chunk_is_retried_then_fails():
                 except ValueError as e:
                     assert "空" in str(e) and "200–419" in str(e)
     finally:
-        turns.RETRY_WAIT_S = old_wait
+        turns.RETRY_WAITS_S = old_wait
+
+
+def test_chunks_saved_and_only_failed_resent():
+    """10-03 第九批（#9）：每一塊成功就存檔；有一塊重送完還是失敗 → 其他塊照樣存、整份丟 TurnChunksFailed；
+    重跑只送沒成功的那一塊；整份成功後逐塊暫存清掉。重送照 RETRY_WAITS_S 漸進等待（假的 sleep）。"""
+    sents = [{"id": f"s{i}", "start": i * 2.0, "end": i * 2.0 + 1, "text": f"第{i}句"} for i in range(500)]
+    seen: dict = {}
+    bad = {"on": True}
+
+    def fake_call(prompt, model):
+        a, b = _chunk_ids(prompt)
+        seen[a] = seen.get(a, 0) + 1
+        if a == 200 and bad["on"]:
+            raise RuntimeError("claude -p 失敗：rate limit（假的）")
+        return json.dumps({"段落": [{"起": a, "迄": b, "說話者": "學員", "學員編號": "S1"}]})
+
+    slept: list = []
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        cdir = turns.text_chunks_dir(w)
+        try:
+            turns.text_turns(sents, "x", log=lambda *_: None, call=fake_call, cache_dir=cdir, sleep=slept.append)
+            raise AssertionError("第 2 塊一直失敗應該丟例外")
+        except turns.TurnChunksFailed as e:
+            assert "1／3 塊" in str(e) and "已存下" in str(e) and "rate limit" in str(e)
+        assert slept == list(turns.RETRY_WAITS_S) == [5, 20, 60]          # 漸進等待，不是 5 秒一次
+        assert seen == {0: 1, 200: 4, 400: 1}
+        assert sorted(f.name for f in cdir.iterdir()) == ["00000-00219.json", "00400-00499.json"]
+        saved = json.loads((cdir / "00000-00219.json").read_text(encoding="utf-8"))
+        assert saved["段落"][0]["學員編號"] == "S1" and saved["句數"] == 500 and len(saved["指紋"]) == 40
+        assert "第0句" not in json.dumps(saved, ensure_ascii=False).replace('"段落"', "")   # 不存原文，只存指紋
+        # 重跑：只送第 2 塊
+        seen.clear(); bad["on"] = False
+        logs: list = []
+        out = turns.get_text_turns(w, sents, model="x", log=logs.append, call=fake_call)
+        assert seen == {200: 1}
+        assert sum("沿用上次存下的結果" in x for x in logs) == 2
+        assert out["段落"][0]["學員編號"] == "C0-S1" and out["段落"][-1]["學員編號"] == "C2-S1"   # 前綴不會加兩次
+        assert turns.turn_gaps(out["段落"], 500) == []
+        assert not cdir.exists() and turns.text_turns_path(w).exists()      # 整份存好，逐塊暫存清掉
+        # 逐字稿改過（指紋不同）或模型不同：不沿用存下的塊
+        cdir.mkdir(parents=True)
+        bad["on"] = True
+        try:
+            turns.text_turns(sents, "x", log=lambda *_: None, call=fake_call, cache_dir=cdir, sleep=lambda s: None)
+        except turns.TurnChunksFailed:
+            pass
+        seen.clear(); bad["on"] = False
+        changed = [dict(x) for x in sents]
+        changed[5]["text"] = "改過的字"
+        turns.text_turns(changed, "x", log=lambda *_: None, call=fake_call, cache_dir=cdir)
+        assert seen == {0: 1, 200: 1}                                        # 第 1 塊改過重送，第 3 塊沿用
+        seen.clear()
+        turns.text_turns(sents, "另一個模型", log=lambda *_: None, call=fake_call, cache_dir=cdir)
+        assert seen == {0: 1, 200: 1, 400: 1}
+        # 存下的塊有缺口（例如手動改壞）：不沿用
+        f = cdir / "00400-00499.json"
+        bad_data = json.loads(f.read_text(encoding="utf-8"))
+        bad_data["段落"][0]["起"] = 410
+        f.write_text(json.dumps(bad_data, ensure_ascii=False), encoding="utf-8")
+        seen.clear()
+        turns.text_turns(sents, "另一個模型", log=lambda *_: None, call=fake_call, cache_dir=cdir)
+        assert seen == {400: 1}
 
 
 def test_stitch_gap_detected():

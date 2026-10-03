@@ -163,7 +163,7 @@ def test_empty_turns_reply_is_a_claude_failure():
             (refpick, "_transcribe_candidate_text", lambda client, wav, data=None: "假的逐字稿初稿"),
             (refpick, "GROQ_CALL_INTERVAL_S", 0.0),
             (turns_mod, "call_claude", empty_claude),
-            (turns_mod, "RETRY_WAIT_S", 0),
+            (turns_mod, "RETRY_WAITS_S", (0, 0, 0)),
             (students, "estimate_pitches", lambda *a, **k: None),
             (roomtone, "ensure_info", lambda *a, **k: None),
         ]

@@ -209,6 +209,47 @@ def test_fourth_batch_1002():
             assert "種子" not in code, line.strip()
 
 
+def test_poll_failure_shows_conn_banner_after_repeated_failures():
+    """10-03 第九批（#24）：輪詢連續連不上才出「連不上伺服器」橫幅，一次失敗不跳；成功一次就收掉；
+    伺服器有回應只是回錯誤不算。兩個輪詢（第 1 步、第 4 步）都接上。用 node 跑真的函式，假的 document。"""
+    import shutil
+    import subprocess
+
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert app.count("pollFailed(e);") == 2 and app.count("pollOk();") == 2
+    assert "連不上伺服器，可能已經關掉了；請回終端機看，或重新雙擊啟動" in app
+    assert "/* 輪詢失敗，下一次再試 */ }" not in app and "// 輪詢失敗不中斷，下一次再試\n" not in app   # 不再靜默吞掉
+    node = shutil.which("node")
+    if not node:
+        return
+    block = app[app.index("const CONN_FAIL_LIMIT"):app.index("function esc(s)")]
+    fake_dom = """
+const nodes = {};
+function mk(id) { return { id, hidden: true, className: "", innerHTML: "", parentNode: null,
+  setAttribute() {}, nextSibling: null }; }
+nodes.saveError = mk("saveError");
+const body = { firstChild: null, insertBefore(el) { nodes[el.id] = el; } };
+nodes.saveError.parentNode = body;
+const document = { body, getElementById: (id) => nodes[id] || null, createElement: () => mk("") };
+"""
+    script = fake_dom + block + """
+const net = Object.assign(new Error("x"), { network: true });
+const out = [];
+const shown = () => !!(document.getElementById("connLost") && !document.getElementById("connLost").hidden);
+pollFailed(net); out.push(shown());
+pollFailed(net); out.push(shown());
+pollFailed(new Error("500")); out.push(shown());   // 伺服器回錯誤：不算
+pollFailed(net); out.push(shown());
+pollFailed(net); out.push(shown());
+pollOk(); out.push(shown());
+pollFailed(net); out.push(shown());
+console.log(JSON.stringify(out), document.getElementById("connLost").innerHTML.includes("重新雙擊啟動"));
+"""
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "[false,false,false,true,true,false,false] true", r.stdout
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

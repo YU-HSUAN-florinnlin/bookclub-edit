@@ -44,6 +44,11 @@ def text_turns_path(workdir: Path) -> Path:
     return workdir / "校對" / "段落_文字.json"
 
 
+def text_chunks_dir(workdir: Path) -> Path:
+    """10-03 第九批（#9）：段落分析逐塊的暫存（每一塊成功就存一個檔），整份做完就清掉。"""
+    return workdir / "校對" / "段落_文字_分塊"
+
+
 # ---------- 文字判斷（Claude） ----------
 
 PROMPT = """你在協助剪輯一支讀書會的錄影。老師帶領，學員輪流分享或提問；通常是老師講一段、學員講一段，可能來回幾次，老師再點下一位學員，或下一位學員自己接話。
@@ -138,7 +143,9 @@ def stitch_chunks(chunks: list[list[dict]]) -> list[dict]:
     return all_turns
 
 
-RETRY_WAIT_S = 5   # 某一塊沒成功時，等幾秒再重送（測試改成 0）
+# 10-03 第九批（#9）：某一塊沒成功（格式壞掉、回空、claude -p 出錯或逾時，多半是同時送太多被限流）時，
+# 照這個間隔重送：以前只等 5 秒重送一次，兩小時影片 8 塊同時送被限流，整份作廢。全部試完約 1.5 分鐘還不行才算失敗。
+RETRY_WAITS_S = (5, 20, 60)   # 測試改成 (0, 0, 0)
 
 
 def _span_time(sentences: list[dict], a: int, b: int) -> str:
@@ -180,43 +187,115 @@ def check_turns_cover(turns: list[dict], sentences: list[dict]) -> None:
         raise ValueError(f"段落分析有缺口：{where}{more} 不屬於任何段落")
 
 
+class TurnChunksFailed(ValueError):
+    """段落分析有幾塊重送完還是沒成功（成功的那幾塊已經存下來，重跑只送沒成功的）。"""
+
+
+def _chunk_fingerprint(lines: str) -> str:
+    """這一塊要送的逐字稿的指紋（sha1）：逐字稿改過（重新轉文字）就對不上，不沿用舊的那一塊。檔案裡不存原文。"""
+    import hashlib
+
+    return hashlib.sha1(lines.encode("utf-8")).hexdigest()
+
+
+def _chunk_file(cache_dir: Path, start: int, end: int) -> Path:
+    return Path(cache_dir) / f"{start:05d}-{end - 1:05d}.json"
+
+
+def _chunk_ok(chunk: list[dict], start: int, end: int) -> bool:
+    """這一塊的段落有東西、而且蓋到這一塊的頭尾（第八批 #4 的規則）。"""
+    return bool(chunk) and chunk[0].get("起") == start and chunk[-1].get("迄") == end - 1
+
+
+def _load_chunk(cache_dir: Path | None, start: int, end: int, n: int, model: str, fp: str) -> list[dict] | None:
+    """存下來的這一塊：行號範圍、總句數、模型、指紋都對得上，而且沒有缺口才沿用；不然回 None（重新送）。"""
+    if cache_dir is None:
+        return None
+    try:
+        data = wd.read_json(_chunk_file(cache_dir, start, end))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if (data.get("起"), data.get("迄"), data.get("句數"), data.get("模型"), data.get("指紋")) != (start, end - 1, n, model, fp):
+        return None
+    chunk = data.get("段落")
+    return [dict(t) for t in chunk] if isinstance(chunk, list) and _chunk_ok(chunk, start, end) else None
+
+
 def text_turns(sentences: list[dict], model: str, log=print, workers: int = PARALLEL_CALLS,
-               call=None) -> list[dict]:
-    """整支逐字稿分塊交給 Claude，**同時送出**（預設 4 塊一起），全部回來再依順序接起來。
+               call=None, cache_dir: str | Path | None = None, sleep=None) -> list[dict]:
+    """整支逐字稿分塊交給 Claude，**同時送出**（預設 8 塊一起），全部回來再依順序接起來。
 
     每一塊各自獨立判斷，所以可以平行；訂閱方案限制同時呼叫數時會自動排隊，最慢就是一塊一塊跑。
     學員編號加上塊的前綴（C0-S1），跨塊的同一人交給聲紋判斷。call 可以換成假的（測試用）。
+
+    10-03 第九批（#9）：
+    - 某一塊沒成功就照 `RETRY_WAITS_S`（5、20、60 秒）等一下再送，全部試完還不行，這一塊才算失敗
+    - 給了 cache_dir：每一塊成功就存一個檔；下次重跑，存下來而且對得上的塊直接沿用，只送沒成功的
+    - 有塊失敗時，其他塊照樣跑完、存檔，最後丟 `TurnChunksFailed`，寫幾塊沒成功、第一個原因
     """
     from concurrent.futures import ThreadPoolExecutor
 
     call = call or call_claude
+    sleep = sleep or time.sleep
     ranges = chunk_ranges(len(sentences))
+    n = len(sentences)
+    cache = Path(cache_dir) if cache_dir is not None else None
 
     def one(k: int) -> list[dict]:
         start, end = ranges[k]
         t0 = time.time()
-        for attempt in (1, 2):   # Claude 偶爾回傳格式壞掉的 JSON、或同時送太多被拒，重送一次
-            try:
-                raw = parse_json(call(PROMPT + "\n逐字稿：\n" + format_lines(sentences[start:end], start), model))
-                raw_turns = raw.get("段落", []) if isinstance(raw, dict) else []
-                chunk = normalize_turns(raw_turns if isinstance(raw_turns, list) else [], start, end - 1)
-                # 10-03 第八批（#4）：格式對、內容空（或沒蓋到這一塊頭尾）也算這一塊失敗，跟格式壞掉一樣重送
-                if not chunk or chunk[0]["起"] != start or chunk[-1]["迄"] != end - 1:
-                    raise ValueError(f"Claude 回的段落是空的（第 {k + 1} 塊，{start}–{end - 1} 行，"
-                                     f"原片 {_span_time(sentences, start, end - 1)}）")
-                break
-            except (ValueError, RuntimeError, subprocess.TimeoutExpired):
-                if attempt == 2:
-                    raise
-                time.sleep(RETRY_WAIT_S)
+        lines = format_lines(sentences[start:end], start)
+        fp = _chunk_fingerprint(lines)
+        chunk = _load_chunk(cache, start, end, n, model, fp)
+        if chunk is not None:
+            log(f"[段落] 第 {k + 1}／{len(ranges)} 塊（{start}–{end - 1} 行）：沿用上次存下的結果，{len(chunk)} 段")
+        else:
+            tries = len(RETRY_WAITS_S) + 1
+            for attempt in range(1, tries + 1):
+                try:
+                    raw = parse_json(call(PROMPT + "\n逐字稿：\n" + lines, model))
+                    raw_turns = raw.get("段落", []) if isinstance(raw, dict) else []
+                    chunk = normalize_turns(raw_turns if isinstance(raw_turns, list) else [], start, end - 1)
+                    # 10-03 第八批（#4）：格式對、內容空（或沒蓋到這一塊頭尾）也算這一塊失敗，跟格式壞掉一樣重送
+                    if not _chunk_ok(chunk, start, end):
+                        raise ValueError(f"Claude 回的段落是空的（第 {k + 1} 塊，{start}–{end - 1} 行，"
+                                         f"原片 {_span_time(sentences, start, end - 1)}）")
+                    break
+                except (ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                    if attempt == tries:
+                        raise
+                    wait_s = RETRY_WAITS_S[attempt - 1]
+                    log(f"⚠️ [段落] 第 {k + 1}／{len(ranges)} 塊沒成功（{type(exc).__name__}），"
+                        f"{wait_s} 秒後重送（第 {attempt}／{len(RETRY_WAITS_S)} 次重送）")
+                    sleep(wait_s)
+            if cache is not None:
+                wd.write_json(_chunk_file(cache, start, end),
+                              {"起": start, "迄": end - 1, "句數": n, "模型": model, "指紋": fp,
+                               "秒": round(time.time() - t0), "段落": chunk})
+            log(f"[段落] 第 {k + 1}／{len(ranges)} 塊（{start}–{end - 1} 行）：{len(chunk)} 段，{time.time() - t0:.0f} 秒")
         for t in chunk:
             if t.get("學員編號"):
                 t["學員編號"] = f"C{k}-{t['學員編號']}"
-        log(f"[段落] 第 {k + 1}／{len(ranges)} 塊（{start}–{end - 1} 行）：{len(chunk)} 段，{time.time() - t0:.0f} 秒")
         return chunk
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        chunks = list(pool.map(one, range(len(ranges))))
+        futures = [pool.submit(one, k) for k in range(len(ranges))]
+    chunks, failed = [], []
+    for k, f in enumerate(futures):
+        exc = f.exception()
+        if exc is None:
+            chunks.append(f.result())
+        elif isinstance(exc, (ValueError, RuntimeError, subprocess.TimeoutExpired)):
+            failed.append((k, exc))
+        else:
+            raise exc
+    if failed:
+        k0, e0 = failed[0]
+        saved = f"，成功的 {len(ranges) - len(failed)} 塊已存下，重跑只送沒成功的" if cache is not None else ""
+        raise TurnChunksFailed(f"{len(failed)}／{len(ranges)} 塊重送 {len(RETRY_WAITS_S)} 次還是沒成功{saved}。"
+                               f"第一個原因：{e0}") from e0
     out = stitch_chunks(chunks)
     check_turns_cover(out, sentences)
     return out
@@ -245,12 +324,28 @@ def get_text_turns(workdir: str | Path, sentences: list[dict], *, model: str | N
         model = load_settings().claude_models.turns
     log(f"[段落] {len(sentences)} 句，交給 Claude（{model}）只看文字切段落...")
     t0 = time.time()
-    raw = text_turns(sentences, model, log, call=call)
+    chunks_dir = text_chunks_dir(workdir)
+    raw = text_turns(sentences, model, log, call=call, cache_dir=chunks_dir)
     for t in raw:
         t["句子"] = [s["id"] for s in sentences[t["起"]:t["迄"] + 1]]
     data = {"段落": raw, "句數": len(sentences), "模型": model, "文字判斷秒": round(time.time() - t0)}
     wd.write_json(path, data)
+    _clear_chunks(chunks_dir)
     return data
+
+
+def _clear_chunks(chunks_dir: Path) -> None:
+    """整份存好之後，清掉逐塊的暫存（只清這個資料夾裡 text_turns 寫的 `NNNNN-NNNNN.json`，別的檔不動）。
+    清掉是為了「想讓 Claude 重判就把 段落_文字.json 改名」照舊有效，不會撿回舊的塊。"""
+    if not chunks_dir.is_dir():
+        return
+    for f in chunks_dir.iterdir():
+        if re.fullmatch(r"\d{5}-\d{5}\.json", f.name):
+            f.unlink(missing_ok=True)
+    try:
+        chunks_dir.rmdir()
+    except OSError:
+        pass   # 裡面還有別的檔：留著
 
 
 # ---------- 文字修正聲紋判斷（09-25 宇軒：冥想引導、導讀整段算老師） ----------

@@ -28,7 +28,14 @@ let statusPollTimer = null;
 // ---------------------------------------------------------------------------
 
 async function apiGet(path) {
-  const res = await fetch(path);
+  let res;
+  try {
+    res = await fetch(path);
+  } catch (e) {
+    const err = new Error("連不上網頁伺服器（可能被關掉了）");
+    err.network = true;   // 10-03 第九批（#24）：輪詢分得出「伺服器沒了」跟「伺服器回錯誤」
+    throw err;
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `${path} 失敗（${res.status}）`);
   return data;
@@ -75,6 +82,42 @@ window.addEventListener("unhandledrejection", (e) => {
   if (err.shown) return;
   showSaveError(err.message || String(err));
 });
+
+// 10-03 第九批（#24）：輪詢（第 1 步分析、第 4 步執行，每 2 秒一次）連續失敗＝伺服器多半已經關掉，
+// 畫面最上面出現橫幅；以前完全靜默，畫面一直停在「執行中…」。偶爾失敗一次不跳（例如伺服器忙），
+// 連續 CONN_FAIL_LIMIT 次（約 6 秒）連不上才跳；下一次輪詢成功就自動收掉。
+// 只算「連不上」（fetch 本身失敗）；伺服器有回應、只是回錯誤（例如 500）不算。
+const CONN_FAIL_LIMIT = 3;
+let connFails = 0;
+
+function connBanner() {
+  let el = document.getElementById("connLost");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "connLost";
+    el.className = "save-error conn-lost";
+    el.setAttribute("role", "alert");
+    el.hidden = true;
+    el.innerHTML = "<b>連不上伺服器，可能已經關掉了；請回終端機看，或重新雙擊啟動。</b>"
+      + ' <span class="why">伺服器回來之後，這一條會自己消失。</span>';
+    const anchor = document.getElementById("saveError");
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(el, anchor.nextSibling);
+    else document.body.insertBefore(el, document.body.firstChild);
+  }
+  return el;
+}
+
+function pollOk() {
+  connFails = 0;
+  const el = document.getElementById("connLost");
+  if (el) el.hidden = true;
+}
+
+function pollFailed(e) {
+  if (!e || !e.network) return;   // 伺服器還在、只是回錯誤：不算斷線
+  connFails += 1;
+  if (connFails >= CONN_FAIL_LIMIT) connBanner().hidden = false;
+}
 
 function esc(s) {
   const d = document.createElement("div");
@@ -554,6 +597,7 @@ function startExecPoll() {
     if (currentRouteId() !== "step4") { clearInterval(execPollTimer); execPollTimer = null; return; }
     try {
       const d = await apiGet("/api/execute");
+      pollOk();
       const el = document.getElementById("execLog");
       if (el) { el.textContent = (d.messages || []).join("\n") || "（還沒有訊息）"; el.scrollTop = el.scrollHeight; }
       const st = document.getElementById("execStats");
@@ -563,7 +607,7 @@ function startExecPoll() {
       const eta = document.getElementById("execEta");
       if (eta) eta.textContent = execEtaText(d);
       if (!d.running) { clearInterval(execPollTimer); execPollTimer = null; await renderExecuteBody(); }
-    } catch (e) { /* 輪詢失敗，下一次再試 */ }
+    } catch (e) { pollFailed(e); /* 輪詢失敗，下一次再試；連續幾次連不上就出橫幅 */ }
   }, 2000);
 }
 
@@ -831,6 +875,7 @@ function startStatusPoll() {
     }
     try {
       const status = await apiGet("/api/run/status");
+      pollOk();
       const logEl = document.getElementById("runLog");
       if (logEl) logEl.textContent = (status.messages || []).join("\n") || "（還沒有訊息）";
       if (!status.running) {
@@ -839,7 +884,7 @@ function startStatusPoll() {
         await renderSidebar();
       }
     } catch (e) {
-      // 輪詢失敗不中斷，下一次再試
+      pollFailed(e);   // 輪詢失敗不中斷，下一次再試；連續幾次連不上就出橫幅（#24）
     }
   }, 2000);
 }
