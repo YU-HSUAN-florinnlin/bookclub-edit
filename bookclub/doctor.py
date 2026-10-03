@@ -39,6 +39,7 @@ from bookclub.models import (
     PYANNOTE_CONFIG_FILENAME,
     PYANNOTE_REPOS,
     _hf_cached,
+    hf_cli_display,
 )
 
 
@@ -55,6 +56,14 @@ class Check:
             return f"✅ {self.name}：{self.detail}"
         arrow = f" → 修法：{self.fix}" if self.fix else ""
         return f"❌ {self.name}：{self.detail}{arrow}"
+
+
+def tool_version() -> str:
+    """工具版本（跟 bookclub/__init__.py 的 __version__ 一致）。10-03 第九批 #25：夥伴回報問題時先看這一行，
+    才知道他手上是哪一版。"""
+    from bookclub import __version__
+
+    return __version__
 
 
 # ── 系統資訊（純顯示，不影響總結）────────────────────────────
@@ -265,7 +274,7 @@ def check_hf_login() -> Check:
         "Hugging Face 登入", False, "無",
         "① 登入 huggingface.co（沒帳號先免費註冊）② 打開 "
         "huggingface.co/pyannote/segmentation-3.0 與 .../pyannote/speaker-diarization-3.1 各按一次同意 "
-        "③ Settings → Access Tokens 建一把 Read 金鑰，終端機執行 .venv/bin/hf auth login 貼上（金鑰不要貼給 AI）",
+        f"③ Settings → Access Tokens 建一把 Read 金鑰，終端機執行 {hf_cli_display()} auth login 貼上（金鑰不要貼給 AI）",
         required=False,
     )
 
@@ -431,9 +440,24 @@ SMOKE_SCRIPTS = [
 ]
 
 
-def _ensure_samples() -> bool:
+def samples_ready() -> bool:
     out_dir = repo_root() / "tests" / "smoke" / "out"
-    if (out_dir / "one.wav").is_file() and (out_dir / "two.wav").is_file():
+    return (out_dir / "one.wav").is_file() and (out_dir / "two.wav").is_file()
+
+
+def can_make_samples(system: str | None = None) -> bool:
+    """測試音檔要用 macOS 內建的 say 產生（10-03 第九批 #32）。Linux／WSL2 沒有 say。"""
+    system = system or platform.system()
+    return system == "Darwin" and shutil.which("say") is not None
+
+
+SMOKE_MAC_ONLY = ("--smoke 這一項只在 Mac 上跑，這次跳過（不算失敗）：測試用的假錄音要用 macOS 內建的 say 產生，"
+                  "{system} 上沒有。要在這台試跑的話，從跑過 --smoke 的 Mac 把 tests/smoke/out/ 裡的 one.wav、two.wav "
+                  "複製到這台工具資料夾的 tests/smoke/out/，再跑一次 bookclub doctor --smoke。")
+
+
+def _ensure_samples() -> bool:
+    if samples_ready():
         return True
     print("找不到測試用音檔，先產生（tests/smoke/make_sample.py，用 macOS 內建的 say）...")
     script = repo_root() / "tests" / "smoke" / "make_sample.py"
@@ -443,6 +467,10 @@ def _ensure_samples() -> bool:
 
 def run_smoke() -> dict:
     print()
+    if not samples_ready() and not can_make_samples():
+        # 10-03 第九批 #32：以前在 Linux／WSL2 一定失敗（找不到 say），改成講清楚、跳過
+        print(SMOKE_MAC_ONLY.format(system=platform.system() or "這個系統"))
+        return {"ok": None, "skipped": "只在 Mac 上跑（沒有測試音檔、也沒有 say 可以產生）"}
     print("開始跑試跑腳本（--smoke）：會實際載入三個模型、各處理一小段測試音檔，需要幾分鐘。")
     if not _ensure_samples():
         print("⚠️ 測試音檔產生失敗，略過 --smoke")
@@ -520,7 +548,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--claude", action="store_true", help="額外實際呼叫一次 claude -p 測試有沒有反應")
     args = parser.parse_args(argv)
 
-    print(f"bookclub doctor — {datetime.now().astimezone().isoformat(timespec='seconds')}")
+    print(f"bookclub doctor — 工具版本 {tool_version()} — {datetime.now().astimezone().isoformat(timespec='seconds')}")
     print()
     checks = run_checks(include_claude_call=args.claude)
     ok = print_report(checks)

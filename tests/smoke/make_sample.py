@@ -107,6 +107,12 @@ def make_two() -> Path:
 
 
 def main() -> int:
+    import shutil
+
+    if shutil.which("say") is None:   # 10-03 第九批 #32：Linux／WSL2 沒有 say，講清楚而不是丟一串錯誤
+        print("這台沒有 macOS 內建的 say 指令，產生不了測試音檔（這支只在 Mac 上跑）。"
+              "可以從 Mac 把 tests/smoke/out/ 裡的 one.wav、two.wav 複製過來。", file=sys.stderr)
+        return 1
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     try:
         make_one()

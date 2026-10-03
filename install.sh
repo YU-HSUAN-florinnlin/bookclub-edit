@@ -386,21 +386,27 @@ echo "資料夾就緒：$DATA_DIR"
 # ── [10/11] Claude Code skill 捷徑 ────────────────────────────
 step "建立 Claude Code skill 捷徑"
 
+# 10-03 第九批 #31：以前只有 ~/.claude/skills 已經存在才建，但裝好 Claude Code 不一定會有 skills 這一層。
+# 改成：有 ~/.claude（裝過、開過 Claude Code）就先建 skills 資料夾再建捷徑；連 ~/.claude 都沒有
+# （還沒裝 Claude Code）維持不建，印出之後怎麼補建。
+SKILL_LINK="$HOME/.claude/skills/bookclub-edit"
+SKILL_SRC="$SCRIPT_DIR/skills/bookclub-edit"
 if [ "$NO_SKILL" = "1" ]; then
   echo "已加 --no-skill，跳過"
-elif [ -d "$HOME/.claude/skills" ]; then
-  SKILL_LINK="$HOME/.claude/skills/bookclub-edit"
-  SKILL_SRC="$SCRIPT_DIR/skills/bookclub-edit"
+elif [ -d "$HOME/.claude" ]; then
+  mkdir -p "$HOME/.claude/skills"
   if [ -L "$SKILL_LINK" ] && [ "$(readlink "$SKILL_LINK")" = "$SKILL_SRC" ]; then
     echo "捷徑已存在，跳過"
-  elif [ -e "$SKILL_LINK" ]; then
+  elif [ -e "$SKILL_LINK" ] || [ -L "$SKILL_LINK" ]; then
     echo "⚠️ $SKILL_LINK 已經存在，但不是指到這個倉庫，跳過建立（請自行確認後處理）"
   else
     ln -s "$SKILL_SRC" "$SKILL_LINK"
     echo "已建立：$SKILL_LINK -> $SKILL_SRC"
   fi
 else
-  echo "沒有找到 ~/.claude/skills，跳過（可能還沒安裝 Claude Code，或裝在別的地方）"
+  echo "沒有找到 ~/.claude，先跳過（多半是還沒安裝、或還沒開過 Claude Code）。"
+  echo "裝好並開過一次 Claude Code 之後，在終端機執行下面這行補建捷徑："
+  echo "  mkdir -p ~/.claude/skills && ln -s \"$SKILL_SRC\" ~/.claude/skills/bookclub-edit"
 fi
 
 # ── [11/11] 環境健檢 ───────────────────────────────────────────

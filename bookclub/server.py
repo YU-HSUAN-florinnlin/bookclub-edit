@@ -119,9 +119,21 @@ def safe_join(base: Path, relative: str) -> Path:
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi")
 
 
-GROQ_KEY_MISSING = ("這個網頁伺服器讀不到 Groq 金鑰，沒辦法轉文字。macOS：金鑰設在 ~/.zshrc，要雙擊「啟動.command」"
-                    "或在終端機（zsh）執行 .venv/bin/bookclub serve；WSL2：金鑰要寫在 ~/.profile（寫在 ~/.bashrc 讀不到），"
-                    "開新的終端機再啟動")
+def groq_key_missing_message(system: str | None = None) -> str:
+    """讀不到 Groq 金鑰時給人看的話，依平台只講適用的那一種（10-03 第九批 #29：以前 Linux／WSL2 也叫人
+    「雙擊啟動.command」）。金鑰檔跟 doctor.key_file() 同一個：macOS ~/.zshrc、Linux／WSL2 ~/.profile。"""
+    import platform
+
+    system = system or platform.system()
+    head = "這個網頁伺服器讀不到 Groq 金鑰，沒辦法轉文字。"
+    if system == "Darwin":
+        return (head + "金鑰設在 ~/.zshrc：關掉這個伺服器，改用雙擊「啟動.command」重開，"
+                "或在終端機（zsh）進工具資料夾執行 .venv/bin/bookclub serve")
+    return (head + "金鑰要寫在 ~/.profile（寫在 ~/.bashrc 讀不到）：加一行 export GROQ_API_KEY=你的金鑰，"
+            "關掉這個伺服器（終端機按 Ctrl+C），開一個新的終端機視窗，進工具資料夾再執行 .venv/bin/bookclub serve")
+
+
+GROQ_KEY_MISSING = groq_key_missing_message()
 
 
 def groq_key_ready() -> bool:
@@ -1337,13 +1349,82 @@ class Handler(BaseHTTPRequestHandler):
 # 對外入口
 # ---------------------------------------------------------------------------
 
+def _is_wsl() -> bool:
+    from bookclub.system_info import is_wsl, read_system_file
+
+    return is_wsl(read_system_file("/proc/version"))
+
+
+def browser_plan(system: str | None = None, wsl: bool | None = None, env: dict | None = None) -> str:
+    """啟動後要不要自動開瀏覽器（10-03 第九批 #29）。回傳：
+    - "open"：macOS，或有桌面的 Linux（有 DISPLAY／WAYLAND_DISPLAY）→ 試著開
+    - "wsl"：WSL2 → 不試，印「請在 Windows 的瀏覽器開…」（WSL2 裡試著開會默默失敗，
+      或叫出終端機文字瀏覽器把畫面卡住）
+    - "manual"：沒有桌面的 Linux → 不試，印網址請人自己開"""
+    import os
+    import platform
+
+    system = system or platform.system()
+    if system == "Darwin":
+        return "open"
+    if wsl is None:
+        wsl = system == "Linux" and _is_wsl()
+    if wsl:
+        return "wsl"
+    env = os.environ if env is None else env
+    if env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"):
+        return "open"
+    return "manual"
+
+
+def browser_url(port: int, plan: str) -> str:
+    """給人開的網址。WSL2 要從 Windows 的瀏覽器開，寫 localhost（Windows 會轉進 WSL2）。"""
+    return f"http://localhost:{port}/" if plan == "wsl" else f"http://127.0.0.1:{port}/"
+
+
+def open_browser_hint(port: int, plan: str) -> str:
+    url = browser_url(port, plan)
+    if plan == "wsl":
+        return f"[網頁伺服器] 這是 WSL2，不會自動開瀏覽器：請在 Windows 的瀏覽器（Edge 或 Chrome）開 {url}"
+    return f"[網頁伺服器] 請在瀏覽器開 {url}"
+
+
+def _bookclub_already_running(port: int, timeout: float = 2.0) -> bool:
+    """這個埠上跑的是不是讀書會剪輯工具（問 /api/projects，看回答裡有沒有這個工具才有的欄位）。"""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/projects", timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return isinstance(data, dict) and "轉文字金鑰" in data
+    except Exception:
+        return False
+
+
+def port_in_use_message(port: int, ours: bool, plan: str) -> str:
+    """埠被占用時給人看的話（10-03 第九批 #30：以前印一大段 Python 錯誤）。"""
+    url = browser_url(port, plan)
+    if ours:
+        close = "要關掉舊的：到開著它的那個終端機視窗按 Ctrl+C（或直接關掉那個視窗）。"
+        return (f"[網頁伺服器] 讀書會剪輯工具已經開著了（{port} 埠有它在跑，多半是之前開過、或連點了兩次），"
+                f"這次不用再開一個。\n[網頁伺服器] 直接在瀏覽器開 {url} 就好。{close}")
+    find = f"lsof -i :{port}" if sys.platform == "darwin" else f"ss -ltnp | grep :{port}"
+    return (f"[網頁伺服器] {port} 埠被占用了，這次沒有啟動。多半是之前開的讀書會剪輯工具還沒關（或卡住了）："
+            f"找到開著它的終端機視窗按 Ctrl+C；找不到的話，終端機執行 {find} 看是哪個程式在用。\n"
+            f"[網頁伺服器] 也可以改用別的埠：.venv/bin/bookclub serve --port {port + 1}"
+            f"（之後一直用的話，改 settings.toml 裡 [server] 的 port）。")
+
+
 def serve(
     workdir: str | Path | None = None,
     video: str | Path | None = None,
     port: int | None = None,
     open_browser: bool = True,
-) -> None:
-    """不帶工作區：網頁總覽選影片或切換已有的專案（09-26）。帶工作區：舊用法，直接開那一個。"""
+) -> int:
+    """不帶工作區：網頁總覽選影片或切換已有的專案（09-26）。帶工作區：舊用法，直接開那一個。
+    回傳結束代碼：正常結束 0；埠被別的程式占用 1（10-03 第九批 #30）。"""
+    import errno
+
     if workdir:
         workdir = Path(workdir).expanduser()
         workdir.mkdir(parents=True, exist_ok=True)
@@ -1355,12 +1436,26 @@ def serve(
             video = (read_json(analysis_result_path(workdir), default={}) or {}).get("video")
             print(f"[網頁伺服器] 接回上次的專案：{workdir.name}")
 
-    httpd = BookclubServer(
-        ("127.0.0.1", port), Handler,
-        workdir=workdir or None, video=Path(video).expanduser() if video else None,
-    )
-    _mark_interrupted(workdir or None)   # 09-30：上次跑到一半伺服器被關掉，進度改「中斷」
-    url = f"http://127.0.0.1:{port}/"
+    plan = browser_plan()
+    try:
+        httpd = BookclubServer(
+            ("127.0.0.1", port), Handler,
+            workdir=workdir or None, video=Path(video).expanduser() if video else None,
+        )
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        # 10-03 第九批 #30：埠被占用（多半是連點兩次啟動）。不印 Python 錯誤，說人話；
+        # 已經開著的是這個工具的話，Mac 上直接幫忙打開瀏覽器到舊的那一個。
+        ours = _bookclub_already_running(port)
+        print(port_in_use_message(port, ours, plan))
+        if ours and open_browser and plan == "open":
+            with contextlib.suppress(Exception):
+                if webbrowser.open(browser_url(port, plan)):
+                    print("[網頁伺服器] 已經幫你在瀏覽器打開舊的那一個。")
+        return 0 if ours else 1
+    _mark_interrupted(workdir or None)   # 09-30：上次跑到一半伺服器被關掉，進度改「中斷」（要在確定埠拿到之後）
+    url = browser_url(port, plan)
     print(f"[網頁伺服器] 網址：{url}")
     print(f"[網頁伺服器] 工作區：{workdir or '（還沒選，到網頁總覽選影片）'}")
     if not groq_key_ready():
@@ -1368,7 +1463,18 @@ def serve(
     print("[網頁伺服器] Ctrl+C 結束")
 
     if open_browser:
-        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+        if plan == "open":
+            def _open() -> None:
+                try:
+                    opened = webbrowser.open(url)
+                except Exception:
+                    opened = False
+                if not opened:
+                    print(open_browser_hint(port, "manual"))
+
+            threading.Timer(0.4, _open).start()
+        else:
+            print(open_browser_hint(port, plan))
 
     try:
         httpd.serve_forever()
@@ -1377,3 +1483,4 @@ def serve(
     finally:
         httpd.server_close()
         print("\n[網頁伺服器] 已結束")
+    return 0
