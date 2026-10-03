@@ -42,6 +42,9 @@ PAUSE_CONTEXT_S = 1.0     # 算「安靜」門檻用的上下文範圍（比搜�
 PAUSE_DB_DROP = 20.0      # 音框音量比上下文裡最大聲的地方低這麼多 dB，算安靜
 DEFAULT_BUFFER_S = 0.05   # 切點確定是乾淨停頓時，建議的前後緩衝
 CANDIDATE_CLIP_PAD_S = 2.0  # 候選小段音檔，名字前後各留幾秒
+# 10-04 #105：一個字的時間被拉長（轉文字時字橫跨被挖掉的靜音，第一堂 43:06.9 一個字 2.2 秒）→ 名字範圍照聲音縮短
+STRETCHED_CHAR_S = 0.5    # 名字平均一個字超過這麼長，才去看聲音（正常一個字 0.2–0.4 秒）
+TRIM_PAUSE_S = 0.3        # 名字範圍裡安靜這麼久以上，算真的停頓（範圍在這裡分段，挑真的有名字的那段）
 
 
 def _syllable_parts(ch: str):
@@ -268,6 +271,61 @@ def _refine_cut(audio: np.ndarray, sr: int, target_t: float, lo_t: float, hi_t: 
     return idx / sr, clean
 
 
+def _voiced_islands(audio: np.ndarray, sr: int, a: float, b: float) -> list[tuple[float, float]]:
+    """[a, b] 裡有聲音的幾段（純函式）：安靜門檻跟 `_find_pause_point` 一樣（比前後 1 秒上下文最大聲的地方低
+    PAUSE_DB_DROP dB），安靜連續 TRIM_PAUSE_S 秒以上才算分段；頭尾的安靜不算在任何一段裡。"""
+    fr = max(1, int(PAUSE_FRAME_S * sr))
+    lo, hi = max(0, int(a * sr)), min(len(audio), int(b * sr))
+    c0, c1 = max(0, int((a - PAUSE_CONTEXT_S) * sr)), min(len(audio), int((b + PAUSE_CONTEXT_S) * sr))
+    n, n_ctx = (hi - lo) // fr, (c1 - c0) // fr
+    if n == 0 or n_ctx == 0:
+        return []
+    ctx = audio[c0:c0 + n_ctx * fr].reshape(n_ctx, fr)
+    thr = float(np.percentile(20 * np.log10(np.sqrt((ctx ** 2).mean(1) + 1e-12)), 90)) - PAUSE_DB_DROP
+    seg = audio[lo:lo + n * fr].reshape(n, fr)
+    loud = 20 * np.log10(np.sqrt((seg ** 2).mean(1) + 1e-12)) > thr
+    min_quiet = max(1, int(round(TRIM_PAUSE_S / PAUSE_FRAME_S)))
+    islands: list[list[int]] = []
+    quiet_run = min_quiet   # 開頭當成剛停頓完
+    for k, v in enumerate(loud):
+        if v:
+            if quiet_run >= min_quiet or not islands:
+                islands.append([k, k + 1])
+            else:
+                islands[-1][1] = k + 1
+            quiet_run = 0
+        else:
+            quiet_run += 1
+    t = lambda k: (lo + k * fr) / sr
+    return [(t(i0), t(i1)) for i0, i1 in islands]
+
+
+def _trim_stretched(audio: np.ndarray, sr: int, spans: list[tuple[float, float]]) -> tuple[float, float] | None:
+    """10-04 #105（純函式）：名字每個字的時間 spans；平均一個字超過 STRETCHED_CHAR_S 秒、而且範圍裡有真的停頓
+    （安靜 TRIM_PAUSE_S 秒以上）或頭尾一大段安靜時，回傳縮短後的 (起, 訖)；不用縮回傳 None。
+
+    根本原因：轉文字送 Groq 前挖掉靜音，一個字橫跨接縫時，換算回原片就把挖掉的靜音整段包進去（舊工作區的逐字稿
+    都是這樣；新轉的已經在 `transcribe._map_word` 擋掉）。名字的字是連著念的，所以挑「跟正常長度的字重疊最多」的
+    那一段有聲音的地方；名字的字全都被拉長時，挑聲音最長的那一段。"""
+    a, b = spans[0][0], spans[-1][1]
+    if b - a <= STRETCHED_CHAR_S * len(spans):
+        return None
+    islands = _voiced_islands(audio, sr, a, b)
+    if not islands:
+        return None
+    normal = [(x, y) for x, y in spans if y - x <= STRETCHED_CHAR_S]
+
+    def score(isl):
+        ov = sum(max(0.0, min(isl[1], y) - max(isl[0], x)) for x, y in normal)
+        return (ov, isl[1] - isl[0])
+
+    best = max(islands, key=score)
+    lo, hi = max(a, best[0]), min(b, best[1])
+    if hi - lo < 0.05 or (lo - a < TRIM_PAUSE_S and b - hi < TRIM_PAUSE_S):
+        return None
+    return lo, hi
+
+
 # ---------- 位置與建議做法 ----------
 
 def _position(start_ci: int, end_ci: int, n_clean: int) -> str:
@@ -419,6 +477,12 @@ def find_names(
             if audio_full is None:
                 audio_full, sr = sf.read(str(audio_path), dtype="float32")
 
+            stretched = _trim_stretched(audio_full, sr, [(chars[clean_idx[k]]["start"], chars[clean_idx[k]]["end"])
+                                                         for k in range(start_ci, end_ci)])
+            raw_len = raw_end_t - raw_start_t
+            if stretched:   # 10-04 #105：字的時間被拉長，名字範圍照聲音縮短（直接消音才不會消掉一大段）
+                raw_start_t, raw_end_t = stretched
+
             # 相鄰字的邊界：切點不可落在前一個字／後一個字裡面
             prev_bound = chars[clean_idx[start_ci - 1]]["end"] if start_ci > 0 else 0.0
             next_bound = chars[clean_idx[end_ci]]["start"] if end_ci < len(clean_idx) else total_dur
@@ -466,6 +530,7 @@ def find_names(
                 "切點信心": confidence,
                 "建議緩衝秒數": DEFAULT_BUFFER_S,
                 "候選音檔": str(clip_path.relative_to(workdir)),
+                **({"逐字時間拉長秒數": round(raw_len, 3)} if stretched else {}),
                 **(annotate(sent) if annotate else {}),
             })
             if not term.get("_sensitive"):

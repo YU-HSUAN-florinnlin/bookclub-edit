@@ -733,7 +733,9 @@ function rvRangeHtml(it) {   // 10-01 宇軒 7-1：名字的重念範圍（可�
   const whole = w["原本整句"] || [w.start, w.end];
   const tag = w["範圍"] === "人選" ? "你改過的範圍" : w["範圍"] === "自動"
     ? `整句 ${(whole[1] - whole[0]).toFixed(1)} 秒太長，自動縮成名字所在的那一小句（照逐字稿的空白切）`
-    : w["範圍"] === "逐字" ? "照整句（句子文字裡找不到名字，改用逐字時間的字）" : "照整句";
+    : w["範圍"] === "逐字" ? "照整句（句子文字裡找不到名字，改用逐字時間的字）"
+    : w["範圍"] === "延伸" ? `句子斷在話中間，往前後延伸到標點或停頓（0.3 秒以上）；原本那一句 ${rvFmt(whole[0], 1)}–${rvFmt(whole[1], 1)}`
+    : "照整句";
   return `<div class="rv-field rv-range"><div class="rv-edrow"><b>重念範圍</b><span class="rv-meta">${esc(tag)}</span>
       <button class="ghost small" id="rv-playrange">只播重念範圍</button>
       ${w["範圍"] === "人選" ? `<button class="ghost small" id="rv-rangereset">回到預設範圍</button>` : ""}</div>

@@ -960,7 +960,9 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     pos = {s["id"]: k for k, s in enumerate(ordered)}
     items = []
     table = replace_table(workdir)
-    words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words") or []
+    merged = wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}
+    words = merged.get("words") or []
+    extend = nameplan.extend_enabled(merged)   # 10-04 #62：轉文字保留停頓的工作區，重念範圍延伸到標點或停頓
     cands = effective_name_candidates(workdir, result.get("candidates", []), decisions)
     raw_decisions, decisions = decisions, card_decisions(cands, decisions)   # 10-03 補修：一張卡的決定套到同一句同代號每一處
     for i, c in enumerate(cands, start=1):
@@ -987,7 +989,7 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
         sentence = c.get("sentence") or (ordered[pos[c["sentence_id"]]]["text"] if c.get("sentence_id") in pos else "")
         whole = None
         if group:   # 10-01：重念範圍跟 nameplan.build_plan 同一個算法（整句太長只重念名字那一小句、人改過的照人改的）
-            ws = nameplan.whole_slot(c, d, group, words)
+            ws = nameplan.whole_slot(c, d, group, words, nameplan.neighbors(ordered, group) if extend else None)
             if not ws["範圍"] and replaced is None and words and \
                     nameplan.replace_name(nameplan.range_words(words, ws["start"], ws["end"]), c) is not None:
                 ws["範圍"] = "逐字"   # 跟 nameplan.build_plan 一樣：句子裡找不到，改用逐字時間的字（17 號 2-7）

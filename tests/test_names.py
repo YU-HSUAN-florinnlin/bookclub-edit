@@ -380,6 +380,67 @@ def test_assign_words_takes_early_first_char():
     assert sum(len(v) for v in got.values()) == 3   # 離句子太遠的不分
 
 
+# ---------- 10-04 #105：字的時間被拉長（橫跨挖掉的靜音），名字範圍照聲音縮短 ----------
+
+def _stretched_fixture():
+    """第一堂 43:06.9 那種：名字第一個字的時間 1.0–3.2（2.2 秒），中間 1.2–2.9 其實是安靜；
+    第二個字 3.2–3.3 正常。真的聲音：0.0–1.2 前面的話、2.9–4.5 名字跟後面的話。"""
+    audio = np.concatenate([_tone(1.2), _silence(1.7), _tone(1.6), _silence(1.5)])
+    spans = [(1.0, 3.2), (3.2, 3.3)]
+    return audio, spans
+
+
+def test_trim_stretched_picks_voiced_part_next_to_normal_char():
+    audio, spans = _stretched_fixture()
+    got = nm._trim_stretched(audio, SR, spans)
+    assert got is not None
+    a, b = got
+    assert 2.85 <= a <= 2.95, a          # 從真的有聲音的地方開始，不包進 1.2–2.9 的安靜
+    assert abs(b - 3.3) < 1e-6
+    assert b - a < 0.5
+
+
+def test_trim_stretched_leaves_normal_names_alone():
+    audio = _tone(4.0)
+    assert nm._trim_stretched(audio, SR, [(1.0, 1.3), (1.3, 1.6)]) is None    # 正常長度
+    assert nm._trim_stretched(audio, SR, [(1.0, 2.5), (2.5, 3.0)]) is None    # 拉長但一路都有聲音，沒得縮
+
+
+def test_trim_stretched_all_chars_stretched_takes_longest_voiced_part():
+    audio = np.concatenate([_tone(0.2), _silence(1.5), _tone(0.5), _silence(1.0)])
+    got = nm._trim_stretched(audio, SR, [(0.0, 1.1), (1.1, 2.2)])
+    assert got is not None and abs(got[0] - 1.7) < 0.03 and abs(got[1] - 2.2) < 1e-6
+
+
+def test_find_names_stretched_second_occurrence_range_is_short():
+    """#105 端到端：同一句第二次出現的名字，第一個字的時間被拉長到 2.2 秒 → 候選範圍不能涵蓋整段安靜到句尾。"""
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        workdir = tmp_dir / "workdir"
+        workdir.mkdir()
+        audio_path = workdir / "audio.flac"
+        # 0–2.0「詩涵詩」有聲音、2.0–3.6 安靜（被挖掉的靜音）、3.6–4.6「涵你好」有聲音、後面安靜
+        sf.write(str(audio_path), np.concatenate([_tone(2.0), _silence(1.6), _tone(1.0), _silence(2.0)]), SR)
+        words = [{"word": "詩", "start": 0.2, "end": 0.5}, {"word": "涵", "start": 0.5, "end": 0.8},
+                 {"word": "對", "start": 0.8, "end": 1.5},
+                 {"word": "詩", "start": 1.5, "end": 3.7},        # 拉長：橫跨 2.0–3.6 的安靜
+                 {"word": "涵", "start": 3.7, "end": 3.9},
+                 {"word": "你好", "start": 3.9, "end": 4.5}]
+        sents = [{"id": "s1", "start": 0.2, "end": 4.5, "text": "詩涵對詩涵你好", "label": "老師"}]
+        roster = tmp_dir / "名冊.csv"
+        roster.write_text("中文名,其他寫法,英文代號,聲線,性別\n詩涵,,S01,女聲A,女\n", encoding="utf-8")
+        res = nm.find_names(audio_path, workdir, sents, words, roster)
+        cands = sorted(res["candidates"], key=lambda c: c["start"])
+        assert len(cands) == 2
+        second = cands[1]
+        assert second["end"] - second["start"] < 0.8, (second["start"], second["end"])
+        assert second["start"] >= 3.5
+        assert second["逐字時間拉長秒數"] > 2.0
+        assert "逐字時間拉長秒數" not in cands[0]
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

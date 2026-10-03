@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from bookclub import workdir as wd
@@ -201,37 +202,156 @@ def too_short(say: str, source: str) -> bool:
     return src >= TOO_SHORT_MIN and say_count(say) < src * TOO_SHORT_RATIO
 
 
-def whole_slot(c: dict, d: dict, group: list[dict], words: list[dict] | None) -> dict:
+# ---------- 10-04 #62 第 6 點：整句換掉的範圍延伸到標點或真的停頓 ----------
+
+PAUSE_EPS = CLEAR_GAP_S - 1e-6   # 浮點誤差：0.3 秒的空白算出來可能是 0.29999
+EXTEND_MAX_S = 5.0       # 往前、往後各最多延伸這麼多秒；這麼遠還找不到標點或停頓，那一邊不延伸
+
+
+def extend_enabled(merged: dict | None) -> bool:
+    """轉文字時段跟段之間補了空白的工作區（`transcribe` 寫 `保留停頓秒數`，句子比較短）才延伸重念範圍。
+    已經轉好、生成過的工作區（第一堂）不動，免得已經生成的句子時間格跟著變、要重新生成。"""
+    return bool((merged or {}).get("保留停頓秒數"))
+
+
+def neighbors(ordered: list[dict], group: list[dict]) -> tuple[dict | None, dict | None]:
+    """group（依時間排好的句子）前一句、後一句（純函式）。"""
+    ids = [g.get("id") for g in ordered]
+    try:
+        i, j = ids.index(group[0].get("id")), ids.index(group[-1].get("id"))
+    except ValueError:
+        return None, None
+    return (ordered[i - 1] if i > 0 else None), (ordered[j + 1] if j + 1 < len(ordered) else None)
+
+
+_CLEAN = re.compile(r"[\w一-鿿]", re.UNICODE)
+
+
+def _punct_after_words(sent: dict, ws: list[dict]) -> list[bool]:
+    """這一句的每個字後面有沒有標點（純函式）：字本身尾巴帶標點，或句子文字裡數到這個字之後是標點
+    （字數跟句子文字對不上時只看字本身）。"""
+    text = sent.get("text") or ""
+    after: set[int] = set()
+    n = 0
+    for ch in text:
+        if _CLEAN.match(ch):
+            n += 1
+        elif ch in WORD_PUNCT and n:
+            after.add(n)
+    counts, n = [], 0
+    for w in ws:
+        n += len(_CLEAN.findall(w.get("word") or ""))
+        counts.append(n)
+    ok = n == len(_CLEAN.findall(text))
+    out = []
+    for w, k in zip(ws, counts):
+        tail = (w.get("word") or "").rstrip()
+        out.append((bool(tail) and tail[-1] in WORD_PUNCT) or (ok and k in after))
+    return out
+
+
+def _sent_words(words: list[dict], sent: dict) -> list[dict]:
+    return sorted((w for w in words if sent["start"] - 0.05 <= (w["start"] + w["end"]) / 2 <= sent["end"] + 0.05),
+                  key=lambda w: w["start"])
+
+
+def extend_range(words: list[dict], lo: float, hi: float, before: dict | None, after: dict | None,
+                 group: list[dict]) -> tuple[float, float]:
+    """10-04 #62 第 6 點（純函式）：整句換掉的範圍，起訖斷在話中間的話往前、往後延伸到標點或真的停頓
+    （字跟字之間空 CLEAR_GAP_S 秒以上），切在空白的中間。
+
+    句子變短後（轉文字保留停頓），Groq 的「一句」常斷在話中間（@3025.04、@3211.92 那種），照一句的起訖重念，
+    接回去會聽到前後的話被切斷。只延伸進老師的句子；起訖本來就在標點或停頓上、或 EXTEND_MAX_S 秒內找不到
+    標點或停頓的那一邊不動。"""
+    ws = sorted(words or [], key=lambda w: w["start"])
+    inside = [w for w in ws if lo - 0.05 <= (w["start"] + w["end"]) / 2 <= hi + 0.05]
+    if not inside:
+        return lo, hi
+    a, b = lo, hi
+    if before is not None and ok_teacher(before) and not _ends_closed(before.get("text", "")):
+        full = _sent_words(ws, before)
+        pairs = [(w, p) for w, p in zip(full, _punct_after_words(before, full)) if w["end"] <= inside[0]["start"] + 0.05]
+        bw, punct = [w for w, _ in pairs], [p for _, p in pairs]
+        if bw and not (inside[0]["start"] - bw[-1]["end"] >= PAUSE_EPS or punct[-1]):
+            cut = None
+            for k in range(len(bw) - 1, 0, -1):    # bw[k-1] 跟 bw[k] 之間
+                if lo - bw[k]["start"] > EXTEND_MAX_S:
+                    break
+                gap = bw[k]["start"] - bw[k - 1]["end"]
+                if gap >= PAUSE_EPS or punct[k - 1]:
+                    cut = (bw[k - 1]["end"] + bw[k]["start"]) / 2 if gap > 0 else bw[k]["start"]
+                    break
+            if cut is None and lo - before["start"] <= EXTEND_MAX_S:
+                cut = min(before["start"], bw[0]["start"])   # 前一句整句（句子開頭就是邊界）
+            if cut is not None:
+                a = min(a, cut)
+    if after is not None and ok_teacher(after) and not _ends_closed(group[-1].get("text", "")):
+        full = _sent_words(ws, after)
+        pairs = [(w, p) for w, p in zip(full, _punct_after_words(after, full)) if w["start"] >= inside[-1]["end"] - 0.05]
+        aw, punct = [w for w, _ in pairs], [p for _, p in pairs]
+        if aw and aw[0]["start"] - inside[-1]["end"] < PAUSE_EPS:
+            cut = None
+            for k in range(len(aw) - 1):           # aw[k] 跟 aw[k+1] 之間
+                if aw[k]["end"] - hi > EXTEND_MAX_S:
+                    break
+                gap = aw[k + 1]["start"] - aw[k]["end"]
+                if gap >= PAUSE_EPS or punct[k]:
+                    cut = (aw[k]["end"] + aw[k + 1]["start"]) / 2 if gap > 0 else aw[k]["end"]
+                    break
+            if cut is None and after["end"] - hi <= EXTEND_MAX_S:
+                cut = max(after["end"], aw[-1]["end"])        # 後一句整句（句子結尾就是邊界）
+            if cut is not None:
+                b = max(b, cut)
+    return round(a, 3), round(b, 3)
+
+
+def _ends_closed(text: str) -> bool:
+    """句子文字以標點結尾（句號類或逗號類）＝本來就在標點上，不用延伸。"""
+    t = (text or "").strip()
+    return bool(t) and t[-1] in WORD_PUNCT
+
+
+def whole_slot(c: dict, d: dict, group: list[dict], words: list[dict] | None,
+               around: tuple[dict | None, dict | None] | None = None) -> dict:
     """「整句換掉」要重念的時間格（純函式；`build_plan` 與覆核工作台共用，兩邊一定一樣）。
 
     - 名字覆核決定有 `整句起訖`（人在卡片上改的）→ 照人改的
     - 整句超過 LONG_SENTENCE_S、有逐字時間、沒改過名字時間 → 縮成名字所在的那一小句（`name_range`）；
       人已經改過要念的字（`改稿`）的話，改稿的字數比較接近縮小後的範圍才縮（改稿是照整句寫的就照整句）
-    回傳 {start, end, 範圍: None｜"自動"｜"人選", 整句: [起, 訖]}。"""
+    - 10-04 #62：`around`＝(前一句, 後一句) 給了的話（轉文字保留停頓的工作區），照整句的範圍起訖斷在話中間時
+      往前後延伸到標點或真的停頓（`extend_range`）→ 範圍「延伸」；改稿的字數比較接近原本整句的話不延伸
+    回傳 {start, end, 範圍: None｜"自動"｜"人選"｜"延伸", 整句: [起, 訖]}。"""
     lo = min(group[0]["start"], c["start"])
     hi = max(group[-1]["end"], c["end"])
     out = {"start": lo, "end": hi, "範圍": None, "整句": [round(lo, 3), round(hi, 3)]}
     rng = d.get("整句起訖")
     if rng:
         return {**out, "start": float(rng[0]), "end": float(rng[1]), "範圍": "人選"}
-    if not words or c.get("改過時間") or hi - lo <= LONG_SENTENCE_S:
-        return out
-    nr = name_range(words, c["start"], c["end"], lo, hi, c.get("位置", ""))
-    if not nr:
-        return out
     edited = (d.get("改稿") or "").strip()
-    if edited:
+
+    def closer(a: float, b: float) -> bool:   # 改稿的字數比較接近 [a, b] 還是原本整句
         n = say_count(edited)
-        if abs(n - say_count(range_words(words, *nr))) > abs(n - say_count(range_words(words, lo, hi))):
-            return out
-    return {**out, "start": nr[0], "end": nr[1], "範圍": "自動"}
+        return abs(n - say_count(range_words(words, a, b))) <= abs(n - say_count(range_words(words, lo, hi)))
+
+    if not words or c.get("改過時間"):
+        return out
+    if hi - lo > LONG_SENTENCE_S:
+        nr = name_range(words, c["start"], c["end"], lo, hi, c.get("位置", ""))
+        if nr and (not edited or closer(*nr)):
+            return {**out, "start": nr[0], "end": nr[1], "範圍": "自動"}
+    if around is not None:
+        a, b = extend_range(words, lo, hi, around[0], around[1], group)
+        if (a < lo - 0.01 or b > hi + 0.01) and (not edited or closer(a, b)):
+            return {**out, "start": a, "end": b, "範圍": "延伸"}
+    return out
 
 
 CUT_SKIP = "落在剪掉的片段裡（聲音和畫面都拿掉，不用處理）"
 
 
 def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dict],
-               default_how: str = WHOLE, words: list[dict] | None = None, cut: set | None = None) -> dict:
+               default_how: str = WHOLE, words: list[dict] | None = None, cut: set | None = None,
+               extend: bool = False) -> dict:
     """純函式：候選＋覆核決定＋句子（id → {start, end, text}）→ 處理計畫。
 
     做法：覆核決定的 `做法` 優先；沒有就用 default_how（09-25 宇軒定案：預設整句換掉；
@@ -243,6 +363,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
     `words`（逐字時間）給了的話，整句太長時只重念名字所在的那一小句（`whole_slot`，10-01），
     這種項目帶 `範圍`（自動／人選）與 `整句`（原本整句的起訖），文字照範圍裡逐字稿的字。
     `cut`（10-01 第三批）：落在剪掉的片段裡的候選編號（字串）→ 放進略過，不生成、不消音（剪掉的地方本來就沒有聲音）。
+    `extend`（10-04 #62）：整句換掉的範圍斷在話中間時延伸到標點或真的停頓（`whole_slot` 的 around）。
     """
     gen, mutes, skipped, manual = [], [], [], []
     ranged: list[dict] = []       # 縮小範圍的（範圍疊在一起的名字併成一筆）
@@ -292,7 +413,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         if c.get("改過時間"):   # 09-29 宇軒：改時間把後面幾秒也納進來（逐字稿漏了第二次叫名字）→ 範圍內的句子一起重念
             group = [g for g in ordered if g["end"] > min(c["start"], group[0]["start"]) + 0.05
                      and g["start"] < max(c["end"], group[-1]["end"]) - 0.05 and (g in group or ok_teacher(g))] or group
-        ws = whole_slot(c, d, group, words)
+        ws = whole_slot(c, d, group, words, neighbors(ordered, group) if extend else None)
         if ws["範圍"]:
             _add_ranged(ranged, manual, c, i, d, ws, words)
             continue
@@ -588,12 +709,13 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
         for i in range(1, len(candidates) + 1):
             if i not in keep:
                 decisions[str(i)] = {"tags": ["不是名字"]}  # 只在計算時略過，不寫回覆核決定
-    words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words") or []
+    merged = wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}
+    words = merged.get("words") or []
     # 10-01 第三批：名字落在剪掉的片段裡 → 不生成（以前照樣生成、第 4 步也算進去；跟第 3 步「已剪掉」同一個判斷）。
     # 剪掉的片段還原，下一次排計畫就回到要生成
     cuts = [(c["start"], c["end"]) for c in review.load_decisions(workdir)["刪除段落"] if c.get("狀態") != "還原"]
     cut = {str(c.get("id") or i) for i, c in enumerate(candidates, start=1) if review._in_ranges(c["start"], c["end"], cuts)}
-    plan = build_plan(candidates, decisions, sentences, words=words, cut=cut)
+    plan = build_plan(candidates, decisions, sentences, words=words, cut=cut, extend=extend_enabled(merged))
     if not only:   # 09-30：重疊選「生成老師聲音」的，老師整句一起排進生成清單
         choices = [o for o in review.overlap_choices(workdir) if not review._in_ranges(o["start"], o["end"], cuts)]
         picks = [o for o in choices if o["做法"] == "只留老師"]
