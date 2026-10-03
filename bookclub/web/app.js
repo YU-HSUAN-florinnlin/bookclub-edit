@@ -326,10 +326,12 @@ function finalCheckHtml(fc) {
     // 10-02 第六批：已經組裝過的話同時列成品時間（還沒有成品時只列原片）
     const outT = r["成品起訖"] ? `<div class="muted">成品 ${esc(fcTime(r["成品起訖"][0]))}–${esc(fcTime(r["成品起訖"][1]))}</div>` : "";
     const sh = r["縮小"];
+    const pts = r["時間點"] || [];   // 10-04 #111：學員段落裡自動處理的重疊，每一處一個「聽」按鈕
     return `<tr data-fckey="${esc(r.key)}" class="${done ? "fc-done" : ""}${r["新的"] ? " fc-new" : ""}"><td class="nowrap">${outT ? "原片 " : ""}${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${outT}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}
       ${done ? `<div><span class="badge fc-donetag">已確認</span></div>` : ""}${r["新的"] ? `<div><span class="badge fc-newtag">新的</span></div>` : ""}</td>
     <td>${esc(r["說明"])}${r["去改"] ? `<div class="muted fc-todo">${done ? "" : "怎麼改："}${esc(r["去改"])}</div>` : ""}</td>
-    <td class="fc-acts"><button class="secondary small" data-fcplay="${r.start}|${r.end}">跳過去聽</button>
+    <td class="fc-acts">${pts.length ? "" : `<button class="secondary small" data-fcplay="${r.start}|${r.end}">跳過去聽</button>`}
+    ${pts.length ? `<div class="fc-points">${pts.map((p) => `<button class="secondary small" data-fcplay="${p.start}|${p.end}" title="${esc(p["名稱"] || "")}">聽 ${esc(fcTime(p.start))}</button>`).join(" ")}</div>` : ""}
     ${sh && sh["可以縮"] ? `<button class="small" data-fcshrink="${i}">照建議縮小</button>` : ""}
     ${r["第3步"] ? `<button class="secondary small" data-fcgo="${i}">去第 3 步改這一筆</button>` : ""}
     ${r["可以按聽過"] ? `<label class="nowrap"><input type="checkbox" data-fcheard="${esc(r.key)}" ${done ? "checked" : ""}> 我聽過了，這裡沒有學員的聲音</label>` : ""}

@@ -189,6 +189,7 @@ GEN_SPEED = 16.5          # 這台 Mac 每 1 秒聲音約 14–19 秒（09-30 �
 ASSEMBLE_S = 21 * 60      # 整支組裝約 21 分鐘（09-30 實測）
 LONG_TEACHER_S = 10.0
 OUTSIDE_MIN_S = 0.3       # 學員的話落在段落外面超過這麼久才算
+STUDENT_TURN_KEY = "重疊:學員段落"   # 10-04 #111：「請看一眼」裡學員段落裡自動處理的重疊那一列
 
 
 def _uncovered(a: float, b: float, ranges: list[tuple[float, float]]) -> float:
@@ -595,11 +596,25 @@ def final_check(workdir: str | Path) -> dict:
         row(look, "聲紋:段落是老師", soft[0]["start"], soft[-1]["end"],
             f"另外 {len(soft)} 句聲音特徵判斷不是老師、但整段的聲音判斷是老師（多半是誤判，例如冥想引導、老師壓低聲音）。"
             "時間：" + "、".join(wd.fmt_time(x["start"]) for x in soft[:40]) + ("⋯" if len(soft) > 40 else ""))
+    # 10-04 #111：學員段落裡、兩邊都沒有老師的重疊，第 3 步不出卡、自動算處理好 → 這裡列筆數與每一處的時間，可以點過去聽
+    #    （其實是老師插話、沒被認出是老師時，會跟著學員那一段整段重念被蓋掉；聽到老師的聲音到第 3 步「設定」救回）
+    auto_ov = review.student_turn_overlaps(workdir, dec, turns) if turns else []
+    if auto_ov:
+        row(look, STUDENT_TURN_KEY, auto_ov[0]["start"], auto_ov[-1]["end"],
+            f"{len(auto_ov)} 處重疊落在會整段重念的學員段落裡、兩邊都沒有老師，第 3 步沒有出卡、自動算處理好"
+            "（跟著那一段整段重念）。下面每一處可以點過去聽：如果聽到其實是老師插話，那一小段會被蓋掉，要救回。"
+            "時間：" + "、".join(wd.fmt_time(x["start"]) for x in auto_ov[:40]) + ("⋯" if len(auto_ov) > 40 else ""),
+            name="學員段落裡的重疊",
+            todo="聽到老師的聲音：到第 3 步「設定」的「已自動跳過的重疊」，按那一處的「救回」，再選怎麼處理")
+        look[-1]["時間點"] = [{"id": x["id"], "start": round(x["start"], 3), "end": round(x["end"], 3),
+                            "名稱": review.item_name(index, f"學員段落:{x['學員段落']}") if x.get("學員段落") else ""}
+                           for x in auto_ov]
     covered = review.covered_overlaps(workdir, dec, turns) if turns else []
     gen_s = sum(g["slot"][1] - g["slot"][0] for g in plan["生成"]) + sum(it["slot_s"] for it in items)
     free = shutil.disk_usage(str(workdir)).free / 1e9
     summary = {"自動算處理好": [{"id": x["id"], "start": x["start"], "end": x["end"], "涵蓋": x["涵蓋"]["名稱"],
                              "名稱": review.item_name(index, f"重疊:{x['id']}")} for x in covered],
+               "學員段落裡自動處理": [{"id": x["id"], "start": x["start"], "end": x["end"]} for x in auto_ov],   # 10-04 #111
                "要生成秒數": round(gen_s), "預估秒數": round(gen_s * GEN_SPEED + ASSEMBLE_S), "硬碟可用GB": round(free, 1),
                "記憶體": memory_status(),   # 10-02 第五批：開始前就提醒記憶體偏滿
                "提醒": "執行期間關掉其他程式（Zoom、瀏覽器分頁）；接上電源、筆電不要闔上（螢幕可以關）"}

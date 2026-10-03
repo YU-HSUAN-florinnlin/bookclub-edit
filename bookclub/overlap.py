@@ -11,6 +11,8 @@
     2. 老師講話時學員的短附和（< `echo_overlap_max_s` 秒，且落在老師連續講話
        的區間內部）→ 跳過
     3. 重疊不到 0.05 秒（分辨說話者的邊界誤差，`apply_simple_filters`，讀快取時也會套用）→ 跳過
+    4. （10-04 #111）落在會整段重念的學員段落裡、兩邊都沒有老師 → 自動算處理好。要看第 3 步的段落與學員聲音設定，
+       不寫進 重疊.json，讀的時候在記憶體裡套（`student_turn_home`、`review.mark_student_turn_overlaps`）
 被跳過的仍然列在輸出清單裡（`已自動跳過` 標成 true、附上原因），不是刪掉——
 覆核網頁之後可以一鍵救回。
 
@@ -158,6 +160,49 @@ def apply_simple_filters(result: dict) -> dict:
     result["已自動跳過數"] = sum(1 for o in ovs if o.get("已自動跳過"))
     result["要人決定數"] = result["重疊數"] - result["已自動跳過數"]
     return result
+
+
+# 10-04 #111（宇軒定做法 A）：重疊落在「會整段重念的學員段落」裡、兩邊都沒有老師 → 不出卡、自動算處理好。
+# 這條要看段落與學員聲音設定（第 3 步才有），所以不寫進 重疊.json，每次讀的時候在記憶體裡套（`review.mark_student_turn_overlaps`）。
+STUDENT_TURN_REASON = "落在會整段重念的學員段落裡、兩邊都沒有老師（跟著那一段整段重念）"
+STUDENT_TURN_TAG = "學員段落"   # 重疊上 `自動處理` 欄位的值（inspect 印得出來的固定說法）
+STUDENT_TURN_TOL_S = 0.05       # 重疊頭尾超出學員段落（句子範圍）這麼多秒以內還算在裡面
+
+
+def student_turn_home(o: dict, turns: list[dict], sents_by_id: dict[str, dict], kept: set) -> dict | None:
+    """這一處重疊是不是「會整段重念的學員段落」裡、兩邊都沒有老師的重疊（純函式）。是的話回傳那一段，不是回傳 None。
+
+    - 兩邊都沒有老師：分辨說話者有標出角色（`speakers` 不是空的；人工補的重疊沒有角色，不算），而且沒有一邊是「老師」
+      （「不是老師」「不確定」都算沒有老師）
+    - 會整段重念的學員段落：說話者是學員（不是老師、不是空的）、這位學員不是「保留原聲」（`kept`）；
+      重疊整個落在這一段的句子範圍裡（`turns.turn_sentences`，頭尾夾在段落起訖裡，跟 `students.build_items` 排時間格用的是同一份；
+      時間格從第一句排到最後一句，中間只有剪掉的地方會斷開，斷開的那一段本來就剪掉了）。
+      手動標的段落沒有句子時，照段落起訖、校對稿不是空的才算（空的不會生成）。
+
+    已知風險（宇軒 10-04 知道）：那一小段其實是老師插話、但分辨說話者沒認出是老師（標成不確定或不是老師）時，
+    會跟著學員那一段整段重念被蓋掉。總檢查「請看一眼」列出每一處讓人聽；第 3 步「設定」可以救回。"""
+    from bookclub.turns import turn_sentences
+
+    roles = [s.get("role") for s in (o.get("speakers") or [])]
+    if not roles or "老師" in roles:
+        return None
+    a, b = o["start"], o["end"]
+    for t in turns:
+        who = t.get("說話者")
+        if not who or who == "老師" or who in kept:
+            continue
+        if not (t["start"] - STUDENT_TURN_TOL_S <= a and b <= t["end"] + STUDENT_TURN_TOL_S):
+            continue
+        ss = turn_sentences(t, sents_by_id)
+        if ss:
+            lo, hi = min(s["start"] for s in ss), max(s["end"] for s in ss)
+        elif (t.get("校對稿") or "").strip():
+            lo, hi = t["start"], t["end"]
+        else:
+            continue
+        if lo - STUDENT_TURN_TOL_S <= a and b <= hi + STUDENT_TURN_TOL_S:
+            return t
+    return None
 
 
 def _region_files(region_dir: Path, start: float, end: float) -> tuple[str, Path, Path]:
