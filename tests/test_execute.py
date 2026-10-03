@@ -384,14 +384,73 @@ def test_resource_numbers_and_no_swap_reader():
     assert "開始前至少要 5 GB" in execute.resource_problem({"硬碟GB": 4.0, "swapGB": None}, lim, starting=True)
     assert execute.resource_problem({"硬碟GB": None, "swapGB": None}, lim, starting=True) is None  # 都讀不到不擋
     assert "8.6 GB" in execute.resource_problem({"硬碟GB": 50.0, "swapGB": 8.6}, lim)
-    real = sys.platform
+    real, real_path = sys.platform, execute.MEMINFO_PATH
     try:
-        execute.sys.platform = "linux"            # 其他系統：swap 讀不到就回 None，不出錯
-        assert execute.swap_used_gb() is None
+        execute.sys.platform = "linux"            # Linux 但 /proc/meminfo 讀不到：回 None，不出錯
+        execute.MEMINFO_PATH = str(Path(tempfile.gettempdir()) / "第九批七-沒有這個檔")
+        assert execute.swap_used_gb() is None and execute.available_mem_gb() is None
         res = execute.read_resources(Path(tempfile.gettempdir()))
-        assert res["swapGB"] is None and res["硬碟GB"] > 0
+        assert res["swapGB"] is None and res["可用記憶體GB"] is None and res["硬碟GB"] > 0
+        execute.sys.platform = "win32"            # 其他系統：不讀
+        assert execute.swap_used_gb() is None and execute.available_mem_gb() is None
     finally:
-        execute.sys.platform = real
+        execute.sys.platform, execute.MEMINFO_PATH = real, real_path
+
+
+_MEMINFO = """MemTotal:       32768000 kB
+MemFree:          512000 kB
+MemAvailable:    1048576 kB
+Buffers:          100 kB
+SwapTotal:       8388608 kB
+SwapFree:        6291456 kB
+"""
+
+
+def test_linux_meminfo_threshold():
+    """10-03 第九批（#28）：Linux／WSL2 讀 /proc/meminfo（只有模擬測試：假檔案＋假 sys.platform）。"""
+    got = execute.parse_meminfo(_MEMINFO)
+    assert abs(got["可用GB"] - 1.0) < 1e-9 and abs(got["swapGB"] - 2.0) < 1e-9
+    assert execute.parse_meminfo("") == {"可用GB": None, "swapGB": None}
+    assert execute.parse_meminfo("MemTotal: 1 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB")["swapGB"] == 0.0
+    fake = _DATA / "第九批七-meminfo"
+    fake.write_text(_MEMINFO, encoding="utf-8")
+    real, real_path = sys.platform, execute.MEMINFO_PATH
+    try:
+        execute.sys.platform, execute.MEMINFO_PATH = "linux", str(fake)
+        assert abs(execute.swap_used_gb() - 2.0) < 1e-9 and abs(execute.available_mem_gb() - 1.0) < 1e-9
+        res = execute.read_resources(Path(tempfile.gettempdir()))
+        assert abs(res["可用記憶體GB"] - 1.0) < 1e-9
+        lim = {"開始前硬碟GB": 5.0, "硬碟GB": 2.5, "swapGB": 8.5}
+        res["硬碟GB"] = 50.0
+        why = execute.resource_problem(res, lim)           # 可用 1.0 GB < 預設 1.5 GB → 停
+        assert why and "可用記憶體剩 1.0 GB" in why and "1.5 GB" in why and "swap" not in why
+        assert execute.resource_problem({**res, "可用記憶體GB": 4.0}, lim) is None
+        assert execute.resource_problem({**res, "可用記憶體GB": 4.0}, {**lim, "可用記憶體GB": 5.0})   # 門檻可以從外面給
+        st = execute.memory_status()                       # 開始前提醒：Linux 也讀得到
+        assert st["讀得到"] and st["偏滿"] and st["可用GB"] == 1.0 and "可用記憶體" in st["說明"] and st["怎麼處理"]
+        fake.write_text(_MEMINFO.replace("1048576", "16777216"), encoding="utf-8")   # 可用 16 GB
+        st = execute.memory_status()
+        assert st["讀得到"] and not st["偏滿"] and "16.0 GB" in st["說明"] and not st["怎麼處理"]
+    finally:
+        execute.sys.platform, execute.MEMINFO_PATH = real, real_path
+        fake.unlink()
+
+
+def test_run_parts_stops_on_low_linux_memory():
+    """跑的過程中可用記憶體見底（Linux 才有的數字）也會請子程式停。"""
+    w = _fresh()
+    seen = {"n": 0}
+
+    def probe(wk):
+        seen["n"] += 1
+        return {"硬碟GB": 50.0, "swapGB": 0.5, "可用記憶體GB": 8.0 if seen["n"] <= 1 else 0.8}
+
+    opts, checks = _parts_setup(w, {"老師名字 生成": "等停止"}, probe=probe)
+    lines: list = []
+    prog = execute.run_execute(w, checks=checks, parts=opts, skip_precheck=True, log=lines.append)
+    assert _calls(w) == ["老師名字 生成"] and prog["停止"]
+    assert "可用記憶體剩 0.8 GB" in prog["停止原因"] and "swap" not in prog["停止原因"]
+    assert any("已請目前這一支程式做完這一句就停" in x for x in lines)
 
 
 def test_settings_thresholds_from_toml():
@@ -985,12 +1044,13 @@ def test_memory_status_warns_before_start_without_changing_threshold():
     for m in (ok, tight, none):
         assert "swap" not in m["說明"] + m["怎麼處理"] and "很簡單" not in m["怎麼處理"]
     assert execute.parse_swapusage("") is None
-    old = sys.platform
-    try:   # 非 macOS：讀不到、不出錯
+    old, old_path = sys.platform, execute.MEMINFO_PATH
+    try:   # 讀不到（Linux 但沒有 /proc/meminfo；在真的 Linux 上跑測試也一樣）：不出錯
         sys.platform = "linux"
+        execute.MEMINFO_PATH = str(Path(tempfile.gettempdir()) / "第九批七-沒有這個檔")
         assert execute.memory_status()["讀得到"] is False
     finally:
-        sys.platform = old
+        sys.platform, execute.MEMINFO_PATH = old, old_path
     # 總檢查的摘要帶記憶體狀況
     w = _fresh()
     assert "記憶體" in execute.final_check(w)["摘要"]

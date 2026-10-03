@@ -875,8 +875,39 @@ def parse_swapusage(text: str) -> float | None:
     return float(m.group(1)) / {"K": 1024 ** 2, "M": 1024, "G": 1}[m.group(2)]
 
 
+# 10-03 第九批（#28）：Linux（夥伴的 WSL2）以前讀不到 swap，跑的過程中的記憶體門檻完全沒作用。
+# 改成 Linux 讀 `/proc/meminfo`：swap 用量照舊比 swapGB 門檻；另外看「可用記憶體」——WSL2 預設 swap 只有
+# 記憶體的四分之一（32GB 的電腦約 8GB），swap 門檻 8.5 GB 幾乎碰不到，記憶體真的不夠時是可用記憶體先見底。
+MIN_AVAILABLE_GB = 1.5   # Linux 可用記憶體低於這個數字就自動停（Mac 讀不到這個數字，不受影響）
+MEMINFO_PATH = "/proc/meminfo"
+
+
+def parse_meminfo(text: str) -> dict:
+    """`/proc/meminfo` 的內容 → {可用GB, swapGB}（單位 kB 換成 GB）；讀不到的欄位是 None（純函式）。
+    可用＝MemAvailable；swap 用量＝SwapTotal − SwapFree。"""
+    kb = {}
+    for line in (text or "").splitlines():
+        m = re.match(r"(\w+):\s+(\d+)\s*kB", line.strip())
+        if m:
+            kb[m.group(1)] = int(m.group(2))
+    avail = kb.get("MemAvailable")
+    swap = (kb["SwapTotal"] - kb["SwapFree"]) if "SwapTotal" in kb and "SwapFree" in kb else None
+    return {"可用GB": avail / 1024 ** 2 if avail is not None else None,
+            "swapGB": max(0, swap) / 1024 ** 2 if swap is not None else None}
+
+
+def read_meminfo(path: str | Path | None = None) -> dict:
+    """讀 `/proc/meminfo`（測試可以給假檔案路徑）；不是 Linux、讀不到都回 {可用GB: None, swapGB: None}。"""
+    try:
+        return parse_meminfo(Path(path or MEMINFO_PATH).read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return {"可用GB": None, "swapGB": None}
+
+
 def swap_used_gb() -> float | None:
-    """swap 用了幾 GB。只有 macOS 讀（`sysctl vm.swapusage`）；其他系統、讀不到回 None（只看硬碟，不出錯）。"""
+    """swap 用了幾 GB。macOS 讀 `sysctl vm.swapusage`；Linux（含 WSL2）讀 `/proc/meminfo`；其他系統、讀不到回 None。"""
+    if sys.platform.startswith("linux"):
+        return read_meminfo()["swapGB"]
     if sys.platform != "darwin":
         return None
     try:
@@ -886,13 +917,20 @@ def swap_used_gb() -> float | None:
     return parse_swapusage(out)
 
 
+def available_mem_gb() -> float | None:
+    """可用記憶體幾 GB：只有 Linux 讀（`/proc/meminfo` 的 MemAvailable）；其他系統回 None。"""
+    if not sys.platform.startswith("linux"):
+        return None
+    return read_meminfo()["可用GB"]
+
+
 def read_resources(workdir: Path) -> dict:
-    """{硬碟GB: 工作區那顆硬碟可用空間, swapGB: swap 用量或 None}。"""
+    """{硬碟GB: 工作區那顆硬碟可用空間, swapGB: swap 用量或 None, 可用記憶體GB: Linux 才有，其他 None}。"""
     try:
         disk = shutil.disk_usage(str(workdir)).free / GB
     except OSError:
         disk = None
-    return {"硬碟GB": disk, "swapGB": swap_used_gb()}
+    return {"硬碟GB": disk, "swapGB": swap_used_gb(), "可用記憶體GB": available_mem_gb()}
 
 
 def default_limits() -> dict:
@@ -915,6 +953,11 @@ def resource_problem(res: dict, limits: dict, *, starting: bool = False) -> str 
     if swap is not None and swap > limits["swapGB"]:
         return (f"記憶體不夠，系統拿硬碟頂替的量到了 {swap:.1f} GB，門檻是 {limits['swapGB']:g} GB。"
                 "處理：關掉瀏覽器其他分頁與用不到的程式，或重開機；再按一次「開始執行」會接著做（做好的不重做）")
+    avail, need_mem = res.get("可用記憶體GB"), limits.get("可用記憶體GB", MIN_AVAILABLE_GB)
+    if avail is not None and avail < need_mem:   # 10-03 第九批（#28）：Linux／WSL2 才讀得到
+        return (f"記憶體不夠：可用記憶體剩 {avail:.1f} GB，至少要 {need_mem:g} GB。"
+                "處理：關掉 Windows 上用不到的程式與瀏覽器其他分頁，或重開機（WSL2 的記憶體上限在 Windows 的 .wslconfig 設定）；"
+                "再按一次「開始執行」會接著做（做好的不重做）")
     return None
 
 
@@ -923,9 +966,13 @@ def resource_problem(res: dict, limits: dict, *, starting: bool = False) -> str 
 MEM_LOAD_GB = 5.0
 
 
-def memory_status(swap: float | None = ..., limit: float | None = None) -> dict:
-    """{讀得到, 現在GB, 門檻GB, 載入約多GB, 偏滿, 說明, 怎麼處理}。swap 不給就自己讀（讀不到＝None，非 macOS 一律讀不到，不出錯）。
-    偏滿＝現在的量加上載入模型大約會多的量，超過跑的過程中會停下來的門檻。畫面上的字不用「swap」這個詞。"""
+def memory_status(swap: float | None = ..., limit: float | None = None, avail: float | None = ...) -> dict:
+    """{讀得到, 現在GB, 門檻GB, 載入約多GB, 偏滿, 說明, 怎麼處理}。swap 不給就自己讀（讀不到＝None，不出錯）。
+    偏滿＝現在的量加上載入模型大約會多的量，超過跑的過程中會停下來的門檻。畫面上的字不用「swap」這個詞。
+    10-03 第九批（#28）：Linux／WSL2 另外看可用記憶體 avail（swap 自己讀時才跟著讀；給了 swap 沒給 avail＝不看）：
+    模型載入吃的是記憶體，可用記憶體扣掉載入量低於 MIN_AVAILABLE_GB 就算偏滿。"""
+    if avail is ...:
+        avail = available_mem_gb() if swap is ... else None
     if swap is ...:
         swap = swap_used_gb()
     if limit is None:
@@ -933,17 +980,26 @@ def memory_status(swap: float | None = ..., limit: float | None = None) -> dict:
             limit = default_limits()["swapGB"]
         except Exception:  # noqa: BLE001 — 設定讀不到不影響開始前的提醒
             limit = 8.5
-    if swap is None:
+    if swap is None and avail is None:
         return {"讀得到": False, "現在GB": None, "門檻GB": limit, "載入約多GB": MEM_LOAD_GB, "偏滿": False,
                 "說明": "這台電腦讀不到記憶體不夠時系統拿硬碟頂替的量；跑的過程只看硬碟空間", "怎麼處理": ""}
+    tip_text = ("現在已經偏滿，照這樣開始，可能載入模型就被停下來。開始之前：關掉瀏覽器的其他分頁、其他瀏覽器視窗和用不到的程式"
+                "（Zoom、LINE、Notion、剪輯軟體等），過一兩分鐘再看一次這個數字有沒有降；這個數字常常要重開機才會降下來，"
+                "降不下來就重開機，開機後先不要開別的程式，直接回來開始跑")
+    if avail is not None:   # Linux／WSL2：模型載入吃記憶體，看可用記憶體夠不夠
+        tight = avail - MEM_LOAD_GB < MIN_AVAILABLE_GB or (swap is not None and swap > limit)
+        text = (f"可用記憶體：現在 {avail:.1f} GB；跑的過程中低於 {MIN_AVAILABLE_GB:g} GB 會自動停下來，"
+                f"載入模型通常會用掉 {MEM_LOAD_GB:g} GB 左右")
+        if swap is not None:
+            text += f"；系統拿硬碟頂替的量現在 {swap:.1f} GB，超過 {limit:g} GB 也會停"
+        return {"讀得到": True, "現在GB": round(swap, 1) if swap is not None else None, "可用GB": round(avail, 1),
+                "門檻GB": limit, "載入約多GB": MEM_LOAD_GB, "偏滿": tight, "說明": text,
+                "怎麼處理": tip_text if tight else ""}
     tight = swap + MEM_LOAD_GB > limit
     text = (f"記憶體不夠時系統拿硬碟頂替的量：現在 {swap:.1f} GB；跑的過程中超過 {limit:g} GB 會自動停下來，"
             f"載入模型通常會再多 {MEM_LOAD_GB:g} GB 左右")
-    tip = ("現在已經偏滿，照這樣開始，可能載入模型就被停下來。開始之前：關掉瀏覽器的其他分頁、其他瀏覽器視窗和用不到的程式"
-           "（Zoom、LINE、Notion、剪輯軟體等），過一兩分鐘再看一次這個數字有沒有降；這個數字常常要重開機才會降下來，"
-           "降不下來就重開機，開機後先不要開別的程式，直接回來開始跑") if tight else ""
     return {"讀得到": True, "現在GB": round(swap, 1), "門檻GB": limit, "載入約多GB": MEM_LOAD_GB, "偏滿": tight,
-            "說明": text, "怎麼處理": tip}
+            "說明": text, "怎麼處理": tip_text if tight else ""}
 
 
 def _child_rss_gb(pid: int) -> float | None:
