@@ -548,6 +548,17 @@ def test_whole_mode_splits_chunk_over_groq_size_limit():
             spans = [(json.loads(f.read_text())["_塊起"], json.loads(f.read_text())["_塊訖"]) for f in cache]
             assert spans[0] == (0.0, 75.0) or spans[0][1] <= 75.0
             assert spans[-1][1] == 150.0 and all(b == c for (_a, b), (c, _d) in zip(spans, spans[1:]))
+            # 對切過的工作區重跑：吃到對切後的快取、Groq 0 次，也不印誤導人的「重轉」
+            (Path(d) / "transcript" / "merged.json").unlink()
+            _no_groq.queue[:] = []
+            import contextlib
+            import io
+
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _fake_run(Path(d), None, mode=tc.MODE_WHOLE, audio_s=150.0, silence=sil)
+            assert "重轉" not in buf.getvalue()
+            assert buf.getvalue().count("已有逐字稿，跳過") == len(spans)
     finally:
         tc.WHOLE_CHUNK_S, tc.WHOLE_SEARCH_S = o
         tc.GROQ_MAX_BYTES = ob

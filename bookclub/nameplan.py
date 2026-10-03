@@ -208,10 +208,19 @@ PAUSE_EPS = CLEAR_GAP_S - 1e-6   # 浮點誤差：0.3 秒的空白算出來可�
 EXTEND_MAX_S = 5.0       # 往前、往後各最多延伸這麼多秒；這麼遠還找不到標點或停頓，那一邊不延伸
 
 
+# 10-04：延伸先關。三輪審查各重現一個新問題（第一輪：延伸把別張卡的名字包進去、吃掉那張卡的消音；第二輪問題 C：
+# 延伸範圍跟前一句另一張卡的整句疊在一起；第三輪問題 D：同一句兩張卡只有一張延伸，另一張被吃掉）。三個都修了、
+# 有測試，但宇軒 10-05 就要用新轉的工作區做第 3 步，先保守關掉。打開的條件：宇軒同意後改成 True；不用重轉文字，
+# 重排名字處理計畫（第 4 步開頭會自動重排）就會生效。
+EXTEND_ON = False
+
+
 def extend_enabled(merged: dict | None) -> bool:
     """新做法轉的工作區才延伸重念範圍：`轉文字做法`＝「不挖停頓」（10-04 #62 乙，Groq 自己斷句），或有
     `保留停頓秒數`（保留一秒的做法，已停用）。已經轉好、生成過的工作區（第一堂）不動，免得已經生成的句子
-    時間格跟著變、要重新生成。"""
+    時間格跟著變、要重新生成。`EXTEND_ON` 是 False 時一律不延伸。"""
+    if not EXTEND_ON:
+        return False
     m = merged or {}
     return m.get("轉文字做法") == "不挖停頓" or bool(m.get("保留停頓秒數"))
 
@@ -227,6 +236,28 @@ def _card_reach(ordered: list[dict], pos: dict, c: dict) -> tuple[str | None, tu
     a = min([group[0]["start"], c["start"]] + ([before["start"]] if before else []))
     b = max([group[-1]["end"], c["end"]] + ([after["end"]] if after else []))
     return group[0]["id"], (float(a), float(b))
+
+
+def no_extend_groups(candidates: list[dict], decisions: dict, ordered: list[dict],
+                     default_how: str = WHOLE, cut: set | None = None) -> set:
+    """10-04 問題 D（純函式）：同一個完整句子裡只要有任何一張卡不能延伸——有改稿、改過時間、人選過重念範圍、
+    做法不是整句換掉（老師整段、找不到句子的也算）——整句的卡都不延伸，回傳這些完整句子（第一段的 id）。
+    不然一張延伸、一張留在整句，兩筆時間格疊在一起，組裝時長的優先，另一張被吃掉。
+    不會產生任何處理的卡（落在剪掉的片段、同一處併進主卡、標成不是名字／是地名）不算。"""
+    pos = {x["id"]: k for k, x in enumerate(ordered)}
+    out: set = set()
+    for i, c in enumerate(candidates, start=1):
+        i = c.get("id", i)
+        d = decisions.get(str(i), {}) or {}
+        if (cut and str(i) in cut) or c.get("同一處") or set(d.get("tags", [])) & SKIP_TAGS:
+            continue
+        key = _card_reach(ordered, pos, c)[0]
+        if key is None:
+            continue
+        if ((d.get("做法") or default_how) != WHOLE or c.get("老師整段") or c.get("改過時間")
+                or (d.get("改稿") or "").strip() or d.get("整句起訖")):
+            out.add(key)
+    return out
 
 
 def other_ranges(candidates: list[dict], c: dict, extra=(), ordered: list[dict] | None = None) -> list[tuple[float, float]]:
@@ -411,6 +442,8 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
     延伸時不碰其他名字候選、別張卡最多會重念到的地方（`other_ranges`）與 `avoid`（保留原聲學員的名字候選）。
     """
     gen, mutes, skipped, manual = [], [], [], []
+    blocked = no_extend_groups(candidates, decisions, sorted(sentences.values(), key=lambda x: x["start"]),
+                               default_how, cut) if extend else set()
     ranged: list[dict] = []       # 縮小範圍的（範圍疊在一起的名字併成一筆）
     whole: dict[str, dict] = {}   # 完整句子第一段的 id → 生成項目（同一句合併）
     ordered = sorted(sentences.values(), key=lambda x: x["start"])
@@ -458,8 +491,9 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         if c.get("改過時間"):   # 09-29 宇軒：改時間把後面幾秒也納進來（逐字稿漏了第二次叫名字）→ 範圍內的句子一起重念
             group = [g for g in ordered if g["end"] > min(c["start"], group[0]["start"]) + 0.05
                      and g["start"] < max(c["end"], group[-1]["end"]) - 0.05 and (g in group or ok_teacher(g))] or group
-        ws = whole_slot(c, d, group, words, neighbors(ordered, group) if extend else None,
-                        other_ranges(candidates, c, avoid, ordered) if extend else ())
+        ext = extend and group[0]["id"] not in blocked   # 問題 D：同一句有卡不能延伸 → 整句都不延伸
+        ws = whole_slot(c, d, group, words, neighbors(ordered, group) if ext else None,
+                        other_ranges(candidates, c, avoid, ordered) if ext else ())
         if ws["範圍"]:
             _add_ranged(ranged, manual, c, i, d, ws, words)
             continue

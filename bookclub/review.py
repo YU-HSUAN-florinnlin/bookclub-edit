@@ -966,6 +966,11 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     student_ranges = nameplan.student_name_ranges(workdir) if extend else []   # 延伸不能碰到別的名字
     cands = effective_name_candidates(workdir, result.get("candidates", []), decisions)
     raw_decisions, decisions = decisions, card_decisions(cands, decisions)   # 10-03 補修：一張卡的決定套到同一句同代號每一處
+    blocked = set()
+    if extend:   # 剪掉的片段跟 nameplan.compute_plan 同一個算法，卡片跟計畫的延伸判斷才會一樣
+        cuts = [(x["start"], x["end"]) for x in load_decisions(workdir)["刪除段落"] if x.get("狀態") != "還原"]
+        cut = {str(x.get("id") or k) for k, x in enumerate(cands, start=1) if _in_ranges(x["start"], x["end"], cuts)}
+        blocked = nameplan.no_extend_groups(cands, decisions, ordered, cut=cut)
     for i, c in enumerate(cands, start=1):
         cid = str(c.get("id") or i)
         if c.get("同一處"):   # 10-03 第八批（#12）：同一處比中好幾個人，併進主卡（主卡寫「也可能是」）
@@ -990,8 +995,9 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
         sentence = c.get("sentence") or (ordered[pos[c["sentence_id"]]]["text"] if c.get("sentence_id") in pos else "")
         whole = None
         if group:   # 10-01：重念範圍跟 nameplan.build_plan 同一個算法（整句太長只重念名字那一小句、人改過的照人改的）
-            ws = nameplan.whole_slot(c, d, group, words, nameplan.neighbors(ordered, group) if extend else None,
-                                     nameplan.other_ranges(cands, c, student_ranges, ordered) if extend else ())
+            ext = extend and group[0]["id"] not in blocked   # 問題 D：跟 nameplan.build_plan 同一個判斷
+            ws = nameplan.whole_slot(c, d, group, words, nameplan.neighbors(ordered, group) if ext else None,
+                                     nameplan.other_ranges(cands, c, student_ranges, ordered) if ext else ())
             if not ws["範圍"] and replaced is None and words and \
                     nameplan.replace_name(nameplan.range_words(words, ws["start"], ws["end"]), c) is not None:
                 ws["範圍"] = "逐字"   # 跟 nameplan.build_plan 一樣：句子裡找不到，改用逐字時間的字（17 號 2-7）
