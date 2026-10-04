@@ -67,9 +67,13 @@ def example_keys(name: str) -> set[str]:
     return {r.get(header[0], "") for r in rows if header and r.get(header[0])}
 
 
-def _is_example(name: str, header: list[str], row: dict, keys: set[str] | None = None) -> bool:
+def is_example_row(name: str, header: list[str], row: dict, keys: set[str] | None = None) -> bool:
+    """這一列是不是範本的範例列（第一欄的值在 `example_keys(name)` 裡）。設定包匯出入（#34）與找名字讀名冊（#107）共用。"""
     keys = example_keys(name) if keys is None else keys
     return bool(header) and row.get(header[0], "") in keys
+
+
+_is_example = is_example_row   # 舊名字（模組內既有的呼叫照舊）
 
 
 def roster_duplicate_rows(path: Path) -> list[list[int]]:

@@ -456,6 +456,45 @@ def test_find_names_stretched_second_occurrence_range_is_short():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+# ---------- 10-04 #107：名冊還留著範本的範例列 ----------
+
+def test_load_roster_skips_template_example_rows():
+    """範本的範例列（範例學員、範例學員二，連同其他寫法「範例同學」）不拿來比對；判斷跟設定包匯出入同一套。"""
+    from bookclub import profile
+
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        path = tmp_dir / "名冊.csv"
+        path.write_text("中文名,其他寫法,英文代號,聲線,性別\n範例學員,範例同學,,女聲A,女\n詩涵,小涵,S01,女聲A,女\n"
+                        "範例學員二,,,男聲A,男\n", encoding="utf-8")
+        roster = nm.load_roster(path)
+        assert {r["寫法"] for r in roster} == {"詩涵", "小涵"}
+        assert profile.is_example_row("名冊.csv", ["中文名"], {"中文名": "範例學員"})
+        sens = tmp_dir / "敏感詞.csv"
+        sens.write_text("原詞,替代詞\n範例公司名稱,某公司\n真的公司,某公司\n", encoding="utf-8")
+        assert [w["寫法"] for w in nm.load_sensitive_words(sens)] == ["真的公司"]
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_find_names_ignores_template_example_rows():
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        workdir = tmp_dir / "workdir"
+        workdir.mkdir()
+        audio_path = workdir / "audio.flac"
+        sf.write(str(audio_path), _tone(6.0), SR)
+        words = _mk_words("範例同學跟詩涵說", 1.0)
+        sents = [{"id": "s1", "start": 1.0, "end": words[-1]["end"], "text": "範例同學跟詩涵說", "label": "老師"}]
+        roster = tmp_dir / "名冊.csv"
+        roster.write_text("中文名,其他寫法,英文代號,聲線,性別\n範例學員,範例同學,,女聲A,女\n詩涵,,S01,女聲A,女\n",
+                          encoding="utf-8")
+        res = nm.find_names(audio_path, workdir, sents, words, roster)
+        assert [c["canonical"] for c in res["candidates"]] == ["詩涵"]
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

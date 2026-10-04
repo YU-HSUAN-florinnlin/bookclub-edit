@@ -73,19 +73,31 @@ def _match_level(window: str, name: str, name_parts) -> str | None:
 
 # ---------- 名冊、敏感詞 ----------
 
+def _example_filter(name: str):
+    """10-04 #107：範本的範例列（install.sh 複製過來的「範例學員」這類示範資料）不拿來比對。
+    判斷沿用設定包匯出入用的 `profile.is_example_row`（第一欄的值是範本裡的範例列）。回傳 (表頭, 列) → 是不是範例列。"""
+    from bookclub import profile
+
+    keys = profile.example_keys(name)
+    return lambda header, row: bool(keys) and profile.is_example_row(
+        name, header, {k: (v or "").strip() for k, v in row.items() if k is not None}, keys)
+
+
 def load_roster(path: Path) -> list[dict]:
     """讀 `名冊.csv`（欄位：中文名,其他寫法,英文代號,聲線,性別），展開成
     [{"寫法": 中文名或其他寫法, "canonical": 中文名, "代號": 英文代號}, ...]，
-    一個人可能對應好幾筆（本名＋其他寫法各一筆）。"""
+    一個人可能對應好幾筆（本名＋其他寫法各一筆）。範本的範例列不算（#107）。"""
     path = Path(path)
     if not path.exists():
         return []
     out = []
+    is_example = _example_filter("名冊.csv")
     with io.StringIO(csvfile.read_text(path), newline="") as f:   # 10-03 #35：Excel 另存的 Big5 也讀得了
-        for row in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        for row in reader:
             canonical = (row.get("中文名") or "").strip()
             code = (row.get("英文代號") or "").strip()
-            if not canonical:
+            if not canonical or is_example(reader.fieldnames or [], row):
                 continue
             out.append({"寫法": canonical, "canonical": canonical, "代號": code})
             variants = (row.get("其他寫法") or "").strip()
@@ -115,16 +127,18 @@ def roster_duplicate_spellings(path: Path) -> list[dict]:
 
 
 def load_sensitive_words(path: Path) -> list[dict]:
-    """讀 `敏感詞.csv`（欄位：原詞,替代詞）。"""
+    """讀 `敏感詞.csv`（欄位：原詞,替代詞）。範本的範例列不算（#107）。"""
     path = Path(path)
     if not path.exists():
         return []
     out = []
+    is_example = _example_filter("敏感詞.csv")
     with io.StringIO(csvfile.read_text(path), newline="") as f:   # 10-03 #35：Excel 另存的 Big5 也讀得了
-        for row in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        for row in reader:
             orig = (row.get("原詞") or "").strip()
             repl = (row.get("替代詞") or "").strip()
-            if orig:
+            if orig and not is_example(reader.fieldnames or [], row):
                 out.append({"寫法": orig, "canonical": orig, "代號": repl})
     return out
 
