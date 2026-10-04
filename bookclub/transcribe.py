@@ -425,8 +425,16 @@ def _groq_client():
     return Groq()
 
 
-def _build_prompt(roster_names: list[str] | None) -> str:
-    if not roster_names:
+# 10-04：提示詞預設不帶名冊，只送語助詞示範。帶名冊（「今天提到的學員：甲、乙、…。」）時 Groq 斷句變粗：
+# 同一塊 10 分鐘音檔帶名冊回傳 75–83 句（句長中位數約 5 秒）、不帶 185 句（約 2 秒）。同樣 2 塊音檔比對找名字：
+# 帶名冊找到的時間點不帶也都找到（0 處漏），不帶還多找回 1 處；代價是 1 處名字從精確比對變成要靠讀音放寬。
+# 只測 2 塊、每種各送 1 次（Groq 本身每次約 ±5% 浮動）。要改回帶名冊就設 True。
+PROMPT_WITH_ROSTER = False
+
+
+def _build_prompt(roster_names: list[str] | None, with_roster: bool | None = None) -> str:
+    with_roster = PROMPT_WITH_ROSTER if with_roster is None else with_roster
+    if not roster_names or not with_roster:
         return FILLER_PROMPT
     return FILLER_PROMPT + "今天提到的學員：" + "、".join(roster_names) + "。"
 
@@ -448,7 +456,7 @@ def transcribe(
 
     `mode`：轉文字做法（`MODE_WHOLE` 不挖停頓／`MODE_KEEP` 保留一秒），不給用 `PAUSE_MODE`。
     `workdir/transcript/merged.json` 已存在就直接讀出來回傳，不重跑 VAD、不打
-    Groq。roster_names 只影響 Groq 的 prompt（幫助辨識學員名字），不影響快取
+    Groq。roster_names 只在 `PROMPT_WITH_ROSTER` 打開時放進 Groq 的 prompt（10-04 起預設不放），不影響快取
     判斷——快取一律照已經轉好的結果為準。
     """
     workdir = ensure(workdir)

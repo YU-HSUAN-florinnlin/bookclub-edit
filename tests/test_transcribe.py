@@ -88,7 +88,8 @@ def test_build_prompt_without_roster():
 
 
 def test_build_prompt_with_roster():
-    prompt = tc._build_prompt(["詩涵", "欣欣"])
+    assert tc._build_prompt(["詩涵", "欣欣"]) == tc.FILLER_PROMPT   # 10-04：預設不帶名冊
+    prompt = tc._build_prompt(["詩涵", "欣欣"], with_roster=True)
     assert "詩涵" in prompt and "欣欣" in prompt
     assert "今天提到的學員" in prompt
 
