@@ -1,4 +1,4 @@
-"""10-04 #127：學員段落的聲音多半是老師 → 第 3 步學員段落卡片提醒、第 4 步總檢查「請看一眼」每一段一列。
+"""10-04 #127：學員段落的聲音有不少是老師（門檻三成）→ 第 3 步學員段落卡片提醒、第 4 步總檢查「請看一眼」每一段一列。
 用 tests/fake_workdir.py 的合成資料，不載入模型、不連網。
 
 獨立可跑：.venv/bin/python tests/test_turnvoice.py
@@ -66,13 +66,21 @@ def test_ratio_and_thresholds():
     sents = [_s(i, i * 3.0, i * 3.0 + 2.5, "老師" if i else "不是老師") for i in range(28)]
     v = turnvoice.turn_voice({"start": 0.0, "end": 90.0, "句子": [s["id"] for s in sents]}, sents)
     assert v["多半是老師"] and v["句數"] == 28 and v["老師句數"] == 27 and abs(v["比例"] - 27 / 28) < 1e-3, v
-    # 剛好一半（老師 5 秒、不是老師 3 秒＋不確定 2 秒）→ 算；「太短」不算進分母
-    sents = [_s(0, 0, 5, "老師"), _s(1, 5, 8, "不是老師"), _s(2, 8, 10, "不確定"), _s(3, 10, 30, "太短")]
-    v = turnvoice.turn_voice({"start": 0, "end": 30}, sents)
-    assert v["多半是老師"] and v["比例"] == 0.5 and v["句數"] == 3, v
-    # 比例不到一半 → 不算
-    sents[1] = _s(1, 5, 8.2, "不是老師")
-    assert not turnvoice.turn_voice({"start": 0, "end": 30}, sents)["多半是老師"]
+    # 10-04 宇軒定門檻 0.3：剛好三成（老師 6 秒、不是老師 10 秒＋不確定 4 秒）→ 算；「太短」不算進分母
+    assert turnvoice.TEACHER_RATIO == 0.3
+    sents = [_s(0, 0, 6, "老師"), _s(1, 6, 16, "不是老師"), _s(2, 16, 20, "不確定"), _s(3, 20, 40, "太短")]
+    v = turnvoice.turn_voice({"start": 0, "end": 40}, sents)
+    assert v["多半是老師"] and v["比例"] == 0.3 and v["句數"] == 3, v
+    # 第一堂 T025 的樣子：比例約 0.336（舊門檻 0.5 會漏掉）→ 算
+    sents = [_s(0, 0, 33.6, "老師"), _s(1, 33.6, 100, "不是老師")]
+    v = turnvoice.turn_voice({"start": 0, "end": 100}, sents)
+    assert v["多半是老師"] and abs(v["比例"] - 0.336) < 1e-3, v
+    # 比例不到三成 → 不算
+    sents = [_s(0, 0, 6, "老師"), _s(1, 6, 16.2, "不是老師"), _s(2, 16.2, 20.2, "不確定")]
+    assert not turnvoice.turn_voice({"start": 0, "end": 40}, sents)["多半是老師"]
+    # 正常學員段落的樣子（老師約 3%）→ 不算
+    sents = [_s(0, 0, 3, "老師"), _s(1, 3, 100, "不是老師")]
+    assert not turnvoice.turn_voice({"start": 0, "end": 100}, sents)["多半是老師"]
     # 全部是老師、但只有 4 秒 → 不算（太短的段落一兩句誤判不算）
     assert not turnvoice.turn_voice({"start": 0, "end": 4}, [_s(0, 0, 4, "老師")])["多半是老師"]
     # 有「聲紋判斷」就用它（冥想引導被文字改成老師的不算）；秒數夾在段落裡
@@ -90,7 +98,7 @@ def test_card_has_warning():
     w = _fresh()
     cards = {x["id"]: x for x in review.page_data(w)["項目"] if x["類型"] == "學員段落"}
     v = cards["T005"]["聲紋多半是老師"]
-    assert v["句數"] == 5 and v["老師句數"] == 4 and v["提醒"].startswith("這一段的聲音特徵多半是老師（5 句裡 4 句"), v
+    assert v["句數"] == 5 and v["老師句數"] == 4 and v["提醒"].startswith("這一段的聲音特徵有不少像老師（5 句裡 4 句"), v
     assert "說話者改成老師" in v["提醒"]
     assert cards["T005"]["建議"]["做法"] == "通過"                     # 不擋通過
     assert "聲紋多半是老師" not in cards["T003"]
