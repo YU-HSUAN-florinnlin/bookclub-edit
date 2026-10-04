@@ -53,7 +53,7 @@ VOCAB = {
     # 段落外的答案
     "老師不用處理", "老師重念", "還是學員", "好幾個人",
     # 總檢查的列
-    "段落是老師", "彙總", "較短",   # 10-04 #117
+    "段落是老師", "學員段落是老師", "彙總", "較短",   # 10-04 #127、#117
     # 前後沒聲音（第六批）
     "重念範圍", "老師整段", "老師起訖",
     # 全片底噪（第六批第五件）
@@ -290,8 +290,19 @@ def topic_turns(w: Path, f: Filter, out: list[str]) -> None:
     data = _read(w / "校對" / "段落.json") or {}
     rows = [t for t in data.get("段落", []) if f.ok(t)]
     out.append(f"段落 {len(data.get('段落', []))} 段（符合條件 {len(rows)} 段）")
+    # 10-04 #127：學員段落聲紋多半是老師（只印是／否與數字）
+    from bookclub import turnvoice
+
+    sents = (_read(wd.speakers_path(w)) or {}).get("sentences", [])
+    by_id = {s.get("id"): s for s in sents}
     for t in rows:
-        out.append(fmt_row(t, ("id", "start", "end", "說話者", "內容類型", "已確認")))
+        line = fmt_row(t, ("id", "start", "end", "說話者", "內容類型", "已確認"))
+        if t.get("說話者") not in (None, "老師"):
+            v = turnvoice.turn_voice(t, sents, by_id)
+            line += (f"  聲紋多半是老師={val('', bool(v['多半是老師']))}  聲紋老師比例={v['比例']:.3f}"
+                     f"  聲紋老師句數={v['老師句數']}/{v['句數']}  聲紋老師秒={v['老師秒']:.1f}/{v['計入秒']:.1f}"
+                     if v else "  聲紋多半是老師=—（沒有可以算的句子）")
+        out.append(line)
     people = data.get("學員") or {}
     if people and not f.ids and f.a is None and f.b is None:
         out.append("學員：")
@@ -443,7 +454,9 @@ def topic_final_check(w: Path, f: Filter, out: list[str]) -> None:
                f"看過後新增 {fc['看過後新增']} 列")
     for part in ("一定要處理", "請看一眼"):
         for r in fc[part]:
-            row = {k: v for k, v in r.items() if k not in ("有學員聲音",)}
+            row = {k: v for k, v in r.items() if k not in ("有學員聲音", "聲紋老師")}
+            if isinstance(r.get("聲紋老師"), dict):   # 10-04 #127：只有數字與是／否
+                row.update(flat({k: v for k, v in r["聲紋老師"].items() if k != "提醒"}, "聲紋老師"))
             if f.ok(row):
                 both = timemap.both(r["start"], r["end"], m) if m else None
                 out.append(f"[{part}] " + fmt_row(row, ("key", "start", "end", "已按聽過", "新的", "第3步"))

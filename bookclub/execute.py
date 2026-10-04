@@ -196,6 +196,7 @@ STUDENT_TURN_KEY = "重疊:學員段落"   # 10-04 #111：「請看一眼」裡�
 UNTRANSCRIBED_KEY = "沒有字"            # 10-04 #117：「一定要處理」每一處一列，鍵 沒有字:{起點秒:.1f}
 UNTRANSCRIBED_LOOK_KEY = "沒有字:彙總"   # 10-04 #117：「請看一眼」比較短的、在學員段落裡的合成一列
 UNTRANSCRIBED_MOVE_S = 1.0              # 重算之後起點移動不超過這麼多秒，之前按的「我聽過了」照算
+TEACHER_TURN_KEY = "聲紋:學員段落是老師"   # 10-04 #127：「請看一眼」每一段一列，鍵 聲紋:學員段落是老師:{段落編號}
 
 
 def untranscribed_key(start: float, heard: set) -> str:
@@ -686,6 +687,21 @@ def final_check(workdir: str | Path) -> dict:
                             "類型": x["類別"], "秒": x["秒"],
                             "名稱": (f"{x['名稱']}裡，" if x.get("名稱") else "") + f"約 {x['秒']:.1f} 秒沒有字"}
                            for x in nz_look]
+    # 10-04 #127：學員段落裡聲紋多半判成老師 → 可能是老師的話被標成學員（會被當成學員重念）；已確認的段落也照列
+    from bookclub import turnvoice
+
+    for t in stu_turns:
+        v = turnvoice.turn_voice(t, sents, by_id)
+        if not v or not v["多半是老師"]:
+            continue
+        k = f"學員段落:{t['id']}"
+        nm = review.item_name(index, k)
+        row(look, f"{TEACHER_TURN_KEY}:{t['id']}", t["start"], t["end"],
+            f"〈{nm}〉的聲音特徵多半是老師（{v['句數']} 句裡 {v['老師句數']} 句、約 {v['老師秒']:.0f} 秒，"
+            f"占 {v['比例'] * 100:.0f}%）" + ("；這一段已經確認過" if t.get("已確認") else "")
+            + "。請聽一下：是老師在講話，到第 3 步按「這段其實是老師」，否則老師的話會被當成學員、用替代聲音重念",
+            name=nm, card=k, todo=f"到第 3 步〈{nm}〉按「這段其實是老師」（只有一部分是老師：先用「改做法」→「從游標處切開」）；聽過確定是學員就不用改")
+        look[-1]["聲紋老師"] = v
     covered = review.covered_overlaps(workdir, dec, turns) if turns else []
     gen_s = sum(g["slot"][1] - g["slot"][0] for g in plan["生成"]) + sum(it["slot_s"] for it in items)
     free = shutil.disk_usage(str(workdir)).free / 1e9

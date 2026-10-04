@@ -911,6 +911,7 @@ function rvBodyHtml(it) {
       ${(it["換過的字"] || []).length && !it["已確認"] ? `<p class="rv-note">自動換成代號的地方：${rvMarkChanges(it["建議稿"], it["換過的字"])}</p>` : ""}
       ${it["代號改過"] ? `<p class="rv-warnline">代號改過，請再看一次（原本的代號：${esc(it["代號改過"])}，別人也在用，沒有自動換）。</p>` : ""}
       ${it["含本名"] ? `<p class="rv-warnline">文字裡還有名冊上的本名，要換成代號。</p>` : ""}
+      ${it["聲紋多半是老師"] ? `<p class="rv-warnline">${esc(it["聲紋多半是老師"]["提醒"])}</p>` : ""}
       ${it["問老師"] ? `<p class="rv-note">已標「聽不清楚，問老師」${it["問老師備註"] ? "：" + esc(it["問老師備註"]) : ""}</p>` : ""}
       ${(it["段落外"] || []).map((q, i) => rvOutQHtml(it, q, i)).join("")}`;
   }

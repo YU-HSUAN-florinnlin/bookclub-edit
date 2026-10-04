@@ -1156,6 +1156,9 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     table = replace_table(workdir)
     items: list[dict] = []
     cut_from = {c["來源段落"]: c for c in dec["刪除段落"] if c.get("來源段落") and c.get("狀態") != "還原"}
+    from bookclub import turnvoice
+
+    sent_by_id = {s.get("id"): s for s in sents}
     for k, t in enumerate(turns):
         if t["說話者"] == "老師":
             if t.get("說話者是人改的"):   # 10-01 2-3：人改成老師的段落照樣列出來（看得到、改得回來），不擋進度
@@ -1184,6 +1187,9 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
                       "建議": {"做法": "通過", "原因": why},
                       "短句保留": bool(t.get("短句保留")),
                       "不用處理": "保留原聲，不用校對逐字稿" if keep else skip_reason(t["start"], t["end"])})
+        tv = turnvoice.turn_voice(t, sents, sent_by_id)   # 10-04 #127：聲音多半是老師 → 卡片上提醒（不擋通過）
+        if tv and tv["多半是老師"]:
+            items[-1]["聲紋多半是老師"] = {**tv, "提醒": turnvoice.warn_text(tv)}
         if t["id"] in cut_from:   # 10-01 2-4：從這一段「通過＝剪掉」產生的剪掉片段，卡片上可以取消
             items[-1]["剪掉的片段"] = cut_from[t["id"]]["id"]
         # 10-01 2-4：人剛新增、剛切出來的段落不建議剪掉（人是特地標的）
