@@ -278,7 +278,7 @@ function rvRenderAll() {
 // 看、播放、篩選、上一筆下一筆照常；其他按鈕與輸入框鎖住，上方橫幅說明。後端也擋（409）。
 // ---------------------------------------------------------------------------
 
-const RV_RO_ALLOW = "#rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-export, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, [data-te-play], [data-te-close], #rv-busy button";
+const RV_RO_ALLOW = "#rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-export, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
 
 function rvReadonly() { return !!(rv.data && rv.data["AI執行中"]); }
 
@@ -605,7 +605,7 @@ function rvRenderCard() {
     <article class="rv-card" data-key="${esc(rv.cur)}">
       <header>
         ${rvChip(it)}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}
-        <span class="rv-when">${esc(when)}</span>${rvIdTag(it)}
+        <span class="rv-when">${esc(when)}</span>${rvPlayOnlyHtml(it)}${rvIdTag(it)}
         <span class="rv-count">第 ${idx + 1}／${all.length} 筆</span>
       </header>
       <div class="rv-body">${coverNote}${rvBodyHtml(it)}${rvAlignLine(it)}</div>
@@ -689,12 +689,26 @@ function rvRenderCard() {
   if (del) del.addEventListener("click", () => rvDeleteManual(it));
   document.getElementById("rv-prev").addEventListener("click", () => rvStep(-1));
   document.getElementById("rv-next").addEventListener("click", () => rvStep(1));
+  const only = document.getElementById("rv-playonly");   // 10-04 #130：從卡片起點剛好開始播，播到終點停
+  if (only) only.addEventListener("click", (e) => {
+    e.stopPropagation();
+    rv.stopAt = Number(only.dataset.e); rvSeek(Number(only.dataset.s), true);
+  });
   const shrink = document.getElementById("rv-shrink");
   if (shrink) shrink.addEventListener("click", () => rvShrink(it));
   rvBindBody(it);
   rvBindOutQ(it);
   rvBindMore(it);
   rvRenderTimeline();
+}
+
+// 10-04 #130（宇軒）：每一種卡片都有「只播這一段」：從卡片的 start 剛好開始播、播到 end 停（點卡片跳過去是從前 2 秒開始播）
+// 名字卡播的是名字那一小段（重念範圍另有「只播重念範圍」）；重疊卡播的是重疊的那一段（兩邊各自的範圍在「改做法」裡「播這一段」）
+function rvPlayOnlyHtml(it) {
+  const a = Number(it && it.start), b = Number(it && it.end);
+  if (!it || it.start == null || it.end == null || !Number.isFinite(a) || !Number.isFinite(b) || b <= a) return "";
+  const label = it["類型"] === "名字" ? "只播名字這一段" : "只播這一段";
+  return ` <button class="ghost small" id="rv-playonly" data-s="${a}" data-e="${b}" title="從 ${esc(rvFmt(a, 1))} 開始播，播到 ${esc(rvFmt(b, 1))} 停">${label}</button>`;
 }
 
 // 10-02 第六批：老師重念範圍開頭或結尾有一段沒有人講話：提醒＋「照建議縮小」（不自動改；改了這一句要重新生成）
