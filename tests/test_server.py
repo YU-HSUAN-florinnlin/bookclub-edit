@@ -453,6 +453,57 @@ def test_current_project_remembered_across_restart():
             os.environ["BOOKCLUB_DATA_DIR"] = old
 
 
+def test_serve_explicit_workdir_wins_over_copied_registry():
+    # 10-04 #129：資料資料夾從舊的複製來，清單和「目前」都指著舊工作區（資料夾名稱一模一樣）；
+    # `bookclub serve <新工作區>` 開的要是新的，並加進清單、設成目前。不真的開伺服器：serve_forever 換成假的
+    data = Path(tempfile.mkdtemp()).resolve()
+    base = Path(tempfile.mkdtemp()).resolve()
+    old = os.environ.get("BOOKCLUB_DATA_DIR")
+    os.environ["BOOKCLUB_DATA_DIR"] = str(data)
+    orig = srv.BookclubServer.serve_forever
+    try:
+        old_ws = base / "舊" / "第一堂_剪輯工作區"
+        new_ws = base / "新" / "第一堂_剪輯工作區"
+        old_ws.mkdir(parents=True)
+        new_ws.mkdir(parents=True)
+        srv.register_project(old_ws)
+        srv.remember_current(old_ws)
+        seen: dict = {}
+
+        def fake_forever(self, *a, **k):
+            seen["workdir"] = self._workdir
+            seen["projects"] = srv.list_projects(self._workdir)
+            raise KeyboardInterrupt
+
+        srv.BookclubServer.serve_forever = fake_forever
+        assert srv.serve(new_ws, port=0, open_browser=False) == 0
+        assert seen["workdir"] == new_ws                                    # 開的就是明確給的那一個
+        assert srv.recall_current() == new_ws                               # 設成目前（下次不帶工作區重開也接回它）
+        assert srv.registered_projects() == [old_ws, new_ws]                # 加進清單，舊的照留
+        r = seen["projects"]
+        rows = {p["路徑"]: p for p in r["專案"]}
+        assert set(rows) == {str(old_ws), str(new_ws)} and r["目前"] == str(new_ws)   # 回應帶完整路徑、目前對得上
+        assert rows[str(old_ws)]["名稱"] == rows[str(new_ws)]["名稱"]       # 名稱一樣，靠路徑分
+        # 相對路徑給的也一樣（存成完整路徑）
+        cwd = os.getcwd()
+        os.chdir(new_ws.parent)
+        try:
+            srv.remember_current(old_ws)
+            assert srv.serve(new_ws.name, port=0, open_browser=False) == 0
+        finally:
+            os.chdir(cwd)
+        assert seen["workdir"] == new_ws and srv.recall_current() == new_ws
+        assert srv.registered_projects() == [old_ws, new_ws]                # 不重複登記
+        shutil.rmtree(old_ws)                                               # 資料夾不在了就不列
+        assert [p["路徑"] for p in srv.list_projects(new_ws)["專案"]] == [str(new_ws)]
+    finally:
+        srv.BookclubServer.serve_forever = orig
+        if old is None:
+            os.environ.pop("BOOKCLUB_DATA_DIR", None)
+        else:
+            os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
 def test_step3_writes_blocked_while_executing():
     # 09-30：第 4 步執行中，第 3 步的存檔回 409（網頁同時變唯讀）；計時照常；停止只在執行中能按
     import threading

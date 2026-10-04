@@ -700,8 +700,9 @@ async function renderOverview() {
       </div>`;
   }
   const list = projects["專案"] || [];
+  // 10-04 #129：每一列小字印完整路徑（以前只印上一層），資料夾名稱一樣的專案分得出來
   const rows = list.map((p) => `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
-      <td><b>${esc(p["名稱"])}</b>${p["路徑"] === projects["目前"] ? "　（目前）" : ""}<div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）" : esc(p["位置"])}</div></td>
+      <td><b>${esc(p["名稱"])}</b>${p["路徑"] === projects["目前"] ? "　（目前）" : ""}<div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）：" : ""}${esc(p["路徑"])}</div></td>
       <td>${esc(p["長度"] || "—")}</td>
       <td>${p["分析完成"] ? "分析完成" : "還沒分析完"}${p["有覆核"] ? "、覆核中" : ""}</td>
       <td>${esc(p["修改時間"])}</td>
