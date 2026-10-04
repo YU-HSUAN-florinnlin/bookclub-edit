@@ -46,6 +46,32 @@ def test_generated_items_count_as_done():
         assert r["完成"] == 1 and r["總數"] == len(items)
 
 
+def test_deleted_wav_not_counted_as_done():
+    # 10-04 #108：跟第 4 步「做過沒有」（tts.output_missing）同一個判斷——紀錄說做過、聲音檔不在的不算做完
+    from bookclub import students
+
+    with tempfile.TemporaryDirectory() as t:
+        w = fake_workdir.make(t)
+        items, _ = students.build_items(w)
+        assert len(items) >= 2
+        recs = []
+        for g in items[:2]:
+            files = {"檔案": f"生成/測試/{g['id']}.wav",
+                     "放回時間格": {"檔案": f"生成/測試/{g['id']}_放回時間格.wav"}}
+            for f in (files["檔案"], files["放回時間格"]["檔案"]):
+                (w / f).parent.mkdir(parents=True, exist_ok=True)
+                (w / f).write_bytes(b"RIFF")
+            recs.append({"id": g["id"], "text": g["text"], **files})
+        wd.write_json(students.log_path(w), {"句子": recs})
+        key = ("學員段落", "學員重念（用替代聲音）")
+        assert _rows(w)[key]["完成"] == 2
+        (w / recs[1]["放回時間格"]["檔案"]).unlink()                # 清硬碟刪掉了：第 4 步會重新生成
+        assert _rows(w)[key]["完成"] == 1
+        (w / recs[0]["檔案"]).unlink()
+        assert _rows(w)[key]["完成"] == 0
+        assert execcounts._gen_done(items[:2], {"句子": recs}) == 2   # 沒給 workdir：照舊只看紀錄
+
+
 def test_cache_counts_generated_before_log_and_eta():
     # 09-30：生成紀錄整組跑完才寫；進度改看 _嘗試快取.json（每生成一次就寫），並推算剩餘時間
     from bookclub import students, tts

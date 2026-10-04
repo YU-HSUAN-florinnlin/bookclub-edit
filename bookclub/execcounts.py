@@ -18,10 +18,12 @@ def _in_range(s: float, e: float, a: float | None, b: float | None) -> bool:
 
 
 def _gen_done(items: list[dict], log: dict | None, back: dict | None = None, ref_of=None,
-              all_stale: bool = False) -> int:
+              all_stale: bool = False, workdir: str | Path | None = None) -> int:
     """做完幾句。10-01：跟第 4 步「做過沒有」用同一個判斷（tts.record_stale：文字、發音對照表、時間格、參考音），
     以前只比文字，參考音換過或改了時間，這裡還寫做完、執行步驟卻說要重做。
-    ref_of(g)：這一句現在的參考音檔（None＝不比）；all_stale：老師參考音整份換過，生成的都不算。"""
+    ref_of(g)：這一句現在的參考音檔（None＝不比）；all_stale：老師參考音整份換過，生成的都不算。
+    workdir（10-04 #108）：給了的話，聲音檔不在的也不算做完（tts.output_missing，跟第 4 步「做過沒有」同一個判斷；
+    只看檔案在不在、不讀內容，每 2 秒輪詢一集約 100 句沒問題）。"""
     from bookclub import tts
 
     recs = {r["id"]: r for r in (log or {}).get("句子", [])}
@@ -30,6 +32,8 @@ def _gen_done(items: list[dict], log: dict | None, back: dict | None = None, ref
     def ok(g: dict) -> bool:
         rec = recs.get(g["id"]) or {}
         if not rec.get("放回時間格") or all_stale:
+            return False
+        if workdir is not None and tts.output_missing(rec, workdir):
             return False
         if rec.get("text") is None:
             rec = {**rec, "text": g.get("text")}
@@ -109,7 +113,7 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
         tlog = wd.read_json(tts.teacher_log_path(workdir), default=None)
         changed = tts.teacher_ref_changed(workdir, tlog)
         fp = tts.ref_fingerprint(wd.ref_dir(workdir) / "ref.wav")
-        return (len(gen), _gen_done(gen, tlog, all_stale=changed),
+        return (len(gen), _gen_done(gen, tlog, all_stale=changed, workdir=workdir),
                 *cached(tts.teacher_out_dir(workdir), gen, f"#{fp}" if fp else None))
 
     def t_mute():
@@ -128,7 +132,7 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
         now = students.current_refs(workdir, items) if items else {}
         fps = {who: tts.ref_fingerprint(f) for who, f in now.items() if f}
         suffix = {g["id"]: f"#{fps[g['學員']]}" for g in items if fps.get(g["學員"])}
-        return (len(items), _gen_done(items, log, ref_of=lambda g: now.get(g["學員"])),
+        return (len(items), _gen_done(items, log, ref_of=lambda g: now.get(g["學員"]), workdir=workdir),
                 *cached(students.out_dir(workdir), items, suffix))
 
     sp_cache: dict = {}
@@ -151,7 +155,8 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
         gen = [{**g, "生成用文字": tts.apply_pron(g["text"], table)[0]} for g in gen]
         recs = {r["id"]: r for r in rec.get("句子", [])}
         return (len(gen), _gen_done(gen, rec, rec.get("退回直接消音"),
-                                    ref_of=lambda g: studentgen.current_ref(workdir, g["學員"], recs.get(g["id"]))),
+                                    ref_of=lambda g: studentgen.current_ref(workdir, g["學員"], recs.get(g["id"])),
+                                    workdir=workdir),
                 *cached(studentgen.out_dir(workdir), gen))
 
     def sn_mute():
