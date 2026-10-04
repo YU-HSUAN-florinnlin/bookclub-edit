@@ -70,13 +70,16 @@ VOCAB = {
     "段落改過、舊的重念不用", "時間格改過、還沒重新生成", "跟別筆重疊、被較長的蓋過", "跟別筆重疊、以那一筆為準",
     "跟別筆邊界差一點、修齊", "整筆落在別筆裡", "局部消音跟別的處理重疊", "局部消音落在剪掉的地方", "還沒生成",
     "改成消音", "修齊照做", "其餘照做", "跟著那一筆",
+    # 名字候選從哪一種句子找到的、補找的原因（10-04 #119）
+    "太短句", "不確定句", "老師段落裡的不是老師句", "找名字範圍放寬後補找", "段落改成老師後補找",
 }
 ENUM_KEYS = {"狀態", "類型", "做法", "排法", "放回做法", "版本", "建議做法", "結果", "方式", "內容類型", "信心", "label", "role",
              "文字判斷", "聲音判斷", "比對層級", "位置", "切點信心", "聲線", "角色", "文字來源", "來源", "判斷依據", "建議類型",
              "決定", "對齊到", "答案", "段落外答案", "tags", "聲音", "改法", "範圍類型", "保留原因", "內容問題",
              "自動處理",   # 10-04 #111：重疊自動處理（值是「學員段落」）
              # 10-04 #61 補修：被蓋過改消音（值是原本的類型）、要人聽原因、警告的類型與處理
-             "被蓋過改消音", "要人聽原因", "警告類型", "處理"}
+             "被蓋過改消音", "要人聽原因", "警告類型", "處理",
+             "補找"}   # 10-04 #119：名字候選是怎麼補找到的
 ID_KEYS = {"id", "鍵", "key", "段落", "sentence_id", "區域", "候選", "覆核項目", "句子", "重疊項目", "生成編號", "建議id",
            "來源段落", "edit", "第3步", "生成", "聽過", "編號", "前一格", "後一格",
            # 10-03 第八批補修（#12）：名字候選併進哪一張卡（同一處、同一句同代號）
@@ -407,7 +410,10 @@ def _name_rows(w: Path) -> list[dict]:
     return rows
 
 
-def topic_names(w: Path, f: Filter, out: list[str]) -> None:
+def topic_names(w: Path, f: Filter, out: list[str], recompute: bool = False) -> None:
+    if recompute:
+        _names_recompute(w, f, out)
+        return
     rows = _name_rows(w)
     out.append(f"名字候選 {len(rows)} 筆（含人工補的）")
     for row in rows:
@@ -422,6 +428,44 @@ def topic_names(w: Path, f: Filter, out: list[str]) -> None:
             row = {"生成編號": g.get("id"), **{k: v for k, v in g.items() if k != "id"}}
             if f.ok(row):
                 out.append("  生成 " + fmt_row(row, ("生成編號", "slot", "候選", "重疊項目", "疊放")))
+
+
+def _spots(cands: list[dict]) -> list[tuple[float, float]]:
+    """候選的時間範圍有重疊的併成一處（同一處好幾個名冊寫法，第 3 步併成一張卡）。"""
+    out: list[list[float]] = []
+    for c in sorted(cands, key=lambda c: c["start"]):
+        if out and c["start"] <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], c["end"])
+        else:
+            out.append([c["start"], c["end"]])
+    return [(a, b) for a, b in out]
+
+
+def _names_recompute(w: Path, f: Filter, out: list[str]) -> None:
+    """10-04 #119：`名字 --重算`——用現在的程式在放寬的句子（太短、不確定、老師段落裡的不是老師句）重找名字，
+    不寫檔（`names.preview_supplement`），列出現有候選沒有的：時間、句子編號、來源、比對層級、信心。"""
+    from bookclub import names
+
+    r = names.preview_supplement(w)
+    out.append("（--重算：用現在的程式在太短、不確定的句子與老師段落裡的不是老師句重找名字；不寫檔）")
+    if r.get("沒辦法重算"):
+        out.append("沒有名冊或音檔，沒辦法重算")
+        return
+    scope = "放寬後" if r.get("掃描範圍") == names.SCAN_SCOPE else "舊版（只掃判成老師的句子）"
+    out.append(f"現有候選 {r['現有候選數']} 筆；名字候選.json 的掃描範圍：{scope}")
+    out.append("多掃的句子：" + ("、".join(f"{val('來源', k)} {n} 句" for k, n in r["多掃句數"].items()) or "沒有"))
+    new = r["candidates"]
+    out.append(f"這些句子裡找到 {len(r['找到'])} 筆（現有候選已經有的 {len(r['找到']) - len(new)} 筆；"
+               f"命中排除清單 {len(r['已自動排除'])} 筆）")
+    by_src = Counter(c.get("來源") for c in new)
+    spots = _spots(new)
+    out.append(f"現有候選沒有的 {len(new)} 筆、{len(spots)} 處（重疊的算一處）："
+               + ("、".join(f"{val('來源', k)} {n} 筆" for k, n in by_src.items()) or "沒有"))
+    for c in new:
+        row = {k: c.get(k) for k in ("start", "end", "sentence_id", "來源", "比對層級", "信心", "敏感詞", "位置",
+                                     "建議做法", "切點信心")}
+        if f.ok(row):
+            out.append("  新增 " + fmt_row(row, ("start", "end", "sentence_id", "來源", "比對層級", "信心")))
 
 
 def topic_cuts(w: Path, f: Filter, out: list[str]) -> None:
@@ -814,7 +858,8 @@ TOPICS = {
     "句子": "說話者判斷的每一句：編號、起訖、判斷（老師／不是老師⋯）、聲紋分數",
     "字": "逐字稿的字：只印每個字的時間（不印字），以及字跟字之間空超過 0.5 秒的地方",
     "重疊": "重疊（含人工補的）與第 3 步的決定（做法、已確認）",
-    "名字": "名字候選與名字決定（做法、已確認、標記），以及上次排的名字處理計畫",
+    "名字": "名字候選與名字決定（做法、已確認、標記），以及上次排的名字處理計畫；--重算 在太短、不確定的句子與老師段落裡的"
+            "不是老師句重找一次（不寫檔），列出會新增的候選時間點",
     "消音": "局部消音、剪掉的片段、建議剪掉（第 3 步的決定）",
     "總檢查": "第 4 步開始前總檢查的每一列（鍵、起訖、已按聽過、新的）；有成品時附成品時間",
     "生成": "生成紀錄（老師／學員／保留原聲）：每一句的時間格、選定、放回做法、要人聽原因、切在講話中、聲音檔在不在、"
@@ -848,7 +893,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=300, help="字：最多列幾個（預設 300）")
     p.add_argument("--毫秒", dest="ms", action="store_true", help="時間印到小數 3 位（看毫秒級的重疊）")
     p.add_argument("--重算", dest="recompute", action="store_true",
-                   help="剪輯決策：用現在的程式重新排一次（不組裝、不寫檔），範圍跟那一份剪輯決策一樣")
+                   help="剪輯決策：用現在的程式重新排一次（不組裝、不寫檔），範圍跟那一份剪輯決策一樣；"
+                        "名字：在太短、不確定的句子與老師段落裡的不是老師句重找名字（不寫檔），列出會新增的候選")
     return p
 
 
@@ -878,7 +924,7 @@ def run(argv: list[str]) -> list[str]:
         elif topic == "重疊":
             topic_overlaps(w, f, out)
         elif topic == "名字":
-            topic_names(w, f, out)
+            topic_names(w, f, out, args.recompute)
         elif topic == "消音":
             topic_cuts(w, f, out)
         elif topic == "總檢查":
