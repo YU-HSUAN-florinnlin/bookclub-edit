@@ -76,6 +76,36 @@ def test_route():
     assert k == "重疊:O1.00" and how is None and "生成老師聲音" in why
 
 
+def test_route_same_card_counts_as_one_name():
+    # 10-04 #115：同一張卡（併進主卡的候選）的好幾處只算一個名字，可以一鍵縮，改的是主卡；不同卡照舊不行
+    cands = {"1": {}, "2": {}, "3": {}}
+    assert silentedge._route({"候選": [1, 2]}, cands, {"1": "1", "2": "1", "3": "3"}) == ("名字:1", "重念範圍", "1", "")
+    assert silentedge._route({"候選": [2, 1]}, cands, {"1": "1", "2": "1"})[:3] == ("名字:1", "重念範圍", "1")
+    k, how, iid, why = silentedge._route({"候選": [1, 3]}, cands, {"1": "1", "2": "1", "3": "3"})
+    assert how is None and iid is None and "好幾個名字" in why
+    assert silentedge._route({"候選": [1, 2, 3]}, cands, {"1": "1", "2": "1", "3": "3"})[1] is None
+    assert silentedge._route({"候選": [1, 2], "重疊項目": ["O1.00"]}, cands, {"2": "1"})[1] is None   # 跟重疊同一句照舊不行
+    assert silentedge._route({"候選": [1, 2]}, {"1": {"老師整段": True}, "2": {}}, {"2": "1"})[1] == silentedge.HOW_WHOLE
+
+
+def test_hints_same_card_shrinkable_different_cards_not():
+    # 接到 hints：名字 1 那一句的生成項目同時帶候選 1、2。2 是另一張卡 → 不給縮；2 併進 1 那張卡 → 給縮、改主卡
+    from bookclub import nameplan
+
+    w = fresh([(80.0, 84.0)])
+    plan = nameplan.compute_plan(w)
+    plan["生成"] = [{**g, "候選": [1, 2]} if g["候選"] == [1] else g for g in plan["生成"]]
+    h = silentedge.hints(w, plan)["名字:1"]
+    assert not h["可以縮"] and "好幾個名字" in h["原因"]
+    orig = review.card_of
+    review.card_of = lambda cands: {**orig(cands), "2": "1"}
+    try:
+        h = silentedge.hints(w, plan)["名字:1"]
+    finally:
+        review.card_of = orig
+    assert h["可以縮"] and h["改法"] == "重念範圍" and h["id"] == "1", h
+
+
 # ---------- 假工作區：名字整句換掉 ----------
 
 def test_name_range_hint_and_shrink():

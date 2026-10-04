@@ -191,6 +191,17 @@ def remember_current(d: Path | None) -> None:
     write_json(registry_path(), {**data, "專案": data.get("專案", []), "目前": cur})
 
 
+def adopt_project(d: Path) -> None:
+    """10-04 #129：`bookclub serve <工作區>` 明確給了工作區 → 一律以它為準：不在清單上就加進去，並設成「目前」。
+    以前只放在記憶體裡，清單和「目前」還指著別的（例如從舊資料夾複製來的 `專案清單.json`），
+    總覽只列得出舊的那個（資料夾名稱一樣分不出來），下次不帶工作區重開也會接回舊的。"""
+    try:
+        register_project(d)
+        remember_current(d)
+    except OSError as e:   # 記不下來只是清單上看不到、下次重開要重選，不擋啟動
+        print(f"⚠️ [網頁伺服器] 記不下目前的專案：{e}")
+
+
 def recall_current() -> Path | None:
     """伺服器啟動時接回上次的專案；資料夾不在了、或不是清單上的專案就不接。"""
     cur = (read_json(registry_path(), default=None) or {}).get("目前")
@@ -1428,7 +1439,8 @@ def serve(
     import errno
 
     if workdir:
-        workdir = Path(workdir).expanduser()
+        # 10-04 #129：用完整路徑（相對路徑、~ 都展開），清單和「目前」才對得上
+        workdir = Path(workdir).expanduser().resolve()
         workdir.mkdir(parents=True, exist_ok=True)
     if port is None:
         port = load_settings().server_port
@@ -1436,7 +1448,7 @@ def serve(
         workdir = recall_current()   # 09-30：重開後接回上次在做的專案
         if workdir:
             video = (read_json(analysis_result_path(workdir), default={}) or {}).get("video")
-            print(f"[網頁伺服器] 接回上次的專案：{workdir.name}")
+            print(f"[網頁伺服器] 接回上次的專案：{workdir}")
 
     plan = browser_plan()
     try:
@@ -1456,10 +1468,12 @@ def serve(
                 if webbrowser.open(browser_url(port, plan)):
                     print("[網頁伺服器] 已經幫你在瀏覽器打開舊的那一個。")
         return 0 if ours else 1
+    if workdir:
+        adopt_project(workdir)
     _mark_interrupted(workdir or None)   # 09-30：上次跑到一半伺服器被關掉，進度改「中斷」（要在確定埠拿到之後）
     url = browser_url(port, plan)
     print(f"[網頁伺服器] 網址：{url}")
-    print(f"[網頁伺服器] 工作區：{workdir or '（還沒選，到網頁總覽選影片）'}")
+    print(f"[網頁伺服器] 工作區（實際開的，完整路徑）：{workdir or '（還沒選，到網頁總覽選影片）'}")
     if not groq_key_ready():
         print(f"⚠️ [網頁伺服器] {GROQ_KEY_MISSING}（已經轉好文字的專案不受影響）")
     print("[網頁伺服器] Ctrl+C 結束")
