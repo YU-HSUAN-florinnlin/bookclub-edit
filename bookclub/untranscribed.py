@@ -10,16 +10,17 @@
 做法：
 1. 人聲區間＝整支影片扣掉 VAD 安靜處
 2. 一個字只算它開頭的前 `WORD_COVER_S` 秒有蓋到（Groq 會把一個字的時間拉長到十幾秒，蓋住其實沒轉出來的話）
-3. 在人聲區間裡，連續 ≥ `MIN_PIECE_S` 秒沒有被任何字蓋到的，是一小段
-4. 相鄰的小段中間沒有任何字（只隔著 VAD 安靜，或不到 1.5 秒、也沒有字的零星人聲）就併成一處；
-   記這一處的起訖、其中人聲合計幾秒（起訖之間的人聲都算，那裡一個字都沒有）、小段數
+3. 一段連續「沒有被任何字蓋到」的時間裡，人聲（每一小段＝一段 VAD 人聲）加起來 ≥ `MIN_PIECE_S` 秒就算一處
+   （10-04 審查 F：以前要求某一小段自己連續 ≥1.5 秒，每一小段都很短的整段漏列）；
+   記這一處的起訖（第一小段開頭到最後一小段結尾）、人聲合計幾秒、小段數
 """
 
 from __future__ import annotations
 
 # 10-04 第一堂三份逐字稿比對（同一支影片轉三次，漏掉的地方每次不同）定的值：
-MIN_PIECE_S = 1.5      # 人聲連續這麼久沒有字才算一小段（短於這個多半是字跟字之間的換氣、拖長音）
+MIN_PIECE_S = 1.5      # 沒有字的那段時間裡人聲加起來這麼久才算一處（短於這個多半是字跟字之間的換氣、拖長音）
 WORD_COVER_S = 1.0     # 一個字只算開頭這麼久有蓋到（Groq 會把一個字的時間拉長到十幾秒）
+OUTSIDE_EPS_S = 0.001  # 學員段落外面的人聲超過這麼多（浮點誤差以上）就算有
 MUST_VOICE_S = 3.0     # 總檢查：人聲合計這麼久以上放「一定要處理」，短的放「請看一眼」
 
 
@@ -92,13 +93,12 @@ def find_regions(duration: float | None, silence_map: list[dict] | None, words: 
     out = []
     for fa, fb in free:
         sp = intersect(speech, fa, fb)
-        pieces = [(a, b) for a, b in sp if b - a >= min_piece]
-        if not pieces:
+        # 10-04 審查 F：人聲「加起來」≥ min_piece 就算一處（每一小段都很短、但一個字都沒有的也要列）
+        if total(sp) < min_piece:
             continue
-        a, b = pieces[0][0], pieces[-1][1]
-        inside = intersect(speech, a, b)
-        out.append({"start": round(a, 3), "end": round(b, 3), "人聲秒": round(total(inside), 3), "小段數": len(pieces),
-                    "人聲區間": [[round(x, 3), round(y, 3)] for x, y in inside]})
+        a, b = sp[0][0], sp[-1][1]
+        out.append({"start": round(a, 3), "end": round(b, 3), "人聲秒": round(total(sp), 3), "小段數": len(sp),
+                    "人聲區間": [[round(x, 3), round(y, 3)] for x, y in sp]})
     return out
 
 
@@ -132,10 +132,9 @@ def summary_line(regions: list[dict] | None, fmt, top: int = 10) -> str:
 def classify(region: dict, cuts: list[tuple[float, float]], student_turns: list[tuple[float, float]]) -> tuple[str | None, float]:
     """總檢查要放哪一區（純函式）。回傳 (類別, 秒數)：
     - 扣掉會被剪掉的範圍後人聲不到 MIN_PIECE_S 秒 → (None, 0)：不列
-    - 扣掉會整段重念的學員段落之後還有 ≥ MUST_VOICE_S 秒 → ("一定要處理", 那幾秒)
-    - 還有 MIN_PIECE_S–MUST_VOICE_S 秒 → ("較短", 那幾秒)
-    - 其他、在會整段重念的學員段落裡有 ≥ MIN_PIECE_S 秒 → ("學員段落", 在段落裡的秒數)
-    - 段落裡外各一點點 → ("較短", 全部秒數)"""
+    - 扣掉會整段重念的學員段落之後還有 ≥ MUST_VOICE_S 秒 → ("一定要處理", 段落外的秒數)
+    - 段落外還有任何人聲（不到 MUST_VOICE_S 秒）→ ("較短", 扣掉剪掉後的全部秒數)
+    - 人聲全部在會整段重念的學員段落裡 → ("學員段落", 全部秒數)"""
     voice = [(float(a), float(b)) for a, b in region.get("人聲區間") or [(region["start"], region["end"])]]
     left = subtract(voice, cuts)
     if total(left) < MIN_PIECE_S:
@@ -144,9 +143,6 @@ def classify(region: dict, cuts: list[tuple[float, float]], student_turns: list[
     s_out = total(out)
     if s_out >= MUST_VOICE_S:
         return "一定要處理", round(s_out, 1)
-    if s_out >= MIN_PIECE_S:
-        return "較短", round(s_out, 1)
-    s_in = total(left) - s_out
-    if s_in >= MIN_PIECE_S:
-        return "學員段落", round(s_in, 1)
-    return "較短", round(total(left), 1)   # 段落裡外各一點點：當成短的
+    if s_out > OUTSIDE_EPS_S:   # 10-04 審查 G：有人聲落在學員段落外面（不會被重念蓋掉）→ 不能算「學員段落」
+        return "較短", round(total(left), 1)
+    return "學員段落", round(total(left), 1)

@@ -676,8 +676,8 @@ def final_check(workdir: str | Path) -> dict:
         inturn = [x for x in nz_look if x["類別"] == "學員段落"]
         text = []
         if short:
-            text.append(f"{len(short)} 處有人講話（各約 {untranscribed.MIN_PIECE_S:.1f}–{untranscribed.MUST_VOICE_S:.0f} 秒）"
-                        "但逐字稿沒有字，工具找不到這裡的名字；有空的話聽一下，有提到名字就到第 3 步手動補名字卡。")
+            text.append(f"{len(short)} 處有人講話但逐字稿沒有字（人聲不到 {untranscribed.MUST_VOICE_S:.0f} 秒，"
+                        "或只有一部分在學員段落外面），工具找不到這裡的名字；有空的話聽一下，有提到名字就到第 3 步手動補名字卡。")
         if inturn:
             text.append(f"{len(inturn)} 處在會整段重念的學員段落裡：重念時會少念這幾秒的內容；隱私不受影響。")
         row(look, UNTRANSCRIBED_LOOK_KEY, nz_look[0]["start"], nz_look[-1]["end"],
