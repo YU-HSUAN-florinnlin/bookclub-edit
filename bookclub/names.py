@@ -367,102 +367,83 @@ def _suggest_action(position: str, start_clean: bool, end_clean: bool) -> tuple[
     return "只換名字", None
 
 
+# ---------- 要掃哪些句子（10-04 #119） ----------
+
+# 名字候選.json 的「掃描範圍」：2＝除了判成老師的句子，太短、不確定的句子、老師段落裡判成不是老師的句子也掃（#119）。
+# 沒有這個欄位＝舊版（只掃判成老師的句子），重跑分析時會補掃放寬的那幾句、加在最後面（見 `find_names`）。
+SCAN_SCOPE = 2
+SOURCE_SHORT = "太短句"
+SOURCE_UNSURE = "不確定句"
+SOURCE_NOT_TEACHER = "老師段落裡的不是老師句"
+SUPPLEMENT_TAG = "找名字範圍放寬後補找"
+
+
+def _is_teacher(s: dict) -> bool:
+    return s.get("label") == "老師"
+
+
+def sentence_turn_roles(workdir: str | Path) -> dict[str, str]:
+    """句子 id → 「老師」或「學員」（只讀檔）：有 `校對/段落.json` 就用它（含第 3 步人改過的說話者）；
+    還沒有就用 `校對/段落_文字.json`（段落分析的文字那一半，分析第 2 步就存好了）；都沒有回傳空的。"""
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    for path in (turns_mod.turns_path(workdir), turns_mod.text_turns_path(workdir)):
+        data = read_json(path, default=None)
+        if not data or not data.get("段落"):
+            continue
+        out: dict[str, str] = {}
+        for t in data["段落"]:
+            who = t.get("說話者") or t.get("文字判斷")
+            if not who:
+                continue
+            for sid in t.get("句子") or []:
+                out[sid] = "老師" if who == "老師" else "學員"
+        return out
+    return {}
+
+
+def extra_scope(sentences: list[dict], roles: dict[str, str]) -> dict[str, str]:
+    """10-04 #119（純函式）：判成老師的句子之外，還要掃名字的句子 → 來源（太短句／不確定句／老師段落裡的不是老師句）。
+
+    - 太短、不確定（以及其他不是「老師」「不是老師」的判斷）：除非落在學員段落，都要掃——寧可多出卡片讓人判斷，不可漏
+    - 不是老師：落在老師段落才掃
+    - 學員段落裡的句子照舊不掃（學員說的名字另有「學員名字候選」那一套，或整段重念時在校對稿換掉）
+    `roles` 是 `sentence_turn_roles` 的結果；沒有段落資料（空的）時，太短、不確定的句子全掃，不是老師的句子不掃。"""
+    out: dict[str, str] = {}
+    for s in sentences:
+        sid, lab = s.get("id"), s.get("label")
+        if sid is None or lab == "老師":
+            continue
+        role = roles.get(sid)
+        if lab == "不是老師":
+            if role == "老師":
+                out[sid] = SOURCE_NOT_TEACHER
+        elif role != "學員":
+            out[sid] = SOURCE_SHORT if lab == "太短" else SOURCE_UNSURE
+    return out
+
+
 # ---------- 主流程 ----------
 
-def find_names(
-    audio_path: Path,
-    workdir: Path,
-    sentences: list[dict],
-    words: list[dict],
-    roster_path: Path,
-    sensitive_path: Path | None = None,
-    exclusion_path: Path | None = None,
-    *,
-    select=None,
-    cache_path: Path | None = None,
-    clip_dir: Path | None = None,
-    use_cache: bool = True,
-    annotate=None,
-) -> dict:
-    """在標成「老師」的句子裡找名冊上的名字與敏感詞。回傳 dict：
-        candidates: 每筆 {start, end, sentence, name, canonical, code, position,
-                          suggested_action, reason, cut_confidence, buffer_s,
-                          clip_path, level, matched_text, 信心}
-        已自動排除: 每筆 {start, end, sentence_id, matched_text, 原因}——matched_text
-                    命中「名字排除清單」的候選，不進 candidates，記在這裡
-        排除清單: 讀到的排除清單原始內容（詞/原因/建立日期），供覆核頁顯示
-        統計: {總筆數, 各層級筆數, 各建議做法筆數, 切點信心分布, 已自動排除數}
-        elapsed
-
-    `exclusion_path` 不給的話，預設抓 `roster_path` 同一層目錄下的
-    `名字排除清單.csv`（宇軒的名冊、敏感詞、排除清單都放在同一個資料夾）；
-    檔案不存在就當作沒有排除清單，照常運作。
-
-    `workdir/名字候選.json` 已存在就直接讀出來回傳。名字與句子內容只寫進檔案，
-    不印在終端機。
-
-    09-29 加（保留原聲學員講到名字，`bookclub/studentnames.py` 用）：`select(句子) → bool` 換掉「只掃老師」、
-    `cache_path`／`clip_dir` 換存放位置、`use_cache=False` 不沿用舊結果、`annotate(句子) → dict` 每筆候選多加的欄位。
-    都不給時行為跟以前一樣。
-    """
-    workdir = Path(workdir)
-    audio_path = Path(audio_path)
-    cache_path = Path(cache_path) if cache_path else names_path(workdir)
-    cached = read_json(cache_path, default=None) if use_cache else None
-    select = select or (lambda s: s.get("label") == "老師")
-    in_fp = fingerprint([[s["id"], s["text"]] for s in sentences if select(s)])
-    if cached is not None:
-        print("[4/找名字] 已有 名字候選.json，略過")
-        # 09-29 檢查 #7：記下是從哪些老師句子找的；之後說話者判斷或逐字稿改了，大聲提醒（不自動重算：
-        # 名字候選已經接了人工覆核決定、補找的名字，自動重算會丟東西）
-        if cached.get("輸入指紋") is None:
-            cached["輸入指紋"] = in_fp
-            write_json(cache_path, cached)
-        elif cached["輸入指紋"] != in_fp:
-            msg = ("名字候選是用舊的說話者判斷／逐字稿找的，這次的不一樣：可能漏掉新判成老師的句子裡的名字。"
-                   "要重找就把 名字候選.json 改名後重跑（覆核決定會照候選內容對回去）")
-            print(f"⚠️ [4/找名字] {msg}")
-            cached = {**cached, "輸入改過": msg}
-        return cached
-
-    t0 = time.time()
-    roster_path = Path(roster_path)
+def _load_terms(roster_path: Path, sensitive_path: Path | None) -> list[dict]:
     roster = load_roster(roster_path)
     for t in roster:
         t["_sensitive"] = False
     sensitive = load_sensitive_words(sensitive_path) if sensitive_path else []
     for t in sensitive:
         t["_sensitive"] = True
-    terms = roster + sensitive
+    return roster + sensitive
 
-    if exclusion_path is None:
-        exclusion_path = roster_path.parent / "名字排除清單.csv"
-    exclusions = load_exclusion_list(exclusion_path)
-    exclusion_lookup = _build_exclusion_lookup(exclusions)
 
-    if not terms:
-        print("[4/找名字] 名冊／敏感詞都是空的，沒有東西可以找")
-
-    clip_dir = Path(clip_dir) if clip_dir else name_candidates_dir(workdir)
-    clip_dir.mkdir(parents=True, exist_ok=True)
-
-    with sf.SoundFile(str(audio_path)) as f:
-        sr = f.samplerate
-        total_samples = f.frames
-    total_dur = total_samples / sr
-
+def _scan_sentences(sents: list[dict], owned: dict, terms: list[dict], exclusion_lookup: dict[str, str],
+                    audio: dict, workdir: Path, clip_dir: Path, first_idx: int, annotate, write_clips: bool
+                    ) -> tuple[list[dict], list[dict]]:
+    """掃這幾句，回傳 (候選, 命中排除清單的)。`audio`：{path, sr, total_dur, data}，data 用到才載入（就地存回）。
+    候選音檔檔名的編號從 `first_idx` 起算；`write_clips=False` 時不寫音檔（`inspect 名字 --重算` 用）。"""
     candidates: list[dict] = []
     excluded: list[dict] = []
-    level_counts = {"精確": 0, "A1": 0, "A2": 0}
-    confidence_level_counts = {"高": 0, "中": 0, "低": 0}
-    action_counts: dict[str, int] = {}
-    confidence_counts = {"雙邊乾淨": 0, "單邊乾淨": 0, "都不乾淨": 0}
-
-    teacher_sentences = [s for s in sentences if select(s)]
-    audio_full = None  # 延遲載入，名冊是空的、或這句的命中全部被排除清單擋掉時完全不用碰音檔
-
-    owned = assign_words(sentences, words)
-    for sent in teacher_sentences:
+    for sent in sents:
         sent_words = owned.get(sent.get("id"), [])
         if not sent_words:
             continue
@@ -471,16 +452,11 @@ def find_names(
         if not clean_idx:
             continue
         hits = _scan_chars_for_terms(chars, clean_idx, terms)
-        if not hits:
-            continue
-
         for hit in hits:
             term, level, matched_text = hit["term"], hit["level"], hit["text"]
             start_ci, end_ci = hit["start_ci"], hit["end_ci"]
-            first_ci_idx = clean_idx[start_ci]
-            last_ci_idx = clean_idx[end_ci - 1]
-            raw_start_t = chars[first_ci_idx]["start"]
-            raw_end_t = chars[last_ci_idx]["end"]
+            raw_start_t = chars[clean_idx[start_ci]]["start"]
+            raw_end_t = chars[clean_idx[end_ci - 1]]["end"]
 
             excl_reason = exclusion_lookup.get(_normalize_match_text(matched_text))
             if excl_reason is not None:
@@ -493,8 +469,9 @@ def find_names(
                 })
                 continue
 
-            if audio_full is None:
-                audio_full, sr = sf.read(str(audio_path), dtype="float32")
+            if audio.get("data") is None:
+                audio["data"], audio["sr"] = sf.read(str(audio["path"]), dtype="float32")
+            audio_full, sr, total_dur = audio["data"], audio["sr"], audio["total_dur"]
 
             stretched = _trim_stretched(audio_full, sr, [(chars[clean_idx[k]]["start"], chars[clean_idx[k]]["end"])
                                                          for k in range(start_ci, end_ci)])
@@ -523,14 +500,13 @@ def find_names(
 
             clip_start = max(0.0, start_t - CANDIDATE_CLIP_PAD_S)
             clip_end = min(total_dur, end_t + CANDIDATE_CLIP_PAD_S)
-            clip_idx = len(candidates)
+            clip_idx = first_idx + len(candidates)
             clip_name = f"{clip_idx:04d}_{clip_start:.1f}s.wav"
             clip_path = clip_dir / clip_name
-            if not clip_path.exists():
+            if write_clips and not clip_path.exists():
                 s0, s1 = int(clip_start * sr), int(clip_end * sr)
                 sf.write(str(clip_path), audio_full[s0:s1], sr)
 
-            match_confidence = LEVEL_CONFIDENCE[level]
             candidates.append({
                 "start": round(start_t, 3),
                 "end": round(end_t, 3),
@@ -542,7 +518,7 @@ def find_names(
                 "敏感詞": bool(term.get("_sensitive")),
                 "matched_text": matched_text,
                 "比對層級": level,
-                "信心": match_confidence,
+                "信心": LEVEL_CONFIDENCE[level],
                 "位置": position,
                 "建議做法": action,
                 "原因": reason,
@@ -552,36 +528,241 @@ def find_names(
                 **({"逐字時間拉長秒數": round(raw_len, 3)} if stretched else {}),
                 **(annotate(sent) if annotate else {}),
             })
-            if not term.get("_sensitive"):
-                level_counts[level] += 1
-            confidence_level_counts[match_confidence] += 1
-            action_counts[action] = action_counts.get(action, 0) + 1
-            confidence_counts[confidence] += 1
+    return candidates, excluded
+
+
+def _stats(candidates: list[dict], excluded: list[dict]) -> dict:
+    level_counts = {"精確": 0, "A1": 0, "A2": 0}
+    confidence_level_counts = {"高": 0, "中": 0, "低": 0}
+    action_counts: dict[str, int] = {}
+    confidence_counts = {"雙邊乾淨": 0, "單邊乾淨": 0, "都不乾淨": 0}
+    for c in candidates:
+        if not c.get("敏感詞"):
+            level_counts[c["比對層級"]] += 1
+        confidence_level_counts[c["信心"]] += 1
+        action_counts[c["建議做法"]] = action_counts.get(c["建議做法"], 0) + 1
+        confidence_counts[c["切點信心"]] += 1
+    return {
+        "總筆數": len(candidates),
+        "各層級筆數": level_counts,
+        "信心分布": confidence_level_counts,
+        "各建議做法筆數": action_counts,
+        "切點信心分布": confidence_counts,
+        "已自動排除數": len(excluded),
+    }
+
+
+def _source_counts(candidates: list[dict]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for c in candidates:
+        if c.get("來源"):
+            out[c["來源"]] = out.get(c["來源"], 0) + 1
+    return out
+
+
+def _same_spot(a: dict, b: dict) -> bool:
+    """同一句、同一個名冊寫法、起點差不到 0.05 秒：算同一筆候選（補找時不重複加）。"""
+    return (a.get("sentence_id") == b.get("sentence_id") and a.get("name") == b.get("name")
+            and abs(float(a["start"]) - float(b["start"])) < 0.05)
+
+
+def supplement(
+    audio_path: Path,
+    workdir: Path,
+    sentences: list[dict],
+    words: list[dict],
+    roster_path: Path,
+    sensitive_path: Path | None = None,
+    exclusion_path: Path | None = None,
+    *,
+    existing: list[dict],
+    roles: dict[str, str] | None = None,
+    clip_dir: Path | None = None,
+    write_clips: bool = True,
+) -> dict:
+    """10-04 #119：只掃放寬的那幾句（`extra_scope`），回傳
+        candidates: 現有候選（`existing`）裡沒有的新候選，每筆帶 `來源` 與 `補找`＝SUPPLEMENT_TAG
+        找到: 放寬的句子裡找到的全部候選（含現有候選已經有的）
+        已自動排除: 命中排除清單的
+        多掃句數: {來源: 句數}
+    不寫 `名字候選.json`（呼叫端決定要不要加進去）；`write_clips=False` 時也不寫候選音檔。
+    新候選的音檔編號接在現有候選後面，原本的候選編號、覆核決定都不動。"""
+    workdir = Path(workdir)
+    roles = sentence_turn_roles(workdir) if roles is None else roles
+    extra = extra_scope(sentences, roles)
+    by_source: dict[str, int] = {}
+    for v in extra.values():
+        by_source[v] = by_source.get(v, 0) + 1
+    terms = _load_terms(Path(roster_path), sensitive_path)
+    if exclusion_path is None:
+        exclusion_path = Path(roster_path).parent / "名字排除清單.csv"
+    lookup = _build_exclusion_lookup(load_exclusion_list(exclusion_path))
+    clip_dir = Path(clip_dir) if clip_dir else name_candidates_dir(workdir)
+    if write_clips:
+        clip_dir.mkdir(parents=True, exist_ok=True)
+    found: list[dict] = []
+    excluded: list[dict] = []
+    if extra and terms:
+        with sf.SoundFile(str(audio_path)) as f:
+            audio = {"path": audio_path, "sr": f.samplerate, "total_dur": f.frames / f.samplerate, "data": None}
+        found, excluded = _scan_sentences(
+            [s for s in sentences if s.get("id") in extra], assign_words(sentences, words), terms, lookup, audio,
+            workdir, clip_dir, len(existing), lambda s: {"來源": extra[s["id"]]}, write_clips)
+    new = [{**c, "補找": SUPPLEMENT_TAG} for c in found if not any(_same_spot(o, c) for o in existing)]
+    return {"candidates": new, "找到": found, "已自動排除": excluded, "多掃句數": by_source}
+
+
+def find_names(
+    audio_path: Path,
+    workdir: Path,
+    sentences: list[dict],
+    words: list[dict],
+    roster_path: Path,
+    sensitive_path: Path | None = None,
+    exclusion_path: Path | None = None,
+    *,
+    select=None,
+    cache_path: Path | None = None,
+    clip_dir: Path | None = None,
+    use_cache: bool = True,
+    annotate=None,
+) -> dict:
+    """在老師的句子裡找名冊上的名字與敏感詞。回傳 dict：
+        candidates: 每筆 {start, end, sentence, name, canonical, code, position,
+                          suggested_action, reason, cut_confidence, buffer_s,
+                          clip_path, level, matched_text, 信心}
+        已自動排除: 每筆 {start, end, sentence_id, matched_text, 原因}——matched_text
+                    命中「名字排除清單」的候選，不進 candidates，記在這裡
+        排除清單: 讀到的排除清單原始內容（詞/原因/建立日期），供覆核頁顯示
+        統計: {總筆數, 各層級筆數, 各建議做法筆數, 切點信心分布, 已自動排除數}
+        elapsed
+
+    掃哪些句子（10-04 #119）：判成老師的句子先掃（候選照句子順序排在前面，跟以前一樣）；再掃 `extra_scope` 放寬的
+    句子——太短、不確定的句子（不在學員段落裡的）、老師段落裡判成不是老師的句子——這些候選排在後面、多一個
+    `來源` 欄位（太短句／不確定句／老師段落裡的不是老師句），信心照比對層級。段落資料見 `sentence_turn_roles`。
+
+    `exclusion_path` 不給的話，預設抓 `roster_path` 同一層目錄下的
+    `名字排除清單.csv`（宇軒的名冊、敏感詞、排除清單都放在同一個資料夾）；
+    檔案不存在就當作沒有排除清單，照常運作。
+
+    `workdir/名字候選.json` 已存在就直接讀出來回傳。舊版找的（沒有 `掃描範圍`）先補掃放寬的句子，新的候選加在最後面
+    （原本的候選編號不變，覆核決定照舊對得上）。名字與句子內容只寫進檔案，不印在終端機。
+
+    09-29 加（保留原聲學員講到名字，`bookclub/studentnames.py` 用）：`select(句子) → bool` 換掉「只掃老師」、
+    `cache_path`／`clip_dir` 換存放位置、`use_cache=False` 不沿用舊結果、`annotate(句子) → dict` 每筆候選多加的欄位。
+    給了 `select` 就只掃 `select` 選的句子（不放寬）。都不給時照上面的預設。
+    """
+    workdir = Path(workdir)
+    audio_path = Path(audio_path)
+    roster_path = Path(roster_path)
+    cache_path = Path(cache_path) if cache_path else names_path(workdir)
+    cached = read_json(cache_path, default=None) if use_cache else None
+    default_scope = select is None
+    select = select or _is_teacher
+    # 指紋只算判成老師的句子（跟以前一樣，舊工作區的指紋才對得上）
+    in_fp = fingerprint([[s["id"], s["text"]] for s in sentences if select(s)])
+    if cached is not None:
+        print("[4/找名字] 已有 名字候選.json，略過")
+        dirty = False
+        if default_scope and cached.get("掃描範圍") != SCAN_SCOPE:
+            # 10-04 #119：舊版只掃判成老師的句子；補掃放寬的句子，新的加在最後面（不重找、不重排原本的候選）
+            extra = supplement(audio_path, workdir, sentences, words, roster_path, sensitive_path, exclusion_path,
+                               existing=cached.get("candidates", []), clip_dir=clip_dir)
+            cached["candidates"] = cached.get("candidates", []) + extra["candidates"]
+            cached["掃描範圍"] = SCAN_SCOPE
+            st = cached.setdefault("統計", {})
+            st["總筆數"] = len(cached["candidates"])
+            st["放寬範圍補找數"] = len(extra["candidates"])
+            dirty = True
+            print(f"[4/找名字] 找名字範圍放寬（太短、不確定的句子也掃）：補找到 {len(extra['candidates'])} 筆，"
+                  "加在最後面（原本的候選編號不變）")
+        # 09-29 檢查 #7：記下是從哪些老師句子找的；之後說話者判斷或逐字稿改了，大聲提醒（不自動重算：
+        # 名字候選已經接了人工覆核決定、補找的名字，自動重算會丟東西）
+        if cached.get("輸入指紋") is None:
+            cached["輸入指紋"] = in_fp
+            dirty = True
+        if dirty:
+            write_json(cache_path, cached)
+        if cached["輸入指紋"] != in_fp:
+            msg = ("名字候選是用舊的說話者判斷／逐字稿找的，這次的不一樣：可能漏掉新判成老師的句子裡的名字。"
+                   "要重找就把 名字候選.json 改名後重跑（覆核決定會照候選內容對回去）")
+            print(f"⚠️ [4/找名字] {msg}")
+            cached = {**cached, "輸入改過": msg}
+        return cached
+
+    t0 = time.time()
+    terms = _load_terms(roster_path, sensitive_path)
+
+    if exclusion_path is None:
+        exclusion_path = roster_path.parent / "名字排除清單.csv"
+    exclusions = load_exclusion_list(exclusion_path)
+    exclusion_lookup = _build_exclusion_lookup(exclusions)
+
+    if not terms:
+        print("[4/找名字] 名冊／敏感詞都是空的，沒有東西可以找")
+
+    clip_dir = Path(clip_dir) if clip_dir else name_candidates_dir(workdir)
+    clip_dir.mkdir(parents=True, exist_ok=True)
+
+    with sf.SoundFile(str(audio_path)) as f:
+        # 音檔內容延遲載入：名冊是空的、或命中全部被排除清單擋掉時完全不用碰
+        audio = {"path": audio_path, "sr": f.samplerate, "total_dur": f.frames / f.samplerate, "data": None}
+
+    owned = assign_words(sentences, words)
+    candidates, excluded = _scan_sentences([s for s in sentences if select(s)], owned, terms, exclusion_lookup,
+                                           audio, workdir, clip_dir, 0, annotate, True)
+    if default_scope:   # 10-04 #119：放寬的句子排在後面掃
+        extra = extra_scope(sentences, sentence_turn_roles(workdir))
+        more, more_ex = _scan_sentences(
+            [s for s in sentences if s.get("id") in extra], owned, terms, exclusion_lookup, audio, workdir, clip_dir,
+            len(candidates), lambda s: {**(annotate(s) if annotate else {}), "來源": extra[s["id"]]}, True)
+        candidates += more
+        excluded += more_ex
 
     elapsed = time.time() - t0
+    stats = _stats(candidates, excluded)
+    if default_scope:
+        stats["各來源筆數"] = _source_counts(candidates)
     result = {
         "candidates": candidates,
         "輸入指紋": in_fp,
+        **({"掃描範圍": SCAN_SCOPE} if default_scope else {}),
         "已自動排除": excluded,
         "排除清單": exclusions,
-        "統計": {
-            "總筆數": len(candidates),
-            "各層級筆數": level_counts,
-            "信心分布": confidence_level_counts,
-            "各建議做法筆數": action_counts,
-            "切點信心分布": confidence_counts,
-            "已自動排除數": len(excluded),
-        },
+        "統計": stats,
         "elapsed": round(elapsed, 1),
     }
     write_json(cache_path, result)
     print(f"[4/找名字] 完成：{len(candidates)} 筆候選，耗時 {elapsed:.1f} 秒")
+    if default_scope and stats["各來源筆數"]:
+        print(f"[4/找名字] 其中太短、不確定的句子與老師段落裡的不是老師句：{stats['各來源筆數']}")
     if excluded:
         print(f"[4/找名字] 已自動排除 {len(excluded)} 筆（命中「名字排除清單」）")
-    print(f"[4/找名字] 讀音比對層級分布：{level_counts}　信心分布：{confidence_level_counts}")
-    print(f"[4/找名字] 建議做法分布：{action_counts}")
-    print(f"[4/找名字] 切點信心分布：{confidence_counts}")
+    print(f"[4/找名字] 讀音比對層級分布：{stats['各層級筆數']}　信心分布：{stats['信心分布']}")
+    print(f"[4/找名字] 建議做法分布：{stats['各建議做法筆數']}")
+    print(f"[4/找名字] 切點信心分布：{stats['切點信心分布']}")
     return result
+
+
+def preview_supplement(workdir: str | Path) -> dict:
+    """`bookclub inspect <工作區> 名字 --重算` 用：用現在的程式、工作區現在的資料，在放寬的句子裡重找一次名字，
+    不寫任何檔（不寫名字候選.json、不寫候選音檔）。回傳 `supplement` 的結果，另加 `現有候選數`、`掃描範圍`。"""
+    from bookclub.config import data_dir
+    from bookclub.workdir import audio_path, merged_transcript_path, speakers_path
+
+    workdir = Path(workdir)
+    roster = data_dir() / "名冊.csv"
+    cur = read_json(names_path(workdir), default=None) or {}
+    existing = cur.get("candidates", [])
+    base = {"現有候選數": len(existing), "掃描範圍": cur.get("掃描範圍")}
+    if not roster.is_file() or not audio_path(workdir).is_file():
+        return {**base, "candidates": [], "找到": [], "已自動排除": [], "多掃句數": {}, "沒辦法重算": True}
+    sents = (read_json(speakers_path(workdir), default={}) or {}).get("sentences", [])
+    words = (read_json(merged_transcript_path(workdir), default={}) or {}).get("words", [])
+    sensitive = data_dir() / "敏感詞.csv"
+    res = supplement(audio_path(workdir), workdir, sents, words, roster, sensitive if sensitive.is_file() else None,
+                     existing=existing, write_clips=False)
+    return {**base, **res}
 
 
 def assign_words(sentences: list[dict], words: list[dict], max_gap_s: float = 0.6) -> dict[str, list[dict]]:
