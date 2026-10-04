@@ -53,7 +53,7 @@ VOCAB = {
     # 段落外的答案
     "老師不用處理", "老師重念", "還是學員", "好幾個人",
     # 總檢查的列
-    "段落是老師",
+    "段落是老師", "彙總", "較短",   # 10-04 #117
     # 前後沒聲音（第六批）
     "重念範圍", "老師整段", "老師起訖",
     # 全片底噪（第六批第五件）
@@ -95,7 +95,8 @@ TIME_KEYS = {"start", "end", "slot", "原片", "成品", "at", "標的起訖", "
              "疊到的範圍", "現在的slot"}
 
 ID_PREFIXES = VOCAB | {"段落外", "剪掉", "名字消音", "長句", "字太少", "聲紋", "前後沒聲音", "學員段落", "名字", "重疊",
-                       "刪除段落", "局部消音", "改成老師", "學員名字", "底噪", "空隙"}
+                       "刪除段落", "局部消音", "改成老師", "學員名字", "底噪", "空隙",
+                       "沒有字"}   # 10-04 #117
 _ID_BODY = r"(?:[A-Za-z]{0,4}\d+(?:[._m]\d+)*(?:_學員|_老師)?|\d+\.\d+)"   # O5602.14_學員：重疊卡片自己生成的那一句
 _ID_RE = re.compile(rf"^{_ID_BODY}$")
 _SPK_RE = re.compile(r"^(老師|學員\d+|學員\?)$")
@@ -310,30 +311,53 @@ def topic_sentences(w: Path, f: Filter, out: list[str]) -> None:
 
 
 def topic_words(w: Path, f: Filter, out: list[str], limit: int) -> None:
-    """逐字稿的字：只印時間，不印字。"""
+    """逐字稿的字：只印時間，不印字。10-04：時間照 `--毫秒`；安靜處與清單都照 `--limit`、只列範圍內的。"""
     merged = _read(wd.merged_transcript_path(w)) or {}
     words = merged.get("words") or []
     rows = [x for x in words if f.ok({"start": x.get("start"), "end": x.get("end")})]
     out.append(f"字 {len(words)} 個（符合條件 {len(rows)} 個）")
+
+    def more(n: int) -> str:
+        return f"⋯另外 {n - limit} 處沒列（用 --limit 調）" if n > limit else ""
+
     # 10-04 #105：轉文字時被挖掉的靜音（只有時間），用來查「一個字橫跨被挖掉的靜音」
     sil = [s for s in (merged.get("silence_map") or []) if f.ok({"start": s.get("start"), "end": s.get("end")})]
     if sil:
-        out.append("VAD 判定的安靜處（挖停頓的做法轉的就是被挖掉的地方）：" + "、".join(f"{timemap.t1(s['start'])}–{timemap.t1(s['end'])}（{s['end'] - s['start']:.1f} 秒）" for s in sil[:30]))
+        out.append(f"VAD 判定的安靜處（挖停頓的做法轉的就是被挖掉的地方）{len(sil)} 處：" + "、".join(
+            f"{tfmt(s['start'])}–{tfmt(s['end'])}（{s['end'] - s['start']:.1f} 秒）" for s in sil[:limit]) + more(len(sil)))
     # 10-04 #62：整個落在安靜超過 1 秒的地方的字（可能是 Groq 自己編的；只印數字與時間）
     from bookclub.transcribe import QUIET_WORD_MIN_S, quiet_word_stats
 
     qs = quiet_word_stats(words, merged.get("silence_map") or [])
     if merged.get("轉文字做法"):
         out.append(f"轉文字做法：{merged['轉文字做法'] if merged['轉文字做法'] in ('不挖停頓', '保留一秒停頓') else '<其他>'}")
+    pos = [p for p in qs["位置"] if f.ok({"start": p[0], "end": p[1]})]
     out.append(f"落在安靜超過 {QUIET_WORD_MIN_S:.0f} 秒的地方的字（整支）：{qs['字數']} 個、{qs['處數']} 處"
-               + ("：" + "、".join(f"{timemap.t1(a)}–{timemap.t1(b)}（{n} 個）" for a, b, n in qs["位置"][:30]) if qs["位置"] else ""))
+               + (f"；範圍內 {len(pos)} 處：" + "、".join(f"{tfmt(a)}–{tfmt(b)}（{n} 個）" for a, b, n in pos[:limit]) + more(len(pos))
+                  if pos else ""))
+    # 10-04 #117：有人聲但沒有字（Groq 漏轉）：整支統計＋範圍內每一處（時間、人聲秒數、小段數）
+    from bookclub import untranscribed
+
+    regions = untranscribed.from_merged(merged)
+    st = untranscribed.stats(regions)
+    if st is None:
+        out.append("有人聲但沒有字：沒有安靜處資料，不統計")
+    else:
+        shown = [r for r in regions if f.ok(r)]
+        out.append(f"有人聲但沒有字（整支）：{st['處數']} 處、人聲合計 {st['人聲秒']:.1f} 秒、"
+                   f"{untranscribed.MUST_VOICE_S:.0f} 秒以上 {st['三秒以上']} 處；範圍內 {len(shown)} 處")
+        for r in shown[:limit]:
+            out.append(f"  沒有字 {tfmt(r['start'])}–{tfmt(r['end'])}  人聲={r['人聲秒']:.1f} 秒  小段數={r['小段數']}")
+        if len(shown) > limit:
+            out.append(more(len(shown)))
     if rows:
-        out.append(f"第一個字從 {timemap.t1(rows[0]['start'])} 開始，最後一個字到 {timemap.t1(rows[-1]['end'])}")
+        out.append(f"第一個字從 {tfmt(rows[0]['start'])} 開始，最後一個字到 {tfmt(rows[-1]['end'])}")
         gaps = [(rows[i]["end"], rows[i + 1]["start"]) for i in range(len(rows) - 1) if rows[i + 1]["start"] - rows[i]["end"] >= 0.5]
         if gaps:
-            out.append("字跟字之間空超過 0.5 秒的地方：" + "、".join(f"{timemap.t1(a)}–{timemap.t1(b)}（{b - a:.1f} 秒）" for a, b in gaps[:30]))
+            out.append("字跟字之間空超過 0.5 秒的地方：" + "、".join(f"{tfmt(a)}–{tfmt(b)}（{b - a:.1f} 秒）" for a, b in gaps[:limit])
+                       + more(len(gaps)))
     for i, x in enumerate(rows[:limit], 1):
-        out.append(f"#{i}  {timemap.t1(x['start'])}–{timemap.t1(x['end'])}  <字 {len(str(x.get('word', '')))} 個字元>")
+        out.append(f"#{i}  {tfmt(x['start'])}–{tfmt(x['end'])}  <字 {len(str(x.get('word', '')))} 個字元>")
     if len(rows) > limit:
         out.append(f"⋯另外 {len(rows) - limit} 個沒列（用 --limit 調）")
 
@@ -424,6 +448,8 @@ def topic_final_check(w: Path, f: Filter, out: list[str]) -> None:
                 both = timemap.both(r["start"], r["end"], m) if m else None
                 out.append(f"[{part}] " + fmt_row(row, ("key", "start", "end", "已按聽過", "新的", "第3步"))
                            + (f"  （{both}）" if both else "") + (f"  有學員聲音的路 {len(r['有學員聲音'])} 條" if r.get("有學員聲音") else ""))
+                for p in r.get("時間點") or []:   # 10-04 #117：合成一列的每一處（編號、時間）
+                    out.append("    時間點 " + fmt_row({k: p.get(k) for k in ("id", "start", "end", "類型", "秒") if k in p}))
     s = fc.get("摘要") or {}
     out.append(f"摘要：自動算處理好 {len(s.get('自動算處理好') or [])} 筆、要生成 {s.get('要生成秒數')} 秒、預估 {s.get('預估秒數')} 秒、"
                f"硬碟可用 {s.get('硬碟可用GB')} GB")

@@ -619,4 +619,10 @@ def transcribe(
     merged_path.write_text(json.dumps(merged, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"[1/轉文字] 完成：{len(merged_sentences)} 句、{len(merged_words)} 個字，"
           f"寫入 {merged_path}")
+    try:   # 10-04 #117：有人聲但沒有字（Groq 漏轉）的統計，只印數字與時間
+        from bookclub import untranscribed
+
+        print(untranscribed.summary_line(untranscribed.from_merged(merged), fmt_time))
+    except Exception as exc:  # noqa: BLE001 — 統計失敗不影響轉文字
+        print(f"[1/轉文字] 有人聲但沒有字：統計失敗（{type(exc).__name__}）")
     return merged

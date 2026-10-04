@@ -37,6 +37,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from bookclub import untranscribed
 from bookclub import workdir as wd
 
 STEPS = (("老師名字", "老師提到名字：用老師 AI 聲音整句重念（gen names）"),
@@ -190,6 +191,64 @@ ASSEMBLE_S = 21 * 60      # 整支組裝約 21 分鐘（09-30 實測）
 LONG_TEACHER_S = 10.0
 OUTSIDE_MIN_S = 0.3       # 學員的話落在段落外面超過這麼久才算
 STUDENT_TURN_KEY = "重疊:學員段落"   # 10-04 #111：「請看一眼」裡學員段落裡自動處理的重疊那一列
+
+
+UNTRANSCRIBED_KEY = "沒有字"            # 10-04 #117：「一定要處理」每一處一列，鍵 沒有字:{起點秒:.1f}
+UNTRANSCRIBED_LOOK_KEY = "沒有字:彙總"   # 10-04 #117：「請看一眼」比較短的、在學員段落裡的合成一列
+UNTRANSCRIBED_MOVE_S = 1.0              # 重算之後起點移動不超過這麼多秒，之前按的「我聽過了」照算
+
+
+def untranscribed_key(start: float, heard: set) -> str:
+    """#117 那一列的鍵（純函式）：之前按過「我聽過了」的鍵起點跟現在差不超過 1 秒，就沿用那個鍵（重算之後小幅移動
+    不用重聽）；否則是新的鍵 沒有字:{起點秒:.1f}。"""
+    best = None
+    for k in heard:
+        if not str(k).startswith(UNTRANSCRIBED_KEY + ":") or k == UNTRANSCRIBED_LOOK_KEY:
+            continue
+        try:
+            x = float(str(k).split(":", 1)[1])
+        except ValueError:
+            continue
+        d = abs(x - start)
+        if d <= UNTRANSCRIBED_MOVE_S and (best is None or d < best[0]):
+            best = (d, k)
+    return best[1] if best else f"{UNTRANSCRIBED_KEY}:{start:.1f}"
+
+
+def _untranscribed_rows(workdir: Path, dec: dict, heard: set, stu_turns: list[dict], kept: set, index: dict,
+                        row, must: list) -> list[dict]:
+    """#117：算「有人聲但沒有字」的區間，≥3 秒的直接加到「一定要處理」；回傳要放「請看一眼」的那幾處。
+    資料不夠（沒有安靜處清單）或算不出來 → 不列、不擋。"""
+    from bookclub import review
+
+    try:
+        regions = untranscribed.from_merged(wd.read_json(wd.merged_transcript_path(workdir), default={}))
+    except Exception:  # noqa: BLE001 — 算不出來不擋總檢查
+        regions = None
+    if not regions:
+        return []
+    cuts = [(float(c["start"]), float(c["end"])) for c in dec.get("刪除段落") or [] if c.get("狀態") != "還原"]
+    again = [t for t in stu_turns if t["說話者"] not in kept]   # 會整段重念的學員段落（保留原聲的不算）
+    look = []
+    for r in regions:
+        kind, secs = untranscribed.classify(r, cuts, [(t["start"], t["end"]) for t in again])
+        if kind is None:
+            continue
+        a, b = r["start"], r["end"]
+        if kind == "一定要處理":
+            key = untranscribed_key(a, heard)
+            row(must, key, a, b,
+                f"這裡有人講話（約 {secs:.1f} 秒）但逐字稿沒有字，工具找不到這裡的名字。請聽一下："
+                "有提到名字就到第 3 步手動補名字卡；沒有就按「我聽過了」", ack=True,
+                name=f"{t1(a)} 沒有字的地方",
+                todo="有提到名字：到第 3 步手動新增名字卡（起訖填這一段時間），補好之後回來按「我聽過了」")
+            must[-1].update({"人聲秒": secs, "小段數": r["小段數"],
+                             "聽過字": "我聽過了，沒有提到名字（或已經補好名字卡）"})
+            continue
+        home = next((t for t in again if t["start"] <= (a + b) / 2 <= t["end"]), None)
+        look.append({"start": a, "end": b, "秒": secs, "類別": kind,
+                     "名稱": review.item_name(index, f"學員段落:{home['id']}") if home and kind == "學員段落" else ""})
+    return look
 
 
 def _uncovered(a: float, b: float, ranges: list[tuple[float, float]]) -> float:
@@ -538,6 +597,8 @@ def final_check(workdir: str | Path) -> dict:
                 name=f"{t1(a)} 這一句",
                 todo="第 3 步沒有這一句的卡片：有學員的聲音時，用下面「有學員的聲音」帶著這段時間去第 3 步新增或延長",
                 paths=_fix_paths(a, b, near(a, b), index, turn=close))
+    # 10-04 #117：有人聲但逐字稿沒有字（Groq 漏轉）→ 找名字找不到，名字可能留在成品裡。見 bookclub/untranscribed.py
+    nz_look = _untranscribed_rows(workdir, dec, heard, stu_turns, kept, index, row, must)
 
     # 請看一眼
     for c in dec["刪除段落"]:
@@ -609,6 +670,22 @@ def final_check(workdir: str | Path) -> dict:
         look[-1]["時間點"] = [{"id": x["id"], "start": round(x["start"], 3), "end": round(x["end"], 3),
                             "名稱": review.item_name(index, f"學員段落:{x['學員段落']}") if x.get("學員段落") else ""}
                            for x in auto_ov]
+    if nz_look:   # 10-04 #117：沒有字、但比較短，或落在會整段重念的學員段落裡 → 合成一列，每一處可以點過去聽
+        short = [x for x in nz_look if x["類別"] == "較短"]
+        inturn = [x for x in nz_look if x["類別"] == "學員段落"]
+        text = []
+        if short:
+            text.append(f"{len(short)} 處有人講話（各約 {untranscribed.MIN_PIECE_S:.1f}–{untranscribed.MUST_VOICE_S:.0f} 秒）"
+                        "但逐字稿沒有字，工具找不到這裡的名字；有空的話聽一下，有提到名字就到第 3 步手動補名字卡。")
+        if inturn:
+            text.append(f"{len(inturn)} 處在會整段重念的學員段落裡：重念時會少念這幾秒的內容；隱私不受影響。")
+        row(look, UNTRANSCRIBED_LOOK_KEY, nz_look[0]["start"], nz_look[-1]["end"],
+            "".join(text) + "時間：" + "、".join(wd.fmt_time(x["start"]) for x in nz_look[:40]) + ("⋯" if len(nz_look) > 40 else ""),
+            name="有人聲但沒有字", todo="有提到名字：到第 3 步手動新增名字卡（起訖填這一處的時間）")
+        look[-1]["時間點"] = [{"id": f"沒有字:{x['start']:.1f}", "start": round(x["start"], 3), "end": round(x["end"], 3),
+                            "類型": x["類別"], "秒": x["秒"],
+                            "名稱": (f"{x['名稱']}裡，" if x.get("名稱") else "") + f"約 {x['秒']:.1f} 秒沒有字"}
+                           for x in nz_look]
     covered = review.covered_overlaps(workdir, dec, turns) if turns else []
     gen_s = sum(g["slot"][1] - g["slot"][0] for g in plan["生成"]) + sum(it["slot_s"] for it in items)
     free = shutil.disk_usage(str(workdir)).free / 1e9

@@ -334,7 +334,7 @@ function finalCheckHtml(fc) {
     ${pts.length ? `<div class="fc-points">${pts.map((p) => `<button class="secondary small" data-fcplay="${p.start}|${p.end}" title="${esc(p["名稱"] || "")}">聽 ${esc(fcTime(p.start))}</button>`).join(" ")}</div>` : ""}
     ${sh && sh["可以縮"] ? `<button class="small" data-fcshrink="${i}">照建議縮小</button>` : ""}
     ${r["第3步"] ? `<button class="secondary small" data-fcgo="${i}">去第 3 步改這一筆</button>` : ""}
-    ${r["可以按聽過"] ? `<label class="nowrap"><input type="checkbox" data-fcheard="${esc(r.key)}" ${done ? "checked" : ""}> 我聽過了，這裡沒有學員的聲音</label>` : ""}
+    ${r["可以按聽過"] ? `<label class="nowrap"><input type="checkbox" data-fcheard="${esc(r.key)}" ${done ? "checked" : ""}> ${esc(r["聽過字"] || "我聽過了，這裡沒有學員的聲音")}</label>` : ""}
     ${outPick}
     ${paths.length ? `<details class="fc-paths"><summary>有學員的聲音</summary><p class="muted">選一個，會帶著這段時間到第 3 步（起訖先填好，按「新增」或「儲存修改」才會存）：</p>
       <ul>${paths.map((p, j) => `<li><button class="secondary small" data-fcpath="${i}|${j}">${esc(p["文字"])}</button></li>`).join("")}</ul></details>` : ""}</td></tr>`;
