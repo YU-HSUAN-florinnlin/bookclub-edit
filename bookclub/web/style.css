@@ -670,3 +670,8 @@ details.adv summary { cursor: pointer; color: var(--muted); }
 .rv-out-btns { display: flex; flex-direction: column; gap: 6px; align-items: stretch; margin: 10px 0; }
 .rv-outq { border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 8px; }
 .rv-outq .rv-row { flex-wrap: wrap; gap: 6px; }
+
+/* 10-04 #128：跟 AI 助手溝通用的內部編號（T027、名字 35、沒有字:1260.6⋯），小字灰色等寬、可以選取複製 */
+.idtag { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; font-weight: normal;
+  color: var(--muted); user-select: text; -webkit-user-select: text; white-space: nowrap; margin-left: 6px; }
+.rv-list .tx .idtag { margin: 0 8px 0 0; }

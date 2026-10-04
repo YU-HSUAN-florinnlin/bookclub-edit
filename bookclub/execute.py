@@ -485,9 +485,20 @@ def final_check(workdir: str | Path) -> dict:
     handled = [(x["start"], x["end"]) for x in named]
     must, look = [], []
 
+    from bookclub.safeview import safe_id
+
+    def show_id(key, card3):
+        """10-04 #128：畫面上小字顯示的編號（跟 inspect 總檢查的鍵一樣）。鍵含自己打的文字或名字（inspect 會印成
+        `<文字 12 字>`）就改顯示第 3 步卡片的鍵；兩個都不能印就不顯示。"""
+        for k in (key, card3):
+            if isinstance(k, str) and safe_id(k):
+                return k
+        return None
+
     def row(lst, key, a, b, text, ack=False, *, name="", card=None, todo="", paths=None, heard_now=None):
+        card3 = (index.get(card) or {}).get("第3步") if card else None
         lst.append({"key": key, "start": round(a, 3), "end": round(b, 3), "說明": text, "名稱": name,
-                    "第3步": (index.get(card) or {}).get("第3步") if card else None,
+                    "第3步": card3, "顯示編號": show_id(key, card3),
                     "去改": todo, **({"有學員聲音": paths} if paths else {}),
                     **({"可以按聽過": True, "已按聽過": key in heard if heard_now is None else heard_now} if ack else {})})
 

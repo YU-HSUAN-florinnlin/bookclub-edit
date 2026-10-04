@@ -44,6 +44,16 @@ function fcShown() { return fcOnlyLook() ? fcRecs().filter((r) => r["要人看"]
 function fcRecs() { return fc.data["紀錄"]; }
 function fcRec(key) { return fcRecs().find((r) => r["鍵"] === key); }
 function fcHasTime(r) { return r["成品"] && r["成品"][0] != null; }
+// 10-04 #128：跟 AI 助手溝通用的編號（跟 `bookclub inspect 成品檢查` 的「編號」一樣：#12；有生成檔的加生成編號：#12 T034_13）。
+// 小字灰色；缺欄位、長得不像編號就不顯示，不丟例外
+function fcIdTag(r) {
+  try {
+    const n = r ? r["編號"] : null;
+    const g = r && typeof r["生成編號"] === "string" && /^[A-Za-z]{1,4}\d+(?:m\d+)*(?:_\d+)?$/.test(r["生成編號"]) ? r["生成編號"] : "";
+    const txt = [Number.isInteger(n) ? `#${n}` : "", g].filter(Boolean).join(" ");
+    return txt ? `<span class="idtag" title="跟 AI 助手溝通用的編號">${esc(txt)}</span>` : "";
+  } catch (e) { return ""; }
+}
 
 async function renderFinal() {
   contentEl.innerHTML = "<p>載入中…</p>";
@@ -299,7 +309,7 @@ function fcRenderRight() {
       ? `<br><span class="rv-meta">範圍改了：${done["原本"] ? `${esc(fcFmt(done["原本"][0]))}–${esc(fcFmt(done["原本"][1]))} → ` : ""}${esc(fcFmt(done["改成"][0]))}–${esc(fcFmt(done["改成"][1]))}（原片時間，第 3 步〈${esc(done["名稱"] || "")}〉看得到）。第 4 步按「開始執行」會${esc(done["重做"] || "重新組裝")}</span>` : ""}` : "";
   box.innerHTML = `<article class="rv-card">
       <header><span class="rv-chip fc-${FC_TYPE[r["類型"]] || "ov"}"><i></i>${esc(fcKind(r["類型"]))}</span>
-        <span class="rv-when">${esc(fcBoth(r))}</span>
+        <span class="rv-when">${esc(fcBoth(r))}</span>${fcIdTag(r)}
         <span class="rv-count">第 ${idx + 1}／${all.length} 筆</span></header>
       <div class="rv-body">
         <p>${esc(r["做了什麼"])}</p>
@@ -624,7 +634,7 @@ function fcRenderLower() {
   const rows = fcShown().map((r) => `<li data-key="${esc(r["鍵"])}" class="${r["鍵"] === fc.cur ? "cur" : ""} ${r["結果"] ? "done" : ""}">
       <span class="tm">${r["原片"] ? `原片 ${esc(fcFmt(r["原片"][0]))}` : "—"}<br><small>${fcHasTime(r) ? `成品 ${esc(fcFmt(r["成品"][0]))}` : r["原片"] ? "成品裡沒有" : ""}</small></span>
       <span class="ty"><span class="rv-chip fc-${FC_TYPE[r["類型"]] || "ov"}"><i></i>${esc(fcKind(r["類型"]))}</span></span>
-      <span class="tx">${r["重做過"] ? `<span class="rv-tag">${esc(r["重做過"]["標籤"] || "重做過")}${r["重做過"]["第幾版"] && r["重做過"]["做法"] === "重新生成" ? `・第 ${r["重做過"]["第幾版"]} 版` : ""}</span>` : ""}${esc(r["做了什麼"])}</span>
+      <span class="tx">${fcIdTag(r)}${r["重做過"] ? `<span class="rv-tag">${esc(r["重做過"]["標籤"] || "重做過")}${r["重做過"]["第幾版"] && r["重做過"]["做法"] === "重新生成" ? `・第 ${r["重做過"]["第幾版"]} 版` : ""}</span>` : ""}${esc(r["做了什麼"])}</span>
       <span class="sg">${esc((r["覆核名稱"] || []).join("、"))}</span>
       <span class="st ${r["結果"] === "通過" ? "ok" : ""}">${r["結果"] === "通過" ? "✓ 通過" : r["結果"] === "退回重做" ? "退回" : "—"}</span></li>`).join("");
   lower.innerHTML = `${unHtml}<h2 class="fc-h2">處理紀錄（${fcRecs().length} 筆）</h2>

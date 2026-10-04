@@ -54,6 +54,22 @@ function rvRuleHint(kind, whole, editing) {
 const RV_ITEM_KIND = { "改成老師": "學員發言", "學員段落": "學員發言", "名字": "名字", "重疊": "重疊", "刪除段落": "刪除段落", "局部消音": "局部消音" };
 
 function rvKey(it) { return `${it["類型"]}:${it.id}`; }
+// 10-04 #128：跟 AI 助手溝通用的內部編號（跟 `bookclub inspect` 的寫法一樣：T027、名字 35、重疊 O2754.10、剪掉 S3、消音 M001），
+// 小字灰色顯示。只顯示長得像程式編號的（同 safeview.safe_id 的編號規則）；對不上、缺欄位就不顯示，不丟例外
+const RV_ID_RE = /^(?:[A-Za-z]{0,4}\d+(?:[._m]\d+)*(?:_學員|_老師)?|\d+\.\d+)$/;
+const RV_ID_LABEL = { "學員段落": "", "改成老師": "", "名字": "名字 ", "學員名字": "學員名字 ", "重疊": "重疊 ", "刪除段落": "剪掉 ", "局部消音": "消音 " };
+function rvIdTag(it) {
+  try {
+    const id = it && it.id != null ? String(it.id) : "";
+    const pre = it ? RV_ID_LABEL[it["類型"]] : undefined;
+    if (pre === undefined || !RV_ID_RE.test(id)) return "";
+    // 名字卡併了好幾筆（同一句同代號）：主卡編號顯示出來，其他幾筆放在滑鼠移上去的提示
+    const mates = rvIsName(it["類型"]) && Array.isArray(it["同一張卡候選"])
+      ? it["同一張卡候選"].map(String).filter((k) => k !== id && RV_ID_RE.test(k)) : [];
+    const title = mates.length ? `同一張卡：${mates.join("、")}` : "跟 AI 助手溝通用的編號";
+    return `<span class="idtag" title="${esc(title)}">${esc(pre + id)}</span>`;
+  } catch (e) { return ""; }
+}
 function rvItem(key) { return rv.data["項目"].find((x) => rvKey(x) === key); }
 function rvItems() { return rv.data["項目"]; }
 // 09-29 宇軒：落在前面已確認刪除的段落裡＝前面核對過了，顯示成「通過」
@@ -589,7 +605,7 @@ function rvRenderCard() {
     <article class="rv-card" data-key="${esc(rv.cur)}">
       <header>
         ${rvChip(it)}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}
-        <span class="rv-when">${esc(when)}</span>
+        <span class="rv-when">${esc(when)}</span>${rvIdTag(it)}
         <span class="rv-count">第 ${idx + 1}／${all.length} 筆</span>
       </header>
       <div class="rv-body">${coverNote}${rvBodyHtml(it)}${rvAlignLine(it)}</div>
@@ -1404,7 +1420,7 @@ function rvRenderList() {
     return `<li class="${key === rv.cur ? "cur" : ""} ${rvDone(it) ? "done" : ""}" data-key="${esc(key)}" tabindex="-1">
       <span class="tm">${esc(rvFmt(it.start))}</span>
       <span class="ty">${rvChip(it)}</span>
-      <span class="tx">${(it["段落外"] || []).some((q) => !q["答案"]) ? `<span class="rv-tag warn">段落外面有幾秒還沒回答</span>` : ""}${it["第5步退回"] ? `<span class="rv-tag warn" title="${esc(it["第5步退回"].join("；"))}">第 5 步退回</span>` : ""}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}${esc(rvPreview(it))}</span>
+      <span class="tx">${rvIdTag(it)}${(it["段落外"] || []).some((q) => !q["答案"]) ? `<span class="rv-tag warn">段落外面有幾秒還沒回答</span>` : ""}${it["第5步退回"] ? `<span class="rv-tag warn" title="${esc(it["第5步退回"].join("；"))}">第 5 步退回</span>` : ""}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}${esc(rvPreview(it))}</span>
       <span class="sg">${esc(sug)}</span>
       ${st}</li>`;
   }).join("");

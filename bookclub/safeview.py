@@ -454,7 +454,7 @@ def topic_final_check(w: Path, f: Filter, out: list[str]) -> None:
                f"看過後新增 {fc['看過後新增']} 列")
     for part in ("一定要處理", "請看一眼"):
         for r in fc[part]:
-            row = {k: v for k, v in r.items() if k not in ("有學員聲音", "聲紋老師")}
+            row = {k: v for k, v in r.items() if k not in ("有學員聲音", "聲紋老師", "顯示編號")}   # 顯示編號＝key 或第3步，不重印
             if isinstance(r.get("聲紋老師"), dict):   # 10-04 #127：只有數字與是／否
                 row.update(flat({k: v for k, v in r["聲紋老師"].items() if k != "提醒"}, "聲紋老師"))
             if f.ok(row):

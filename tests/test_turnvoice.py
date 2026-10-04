@@ -114,6 +114,12 @@ def test_final_check_row():
     assert r["第3步"], r                                                # 可以點回第 3 步那張卡
     assert "5 句裡 4 句" in r["說明"] and "已經確認" not in r["說明"] and not r.get("可以按聽過")
     assert r["聲紋老師"]["多半是老師"]
+    assert r["顯示編號"] == key, r                                     # 10-04 #128：畫面小字顯示的編號
+    from bookclub.safeview import safe_id
+
+    for x in fc["一定要處理"] + fc["請看一眼"]:   # 鍵能印就顯示鍵；不能印（含自己打的字）改顯示第 3 步卡片；都不行不顯示
+        want = x["key"] if safe_id(str(x["key"])) else x["第3步"] if x["第3步"] and safe_id(x["第3步"]) else None
+        assert x["顯示編號"] == want, x
     assert not any(str(x["key"]).startswith(execute.TEACHER_TURN_KEY) for x in fc["一定要處理"])
     # 已確認的段落也照列，說明寫明已確認
     data = wd.read_json(w / "校對" / "段落.json")

@@ -234,6 +234,7 @@ def test_save_flow_sendback_and_export():
     w = _workdir()
     d = fc.page_data(w)
     assert d["成品影片"] == "輸出/成品_0-0_sw.mp4" and 9.5 < d["成品長度"] < 10.5
+    assert all("生成編號" in r for r in d["紀錄"]) and d["紀錄"][0]["生成編號"] is None   # 10-04 #128：a.wav 不像編號
     k1, k2 = (r["鍵"] for r in d["紀錄"])
     try:
         fc.decide_record(w, k1, "退回重做", "  ")
@@ -498,6 +499,19 @@ def test_redone_reason_stays_on_its_own_record_not_the_neighbour():
     # 整片看時標的（一個時間點）：照舊對到附近那一筆
     done["項目"].append({"鍵": "R001", "原片": [24.0, 24.0], "覆核項目": ["學員段落:T034"], "原因": "整片看時標的", "做法": "重新生成"})
     assert fc.redone_info(r2, check, log)["原因"] == "整片看時標的"
+
+
+
+def test_gen_id_from_generated_file_name():
+    """10-04 #128：第 5 步畫面小字顯示的生成編號，從生成檔的檔名取；長得不像程式編號的不給。"""
+    assert fc.gen_id({"檔案": "生成/學員/T034_13_放回時間格.wav"}) == "T034_13"
+    assert fc.gen_id({"檔案": "生成/學員/T034_13.wav"}) == "T034_13"
+    assert fc.gen_id({"檔案": "生成/老師/SNM001_第2次.wav"}) == "SNM001"
+    assert fc.gen_id({"檔案": "生成/老師/NM012.wav"}) == "NM012"
+    assert fc.gen_id({"檔案": "生成/學員/T034m2_3_拉長.wav"}) == "T034m2_3"
+    for bad in (None, "", "a.wav", "生成/小美.wav", "生成/男聲_暫定.wav", "生成/Amy_1.wav", "T034X.wav"):
+        assert fc.gen_id({"檔案": bad}) is None, bad
+    assert fc.gen_id({}) is None
 
 
 if __name__ == "__main__":

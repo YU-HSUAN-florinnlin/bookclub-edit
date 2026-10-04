@@ -626,6 +626,27 @@ def clip_ranges(ranges: list, total: float) -> list:
     return [[a, min(b, total)] for a, b in ranges if a < total and total > 0]
 
 
+_GEN_FILE_RE = None
+
+
+def gen_id(r: dict) -> str | None:
+    """10-04 #128：處理紀錄一筆用的生成檔是哪一句（`T034_13`、`SNM001`⋯），給第 5 步畫面小字顯示、跟 AI 助手溝通用（純函式）。
+    處理紀錄本身沒存生成編號，從生成檔的檔名取（檔名是程式取的：`<編號>.wav`、`<編號>_第2次.wav`、`<編號>_放回時間格.wav`）；
+    取出來的還要過 `safeview.safe_id`（長得像程式編號才給）。沒有生成檔、對不上就回 None。不影響任何判斷。"""
+    import re
+
+    from bookclub.safeview import safe_id
+
+    global _GEN_FILE_RE
+    if _GEN_FILE_RE is None:
+        _GEN_FILE_RE = re.compile(r"^([A-Z]{1,4}\d+(?:m\d+)*(?:_\d+)?)(?=[_.]|$)")
+    f = r.get("檔案")
+    if not isinstance(f, str) or not f:
+        return None
+    m = _GEN_FILE_RE.match(Path(f).name)
+    return m.group(1) if m and safe_id(m.group(1)) else None
+
+
 def page_data(workdir: str | Path) -> dict:
     """`GET /api/final`：成品檢查頁一次要的全部資料。"""
     workdir = Path(workdir)
@@ -651,7 +672,8 @@ def page_data(workdir: str | Path) -> dict:
                      "做了什麼": plain_ids(r.get("做了什麼") or "", index, workdir),
                      "覆核名稱": [review_name(index, k) for k in r.get("覆核項目") or []],
                      "改範圍": tgt, "已改範圍": done,
-                     "重做過": redone_info(r, check, log)})   # 10-01 第三批：上一次「只重做退回的」重做過的
+                     "重做過": redone_info(r, check, log),   # 10-01 第三批：上一次「只重做退回的」重做過的
+                     "生成編號": gen_id(r)})   # 10-04 #128：畫面小字顯示（跟 inspect 一樣的編號）
         hit = next((edge[k] for k in r.get("覆核項目") or [] if k in edge), None) if r["類型"] in ("名字整句換掉", "換聲音") else None
         if hit:
             recs[-1]["前後沒聲音"] = hit

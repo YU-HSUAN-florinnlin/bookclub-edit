@@ -327,7 +327,7 @@ function finalCheckHtml(fc) {
     const outT = r["成品起訖"] ? `<div class="muted">成品 ${esc(fcTime(r["成品起訖"][0]))}–${esc(fcTime(r["成品起訖"][1]))}</div>` : "";
     const sh = r["縮小"];
     const pts = r["時間點"] || [];   // 10-04 #111：學員段落裡自動處理的重疊，每一處一個「聽」按鈕
-    return `<tr data-fckey="${esc(r.key)}" class="${done ? "fc-done" : ""}${r["新的"] ? " fc-new" : ""}"><td class="nowrap">${outT ? "原片 " : ""}${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${outT}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}
+    return `<tr data-fckey="${esc(r.key)}" class="${done ? "fc-done" : ""}${r["新的"] ? " fc-new" : ""}"><td class="nowrap">${outT ? "原片 " : ""}${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${outT}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}${r["顯示編號"] ? `<div><span class="idtag" title="跟 AI 助手溝通用的編號">${esc(r["顯示編號"])}</span></div>` : ""}
       ${done ? `<div><span class="badge fc-donetag">已確認</span></div>` : ""}${r["新的"] ? `<div><span class="badge fc-newtag">新的</span></div>` : ""}</td>
     <td>${esc(r["說明"])}${r["去改"] ? `<div class="muted fc-todo">${done ? "" : "怎麼改："}${esc(r["去改"])}</div>` : ""}</td>
     <td class="fc-acts">${pts.length ? "" : `<button class="secondary small" data-fcplay="${r.start}|${r.end}">跳過去聽</button>`}
