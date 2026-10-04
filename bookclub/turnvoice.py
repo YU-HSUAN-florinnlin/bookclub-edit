@@ -19,13 +19,13 @@ def _label(s: dict) -> str | None:
 
 
 def turn_voice(turn: dict, sents: list[dict], by_id: dict | None = None) -> dict | None:
-    """一個段落裡聲紋判成老師的比例（純函式）。句子照段落的 `句子` 編號找（沒有編號就用中點落在段落裡的句子），
+    """一個段落裡聲紋判成老師的比例（純函式）。句子照段落的 `句子` 編號找（沒有編號、或一個都對不到，就用中點落在段落裡的句子），
     秒數夾在段落起訖裡面。回傳 {句數, 老師句數, 老師秒, 計入秒, 比例, 多半是老師}；沒有可以算的句子回傳 None。"""
     by_id = by_id if by_id is not None else {s.get("id"): s for s in sents}
     a, b = float(turn["start"]), float(turn["end"])
-    ids = turn.get("句子") or []
-    ss = [by_id[i] for i in ids if i in by_id] if ids else \
-        [s for s in sents if a <= (float(s["start"]) + float(s["end"])) / 2 <= b]
+    ss = [by_id[i] for i in turn.get("句子") or [] if i in by_id]
+    if not ss:   # 沒有編號、或編號一個都對不到（10-04 審查 H）→ 用中點落在段落裡的句子
+        ss = [s for s in sents if a <= (float(s["start"]) + float(s["end"])) / 2 <= b]
     n = n_t = 0
     t_s = all_s = 0.0
     for s in ss:

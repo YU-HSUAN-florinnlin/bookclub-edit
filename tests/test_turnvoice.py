@@ -80,6 +80,9 @@ def test_ratio_and_thresholds():
     v = turnvoice.turn_voice({"start": 0, "end": 20}, sents)
     assert v["老師秒"] == 10.0 and v["計入秒"] == 20.0 and v["多半是老師"], v
     assert turnvoice.turn_voice({"start": 0, "end": 5}, [_s(0, 0, 5, "太短")]) is None
+    # 10-04 審查 H：段落有句子編號、但一個都對不到 → 改用中點落在段落裡的句子
+    v = turnvoice.turn_voice({"start": 0, "end": 10, "句子": ["舊的1", "舊的2"]}, [_s(0, 0, 6, "老師"), _s(1, 6, 10, "不是老師")])
+    assert v and v["句數"] == 2 and v["多半是老師"], v
     assert "28 句裡 27 句" in turnvoice.warn_text({"句數": 28, "老師句數": 27, "老師秒": 75.1})
 
 
