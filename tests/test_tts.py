@@ -1078,5 +1078,39 @@ def test_deleted_wavs_regenerated_reusing_attempt_cache():
         assert calls == [text] and chosen.is_file() and fitted.is_file()  # 快取的聲音也不在：重新生成
 
 
+# ---------- 10-04 #109：念對沒有的檢查沒做成，訊息依原因說清楚 ----------
+
+def test_check_fail_message_says_why():
+    """Groq 額度用完（429）不再寫「多半是網路」；連不上才寫；其他錯誤不猜。不連網：例外是自己建的。"""
+    import httpx
+    import groq
+
+    from bookclub.refpick import GroqQuotaExhausted
+
+    req = httpx.Request("POST", "https://example.invalid/x")
+    cases = [(groq.RateLimitError("rate", response=httpx.Response(429, request=req), body=None), "額度用完或被限流"),
+             (GroqQuotaExhausted("Groq 額度用完了"), "額度用完或被限流"),
+             (groq.APIConnectionError(request=req), "連不上 Groq"),
+             (groq.APITimeoutError(request=req), "連不上 Groq"),
+             (ConnectionError("連不上"), "連不上 Groq"),
+             (ValueError("壞掉"), "不是網路或額度的問題")]
+    for exc, want in cases:
+        with tempfile.TemporaryDirectory() as d:
+            work = _ref_work(Path(d))
+            sp = work / "句子.json"
+            sp.write_text(json.dumps([{"id": "A", "text": "甲乙丙丁"}], ensure_ascii=False), encoding="utf-8")
+
+            def broken(path, exc=exc):
+                raise exc
+
+            msgs: list = []
+            r = tts.generate_teacher(work, sp, synth=_len_synth([]), hear=broken, check_similarity=False,
+                                     use_pauses=False, log=msgs.append)["句子"][0]
+            lines = [m for m in msgs if "念對沒有的檢查沒做成" in m]
+            assert len(lines) == 1 and want in lines[0], (type(exc).__name__, lines)
+            assert ("多半是網路" in lines[0]) == (want == "連不上 Groq"), lines
+            assert r["要人聽"] and r["嘗試"][0]["內容檢查沒做成"]          # 流程照舊：標要人聽、生成照常往下
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

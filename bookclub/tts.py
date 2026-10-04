@@ -534,6 +534,27 @@ def _paused_version(src: Path, text: str, ctx: dict, align: Align, dst: Path) ->
     return len(y) / sr, inserts, lead
 
 
+def _check_fail_reason(exc: BaseException) -> str:
+    """念對沒有的檢查沒做成，依例外類型說原因（10-04 #109：以前一律寫「多半是網路」，Groq 額度用完也這樣寫）。只管訊息文字。"""
+    name = type(exc).__name__
+    try:
+        from bookclub.refpick import GroqQuotaExhausted
+    except Exception:  # noqa: BLE001
+        GroqQuotaExhausted = ()   # type: ignore[assignment]
+    rate, conn = (GroqQuotaExhausted,), (ConnectionError, TimeoutError)
+    try:
+        from groq import APIConnectionError, RateLimitError   # APITimeoutError 是 APIConnectionError 的一種
+
+        rate, conn = rate + (RateLimitError,), conn + (APIConnectionError,)
+    except Exception:  # noqa: BLE001 — 沒裝 groq：只認內建的
+        pass
+    if isinstance(exc, rate) or getattr(exc, "status_code", None) == 429:
+        return f"Groq 額度用完或被限流（429，{name}）"
+    if isinstance(exc, conn):
+        return f"連不上 Groq（{name}），多半是網路"
+    return f"{name}，不是網路或額度的問題"
+
+
 def _run_attempt(
     item: dict, n: int, seed: int, speed: float, out_dir: Path,
     synth: Synth, hear: Hear | None, similar: Similar | None, log: Callable[[str], None],
@@ -559,7 +580,7 @@ def _run_attempt(
             heard = hear(path)
         except Exception as exc:  # noqa: BLE001 — 重試完還是連不上：不要讓整晚的生成停在這裡，這一句標要人聽
             check_failed = True
-            log(f"  ⚠️ 念對沒有的檢查沒做成（{type(exc).__name__}，多半是網路），這一句先標要人聽，生成照常往下")
+            log(f"  ⚠️ 念對沒有的檢查沒做成（{_check_fail_reason(exc)}），這一句先標要人聽，生成照常往下")
     att = Attempt(seed, speed, audio_s, elapsed, heard, content_score(text, heard) if heard is not None else None,
                   check_failed=check_failed).check(text)
     if similar:
