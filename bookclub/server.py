@@ -198,7 +198,7 @@ def adopt_project(d: Path) -> None:
     try:
         register_project(d)
         remember_current(d)
-    except OSError as e:   # 記不下來只是清單上看不到、下次重開要重選，不擋啟動
+    except (OSError, ValueError) as e:   # 記不下來（寫不進去、清單檔內容壞掉）只是清單上看不到、下次重開要重選，不擋啟動
         print(f"⚠️ [網頁伺服器] 記不下目前的專案：{e}")
 
 
