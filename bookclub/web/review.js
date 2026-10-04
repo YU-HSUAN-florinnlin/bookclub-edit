@@ -707,8 +707,8 @@ function rvRenderCard() {
 function rvPlayOnlyHtml(it) {
   const a = Number(it && it.start), b = Number(it && it.end);
   if (!it || it.start == null || it.end == null || !Number.isFinite(a) || !Number.isFinite(b) || b <= a) return "";
-  const label = it["類型"] === "名字" ? "只播名字這一段" : "只播這一段";
-  return ` <button class="ghost small" id="rv-playonly" data-s="${a}" data-e="${b}" title="從 ${esc(rvFmt(a, 1))} 開始播，播到 ${esc(rvFmt(b, 1))} 停">${label}</button>`;
+  if (it["類型"] === "名字") return "";   // 10-04 宇軒：名字卡不要這顆（已經有「只播重念範圍」）
+  return ` <button class="ghost small" id="rv-playonly" data-s="${a}" data-e="${b}" title="從 ${esc(rvFmt(a, 1))} 開始播，播到 ${esc(rvFmt(b, 1))} 停">只播這一段</button>`;
 }
 
 // 10-02 第六批：老師重念範圍開頭或結尾有一段沒有人講話：提醒＋「照建議縮小」（不自動改；改了這一句要重新生成）
