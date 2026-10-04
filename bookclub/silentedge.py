@@ -55,20 +55,26 @@ def describe(h: dict) -> str:
     return f"這個範圍{'、'.join(sides)}沒有人講話，建議縮成 {timemap.t1(a)}–{timemap.t1(b)}"
 
 
-def _route(g: dict, cands: dict) -> tuple[str, str | None, str | None, str]:
-    """這一筆老師重念 → (第 3 步卡片的鍵, 改法, 要改的 id, 不能一鍵縮的原因)。"""
+def _route(g: dict, cands: dict, cards: dict | None = None) -> tuple[str, str | None, str | None, str]:
+    """這一筆老師重念 → (第 3 步卡片的鍵, 改法, 要改的 id, 不能一鍵縮的原因)。
+
+    cards：名字候選 id → 第 3 步顯示它的那一張主卡的 id（`review.card_of`）。10-04 #115：跟第 5 步
+    `finalcheck.retime_target`（#113）同一個判斷——同一張卡（同一處、同一句同代號，併進主卡的候選）的好幾處
+    只算一個名字，改的是那張主卡；真的是好幾張不同的卡才算「好幾個名字」。"""
     cids = [str(x) for x in g.get("候選") or []]
     ovs = [str(x) for x in g.get("重疊項目") or []]
     if cids:
-        key = f"名字:{cids[0]}"
-        if len(cids) > 1:
+        mains = list(dict.fromkeys((cards or {}).get(c, c) for c in cids))
+        key = f"名字:{mains[0]}"
+        if len(mains) > 1:
             return key, None, None, "這一句同時換掉好幾個名字，重念範圍是合起來的：到第 3 步這幾張卡片各自改重念範圍"
         if ovs:
             return key, None, None, "這一句同時是名字重念和重疊的老師那一句：到第 3 步名字卡片改重念範圍"
-        c = cands.get(cids[0]) or {}
+        iid = mains[0] if mains[0] in cands else cids[0]
+        c = cands.get(iid) or {}
         if c.get("老師整段"):
-            return key, HOW_WHOLE, cids[0], ""
-        return key, HOW_RANGE, cids[0], ""
+            return key, HOW_WHOLE, iid, ""
+        return key, HOW_RANGE, iid, ""
     key = f"重疊:{ovs[0]}" if ovs else f"生成:{g.get('id')}"
     if ovs and g.get("疊放"):
         return key, HOW_SIDE, ovs[0], ""
@@ -90,8 +96,10 @@ def hints(workdir: str | Path, plan: dict | None = None) -> dict[str, dict]:
         return {}
     decisions = wd.read_json(review.name_decisions_path(workdir), default={}) or {}
     raw = (wd.read_json(wd.names_path(workdir), default=None) or {}).get("candidates", [])
+    eff = review.effective_name_candidates(workdir, raw, decisions)
+    cards = review.card_of(eff)   # 10-04 #115：併進主卡的候選指到主卡（跟第 3 步、第 5 步同一份）
     cands = {}
-    for i, c in enumerate(review.effective_name_candidates(workdir, raw, decisions), start=1):
+    for i, c in enumerate(eff, start=1):
         cid = str(c.get("id") or i)
         if set((decisions.get(cid) or {}).get("tags") or []) & {"不是名字", "是地名"}:
             continue
@@ -103,7 +111,7 @@ def hints(workdir: str | Path, plan: dict | None = None) -> dict[str, dict]:
         e = edges(a, b, words)
         if not e:
             continue
-        key, how, iid, why = _route(g, cands)
+        key, how, iid, why = _route(g, cands, cards)
         na, nb = e["建議"]
         left = [(x, y) for x, y in ((a, na), (nb, b)) if y - x > 0]
         # 縮掉的那幾秒回到原聲：裡面有名字候選（包括這一句自己的）就不給縮；只有那個名字本來就另外消音的不算
