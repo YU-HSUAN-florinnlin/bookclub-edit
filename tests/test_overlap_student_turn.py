@@ -208,6 +208,25 @@ def test_no_row_without_auto_overlaps():
     assert not any(x.get("自動處理") for x in review.page_data(w)["已自動跳過的重疊"])
 
 
+def test_analyze_message_counts_student_turn_overlaps():
+    """10-04 #126：分析第 4 行印的「自動跳過」是找重疊當下的數字（還沒有段落，算不到 #111），
+    段落分析後補印的那一行要算進學員段落裡自動處理的，跟第 3 步看到的一樣。"""
+    from bookclub import analyze
+
+    w = _fresh()
+    _setup(w)
+    # 重疊.json 裡 9 處：假工作區原本 3 處（2 處已自動跳過）＋ _setup 加的 6 處；
+    # 學員段落裡自動處理 3 處（AUTO_A、AUTO_B、SAME_CHOICE），要人決定 4 處（老師與學員、WITH_TEACHER、IN_TEACHER、OWN_CHOICE）
+    assert analyze.overlap_after_turns_line(w) == (
+        "[分析一條龍] 重疊（段落分析後）：9 處，已自動跳過 5 處（其中學員段落裡自動處理 3 處），要人決定 4 處")
+    # 救回一處：回到要人決定
+    review.save_overlap(w, review.overlap_id(AUTO_A), {"救回": True})
+    assert analyze.overlap_after_turns_line(w).endswith("已自動跳過 4 處（其中學員段落裡自動處理 2 處），要人決定 5 處")
+    # 還沒有段落：不印
+    (w / "校對" / "段落.json").rename(w / "校對" / "段落_改名.json")
+    assert analyze.overlap_after_turns_line(w) is None
+
+
 def _run_all() -> int:
     tests = [(n, f) for n, f in globals().items() if n.startswith("test_") and callable(f)]
     failed = 0

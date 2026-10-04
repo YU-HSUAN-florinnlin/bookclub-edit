@@ -43,6 +43,25 @@ def _roster_names(roster_path: str | Path | None) -> list[str] | None:
     return seen or None
 
 
+def overlap_after_turns_line(workdir: Path) -> str | None:
+    """10-04 #126：段落分析後的重疊筆數（只讀，跟第 3 步看到的一樣：`review.load_overlaps` 在記憶體裡套上
+    #111「學員段落裡、兩邊都沒有老師」的自動處理）。第 4 步印的「自動跳過」是找重疊當下的數字，那時還沒有段落，
+    算不到 #111 的那幾處。還沒有段落（`校對/段落.json`）回傳 None。"""
+    from bookclub import review
+    from bookclub import turns as turns_mod
+
+    turns = (read_json(turns_mod.turns_path(workdir), default=None) or {}).get("段落") or []
+    if not turns:
+        return None
+    dec = review.load_decisions(workdir)
+    ovs = review.load_overlaps(workdir, dec, turns)["overlaps"]
+    rescued = lambda o: (dec["重疊"].get(review.overlap_id(o)) or {}).get("救回")
+    skipped = [o for o in ovs if o.get("已自動跳過") and not rescued(o)]
+    student = sum(1 for o in skipped if o.get("自動處理") == overlap_mod.STUDENT_TURN_TAG)
+    return (f"[分析一條龍] 重疊（段落分析後）：{len(ovs)} 處，已自動跳過 {len(skipped)} 處"
+            f"（其中學員段落裡自動處理 {student} 處），要人決定 {len(ovs) - len(skipped)} 處")
+
+
 def skipped_overlap_result(workdir: Path, scan_regions: list) -> dict:
     """`--skip-overlap` 時的重疊結果：已有 `重疊.json` 就沿用（不重新掃描）。
 
@@ -211,7 +230,7 @@ def run_analyze(
         )
         elapsed["4_找重疊"] = round(time.time() - t0, 1)
         print(f"[分析一條龍] 4/7 找重疊完成：{overlap_result['重疊數']} 處，"
-              f"自動跳過 {overlap_result['已自動跳過數']} 處")
+              f"自動跳過 {overlap_result['已自動跳過數']} 處（段落分析後會再更新）")
 
     # ---------- 5. 挑老師參考音（呼叫 refpick） ----------
     # 排除區域：重疊處（02 規格第七節）＋冥想引導、導讀段落（語氣不適合當參考音；
@@ -281,6 +300,14 @@ def run_analyze(
         except Exception as exc:
             print(f"⚠️ [分析一條龍] 7/7 段落分析（聲紋部分）失敗：{exc}")
             print("   → 修好之後單獨重跑：bookclub run turns <工作區>")
+
+    # 10-04 #126：學員段落裡自動處理的重疊（#111）要有段落才算得出來，第 4 行的數字沒算進去；這裡補印正確的
+    try:
+        line = overlap_after_turns_line(workdir)
+        if line:
+            print(line)
+    except Exception as exc:  # 只是訊息，算不出來不擋分析
+        print(f"⚠️ [分析一條龍] 段落分析後的重疊筆數沒算出來（{type(exc).__name__}）")
 
     # 09-29：找出這一集提到的所有人名（Claude 看整支逐字稿；名冊上沒有的名字也要抓出來）。放在說話者判斷定案之後
     if not skip_turns:
