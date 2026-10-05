@@ -675,3 +675,7 @@ details.adv summary { cursor: pointer; color: var(--muted); }
 .idtag { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; font-weight: normal;
   color: var(--muted); user-select: text; -webkit-user-select: text; white-space: nowrap; margin-left: 6px; }
 .rv-list .tx .idtag { margin: 0 8px 0 0; }
+/* 10-05 #177、#178：「不改（維持目前設定）」、「請看一眼」的「我看過了」／「全部看過了」 */
+.fc-keepwhy { flex-basis: 100%; font-size: .85em; }
+.fc-lookhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 14px; }
+.fc-lookhead p { margin: 0; }
