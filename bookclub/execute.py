@@ -1633,6 +1633,43 @@ def current_steps(workdir: str | Path, a: float | None = None, b: float | None =
     return out
 
 
+GEN_STEP_KEYS = ("老師名字", "學員重念", "保留原聲學員名字")   # 10-05 #97：要生成聲音的三步（組裝以外）
+
+
+def _left_count(why: str) -> int | None:
+    """三步「做過沒有」說明裡還沒生成的句數（`還有 3／10 句要生成`、`老師參考音換過了，10 句都要重新生成`）；看不出來回 None。"""
+    m = re.search(r"還有 (\d+)／", why or "") or re.search(r"(\d+) 句都要重新生成", why or "")
+    return int(m.group(1)) if m else None
+
+
+def reassemble_problem(workdir: str | Path, a: float | None = None, b: float | None = None,
+                       steps: dict | None = None) -> str | None:
+    """10-05 #97：第 5 步沒有退回時按「只重新組裝」之前的檢查（只讀）。可以按回傳 None，不行回傳要給人看的一句話。
+    - 還沒有組好的成品（這個範圍的 `輸出/成品_{標記}_*.mp4`，驗證沒過的不算）：請按「開始執行」
+    - 三步生成（老師名字、學員重念、保留原聲學員名字）有還沒生成的：只重新組裝會把那些地方變成消音，請按「開始執行」
+    跟「開始執行」判斷做過沒有用同一套（`current_steps`）；steps 可以傳已經算好的（同一個範圍）。"""
+    workdir = Path(workdir)
+    a = 0.0 if a is None else float(a)
+    b = float(b) if b is not None else float(video_duration(workdir) or 0.0)
+    out = workdir / "輸出"
+    tag = tag_for(a, b)
+    made = [p for p in (out.iterdir() if out.is_dir() else [])
+            if p.name.startswith(f"成品_{tag}_") and p.suffix.lower() == ".mp4" and "_驗證沒過" not in p.stem]
+    if not made:
+        return "還沒有組裝好的成品，請按「開始執行」"
+    steps = current_steps(workdir, a, b) if steps is None else steps
+    unread = [k for k in GEN_STEP_KEYS if (steps.get(k) or {}).get("做好了") is None]
+    if unread:
+        return f"讀不到「{'、'.join(unread)}」有沒有生成好，請按「開始執行」"
+    left = [(k, steps[k].get("說明") or "") for k in GEN_STEP_KEYS if not steps[k]["做好了"]]
+    if not left:
+        return None
+    counts = [_left_count(why) for _k, why in left]
+    detail = "；".join(f"{k}：{why}" for k, why in left)
+    head = f"還有 {sum(counts)} 句聲音沒生成" if None not in counts else "還有聲音沒生成"
+    return f"{head}（{detail}），只重新組裝會把這些地方變成消音，請按「開始執行」"
+
+
 def status(workdir: str | Path) -> dict:
     """`GET /api/execute`：前置檢查、上次的進度、第 5 步退回的清單。"""
     from bookclub import finalcheck

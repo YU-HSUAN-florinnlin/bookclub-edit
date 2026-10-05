@@ -1212,6 +1212,150 @@ def test_render_without_valid_output_not_marked_done():
     assert prog["步驟"]["組裝"]["狀態"] == "失敗" and "沒有通過驗證" in prog["錯誤"] and not finished
 
 
+_ALL_DONE = {"老師名字": {"做好了": True, "說明": "3 句都生成好了"}, "學員重念": {"做好了": True, "說明": "5 段都生成好了"},
+             "保留原聲學員名字": {"做好了": True, "說明": "沒有選換成代號的"}, "組裝": {"做好了": True, "說明": "成品比覆核、生成結果都新"}}
+
+
+def _fake_product(w: Path, name: str = "成品_0-3_sw.mp4") -> Path:
+    out = w / "輸出"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / name).write_bytes(b"fake-mp4")
+    return out / name
+
+
+def test_reassemble_problem_needs_product_and_all_generated():
+    """10-05 #97：沒有退回時「只重新組裝」能不能按：要有組好的成品、三步生成都做好了；還有沒生成的回白話（幾句、請按開始執行）。"""
+    w = _fresh()
+    why = execute.reassemble_problem(w, steps=_ALL_DONE)
+    assert why and "還沒有組裝好的成品" in why and "開始執行" in why
+    _fake_product(w, "成品_0-3_sw_驗證沒過.mp4")                       # 驗證沒過的不算
+    assert "還沒有組裝好的成品" in execute.reassemble_problem(w, steps=_ALL_DONE)
+    _fake_product(w)
+    assert execute.reassemble_problem(w, steps=_ALL_DONE) is None
+    left = {**_ALL_DONE, "老師名字": {"做好了": False, "說明": "老師參考音換過了，3 句都要重新生成"},
+            "學員重念": {"做好了": False, "說明": "還有 2／5 段要生成"}}
+    why = execute.reassemble_problem(w, steps=left)
+    assert why.startswith("還有 5 句聲音沒生成") and "消音" in why and "請按「開始執行」" in why, why
+    odd = {**_ALL_DONE, "保留原聲學員名字": {"做好了": False, "說明": "別的說法"}}
+    assert execute.reassemble_problem(w, steps=odd).startswith("還有聲音沒生成")
+    unread = {**_ALL_DONE, "學員重念": {"做好了": None, "說明": "讀不到：壞掉"}}
+    assert "讀不到「學員重念」" in execute.reassemble_problem(w, steps=unread)
+    stale = {**_ALL_DONE, "組裝": {"做好了": False, "說明": "覆核或生成結果比成品新，要重新組裝"}}
+    assert execute.reassemble_problem(w, steps=stale) is None             # 成品舊了正是要重新組裝的時候
+    olds = execute.current_steps
+    try:                                                                  # 沒傳 steps：用跟「開始執行」同一套判斷
+        execute.current_steps = lambda wk, a, b: left
+        assert "還有 5 句" in execute.reassemble_problem(w)
+    finally:
+        execute.current_steps = olds
+
+
+def test_reassemble_without_returns_keeps_unchanged_step5_results():
+    """10-05 #97：沒有退回時只重新組裝：第 5 步內容沒變的那一筆保留通過，內容變了的（接縫做法改了）回到還沒看。
+    （按鈕確認框寫的就是這個行為）"""
+    from bookclub import finalcheck, proclog
+
+    w = _fresh()
+    recs = [{"類型": "學員重念", "原片": [40.0, 45.0], "成品": [40.0, 45.0], "做了什麼": "x", "檔案": "a.wav", "文字": "甲"},
+            {"類型": "學員重念", "原片": [90.0, 95.0], "成品": [90.0, 95.0], "做了什麼": "x", "檔案": "b.wav", "文字": "乙"}]
+    log = {"產生時間": "t1", "片段": None, "紀錄": recs}
+    wd.write_json(proclog.log_path(w), log)
+    keys = [finalcheck.record_key(r) for r in recs]
+    for k in keys:
+        finalcheck.decide_record(w, k, finalcheck.PASS)
+    ran = []
+
+    def render(wk, ctx):
+        ran.append("組裝")
+        changed = [recs[0], {**recs[1], "停格秒": 0.4}]                 # 第二筆的組裝做法變了
+        wd.write_json(proclog.log_path(wk), {**log, "產生時間": "t2", "紀錄": changed})
+
+    runners = {"老師名字": lambda wk, c: ran.append("老師名字"), "學員重念": lambda wk, c: ran.append("學員重念"),
+               "保留原聲學員名字": lambda wk, c: ran.append("保留原聲學員名字"), "組裝": render}
+    checks = {k: (lambda wk, c: (True, "假的")) for k in runners}
+    execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, redo_returned=True,
+                        reassemble_only=True, log=lambda s: None)
+    assert ran == ["組裝"]
+    got = {r["鍵"]: r for r in finalcheck.page_data(w)["紀錄"]}
+    chk = wd.read_json(finalcheck.check_path(w))
+    assert "重做中" not in chk and not chk.get("重做過")                  # 沒有退回：不標「重做過」
+    assert finalcheck.load_check(w)["逐筆"].get(keys[0]) and len(got) == 2
+    _log, now = finalcheck._current(w)
+    assert keys[0] in now["逐筆"] and keys[1] not in now["逐筆"]
+
+
+def test_server_reassemble_without_returns():
+    """10-05 #97：網頁「只重新組裝」沒有退回時：都生成好了可以開始（假的執行，不真的組裝）；還有沒生成的擋下來回白話；
+    有退回時照原本（不另外擋）；正在跑時不能按；總檢查沒過照原本的訊息擋下；第 4 步狀態帶「只重新組裝」能不能按。"""
+    import threading
+
+    from bookclub import finalcheck
+    from bookclub import server as srv
+
+    w = _fresh()
+    _fake_product(w)
+    httpd = srv.BookclubServer(("127.0.0.1", 0), srv.Handler, workdir=w, video=None)
+    started: list = []
+    gate = threading.Event()
+
+    def fake_run(wk, **kw):
+        started.append(kw)
+        gate.wait(5)
+        return {}
+
+    steps = {"now": _ALL_DONE}
+    olds = (execute.precheck, execute.final_check, execute.run_execute, execute.current_steps, finalcheck.redo_list)
+    try:
+        execute.precheck = lambda wk: {"可以開始": True, "缺": [], "提醒": [], "缺代號": 0}
+        execute.final_check = lambda wk: {"可以開始": True, "看過": True, "還要處理": 0}
+        execute.run_execute = fake_run
+        execute.current_steps = lambda wk, a=None, b=None, m=None: steps["now"]
+        finalcheck.redo_list = lambda wk: {"項目": [], "重做中": False}
+        body = {"start": None, "end": None, "methods": ["sw"], "只重新組裝": True}
+        # 還有沒生成的：擋下來
+        steps["now"] = {**_ALL_DONE, "學員重念": {"做好了": False, "說明": "還有 2／5 段要生成"}}
+        r = httpd.start_execute(body)
+        assert not r["started"] and "還有 2 句聲音沒生成" in r["error"] and "開始執行" in r["error"] and not started
+        st = httpd.exec_status()
+        assert st["只重新組裝"]["可以"] is False and "還有 2 句" in st["只重新組裝"]["原因"]
+        # 都生成好了：可以開始，傳 reassemble_only
+        steps["now"] = _ALL_DONE
+        st = httpd.exec_status()
+        assert st["只重新組裝"] == {"可以": True, "原因": None, "預估秒數": execute.ASSEMBLE_S}
+        r = httpd.start_execute(body)
+        assert r["started"], r
+        r2 = httpd.start_execute(body)                                    # 正在跑：不能再按
+        assert not r2["started"] and "已經有分析或 AI 執行在跑" in r2["error"]
+        assert "只重新組裝" not in httpd.exec_status()                     # 跑的時候不算（畫面也不顯示）
+        gate.set()
+        for _ in range(100):
+            if not httpd.exec_running():
+                break
+            time.sleep(0.02)
+        assert len(started) == 1 and started[0]["reassemble_only"] is True and started[0]["redo_returned"] is True
+        # 有退回時：照原本的做法，不另外擋（還有沒生成的也一樣）；狀態不帶新的那一顆
+        steps["now"] = {**_ALL_DONE, "學員重念": {"做好了": False, "說明": "還有 2／5 段要生成"}}
+        finalcheck.redo_list = lambda wk: {"項目": [{"鍵": "x"}], "重做中": False}
+        assert "只重新組裝" not in httpd.exec_status()
+        r = httpd.start_execute(body)
+        assert r["started"], r
+        for _ in range(100):
+            if not httpd.exec_running():
+                break
+            time.sleep(0.02)
+        assert len(started) == 2 and started[1]["reassemble_only"] is True
+        # 總檢查沒過：照「開始執行」的訊息擋下
+        finalcheck.redo_list = lambda wk: {"項目": [], "重做中": False}
+        steps["now"] = _ALL_DONE
+        execute.final_check = lambda wk: {"可以開始": False, "看過": True, "還要處理": 2}
+        r = httpd.start_execute(body)
+        assert not r["started"] and "開始前總檢查還有 2 列" in r["error"] and len(started) == 2
+    finally:
+        gate.set()
+        (execute.precheck, execute.final_check, execute.run_execute, execute.current_steps, finalcheck.redo_list) = olds
+        httpd.server_close()
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

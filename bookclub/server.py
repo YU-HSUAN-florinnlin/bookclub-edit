@@ -855,10 +855,28 @@ class BookclubServer(ThreadingHTTPServer):
                 return {"started": False, "error": f"開始前總檢查還有 {fc['還要處理']} 列一定要處理的"}
             if not fc["看過"]:
                 return {"started": False, "error": "開始前總檢查的「請看一眼」還沒按「我看過了」"}
+            if opts.get("只重新組裝") and not self._has_returned():   # 10-05 #97：沒有退回時只重新組裝，先確定聲音都生成好了
+                from bookclub.execute import reassemble_problem
+                from bookclub.review import parse_time
+
+                why = reassemble_problem(self.workdir, parse_time(opts["start"]) if opts.get("start") else None,
+                                         parse_time(opts["end"]) if opts.get("end") else None)
+                if why:
+                    return {"started": False, "error": why}
             self.exec_state = self._fresh_run_state()
             self.exec_state.update(running=True, started_at=time.time())
             threading.Thread(target=self._exec_job, args=(opts,), daemon=True).start()
         return {"started": True}
+
+    def _has_returned(self) -> bool:
+        """10-05 #97：第 5 步有沒有退回（或上次重做沒做完）——有的話「只重新組裝」照原本的做法（退回的那幾筆一起收尾），不另外擋。"""
+        from bookclub import finalcheck
+
+        try:
+            r = finalcheck.redo_list(self.workdir)
+        except Exception:  # noqa: BLE001 — 還沒有成品檢查就是沒有退回（跟 execute.status 一樣）
+            return False
+        return bool(r.get("項目") or r.get("重做中"))
 
     def _exec_job(self, opts: dict) -> None:
         from bookclub.execute import run_execute
@@ -900,6 +918,15 @@ class BookclubServer(ThreadingHTTPServer):
             from bookclub.execute import current_steps
 
             st["現在狀態"] = current_steps(self.workdir, rng[0], rng[1], prog.get("輸出做法"))
+            if not st.get("退回清單") and not st.get("重做中"):   # 10-05 #97：沒有退回時的「只重新組裝」（整支影片）能不能按
+                from bookclub.execute import ASSEMBLE_S, reassemble_problem
+
+                whole = rng[0] in (None, 0, 0.0) and rng[1] in (None, st.get("影片長度"))
+                try:
+                    why = reassemble_problem(self.workdir, steps=st["現在狀態"] if whole else None)
+                except Exception as e:  # noqa: BLE001 — 讀不到就不讓按，畫面照樣打得開
+                    why = f"讀不到現在的狀態：{e}"
+                st["只重新組裝"] = {"可以": why is None, "原因": why, "預估秒數": ASSEMBLE_S}
         from bookclub.execute import stop_requested
 
         st["停止中"] = bool(state.get("running")) and stop_requested(self.workdir)
