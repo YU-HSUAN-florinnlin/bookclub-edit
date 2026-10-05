@@ -146,7 +146,7 @@ def test_final_check_rows():
     # 頭尾會帶到前後句子裡字蓋不到的零點幾秒人聲（那段時間一樣一個字都沒有）
     assert 131.4 < r["start"] <= 132.0 and 139.5 < r["end"] <= 140.2, r
     assert r["key"] == f"沒有字:{r['start']:.1f}" and r["可以按聽過"] and not r["已按聽過"]
-    assert "約 7.3 秒" in r["說明"] and "名字卡" in r["說明"] and "我聽過了" in r["說明"]
+    assert "約 7.3 秒" in r["說明"] and "名字卡" in r["說明"] and "照目前設定做" in r["說明"]
     look = _rows(fc, "請看一眼")
     assert [x["key"] for x in look] == [execute.UNTRANSCRIBED_LOOK_KEY], look
     pts = look[0]["時間點"]

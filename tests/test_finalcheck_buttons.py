@@ -1,7 +1,7 @@
 """10-05 第 4 步「開始前總檢查」三項修改（宇軒 10-05 實際操作後提出）：
 - #176「跳過去聽」只播那一列的起點到終點（不加前後緩衝）
-- #177「一定要處理」每一列都有「不改（維持目前設定）」：可以按的類別按了算處理完、可以取消、存在覆核資料、inspect 看得到；
-  維持現狀會讓學員原聲或名字留在成品裡的類別先不開放（按鈕灰掉、後端也擋）
+- #177「一定要處理」每一列的「照目前設定做」（按下去就照第 3 步的決定進行）：五類可以按（含原本「我聽過了」的三類，
+  合成同一顆），按了算處理完、可以取消、存在覆核資料、inspect 看得到；名字換不了代號、重疊缺東西不開放，放「回第 3 步補」
 - #178「請看一眼」每一列一個「我看過了」＋整區「全部看過了」；全部看過才算，之後新增的列回到沒看過
 
 後端用 tests/fake_workdir.py 的合成資料（不載入模型、不連網）；網頁的純函式用 node 跑（沒有 node 就略過那幾項）。
@@ -108,65 +108,131 @@ def test_listen_plays_exact_range_without_padding():
     assert 'data-fcplay="12.3|15.8"' in got[5] and ">跳過去聽<" in got[5] and got[6] == "", got
 
 
-# ---------- #177 不改（維持目前設定） ----------
+# ---------- #177 照目前設定做（10-05 宇軒：按下去就照第 3 步的決定進行） ----------
 
-def test_keep_policy_per_kind():
-    for k in ("英文代號:學員段落:T1:改稿", "字太少:N001"):
+def _row(kind, **kw):
+    return {"key": f"{kind}:x", "類別": kind, "start": 1.0, "end": 2.0, "依據": "abc", **kw}
+
+
+def test_keep_policy_uses_kind_field():
+    for k in (execute.KIND_CODE, execute.KIND_SHORT, execute.KIND_OUTSIDE, execute.KIND_VOICE, execute.KIND_NO_TEXT):
         assert execute.keep_policy(k) == (True, ""), k
-    for k in ("段落外:T1:12.0", "聲紋:S12", "聲紋:S12:3.4", "沒有字:131.5", "名字:3", "重疊:O80.20", "以後新的類別:1"):
+    for k in (execute.KIND_NAME, execute.KIND_OVERLAP):
+        ok, why = execute.keep_policy(k)
+        assert not ok and "回第 3 步補" in why, k
+    for k in (None, "", "以後新的類別", "段落外:T1:1.0"):              # 不認得的（包括鍵的樣子）一律不開放
         ok, why = execute.keep_policy(k)
         assert not ok and why, k
-    assert "學員的聲音" in execute.keep_policy("段落外:T1:1.0")[1] and "名字" in execute.keep_policy("沒有字:1.0")[1]
+    # 列上的判斷看「類別」欄位，不看鍵：鍵像英文代號、類別不認得 → 不開放
+    r = {"key": "英文代號:a:b", "start": 1.0, "end": 2.0}
+    execute.apply_keep(r, {"start": 1.0, "end": 2.0, "依據": None})
+    assert not r["可以按照目前設定做"] and not r["處理好"]
+
+
+def test_apply_keep_ack_kinds_old_and_new_records():
+    """原本「我聽過了」的三類：舊的「聽過」紀錄照算；這次之後按的多記起訖與內容，變了就不算（取嚴格的）。"""
+    for kind in execute.ACK_KINDS:
+        r = _row(kind, 已按聽過=True)
+        execute.apply_keep(r, None)                                         # 只有舊的「聽過」→ 照算
+        assert r["處理好"] and r["已按照目前設定做"] and r["照目前設定做的後果"], kind
+        r = _row(kind, 已按聽過=True)
+        execute.apply_keep(r, {"start": 1.0, "end": 2.0, "依據": "abc"})     # 新紀錄沒變 → 算
+        assert r["處理好"]
+        r = _row(kind, 已按聽過=True)
+        execute.apply_keep(r, {"start": 1.6, "end": 2.0, "依據": "abc"})     # 範圍變了（沒有字的舊規則容許 1 秒，這裡從嚴）
+        assert not r["處理好"] and r["照目前設定做後變了"]
+        r = _row(kind, 已按聽過=True)
+        execute.apply_keep(r, {"start": 1.0, "end": 2.0, "依據": "zzz"})     # 內容變了
+        assert not r["處理好"] and r["照目前設定做後變了"]
+        r = _row(kind, 已按聽過=False)
+        execute.apply_keep(r, {"start": 1.0, "end": 2.0, "依據": "abc"})     # 第 3 步改了答案（聽過拿掉）→ 不算
+        assert not r["處理好"] and not r.get("照目前設定做後變了")
+    for kind in (execute.KIND_NAME, execute.KIND_OVERLAP):                  # 後兩類：存檔怎麼塞都不算，有「回第 3 步補」
+        r = _row(kind, 已按聽過=True)
+        execute.apply_keep(r, {"start": 1.0, "end": 2.0, "依據": "abc"})
+        assert not r["處理好"] and r["回第3步補"] and not r["可以按照目前設定做"], kind
 
 
 def test_keep_marks_row_done_persists_and_can_undo():
     w = _fresh()
     with _FakeCodes(["Emma"]):
         r = _must(w, "英文代號:")[0]
-        assert r["可以按不改"] and not r["已按不改"] and not r["處理好"] and not r.get("可以按聽過")
+        assert r["類別"] == execute.KIND_CODE and r["可以按照目前設定做"] and not r["處理好"]
         before = execute.final_check(w)
         execute.keep_final(w, r["key"])
-        dec = review.load_decisions(w)                                     # 存在覆核資料（重新整理頁面後還在）
-        saved = dec["總檢查"][execute.KEEP_FIELD][r["key"]]
+        saved = review.load_decisions(w)["總檢查"][execute.KEEP_FIELD][r["key"]]   # 存在覆核資料
         assert set(saved) == {"start", "end", "依據", "時間"} and "Emma" not in json.dumps(saved, ensure_ascii=False)
         after = execute.final_check(w)
         r2 = next(x for x in after["一定要處理"] if x["key"] == r["key"])
-        assert r2["已按不改"] and r2["處理好"] and after["已按不改"] == 1
+        assert r2["已按照目前設定做"] and r2["處理好"] and after["已按照目前設定做"] == 1
         assert after["還要處理"] == before["還要處理"] - 1 and after["已確認"] == before["已確認"] + 1
-        # 內容變了（代號多了一個）→ 不再算，標「按了不改之後變了」
-    with _FakeCodes(["Emma", "Rose"]):
+    with _FakeCodes(["Emma", "Rose"]):                                     # 內容變了 → 不算、標出來
         r3 = _must(w, "英文代號:")[0]
-        assert not r3["已按不改"] and r3["不改後變了"] and not r3["處理好"]
+        assert not r3["處理好"] and r3["照目前設定做後變了"]
     with _FakeCodes(["Emma"]):
-        assert _must(w, "英文代號:")[0]["已按不改"]                         # 改回來：照算
+        assert _must(w, "英文代號:")[0]["處理好"]
         execute.keep_final(w, r["key"], keep=False)                        # 反悔
         r4 = _must(w, "英文代號:")[0]
-        assert not r4["已按不改"] and not r4["處理好"] and not r4.get("不改後變了")
-        assert r["key"] not in review.load_decisions(w)["總檢查"][execute.KEEP_FIELD]
+        assert not r4["處理好"] and not r4.get("照目前設定做後變了")
+        # b6291f7 的舊名字（總檢查.不改）也認
+        dec = review.load_decisions(w)
+        dec["總檢查"][execute.KEEP_FIELD_OLD] = {r["key"]: dict(saved)}
+        review._save_decisions(w, dec)
+        assert _must(w, "英文代號:")[0]["處理好"]
+        execute.keep_final(w, r["key"], keep=False)
+        assert not _must(w, "英文代號:")[0]["處理好"]
 
 
-def test_keep_refused_for_risky_kinds():
-    w = _fresh()
+def _outside_setup(w: Path) -> str:
     oid = review.manual_edit(w, {"類型": "重疊", "start": 80.2, "end": 81.0})["id"]
-    review.save_overlap(w, oid, {"做法": "只留學員"})                      # 缺學員是誰 → 一定要處理（重疊）
+    review.save_overlap(w, oid, {"做法": "只留學員"})                      # 缺學員是誰 → 重疊缺東西
     t = next(t for t in review.page_data(w)["項目"] if t["類型"] == "學員段落")
-    review.retime_turn(w, t["id"], t["start"] + 1.0, t["end"])             # 段落外（可以按「我聽過了」那一類）
-    fc = execute.final_check(w)
-    risky = [r for r in fc["一定要處理"] if r["key"].split(":")[0] in ("重疊", "段落外")]
-    assert {r["key"].split(":")[0] for r in risky} == {"重疊", "段落外"}, [r["key"] for r in fc["一定要處理"]]
-    for r in risky:
-        assert not r["可以按不改"] and r["不改不開放原因"] and not r["已按不改"]
-        try:
-            execute.keep_final(w, r["key"])
-            raise AssertionError(f"{r['key']} 不該能按不改")
-        except ValueError as e:
-            assert "成品" in str(e)
-    # 手動塞進存檔也不算（不開放的類別一律不算處理好）
+    review.retime_turn(w, t["id"], t["start"] + 1.0, t["end"])             # 開頭晚 1 秒 → 段落外
+    return t["id"]
+
+
+def test_outside_kind_open_merged_with_heard_and_old_record():
+    w = _fresh()
+    tid = _outside_setup(w)
+    out = _must(w, "段落外:")[0]
+    assert out["類別"] == execute.KIND_OUTSIDE and out["可以按照目前設定做"] and not out["處理好"]
+    assert "原聲" in out["照目前設定做的後果"]
+    execute.keep_final(w, out["key"])                                      # 按一顆＝以前的「我聽過了」
+    r = _must(w, "段落外:")[0]
+    assert r["處理好"] and r["已按聽過"] and out["key"] in review.load_decisions(w)["總檢查"]["聽過"]
+    assert execute.outside_questions(w)[tid][0]["答案"] == execute.OUT_A   # 第 3 步看得到「老師的話，不用處理」
+    # 內容變了（存的依據不一樣）→ 不算
     dec = review.load_decisions(w)
-    dec.setdefault("總檢查", {})[execute.KEEP_FIELD] = {r["key"]: {"start": r["start"], "end": r["end"], "依據": "x", "時間": "t"} for r in risky}
+    dec["總檢查"][execute.KEEP_FIELD][out["key"]]["依據"] = "舊的"
     review._save_decisions(w, dec)
-    fc = execute.final_check(w)
-    assert not any(r["已按不改"] for r in fc["一定要處理"]) and not fc["可以開始"]
+    assert not _must(w, "段落外:")[0]["處理好"] and _must(w, "段落外:")[0]["照目前設定做後變了"]
+    execute.keep_final(w, out["key"])                                      # 再按一次就好
+    assert _must(w, "段落外:")[0]["處理好"]
+    execute.keep_final(w, out["key"], keep=False)                          # 取消：聽過、第 3 步答案一起拿掉
+    assert not _must(w, "段落外:")[0]["處理好"] and execute.outside_questions(w)[tid][0]["答案"] is None
+    # 舊資料：只有「聽過」（以前勾的「我聽過了」）→ 照算
+    dec = review.load_decisions(w)
+    dec["總檢查"].pop(execute.KEEP_FIELD, None)
+    review._save_decisions(w, dec)
+    execute.ack_final(w, out["key"])
+    assert _must(w, "段落外:")[0]["處理好"]
+
+
+def test_back3_kinds_still_refused():
+    w = _fresh()
+    _outside_setup(w)
+    ov = _must(w, "重疊:")[0]
+    assert ov["類別"] == execute.KIND_OVERLAP and ov["回第3步補"] and not ov["可以按照目前設定做"] and ov["第3步"]
+    try:
+        execute.keep_final(w, ov["key"])
+        raise AssertionError("重疊缺東西不該能照目前設定做")
+    except ValueError as e:
+        assert "回第 3 步補" in str(e)
+    dec = review.load_decisions(w)                                         # 手動塞進存檔也不算
+    dec.setdefault("總檢查", {}).setdefault("聽過", []).append(ov["key"])
+    dec["總檢查"][execute.KEEP_FIELD] = {ov["key"]: {"start": ov["start"], "end": ov["end"], "依據": ov["依據"], "時間": "t"}}
+    review._save_decisions(w, dec)
+    assert not _must(w, "重疊:")[0]["處理好"] and not execute.final_check(w)["可以開始"]
     try:
         execute.keep_final(w, "英文代號:不存在:改稿")
         raise AssertionError("不在清單的列不該能按")
@@ -174,8 +240,55 @@ def test_keep_refused_for_risky_kinds():
         assert "不在" in str(e)
 
 
+def test_no_text_kind_open():
+    """沒有字（#117）：開放「照目前設定做」；舊的「聽過」鍵容許 1 秒移動照算。"""
+    import test_untranscribed as tu
+
+    w = tu._fresh()
+    r = _must(w, "沒有字:")[0]
+    assert r["類別"] == execute.KIND_NO_TEXT and r["可以按照目前設定做"] and not r["處理好"]
+    execute.keep_final(w, r["key"])
+    assert _must(w, "沒有字:")[0]["處理好"]
+
+
+def test_run_execute_check_matches_buttons():
+    """命令列 run execute 的總檢查擋法跟網頁一致：還要處理就擋；按了「照目前設定做」就過（過了之後用假的 sync 停下，不跑模型）。"""
+    from bookclub import epcodes
+
+    w = _fresh()
+    old_pre, old_sync = execute.precheck, epcodes.sync
+
+    class Passed(Exception):
+        pass
+
+    def stop(_w):
+        raise Passed()
+
+    execute.precheck = lambda _w: {"可以開始": True, "缺": [], "提醒": [], "缺代號": 0}
+    epcodes.sync = stop
+    try:
+        with _FakeCodes(["Emma"]):
+            key = _must(w, "英文代號:")[0]["key"]
+            try:
+                execute.run_execute(w, log=lambda m: None)
+                raise AssertionError("還有一定要處理的，應該擋")
+            except FileNotFoundError as e:
+                assert "總檢查" in str(e)
+            execute.keep_final(w, key)
+            fc = execute.final_check(w)
+            assert fc["可以開始"], [r["key"] for r in fc["一定要處理"] if not r["處理好"]]
+            try:
+                execute.run_execute(w, log=lambda m: None)
+                raise AssertionError("應該過了總檢查")
+            except Passed:
+                pass
+    finally:
+        execute.precheck, epcodes.sync = old_pre, old_sync
+
+
 def test_keep_html_and_inspect():
     w = _fresh()
+    _outside_setup(w)
     with _FakeCodes(["Emma"]):
         key = _must(w, "英文代號:")[0]["key"]
         execute.keep_final(w, key)
@@ -186,19 +299,30 @@ def test_keep_html_and_inspect():
         with redirect_stdout(buf):
             assert safeview.main([str(w), "總檢查"]) == 0
         out = buf.getvalue()
-        assert "按了不改 1" in out and "已按不改=是" in out and "可以按不改=是" in out and "處理好=是" in out, out
-        assert "Emma" not in out and "不改不開放原因" not in out and "維持現狀" not in out   # 不印說明文字、代號
+        assert "按了照目前設定做 1" in out and "已按照目前設定做=是" in out and "可以按照目前設定做=是" in out, out
+        assert "類別=英文代號" in out and "類別=重疊缺東西" in out and "回第3步補=是" in out and "類別=段落外" in out, out
+        assert "Emma" not in out and "不開放原因" not in out and "原聲留在" not in out and "依據=" not in out
         assert wd.read_json(review.review_path(w)) == before
     if not NODE:
         print("（沒有 node，略過網頁）")
         return
-    rows = [{"key": "英文代號:x:改稿", "可以按不改": True, "已按不改": False},
-            {"key": "英文代號:y:改稿", "可以按不改": True, "已按不改": True},
-            {"key": "段落外:T1:1.0", "可以按不改": False, "不改不開放原因": "維持現狀的話<學員>原聲會留著"}]
-    got = _node(_ESC + _fn(APPJS, "fcKeepHtml") + f"console.log(JSON.stringify({json.dumps(rows, ensure_ascii=False)}.map(fcKeepHtml)));")
-    assert 'data-fckeep="英文代號:x:改稿" data-on="1"' in got[0] and ">不改（維持目前設定）<" in got[0]
-    assert 'data-on="0"' in got[1] and "再按取消" in got[1] and 'aria-pressed="true"' in got[1]
-    assert "disabled" in got[2] and "data-fckeep" not in got[2] and "&lt;學員&gt;" in got[2]
+    rows = [{"key": "英文代號:x:改稿", "可以按照目前設定做": True, "照目前設定做的後果": "按了：照現在的文字生成"},
+            {"key": "段落外:T1:1.0", "可以按照目前設定做": True, "已按照目前設定做": True, "照目前設定做的後果": "這幾秒<照原聲>"},
+            {"key": "重疊:O1", "類別": "重疊缺東西", "回第3步補": True, "照目前設定做不開放原因": "這一類要回第 3 步補"},
+            {"key": "?:1", "照目前設定做不開放原因": "不行"}]
+    got = _node(_ESC + _fn(APPJS, "fcKeepHtml") + f"console.log(JSON.stringify({json.dumps(rows, ensure_ascii=False)}.map((r, i) => fcKeepHtml(r, i))));")
+    assert 'data-fckeep="英文代號:x:改稿" data-on="1"' in got[0] and ">照目前設定做<" in got[0] and "照現在的文字生成" in got[0]
+    assert 'data-on="0"' in got[1] and "再按取消" in got[1] and "&lt;照原聲&gt;" in got[1]
+    assert 'data-fcback="2"' in got[2] and "回第 3 步補" in got[2] and "data-fckeep" not in got[2]
+    assert "data-fckeep" not in got[3] and "data-fcback" not in got[3]
+    html = _fn(APPJS, "finalCheckHtml")
+    assert "不改" not in html and "data-fcheard" not in html                # 不留兩顆做同一件事的按鈕、不再叫「不改」
+    assert "!r[\"回第3步補\"]" in html                                     # 回第 3 步補的列不重複放「去第 3 步改這一筆」
+    go = _node("const FC_BACK3_CARD = { \"名字換不了代號\": \"老師提到名字\", \"重疊缺東西\": \"重疊\" };\n" + _fn(APPJS, "fcBack3Go") + """
+      console.log(JSON.stringify([fcBack3Go({key: "名字:3", "類別": "名字換不了代號", "第3步": "名字:3", "名稱": "A"}),
+        fcBack3Go({key: "名字:4", "類別": "名字換不了代號", "名稱": "B"})]));""")
+    assert go[0]["key"] == "名字:3" and go[0]["backKey"] == "名字:3"
+    assert go[1]["key"] is None and "老師提到名字" in go[1]["note"]
 
 
 # ---------- #178 請看一眼：每一列「我看過了」＋「全部看過了」 ----------
@@ -248,6 +372,18 @@ def test_look_each_row_then_all_seen_and_new_rows_reset():
         raise AssertionError("不在清單的列不該能按")
     except ValueError:
         pass
+    # 畫面是舊的（那一列的起訖跟伺服器現在算的不一樣）→ 不記，請人重新整理；記下的起訖一律用伺服器算的
+    fc = execute.final_check(w)
+    r0 = fc["請看一眼"][0]
+    stale = [{"key": r0["key"], "start": r0["start"] - 3, "end": r0["end"]}]
+    try:
+        execute.ack_final(w, seen=True, rows=stale, look_key=r0["key"])
+        raise AssertionError("畫面上的範圍是舊的，不該記")
+    except ValueError as e:
+        assert "重新整理" in str(e)
+    execute.ack_final(w, seen=True, look_key=r0["key"])
+    snap = review.load_decisions(w)["總檢查"]["看過的列"]
+    assert next(x for x in snap if x["key"] == r0["key"])["start"] == round(r0["start"], 3)
 
 
 def test_look_legacy_seen_flag_counts_rows_as_seen():
@@ -304,8 +440,10 @@ def test_server_routes_keep_and_look():
 
     with _FakeCodes(["Emma"]):
         key = _must(w, "英文代號:")[0]["key"]
-        srv.Handler._route_post_api(H(), "/api/execute/finalcheck", {"key": key, "不改": True})
-        assert sent[-1][0] == 200 and _must(w, "英文代號:")[0]["已按不改"]
+        srv.Handler._route_post_api(H(), "/api/execute/finalcheck", {"key": key, "照目前設定做": True})
+        assert sent[-1][0] == 200 and _must(w, "英文代號:")[0]["處理好"]
+        srv.Handler._route_post_api(H(), "/api/execute/finalcheck", {"key": key, "不改": False})   # 舊名字也收
+        assert not _must(w, "英文代號:")[0]["處理好"]
         look = execute.final_check(w)["請看一眼"]
         rows = [{"key": r["key"], "start": r["start"], "end": r["end"]} for r in look]
         srv.Handler._route_post_api(H(), "/api/execute/finalcheck", {"看一眼": look[0]["key"], "看過": True, "看過的列": rows})
