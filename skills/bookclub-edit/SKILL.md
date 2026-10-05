@@ -68,7 +68,10 @@ README 的例子用 `~/bookclub-edit`，夥伴放在別的位置時照查到的�
 
 ## 執行流程（Claude Code 這邊做的事）
 
-1. **環境還沒裝好時**：程式還沒下載的話，照 README 第 4 節「下載程式」用 `git clone` 下載。
+1. **環境還沒裝好時**：Windows 還沒裝過 WSL2 與 Ubuntu 的，先照 README 第 4 節「Windows：第一次安裝 WSL2 與 Ubuntu」
+   裝好（這一節大多在 Windows 的 PowerShell 裡做，要用系統管理員身分；請夥伴照著做，有要確認的再問）。
+   Windows（WSL2）使用上要注意的事集中在 README 第 3 節「Windows（WSL2）要注意的事」。
+   程式還沒下載的話，照 README 第 4 節「下載程式」用 `git clone` 下載。
    在工具資料夾裡先跑 `bash install.sh --check-only`，看電腦裡已經有哪些工具與模型
    （別處已經裝過的 CosyVoice 與模型會被認出來、直接沿用，不重抓約 7GB）。再跑 `bash install.sh`
    安裝缺的部分。裝完會自動跑一次 `bookclub doctor`，把結果念給夥伴聽，必要項目沒過的照畫面上的「修法」處理。

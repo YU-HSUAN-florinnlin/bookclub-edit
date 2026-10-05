@@ -51,16 +51,16 @@
 
 ## 3. 準備什麼
 
-第一次安裝前，照順序準備好這幾樣（打 ✱ 的是 WSL2 才要做的）。Windows 的部分，這份說明是從「WSL2 與 Ubuntu 已經裝好、打得開 Ubuntu 的終端機」開始寫；還沒裝過 WSL2 的話，請先請開發者或身邊的人協助裝好。
+第一次安裝前，照順序準備好這幾樣（打 ✱ 的是 WSL2 才要做的）。Windows 還沒裝過 WSL2 的話，先照第 4 節「Windows：第一次安裝 WSL2 與 Ubuntu」裝好（下面第 2、3 項，那一節也有一步一步的寫法）。
 
 | # | 要準備的 | 做什麼用 | 怎麼準備 |
 | --- | --- | --- | --- |
 | 1 | 硬碟空間 | 模型、套件、工作區 | 至少 15GB（模型約 7GB、套件約 3GB；WSL2 用只用處理器的 torch）；每支 2 小時影片的工作區另外抓 5–10GB |
-| 2 | ✱ WSL2 記憶體上限 | 找重疊、組裝整支影片 | WSL2 預設只能用主機一半的記憶體。Windows 使用者資料夾建 `.wslconfig`，寫 `[wsl2]`、`memory=24GB`、`swap=16GB`，存檔後在 PowerShell 跑 `wsl --shutdown` 再開 |
-| 3 | Groq API 金鑰 | 語音轉文字（免費額度通常夠） | 到 [console.groq.com](https://console.groq.com) 申請。把 `export GROQ_API_KEY=你的金鑰` 加進：**macOS → `~/.zshrc`**；**WSL2 → `~/.profile`**（不要放 `~/.bashrc`：Ubuntu 的 `.bashrc` 在非互動模式會提早結束，工具讀不到）。加完開新的終端機視窗。**金鑰不要寫進其他檔案、也不要貼給 AI** |
+| 2 | ✱ WSL2 記憶體上限 | 找重疊、組裝整支影片 | WSL2 預設只能用主機一半的記憶體。32GB 的電腦：Windows 使用者資料夾建 `.wslconfig`，寫 `[wsl2]`、`memory=24GB`、`swap=16GB`，存檔後在 PowerShell 跑 `wsl --shutdown` 再開（怎麼建、其他記憶體大小怎麼辦，見「Windows：第一次安裝 WSL2 與 Ubuntu」第 7 步） |
+| 3 | Groq API 金鑰 | 語音轉文字（免費額度通常夠） | 到 [console.groq.com](https://console.groq.com) 申請。把 `export GROQ_API_KEY=你的金鑰` 加進：**macOS → `~/.zshrc`**；**WSL2 → `~/.profile`**（不要放 `~/.bashrc`：Ubuntu 的 `.bashrc` 在非互動模式會提早結束，工具讀不到）。加完開新的終端機視窗（WSL2 的一行指令寫法見「Windows：第一次安裝 WSL2 與 Ubuntu」第 9 步）。**金鑰不要寫進其他檔案、也不要貼給 AI** |
 | 4 | Hugging Face 帳號與同意條款 | 分辨誰在說話（pyannote 是要先同意條款的模型） | ① 註冊／登入 [huggingface.co](https://huggingface.co) ② 打開 [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) 與 [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) 各按一次同意 ③ Settings → Access Tokens 建一把 **Read** 金鑰。登入指令在安裝完之後跑（見下一節） |
 | 5 | Claude Code（登入過） | 段落分析、建議刪除段落、人名清單（第 1 步） | macOS 裝好 Claude Code 即可。**✱ WSL2 要在 WSL2 裡面另外裝一份**（Windows 那份 WSL2 用不到）：`curl -fsSL https://claude.ai/install.sh \| bash`，裝完執行 `claude` 登入一次。沒裝的話第 1 步會跳過段落分析，第 3 步沒有學員段落可以覆核 |
-| 6 | 設定包（向宇軒拿） | 名冊、敏感詞、名字排除清單、發音對照表、**匿名聲線**（學員重念用的男聲、女聲） | 安裝完用 `bookclub profile import 設定包.zip` 匯入（見「怎麼用」第 0 步）。沒有設定包時，安裝會放範例檔，名冊要自己填、匿名聲線要另外準備 |
+| 6 | 設定包（向開發者拿） | 名冊、敏感詞、名字排除清單、發音對照表、**匿名聲線**（學員重念用的男聲、女聲） | 安裝完用 `bookclub profile import 設定包.zip` 匯入（見「怎麼用」第 0 步）。沒有設定包時，安裝會放範例檔，名冊要自己填、匿名聲線要另外準備 |
 | 7 | 影片檔 | 讀書會的 Zoom 錄影（.mp4） | 放進 `~/讀書會剪輯資料/影片/`（安裝時會建好這個資料夾）。工作區會建在影片旁邊，所以影片放哪裡，工作區就在哪裡。**✱ WSL2 一定要先把影片複製進 WSL2 自己的資料夾**，不要直接用 `/mnt/c/...` 底下的檔案：網頁只能選家目錄底下的檔案，跨系統讀寫也慢很多。怎麼複製進去、成品怎麼拿回 Windows，見下面「WSL2：影片放進去、成品拿出來」 |
 
 名冊欄位：`中文名`（學員本名）、`其他寫法`（同音字、暱稱、轉文字常聽錯的寫法，多個用「、」分隔）、`性別`（決定用男聲或女聲重念）。**代號不寫在名冊**：每一集在第 3 步選（代號是外國人名的中文寫法，例如「潔西」；同一集同一人同一個代號就好）。敏感詞欄位：`原詞`、`替代詞`。這幾份含真實姓名，放在 `~/讀書會剪輯資料/`，不要提交進任何 git 倉庫。
@@ -106,7 +106,135 @@ cd ~/讀書會剪輯資料/影片 && explorer.exe .
 
 **macOS**：第 4 步執行時，工具會自己讓電腦不進入閒置睡眠（用系統內建的 `caffeinate`），做完自動恢復；螢幕可以關。但**闔上筆電螢幕還是會睡**，筆電請接電源、螢幕打開。第 1 步分析時工具不會防睡眠：跑的時候請在「系統設定」把電腦閒置後進入睡眠的時間拉長（位置依 macOS 版本不同，常見在「鎖定畫面」或「電池」→「選項」），跑完再改回來。
 
+### Windows（WSL2）要注意的事
+
+散在這份說明各處、Windows（WSL2）才會遇到的事，集中在這裡：
+
+- **網頁要自己開**：WSL2 不會自動開瀏覽器。在 Ubuntu 的終端機打 `.venv/bin/bookclub serve` 之後，終端機會印「這是 WSL2，不會自動開瀏覽器：請在 Windows 的瀏覽器（Edge 或 Chrome）開 http://localhost:8766/」，照著在 Windows 的瀏覽器開這個網址。
+- **關掉那個終端機視窗，網頁就停了**：跑 `bookclub serve` 的終端機視窗要一直開著（可以縮小）。第 4 步跑到一半關掉，下次開網頁會顯示「中斷」，按「開始執行」會接著做。
+- **網頁已經開著又開一次**：終端機會說「讀書會剪輯工具已經開著了」，直接用瀏覽器開原本的網址就好；如果是別的程式占用了這個埠，訊息會說怎麼查、怎麼改用別的埠。
+- **Groq 金鑰寫在 `~/.profile`**，不要寫在 `~/.bashrc`（寫在裡面工具讀不到）。讀不到金鑰時，新影片的第 1 步不能開始轉文字（已經轉好文字的不受影響）、第 4 步不能開始生成，畫面會說要寫在 `~/.profile`、開新的終端機視窗再啟動。一行指令的寫法見「Windows：第一次安裝 WSL2 與 Ubuntu」第 9 步。
+- **第 1 步與第 4 步都要先把電腦設成不睡眠**：WSL2 沒有防睡眠的功能，見「Windows：跑之前先把電腦設成不睡眠」。
+- **影片要先複製進 WSL2 自己的資料夾**（`~/讀書會剪輯資料/影片/`），成品再複製回 Windows，見「WSL2：影片放進去、成品拿出來」。網頁只能選家目錄底下的檔案；`/mnt/c/...` 底下的檔案跨系統讀寫也慢很多。
+- **中文路徑**：影片、工作區放在 WSL2 自己的資料夾、路徑有中文，還沒在 WSL2 上實測過；直接用掛在 `/mnt/` 底下（Windows 磁碟）的中文路徑更沒有測過，請不要這樣用。遇到跟路徑有關的錯誤請回報。
+- **輸出方式只有「標準輸出」**（整段軟體編碼）：第 4 步「進階設定」裡的另外兩種（用 Mac 顯示晶片的硬體編碼、只重做有動到的片段）只有 Mac 才會列出來。標準輸出在 Mac 與 Windows 的結果一樣。
+- **`doctor --smoke` 會跳過**：測試用的假錄音要用 Mac 內建的功能產生，Linux／WSL2 上會說「只在 Mac 上跑，這次跳過（不算失敗）」。
+- **標字試看版**（終端機 `render video --label`，測試用）在 Windows 上找不到中文字型、做不出來；正式流程（網頁第 4 步）不會用到。
+- **記憶體**：WSL2 預設只能用電腦一半的記憶體。32GB 的電腦照「準備什麼」第 2 項設 `.wslconfig`；其他大小的電腦見「Windows：第一次安裝 WSL2 與 Ubuntu」第 7 步。第 4 步跑的過程中，WSL2 裡可用記憶體低於 1.5 GB、或 swap 超過門檻，工具會請程式做完目前這一句就停（這項只有模擬測試，還沒在實機跑過）。
+- **還沒有雙擊就能開的啟動捷徑**：照「怎麼用」在 Ubuntu 的終端機打指令啟動。
+
 ## 4. 安裝
+
+### Windows：第一次安裝 WSL2 與 Ubuntu
+
+> 這一節是照微軟官方文件整理的，還沒有在實際的 Windows 電腦上逐步驗過；遇到跟說明不一樣的地方請回報給開發者。
+
+工具在 Windows 上是跑在 WSL2（Windows 裡面的一個 Linux 環境）的 Ubuntu 裡。已經裝好、打得開 Ubuntu 終端機的，直接跳到下面「下載程式」。
+
+每一步照「要做什麼 → 會看到什麼 → 看到這個就成功了」寫。畫面上的字依 Windows 版本可能略有不同，意思一樣就對了。
+
+**第 1 步　確認 Windows 版本夠新**
+
+- 要做什麼：按鍵盤的 Windows 鍵，打 `winver`，按 Enter。
+- 會看到什麼：一個「關於 Windows」的小視窗，寫著 Windows 10 或 Windows 11，和「版本」「OS 組建」。
+- 成功：Windows 11 都可以；Windows 10 要「版本 2004」以上（組建 19041 以上）。比這個舊的，先做 Windows Update 更新，或請開發者協助（官方另有手動安裝的步驟）。
+
+**第 2 步　用系統管理員身分開 PowerShell**
+
+- 要做什麼：按 Windows 鍵，打 `PowerShell`，在「Windows PowerShell」上按滑鼠右鍵，選「以系統管理員身分執行」。
+- 會看到什麼：跳出視窗問「要允許此 App 變更您的裝置嗎？」，按「是」。接著出現一個深色（通常是藍色或黑色）的視窗，標題有「系統管理員」。
+- 成功：視窗裡有一行閃爍的游標，前面寫著 `PS C:\WINDOWS\system32>` 之類的字。
+- 卡住：沒有「是」可以按、要你輸入管理員帳號密碼，代表這台電腦的帳號沒有系統管理員權限（公司或學校的電腦常這樣）。請找電腦的管理者幫忙，或換一台自己的電腦。
+
+**第 3 步　安裝 WSL2 與 Ubuntu**
+
+- 要做什麼：在剛剛的 PowerShell 視窗打下面這行，按 Enter：
+
+  ```powershell
+  wsl --install
+  ```
+
+- 會看到什麼：一段一段的安裝訊息與進度，最後提示要重新開機。
+- 成功：訊息跑完、沒有紅字。這一行會把 WSL2 需要的功能打開，並安裝 Ubuntu。
+- 卡住：
+  - 只印出一大段 WSL 的說明文字、沒有開始安裝：代表 WSL 已經裝過一部分。改打 `wsl --list --online` 看可以裝哪些，再打 `wsl --install -d Ubuntu`。
+  - 進度停在 0.0% 不動：改打 `wsl --install --web-download -d Ubuntu`。
+
+**第 4 步　重新開機**
+
+- 要做什麼：存好其他檔案，重新開機。
+- 成功：重開後回到桌面。有時 Ubuntu 的視窗會自己跳出來，就直接做第 5 步。
+
+**第 5 步　第一次打開 Ubuntu，設定使用者名稱與密碼**
+
+- 要做什麼：Ubuntu 視窗沒有自己跳出來的話，按 Windows 鍵，打 `Ubuntu`，點開。
+- 會看到什麼：第一次開要等它解壓縮、安裝一下（之後再開就很快）。接著問您要用的使用者名稱（英文小寫，例如 `teacher`），再問兩次密碼。
+- **打密碼時畫面上不會出現任何字**（連星號都沒有），這是正常的，打完按 Enter 就好。
+- **這組密碼請記下來**：之後安裝工具時，畫面跳出 `[sudo] password for …` 要的就是這組密碼。它跟 Windows 的登入密碼是兩回事。
+- 成功：最後出現一行類似 `teacher@電腦名稱:~$` 的字，後面有閃爍的游標。這就是「Ubuntu 的終端機」，這份說明裡的 `bash` 指令都打在這裡。
+
+**第 6 步　之後怎麼再打開 Ubuntu 的終端機**
+
+- 按 Windows 鍵，打 `Ubuntu`，點開。也可以在「Windows 終端機」（Windows Terminal）的分頁選單裡選 Ubuntu。
+- 找不到 Ubuntu：開 PowerShell 打 `wsl --list --verbose`，看清單裡有沒有 Ubuntu、`VERSION` 是不是 2。清單是空的，回到第 3 步。在 PowerShell 打 `wsl` 也可以直接進到 Ubuntu。
+- 在 Ubuntu 終端機貼上文字：按滑鼠右鍵，或按 `Ctrl＋Shift＋V`（依視窗不同可能略有差異）。
+
+**第 7 步　（電腦記憶體 32GB 時）設定 WSL2 可以用的記憶體**
+
+WSL2 預設只能用電腦一半的記憶體，swap（記憶體不夠時拿硬碟頂替）是記憶體的四分之一。這份說明目前只有 32GB 電腦的建議值：`memory=24GB`、`swap=16GB`（還沒實測過這組設定：09-29 在 WSL2 實測時，WSL2 分到的是約 15GB）。**其他記憶體大小該設多少還沒定**：先不要建這個檔、用預設值，裝完跑 `bookclub doctor` 看「記憶體」那一項（WSL2 裡看到的記憶體低於 8GB 會提醒），把結果回報給開發者。
+
+32GB 電腦的設定方法：
+
+- 要做什麼：開一般的 PowerShell（不用系統管理員），打下面這行，按 Enter。它會在 Windows 使用者資料夾（`C:\Users\你的Windows使用者名稱\`）建一個叫 `.wslconfig` 的檔案。**已經有這個檔案的話先不要打**（會蓋掉原本的內容），請開發者協助。
+
+  ```powershell
+  Set-Content -Path "$env:USERPROFILE\.wslconfig" -Value "[wsl2]`nmemory=24GB`nswap=16GB"
+  ```
+
+  用指令建，是為了避開「記事本存檔時自動在檔名後面加 `.txt`」的問題：檔名變成 `.wslconfig.txt`，WSL2 就讀不到。
+- 確認：打 `Get-Content "$env:USERPROFILE\.wslconfig"`，看到三行 `[wsl2]`、`memory=24GB`、`swap=16GB` 就對了。
+- 讓設定生效：關掉所有 Ubuntu 視窗，在 PowerShell 打 `wsl --shutdown`，等大約 10 秒再打開 Ubuntu。
+- 官方也提供「WSL 設定」程式（在開始功能表找），可以不改檔案、直接在畫面上設記憶體。
+
+**第 8 步　Windows 的檔案在 Ubuntu 裡在哪裡**
+
+- Windows 的 C 槽，在 Ubuntu 裡是 `/mnt/c/`。例如 Windows 的「下載」資料夾是 `/mnt/c/Users/你的Windows使用者名稱/Downloads/`。
+- 工具和影片都要放在 Ubuntu 自己的資料夾（`~` 底下），不要放在 `/mnt/c/...`：跨系統讀寫慢很多，網頁也只能選家目錄底下的檔案。怎麼把影片複製進來、成品怎麼拿回 Windows，見上面「WSL2：影片放進去、成品拿出來」。
+- 想用 Windows 的檔案總管看 Ubuntu 的資料夾：在 Ubuntu 終端機打 `explorer.exe .`（最後有一個點）。
+
+**第 9 步　把轉文字服務（Groq）的金鑰寫進 `~/.profile`**
+
+- 要做什麼：在 Ubuntu 終端機打下面這行（`你的金鑰` 換成在 console.groq.com 申請到的那一串，前後的單引號要留著），按 Enter：
+
+  ```bash
+  echo 'export GROQ_API_KEY=你的金鑰' >> ~/.profile
+  ```
+
+  這行是把一行字加到 `~/.profile` 的最後面，不用學編輯器。**`>>` 是兩個大於符號**（只打一個會把整個檔案蓋掉）。
+- 確認：打 `grep -c GROQ_API_KEY ~/.profile`，印出 `1` 就對了（印出 2 以上代表加了好幾次，請開發者協助整理）。
+- 讓設定生效：關掉這個 Ubuntu 視窗，重新打開一個。
+- 為什麼不能放 `~/.bashrc`：Ubuntu 的 `~/.bashrc` 一開頭就判斷「不是互動模式就結束」，工具在背景執行時讀不到寫在裡面的金鑰；`~/.profile` 才讀得到（`bookclub doctor` 檢查的也是這個檔）。
+- 金鑰不要貼給 AI、不要寫進其他檔案。
+
+**第 10 步　接著做：下載程式、安裝**
+
+- 照下面「下載程式」「先檢查電腦裡已經有什麼」「正式安裝」做。打 `git clone` 時如果說找不到 `git`，先打 `sudo apt-get update && sudo apt-get install -y git`（會問第 5 步設的密碼）。
+- 安裝完，照「裝完之後」登入 Hugging Face：`hf auth login` 會出現 `Enter your token (input will not be visible):`，**貼上金鑰時畫面一樣不會顯示任何字**，貼上後按 Enter。接著問 `Add token as git credential?`，打 `n` 按 Enter。
+- 第 3 節「準備什麼」第 5 項的 Claude Code，要在這個 Ubuntu 終端機裡另外裝一份。
+
+**常見卡住的地方**
+
+- **跟虛擬化有關的錯誤**（例如出現 `0x80370102`、「無法啟動虛擬機器」）：電腦的 BIOS（開機時的設定畫面）要打開「虛擬化」。每台電腦進入 BIOS 的方式與選項名稱都不一樣，多半在處理器（CPU）相關的選項裡；可以先在「工作管理員」→「效能」→「CPU」看「虛擬化」是不是「已啟用」。這一步建議請熟電腦的人協助。
+- **沒有系統管理員權限**（公司、學校的電腦）：第 2 步做不下去，請電腦的管理者協助。
+- **Windows 版本太舊**：先做 Windows Update；Windows 10 版本 2004 以前的要照官方的手動安裝步驟，請開發者協助。
+- **Ubuntu 視窗找不到**：見第 6 步。
+
+參考的微軟官方文件：
+
+- 〈如何使用 WSL 在 Windows 上安裝 Linux〉<https://learn.microsoft.com/zh-tw/windows/wsl/install>
+- 〈設定 WSL 開發環境〉（設定使用者名稱與密碼、檔案放哪裡）<https://learn.microsoft.com/zh-tw/windows/wsl/setup/environment>
+- 〈WSL 中的進階設定組態〉（`.wslconfig`、記憶體與 swap 的預設值、`wsl --shutdown`、「WSL 設定」程式）<https://learn.microsoft.com/zh-tw/windows/wsl/wsl-config>
+- 〈針對適用於 Linux 的 Windows 子系統進行疑難解答〉（虛擬化、`0x80370102`）<https://learn.microsoft.com/zh-tw/windows/wsl/troubleshooting>
 
 ### 下載程式
 
@@ -171,7 +299,7 @@ bash install.sh
    ```bash
    .venv/bin/bookclub models download
    ```
-3. **匯入設定包**（名冊、匿名聲線等，向宇軒拿）：
+3. **匯入設定包**（名冊、匿名聲線等，向開發者拿）：
    ```bash
    .venv/bin/bookclub profile import 設定包.zip
    ```
@@ -590,4 +718,4 @@ WSL2 上找重疊比 M1 慢，是唯一的瓶頸（純本機運算）；聲音�
    - 用的是 Mac 還是 Windows（WSL2）、大概跑了多久才出錯
    - 如果方便，加跑 `.venv/bin/bookclub doctor --smoke`（實際跑三個模型各處理一小段測試音檔；只在 Mac 上跑，WSL2 會跳過），把輸出一起附上，裡面有更詳細的錯誤訊息
 4. **請不要附**：逐字稿內容、學員的名字（本名、代號對照都不要）、名冊、工作區裡的 JSON 檔、影片或聲音檔。截圖前先確認畫面上沒有逐字稿或名字。
-5. 把以上資訊回報給宇軒，一起討論下一步。
+5. 把以上資訊回報給開發者，一起討論下一步。
