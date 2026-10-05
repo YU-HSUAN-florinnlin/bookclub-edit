@@ -645,5 +645,30 @@ def _run_all() -> int:
     return 1 if failed else 0
 
 
+def test_swap_gap_edits_short_gap_between_different_swaps():
+    """10-05 #134（宇軒第三點）：不同段落／不同類型的兩筆換聲音之間只隔 ≤0.1 秒 → 墊底噪；
+    比較長、裡面有老師的句子、有別的動作、碰到剪掉的地方、疊放的 → 照舊不動。"""
+    E = lambda k, i, s, e, **kw: {"類型": k, "id": i, "start": s, "end": e, **kw}
+    edits = [E("學員重念", "T010_02", 10.0, 20.0), E("名字整句換掉", "S001", 20.04, 25.0),      # 0.04 → 墊
+             E("學員重念", "T011_01", 25.3, 30.0),                                                # 0.3 → 不動
+             E("學員重念", "T012_01", 30.08, 40.0),                                               # 0.08 → 墊
+             E("學員重念", "T013_01", 40.09, 50.0),                                               # 有老師的句子
+             E("學員重念", "T014_01", 50.05, 60.0), E("局部消音", "M1", 60.0, 60.02),             # 0.05 → 墊；60.0 之後有別的動作
+             E("學員重念", "T015_01", 60.06, 70.0)]
+    got = assemble.swap_gap_edits(edits, teacher=[(39.99, 40.2)])
+    spans = [(g["start"], g["end"], g["前一格"], g["後一格"]) for g in got]
+    assert spans == [(20.0, 20.04, "T010_02", "S001"), (30.0, 30.08, "T011_01", "T012_01"),
+                     (50.0, 50.05, "T013_01", "T014_01")], spans
+    assert all(g["類型"] == assemble.GAP_KIND and g["跨筆"] for g in got)
+    assert got[0]["段落"] == "T010" and got[0].get("併入前一格")
+    assert "兩筆換聲音之間" in assemble.gap_mute_text(got[1])
+    # 剪掉的地方、疊放的不動
+    assert not assemble.swap_gap_edits(edits[:2], cuts=[(20.0, 20.04)])
+    assert not assemble.swap_gap_edits([edits[0], {**edits[1], "疊放": True}])
+    # 同一個學員段落的空隙已經有 #102 的墊底噪：不重複
+    gap = {"類型": assemble.GAP_KIND, "id": "空隙:T010_02", "start": 20.0, "end": 20.04}
+    assert not assemble.swap_gap_edits(edits[:2] + [gap])
+
+
 if __name__ == "__main__":
     sys.exit(_run_all())

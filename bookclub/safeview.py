@@ -58,6 +58,9 @@ VOCAB = {
     "重念範圍", "老師整段", "老師起訖",
     # 全片底噪（第六批第五件）
     "確認",
+    # 10-04 #134：停格點跟格子結尾錯開時怎麼接（assemble.FREEZE_*）
+    "對齊", "停格點比結尾早：畫面先停，聲音連續播完，播完才墊底噪", "停格點比結尾晚：聲音連續播過停格點並播完，之後墊底噪（佔用下一筆開頭這一小段）",
+    "停格點比結尾晚太多：維持原樣，聲音前後淡出淡入", "錯開太多，照舊",
     # 要念的文字放在哪個欄位（第七批「代號」主題）
     "改稿", "整段文字", "老師文字", "學員文字", "老師整句改稿",
     # 學員段落裡兩格之間的空隙（第八批補修 #102）
@@ -79,7 +82,8 @@ ENUM_KEYS = {"狀態", "類型", "做法", "排法", "放回做法", "版本", "
              "自動處理",   # 10-04 #111：重疊自動處理（值是「學員段落」）
              # 10-04 #61 補修：被蓋過改消音（值是原本的類型）、要人聽原因、警告的類型與處理
              "被蓋過改消音", "要人聽原因", "警告類型", "處理",
-             "補找"}   # 10-04 #119：名字候選是怎麼補找到的
+             "補找",   # 10-04 #119：名字候選是怎麼補找到的
+             "錯開處理", "停格錯開處理"}   # 10-04 #134：停格點跟結尾錯開時怎麼接
 ID_KEYS = {"id", "鍵", "key", "段落", "sentence_id", "區域", "候選", "覆核項目", "句子", "重疊項目", "生成編號", "建議id",
            "來源段落", "edit", "第3步", "生成", "聽過", "編號", "前一格", "後一格",
            # 10-03 第八批補修（#12）：名字候選併進哪一張卡（同一處、同一句同代號）
@@ -706,17 +710,24 @@ def topic_decisions(w: Path, f: Filter, out: list[str], tag: str | None, recompu
 
         rng = d.get("範圍") or [0.0, 1e9]
         d = render.build_decisions(w, float(rng[0]), float(rng[1]))
+        d["片段"] = render.pieces(float(rng[0]), float(rng[1]), d["刪除"], d["停格"])   # 10-04 #134：重算也印成品長度
         out.append("（--重算：以下是用現在的程式重新排的剪輯決策，還沒組裝；停格、片段以實際組裝為準）")
     acts = d.get("動作") or d.get("edits") or []
     out.append("動作 " + str(len(acts)) + " 筆：" + "、".join(f"{val('類型', k)} {n}" for k, n in Counter(a.get("類型") for a in acts).items()))
     for a in acts:
         row = {k: v for k, v in a.items() if k not in ("text", "生成用文字", "轉回文字", "檔案", "來源檔案")}
         if f.ok(row):
-            out.append("  動作 " + fmt_row(row, ("類型", "id", "start", "end", "放回做法", "要人聽", "加快", "停格秒", "疊放")))
+            out.append("  動作 " + fmt_row(row, ("類型", "id", "start", "end", "放回做法", "要人聽", "加快", "停格秒", "停格錯開秒",
+                                                  "停格錯開處理", "開頭讓出秒", "結尾多佔原片秒", "空隙秒", "跨筆",
+                                                  "疊放")))
     cuts = d.get("刪除") or []
     out.append(f"剪掉 {len(cuts)} 段：" + "、".join(val("範圍", c) for c in cuts[:40]))
     fz = d.get("停格") or []
-    out.append(f"停格 {len(fz)} 個：" + "、".join(f"{timemap.t1(x.get('at'))}（{_num(x.get('dur', 0))} 秒）" for x in fz[:40]))
+    out.append(f"停格 {len(fz)} 個：" + "、".join(f"{tfmt(x.get('at'))}（{_num(x.get('dur', 0))} 秒）" for x in fz[:40]))
+    for x in fz:   # 10-04 #134：每個停格跟那一格結尾錯開多少、組裝怎麼接（只有數字與固定說法）
+        row = {k: x[k] for k in ("at", "dur", "edit", "錯開秒", "錯開處理") if k in x}
+        if f.ok(row):
+            out.append("  停格 " + fmt_row(row, ("at", "edit", "dur", "錯開秒", "錯開處理")))
     marks = d.get("標記") or []
     out.append("標記 " + str(len(marks)) + " 筆：" + "、".join(f"{val('類型', k)} {n}" for k, n in Counter(m.get("類型") for m in marks).items()))
     for m in marks:
@@ -730,7 +741,7 @@ def topic_decisions(w: Path, f: Filter, out: list[str], tag: str | None, recompu
     if plist:
         from bookclub.render import output_length
 
-        out.append(f"片段 {len(plist)} 段、成品長度 {timemap.t1(output_length(plist))}、停格合計 {sum(p.get('freeze', 0) for p in plist):.2f} 秒")
+        out.append(f"片段 {len(plist)} 段、成品長度 {tfmt(output_length(plist))}、停格合計 {sum(p.get('freeze', 0) for p in plist):.2f} 秒")
 
 
 def warn_id(text: str) -> str | None:

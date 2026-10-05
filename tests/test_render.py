@@ -536,6 +536,251 @@ def test_build_audio_gap_has_only_room_tone_and_no_unlogged_change():
         assert log["未登記的變動"] == [], log["未登記的變動"]
 
 
+def _offset_case(e_s: float, p_s: float, next_kind: str = "學員重念", new: bool = True):
+    """#134 假資料：一格學員重念 [1.0, e_s]、停格點 p_s（停格 0.4 秒），後面接 next_kind [e_s, 3.0]。
+    照 build_audio 的放法排聲音（new=False 是修之前的放法），回傳（成品聲音、片段表、各種位置）。"""
+    import numpy as np
+
+    from bookclub import assemble
+
+    a, SR = 0.0, render.SR
+    n_all = int(4 * SR)
+    x = (0.5 * np.sin(2 * np.pi * 200 * np.arange(n_all) / SR)).astype(np.float32)   # 原片：學員講話
+    s, t = int(1.0 * SR), int(e_s * SR)
+    pi = int(round(p_s * SR))
+    fz = int(round(0.4 * SR))
+    off = pi - t
+    f0 = int(SR * assemble.FADE_S)
+    clip = (0.3 * np.sin(2 * np.pi * 330 * np.arange(t - s + fz) / SR)).astype(np.float32)   # 生成聲音一直講到最後
+    room = np.full(t - s + fz + max(0, off) + f0, 0.001, dtype=np.float32)
+    y = x.copy()
+    # 下一筆
+    t2 = int(3.0 * SR)
+    if next_kind == "學員重念":
+        nclip = (0.2 * np.sin(2 * np.pi * 440 * np.arange(t2 - t) / SR)).astype(np.float32)
+        nclip[:int(0.1 * SR)] = 0.0   # 開頭對齊空白
+        nh, _, _ = assemble.voice_over_room(nclip, np.full(t2 - t, 0.002, np.float32), t2 - t, 0, SR)
+        y[t:t2] = nh
+    elif next_kind == "名字整句換掉":
+        y[t:t2] = (0.25 * np.sin(2 * np.pi * 150 * np.arange(t2 - t) / SR)).astype(np.float32)
+    # next_kind == "原片"：y 照原片
+    before_next = y[t:t2].copy()
+    if not new or off == 0:
+        head, tail, _ = assemble.voice_over_room(clip, room[:t - s + fz], t - s, fz, SR)
+        y[s:t] = head
+    else:
+        how = (assemble.FREEZE_EARLY if off < 0 else
+               assemble.FREEZE_LATE_JOIN if off <= 0.02 * SR + 1 else assemble.FREEZE_LATE_KEEP)
+        got = assemble.freeze_offset_split(clip, room, t - s, fz, off, join=how == assemble.FREEZE_LATE_JOIN, sr=SR)
+        tail = got["tail"]
+        y[s:t] = got["head"][:t - s]
+        if how == assemble.FREEZE_LATE_JOIN:
+            y[s:pi] = got["head"]
+            k = len(got["resume"])
+            r = np.linspace(0, 1, k, dtype=np.float32)
+            y[pi:pi + k] = y[pi:pi + k] * r + got["resume"] * (1 - r)
+    plist = render.pieces(a, 4.0, [], [{"at": p_s, "dur": 0.4, "edit": "E1"}])
+    out = np.concatenate(list(render.output_segments(x, y, plist, {"E1": tail}, a)))
+    return {"out": out, "plist": plist, "s": s, "t": t, "pi": pi, "fz": fz, "clip": clip, "x": x, "y": y,
+            "before_next": before_next, "t2": t2, "off": off}
+
+
+def _max_step(z) -> float:
+    import numpy as np
+    return float(np.max(np.abs(np.diff(z)))) if len(z) > 1 else 0.0
+
+
+def test_freeze_offset_early_no_fragment():
+    """#134 停格點比結尾早 10 毫秒（第一堂 T034_03：停格 2635.56、結尾 2635.57）：
+    修之前停格那一段從結尾的內容接著念、停格後冒出 10 毫秒的碎片（硬切）；修之後成品裡這一格是整條連續的聲音。"""
+    import numpy as np
+
+    old = _offset_case(2.01, 2.0, new=False)
+    new = _offset_case(2.01, 2.0)
+    s, pi, fz, t = new["s"], new["pi"], new["fz"], new["t"]
+    win = slice(s + 100, t + fz + 2000)   # 這一格（含停格）到下一格開頭
+    assert _max_step(old["out"][win]) > 0.05, _max_step(old["out"][win])   # 修之前：有跳動（碎片、硬切）
+    assert _max_step(new["out"][win]) < 0.03, _max_step(new["out"][win])   # 修之後：沒有
+    got = new["out"][s:t + fz]
+    want = new["clip"] + 0.001
+    f = int(render.SR * 0.01)
+    assert np.allclose(got[f:-f], want[f:-f], atol=1e-6)   # 一個取樣點都沒丟、順序對
+    assert abs(got[-1] - 0.001) < 1e-4                      # 整句最後淡出到底噪（在原本的格子結尾）
+    assert len(new["out"]) == len(old["out"]) == int(round(render.output_length(new["plist"]) * render.SR))
+
+
+def test_freeze_offset_late_next_student_joins():
+    """#134 停格點比結尾晚 10 毫秒、下一格是學員重念（開頭是對齊空白）：這一格念到停格點、停格接著念，
+    下一格開頭讓出 10 毫秒；停格結束接回下一格時從底噪淡入。沒有破洞、沒有硬切；成品長度不變。"""
+    import numpy as np
+
+    old = _offset_case(1.99, 2.0, new=False)
+    new = _offset_case(1.99, 2.0)
+    s, pi, fz, t = new["s"], new["pi"], new["fz"], new["t"]
+    win = slice(s + 100, pi + fz + 2000)
+    assert _max_step(old["out"][win]) > 0.05, _max_step(old["out"][win])
+    assert _max_step(new["out"][win]) < 0.03, _max_step(new["out"][win])
+    got = new["out"][s:pi + fz]
+    clip = new["clip"]
+    f = int(render.SR * 0.01)
+    assert np.allclose(got[f:len(clip) - f], clip[f:-f] + 0.001, atol=1e-6)   # 整條聲音連續、沒丟
+    assert np.allclose(got[len(clip):], 0.001, atol=1e-6)                     # 念完剩下的停格補長是底噪
+    assert new["y"][t2_ := new["t2"] - 1] == old["y"][t2_]                     # 下一格只動到開頭
+    assert np.array_equal(new["y"][pi + f:new["t2"]], new["before_next"][pi - t + f:])
+    assert len(new["out"]) == len(old["out"])
+
+
+def test_freeze_offset_late_next_not_student():
+    """#134 停格點比結尾晚 10 毫秒、後面是原片或名字整句換掉（宇軒 10-05）：這一格的聲音一樣連續播完，
+    只佔用下一筆開頭這 10 毫秒（不露學員原聲、不多蓋）；停格點之後那一筆除了 10 毫秒交叉淡入，一個取樣點都沒動。"""
+    import numpy as np
+
+    for kind in ("原片", "名字整句換掉"):
+        new = _offset_case(1.99, 2.0, next_kind=kind)
+        s, t, pi, fz = new["s"], new["t"], new["pi"], new["fz"]
+        f = int(render.SR * 0.01)
+        assert np.array_equal(new["y"][pi + f:new["t2"]], new["before_next"][pi - t + f:]), kind
+        out = new["out"]
+        clip = new["clip"]
+        assert np.allclose(out[s + f:s + len(clip) - f], clip[f:-f] + 0.001, atol=1e-6), kind   # 聲音連續、沒丟
+        assert np.allclose(out[s + len(clip):pi + fz], 0.001, atol=1e-6)                      # 播完之後墊底噪
+        assert _max_step(out[s + 100:pi + fz + 2000]) < 0.05, (kind, _max_step(out[s + 100:pi + fz + 2000]))
+
+
+def test_freeze_offset_late_too_much_keeps_others():
+    """錯開超過 0.02 秒（不該發生）：別筆範圍不動，這一格的聲音在結尾淡出、停格那一段淡入。"""
+    import numpy as np
+
+    new = _offset_case(1.97, 2.0, next_kind="名字整句換掉")
+    s, t, pi, fz = new["s"], new["t"], new["pi"], new["fz"]
+    assert np.array_equal(new["y"][t:new["t2"]], new["before_next"])
+    out = new["out"]
+    assert abs(out[t - 1] - 0.001) < 2e-3 and abs(out[pi] - 0.001) < 2e-3
+
+
+def test_freeze_offset_zero_unchanged():
+    """#134 停格點＝結尾：跟修之前一模一樣。"""
+    import numpy as np
+
+    old = _offset_case(2.0, 2.0, new=False)
+    new = _offset_case(2.0, 2.0)
+    assert np.array_equal(old["out"], new["out"])
+
+
+def test_mark_freeze_offsets_kinds():
+    """#134：剪輯決策記每個停格錯開多少、怎麼接；時間格、停格點、停格秒都不動。"""
+    from bookclub import assemble
+
+    def cell(i, s0, s1, **kw):
+        return {"類型": "學員重念", "id": i, "start": s0, "end": s1, **kw}
+
+    kept = [cell("A", 0, 10.01, 停格秒=0.4), cell("B", 10.01, 20.0), cell("C", 20.0, 29.99, 停格秒=0.2),
+            cell("D", 29.99, 40.0, 停格秒=0.2), {"類型": "名字整句換掉", "id": "S1", "start": 40.0, "end": 41.0},
+            cell("E", 50.0, 59.99, 停格秒=0.2), cell("F", 60.0, 69.99, 停格秒=0.2, 切在講話中=[69.99]),
+            cell("G", 69.99, 80.0)]
+    freezes = [{"at": render.snap(k["end"]), "dur": k["停格秒"], "edit": k["id"]} for k in kept if k.get("停格秒")]
+    before = [(k["start"], k["end"]) for k in kept], [(f["at"], f["dur"]) for f in freezes]
+    render.mark_freeze_offsets(kept, freezes)
+    by = {f["edit"]: f for f in freezes}
+    assert by["A"]["錯開秒"] == -0.01 and by["A"]["錯開處理"] == assemble.FREEZE_EARLY
+    assert by["C"]["錯開秒"] == 0.01 and by["C"]["錯開處理"] == assemble.FREEZE_LATE_JOIN
+    assert kept[3]["開頭讓出秒"] == 0.01                                     # D 開頭讓給 C
+    assert by["D"]["錯開秒"] == 0.0 and by["D"]["錯開處理"] == assemble.FREEZE_ALIGNED   # 40.0 本來就在畫面格上
+    assert by["E"]["錯開處理"] == assemble.FREEZE_LATE_JOIN and kept[5]["結尾多佔原片秒"] == 0.01   # 後面接原片
+    assert by["F"]["錯開處理"] == assemble.FREEZE_LATE_JOIN and kept[7]["開頭讓出秒"] == 0.01
+    assert ([(k["start"], k["end"]) for k in kept], [(f["at"], f["dur"]) for f in freezes]) == before
+    # 錯開超過 0.02 秒：維持原樣
+    kept = [cell("A", 0, 9.97, 停格秒=0.2), cell("B", 9.97, 20.0)]
+    freezes = [{"at": 10.0, "dur": 0.2, "edit": "A"}]
+    render.mark_freeze_offsets(kept, freezes)
+    assert freezes[0]["錯開處理"] == assemble.FREEZE_LATE_KEEP and "開頭讓出秒" not in kept[1]
+    # 後面是名字整句換掉
+    kept = [cell("A", 0, 39.99, 停格秒=0.2), {"類型": "名字整句換掉", "id": "S1", "start": 39.99, "end": 41.0}]
+    freezes = [{"at": 40.0, "dur": 0.2, "edit": "A"}]
+    render.mark_freeze_offsets(kept, freezes)
+    assert freezes[0]["錯開處理"] == assemble.FREEZE_LATE_JOIN and kept[1]["開頭讓出秒"] == 0.01
+
+
+def test_freeze_offset_in_proclog_only_changes_offset_rows():
+    """#134：處理紀錄的「做了什麼」只有錯開的那幾筆多一段說明（第 5 步內容指紋變了、要重聽）；對齊的那幾筆跟以前一樣。"""
+    from bookclub import assemble, finalcheck, proclog
+
+    def cell(i, s0, s1, **kw):
+        return {"類型": "學員重念", "id": i, "start": s0, "end": s1, "學員": "學員1", "聲線": "女", **kw}
+
+    acts = [cell("T1_01", 0, 10.01, 停格秒=0.4, 加快=1.15, 來源檔案="a.wav"), cell("T1_02", 10.01, 20.0),
+            cell("T1_03", 20.0, 29.99, 停格秒=0.2, 加快=1.15, 來源檔案="b.wav"), cell("T1_04", 29.99, 40.0),
+            cell("T1_05", 40.0, 50.0, 停格秒=0.2, 加快=1.15, 來源檔案="c.wav"), cell("T1_06", 50.0, 60.0)]
+    freezes = [{"at": render.snap(k["end"]), "dur": k["停格秒"], "edit": k["id"], "原因": "x"} for k in acts if k.get("停格秒")]
+    plain = {"動作": [dict(k) for k in acts], "停格": [dict(f) for f in freezes], "刪除": [], "標記": []}
+    render.mark_freeze_offsets(acts, freezes)
+    marked = {"動作": acts, "停格": freezes, "刪除": [], "標記": []}
+    r0 = {(r["類型"], tuple(r["原片"])): finalcheck.content_print(r) for r in proclog.build_records(plain, None)}
+    r1 = {(r["類型"], tuple(r["原片"])): finalcheck.content_print(r) for r in proclog.build_records(marked, None)}
+    changed = sorted(k for k in r0 if r0[k] != r1[k])
+    assert changed == sorted([("學員重念", (0.0, 10.01)), ("學員重念", (20.0, 29.99)), ("學員重念", (29.99, 40.0)),
+                              ("停格", (10.0, 10.0)), ("停格", (30.0, 30.0))]), changed
+    rec = next(r for r in proclog.build_records(marked, None) if r["原片"] == [0.0, 10.01])
+    assert rec["停格錯開秒"] == -0.01 and assemble.FREEZE_EARLY in rec["做了什麼"]
+
+
+def test_build_audio_freeze_offset_no_fragment_or_hole():
+    """#134 組聲音（render.build_audio，假資料、不讀真的影片）：停格點比結尾早／晚 10 毫秒、下一格是學員重念。
+    修之前（不記錯開處理）停格前後有硬切；修之後沒有；成品長度、片段表不變；兩格裡沒有「沒登記的變動」。"""
+    import tempfile
+
+    import numpy as np
+    import soundfile as sf
+
+    from bookclub import proclog
+
+    SR = render.SR
+    with tempfile.TemporaryDirectory() as root:
+        w = Path(root) / "工作區"
+        out = w / "輸出"
+        (w / "生成" / "學員").mkdir(parents=True)
+        out.mkdir()
+        rng = np.random.default_rng(5)
+        x = (0.001 * rng.standard_normal(SR * 8)).astype(np.float32)
+        x[SR:SR * 6] += (0.3 * np.sin(2 * np.pi * 300 * np.arange(SR * 5) / SR)).astype(np.float32)
+
+        def run(tag: str, end: float, fixed: bool) -> tuple[np.ndarray, dict, list]:
+            n_a = int(round((end - 1.0 + 0.4) * SR))
+            sf.write(str(w / "生成" / "學員" / "A.wav"), (0.1 * np.sin(2 * np.pi * 330 * np.arange(n_a) / SR)).astype(np.float32),
+                     SR, subtype="FLOAT")
+            b = (0.1 * np.sin(2 * np.pi * 440 * np.arange(int((5.0 - end) * SR)) / SR)).astype(np.float32)
+            b[:int(0.15 * SR)] = 0.0   # 開頭對齊空白
+            sf.write(str(w / "生成" / "學員" / "B.wav"), b, SR, subtype="FLOAT")
+            sf.write(str(out / f"原聲_{tag}.wav"), x, SR, subtype="FLOAT")
+            acts = [{"類型": "學員重念", "id": "A", "start": 1.0, "end": end, "檔案": "生成/學員/A.wav", "來源檔案": "生成/學員/A.wav",
+                     "停格秒": 0.4, "加快": 1.0, "學員": "學員1", "聲線": "女", "text": "假", "生成用文字": "假"},
+                    {"類型": "學員重念", "id": "B", "start": end, "end": 5.0, "檔案": "生成/學員/B.wav", "學員": "學員1", "聲線": "女",
+                     "text": "假", "生成用文字": "假"}]
+            fzs = [{"at": render.snap(end), "dur": 0.4, "edit": "A", "原因": "假"}]
+            if fixed:
+                render.mark_freeze_offsets(acts, fzs)
+            d = {"範圍": [0.0, 8.0], "動作": acts, "刪除": [], "停格": fzs, "模糊": None, "標記": []}
+            res = render.build_audio(w, Path(root) / "沒有影片.mp4", d, out, tag)
+            o, _ = sf.read(str(res["原聲"]), dtype="float32")
+            n, _ = sf.read(str(res["新聲音"]), dtype="float32")
+            recs = proclog.build_records(d, res["片段"])
+            chk = proclog.check_arrays(o, n, SR, recs)
+            return n, chk, res["片段"]
+
+        for end in (2.99, 3.01):
+            n0, chk0, pl0 = run(f"old{end}", end, False)
+            n1, chk, pl1 = run(f"new{end}", end, True)
+            assert pl0 == pl1 or [p["src"] for p in pl0] == [p["src"] for p in pl1]
+            assert len(n0) == len(n1) == int(round(render.output_length(pl1) * SR))
+            win = slice(int(2.8 * SR), int(3.6 * SR))
+            step0, step1 = _max_step(n0[win]), _max_step(n1[win])
+            assert step1 < 0.05, (end, step1)
+            assert step0 > 2 * step1, (end, step0, step1)
+            # 停格後面的比對是假資料本身的限制（修之前就有），修之後沒有多出新的「沒登記的變動」
+            assert chk["未登記的變動"] == chk0["未登記的變動"], (chk["未登記的變動"], chk0["未登記的變動"])
+            assert not [c for c in chk["未登記的變動"] if c["原片"][0] < 5.0]   # 這兩格（1–5 秒）裡沒有
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
