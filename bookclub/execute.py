@@ -747,14 +747,104 @@ def final_check(workdir: str | Path) -> dict:
             oa, ob = timemap.to_output(r["start"], tm), timemap.to_output(r["end"], tm)
             if oa is not None or ob is not None:
                 r["成品起訖"] = [round(oa if oa is not None else ob, 3), round(ob if ob is not None else oa, 3)]
-    left = [r for r in must if not r.get("已按聽過")]
-    seen, new_keys = seen_state(dec.get("總檢查") or {}, look, dec)
+    keep = (dec.get("總檢查") or {}).get(KEEP_FIELD) or {}
+    for r in must:   # 10-05 #177：「不改（維持目前設定）」
+        ok, why = keep_policy(r["key"])
+        r["可以按不改"] = ok
+        if not ok:
+            r["不改不開放原因"] = why
+        st = keep_state(keep.get(r["key"]), r)
+        r["已按不改"] = ok and st == "有效"
+        if st == "變了":
+            r["不改後變了"] = True   # 按「不改」之後這一列的範圍或內容變了：要重新決定
+        r["處理好"] = bool(r.get("已按聽過") or r["已按不改"])
+    left = [r for r in must if not r["處理好"]]
+    seen, new_keys, seen_keys = look_state(dec.get("總檢查") or {}, look, dec)
     for r in look:
+        r["已看過"] = r["key"] in seen_keys   # 10-05 #178：每一列各自按「我看過了」
         if r["key"] in new_keys:
             r["新的"] = True   # 10-02 第五批：按「我看過了」之後才多出來、或時間範圍變了的那幾列
     return {"一定要處理": sorted(must, key=lambda r: r["start"]), "請看一眼": sorted(look, key=lambda r: r["start"]),
             "摘要": summary, "可以開始": not left, "還要處理": len(left), "已確認": len(must) - len(left),
-            "看過": seen, "看過後新增": len(new_keys)}
+            "已按不改": sum(1 for r in must if r["已按不改"]),
+            "看過": seen, "看過後新增": len(new_keys), "已看過列數": sum(1 for r in look if r["已看過"])}
+
+
+# ---------- 10-05 #177：「一定要處理」每一列的「不改（維持目前設定）」 ----------
+
+KEEP_FIELD = "不改"   # 存在覆核決定的 總檢查.不改：{鍵: {start, end, 依據, 時間}}
+# 按了「不改」就算處理完的類別（照現在的設定做，成品不會多出學員原聲或名字；最多是念得不好或少幾個字）
+KEEP_OK = {
+    "英文代號": "照現在的文字生成（AI 會念出英文代號；代號不是真名）",
+    "字太少": "照現在要念的文字生成（逐字稿裡其他的話會不見）",
+}
+# 維持現狀可能讓學員原聲或名字留在成品裡：先不開放「不改」，等宇軒決定（見任務單 #177 回報）
+KEEP_RISK = {
+    "段落外": "維持現狀的話，這幾秒如果有學員的聲音，會照原聲留在成品裡；聽過確定沒有學員的聲音，請按「我聽過了」",
+    "聲紋": "維持現狀的話，這一句如果是學員，會照原聲留在成品裡；聽過確定沒有學員的聲音，請按「我聽過了」",
+    "沒有字": "維持現狀的話，這裡如果有提到名字，會照原聲留在成品裡；聽過確定沒有提到名字，請按「我聽過了」",
+    "名字": "維持現狀的話，成品會照原聲念出這個名字（開始執行也會擋）；請到第 3 步改好要重念的句子，或改成直接消音",
+    "重疊": "維持現狀的話，這一句學員的聲音不會重新生成，學員原聲可能留在成品裡；請到第 3 步把缺的填好，或改別的做法",
+}
+KEEP_UNKNOWN = "這一類還沒決定能不能「不改」，請照「怎麼改」處理"
+
+
+def keep_policy(key: str) -> tuple[bool, str]:
+    """這一列可不可以按「不改（維持目前設定）」（純函式）。回傳（可以, 不行的原因）。看鍵的開頭判斷類別。"""
+    kind = str(key).split(":", 1)[0]
+    if kind in KEEP_OK:
+        return True, ""
+    return False, KEEP_RISK.get(kind, KEEP_UNKNOWN)
+
+
+def _keep_basis(row: dict) -> str:
+    """「不改」記下的依據：說明文字的雜湊（說明裡有字數、代號、做法；內容變了就要重新決定）。不存原文。"""
+    import hashlib
+
+    return hashlib.sha1(str(row.get("說明", "")).encode("utf-8")).hexdigest()[:12]
+
+
+def keep_state(saved: dict | None, row: dict) -> str | None:
+    """這一列的「不改」現在還算不算（純函式）：None＝沒按過；「有效」；「變了」＝範圍差超過 0.05 秒或說明變了。"""
+    if not isinstance(saved, dict):
+        return None
+    try:
+        same = (abs(float(saved.get("start", 0)) - float(row["start"])) <= LOOK_RANGE_TOL_S
+                and abs(float(saved.get("end", 0)) - float(row["end"])) <= LOOK_RANGE_TOL_S
+                and saved.get("依據") == _keep_basis(row))
+    except (TypeError, ValueError, KeyError):
+        same = False
+    return "有效" if same else "變了"
+
+
+def keep_final(workdir: str | Path, key: str, keep: bool = True) -> dict:
+    """`POST /api/execute/finalcheck`（body 有「不改」）：「一定要處理」某一列按「不改（維持目前設定）」或取消。
+    只有 KEEP_OK 的類別可以按；其他類別丟 ValueError（原因寫在 KEEP_RISK）。取消（keep=False）任何類別都可以。"""
+    from bookclub import review
+
+    workdir = Path(workdir)
+    key = str(key or "")
+    if not key:
+        raise ValueError("缺少要處理的那一列（key）")
+    row = None
+    if keep:
+        ok, why = keep_policy(key)
+        if not ok:
+            raise ValueError(why)
+        row = next((r for r in final_check(workdir)["一定要處理"] if r["key"] == key), None)
+        if row is None:
+            raise ValueError("這一列已經不在「一定要處理」裡（可能已經改好了），重新整理頁面再看一次")
+    with review._lock:
+        dec = review.load_decisions(workdir)
+        fc = dec.setdefault("總檢查", {"聽過": [], "看過": False})
+        kept = fc.setdefault(KEEP_FIELD, {})
+        if keep:
+            kept[key] = {"start": round(float(row["start"]), 3), "end": round(float(row["end"]), 3),
+                         "依據": _keep_basis(row), "時間": _now()}
+        else:
+            kept.pop(key, None)
+        review._save_decisions(workdir, dec)
+    return {"ok": True, "總檢查": fc}
 
 
 LOOK_RANGE_TOL_S = 0.05   # 「請看一眼」某一列的起訖跟按「我看過了」時差超過這麼多秒，算這一列變了
@@ -790,14 +880,36 @@ def seen_state(fc: dict, look: list[dict], dec: dict | None = None) -> tuple[boo
     return not new, new
 
 
+def look_state(fc: dict, look: list[dict], dec: dict | None = None) -> tuple[bool, list[str], set[str]]:
+    """10-05 #178：「請看一眼」每一列各自按「我看過了」之後的狀態（純函式）。回傳（全部看過了, 新的列的鍵, 已看過的鍵）。
+    - `看過的列`（按過的每一列與當時的起訖）裡有、起訖沒變的那一列算看過了；全部看過才算「我看過了」成立
+    - 清單是空的：照以前，要按一次「全部看過了」（`看過`）
+    - 「新的」跟以前一樣：曾經全部看過（`看過`）之後才多出來、或時間範圍變了的那幾列
+    - 舊資料（10-02 以前只記了 `看過`、`看過時間`）照 seen_state"""
+    snap = fc.get("看過的列")
+    if isinstance(snap, list):
+        old = {x.get("key"): x for x in snap if isinstance(x, dict)}
+        seen_keys = {r["key"] for r in look if r["key"] in old
+                     and abs(float(old[r["key"]].get("start", 0)) - r["start"]) <= LOOK_RANGE_TOL_S
+                     and abs(float(old[r["key"]].get("end", 0)) - r["end"]) <= LOOK_RANGE_TOL_S}
+        unseen = [r["key"] for r in look if r["key"] not in seen_keys]
+        new = unseen if fc.get("看過") else []
+        return (not unseen) if look else bool(fc.get("看過")), new, seen_keys
+    ok, new = seen_state(fc, look, dec)
+    seen_keys = {r["key"] for r in look if r["key"] not in new} if fc.get("看過") else set()
+    return ok, new, seen_keys
+
+
 def ack_final(workdir: str | Path, key: str | None = None, heard: bool = True, seen: bool | None = None,
-              rows: list[dict] | None = None) -> dict:
+              rows: list[dict] | None = None, look_key: str | None = None) -> dict:
     """`POST /api/execute/finalcheck`：「一定要處理」裡可以按的那一列按「我聽過了」（key），或整頁「我看過了」（seen）。
     10-02 第五批：按「我看過了」時記下當時「請看一眼」的清單（rows＝網頁上顯示的那幾列；沒給就照現在算的），
     之後清單多了列或時間範圍變了，「我看過了」就回到沒勾（見 seen_state）。"""
     from bookclub import review
 
     workdir = Path(workdir)
+    if look_key is not None and seen is not None:
+        return _ack_look_row(workdir, str(look_key), bool(seen), rows)
     snap = None
     if seen:
         try:
@@ -830,6 +942,39 @@ def ack_final(workdir: str | Path, key: str | None = None, heard: bool = True, s
                 fc["看過的列"] = snap
             else:
                 fc.pop("看過的列", None)
+        review._save_decisions(workdir, dec)
+    return {"ok": True, "總檢查": fc}
+
+
+def _ack_look_row(workdir: Path, key: str, seen: bool, rows: list[dict] | None) -> dict:
+    """10-05 #178：「請看一眼」某一列按「我看過了」（seen）或取消。rows＝網頁上顯示的那幾列（沒給、格式不對就照現在算的）。
+    記下那一列當時的起訖（之後範圍變了就回到沒看過）；全部列都看過時 `看過`＝True（跟按「全部看過了」一樣）。"""
+    from bookclub import review
+
+    try:
+        cur = look_snapshot(rows) if rows is not None else None
+    except (KeyError, TypeError, ValueError):
+        cur = None
+    if cur is None:
+        cur = look_snapshot(final_check(workdir)["請看一眼"])
+    hit = next((x for x in cur if x["key"] == key), None)
+    if hit is None:
+        raise ValueError("這一列已經不在「請看一眼」裡，重新整理頁面再看一次")
+    with review._lock:
+        dec = review.load_decisions(workdir)
+        fc = dec.setdefault("總檢查", {"聽過": [], "看過": False})
+        fc.setdefault("聽過", [])
+        snap = fc.get("看過的列")
+        if not isinstance(snap, list):   # 沒有逐列紀錄（舊資料或還沒按過）：照現在算出來看過的那幾列起頭
+            _, _, done = look_state(fc, cur, dec)
+            snap = [x for x in cur if x["key"] in done]
+        snap = [x for x in snap if isinstance(x, dict) and x.get("key") != key]
+        if seen:
+            snap.append(hit)
+        fc["看過的列"] = snap
+        all_seen, _, _ = look_state({"看過的列": snap}, cur)
+        fc["看過"] = bool(cur) and all_seen
+        fc["看過時間"] = _now()
         review._save_decisions(workdir, dec)
     return {"ok": True, "總檢查": fc}
 
@@ -1491,7 +1636,7 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
         if not only_steps or "組裝" in only_steps:   # 10-01：要組成品才看總檢查（只生成聲音不影響成品，不擋）
             fc = final_check(workdir)
             if not fc["可以開始"]:
-                rows = [r for r in fc["一定要處理"] if not r.get("已按聽過")]
+                rows = [r for r in fc["一定要處理"] if not r.get("處理好")]   # 10-05 #177：按了「不改」也算處理好
                 raise FileNotFoundError("開始前總檢查還有一定要處理的：\n- " + "\n- ".join(
                     f"{wd.fmt_time(r['start'])} {r['說明']}" for r in rows[:20]) + ("\n（還有更多）" if len(rows) > 20 else ""))
     from bookclub import epcodes
