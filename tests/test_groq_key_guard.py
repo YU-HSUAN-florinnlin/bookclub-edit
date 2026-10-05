@@ -23,6 +23,24 @@ def test_key_problem_blocks_generation_only():
     assert execute_key_problem(env={}, only_steps=["學員重念", "組裝"])
 
 
+def test_key_problem_message_per_platform():
+    """Mac 只講 ~/.zshrc／啟動.command；Linux／WSL2 只講 ~/.profile（~/.bashrc 讀不到），不叫人雙擊啟動.command。"""
+    from bookclub import server as sv
+
+    mac = execute_key_problem(env={}, system="Darwin")
+    linux = execute_key_problem(env={}, system="Linux")
+    assert "啟動.command" in mac and "~/.zshrc" in mac and "~/.profile" not in mac
+    assert "啟動.command" not in linux and "~/.profile" in linux and "~/.bashrc" in linux and "~/.zshrc" not in linux
+    assert "--allow-no-key" in mac and "--allow-no-key" in linux
+    # 跟網頁伺服器同一套說法（怎麼補金鑰那一句共用）
+    assert sv.groq_key_howto("Linux", cli=True) in linux and sv.groq_key_howto("Darwin", cli=True) in mac
+    # 網頁第 4 步被擋下的那一句：WSL2 不提啟動.command，不說「沒辦法轉文字」
+    web_linux = sv.groq_key_execute_message("Linux")
+    assert "啟動.command" not in web_linux and "~/.profile" in web_linux and "轉文字" not in web_linux
+    assert "Ctrl+C" in web_linux and "--allow-no-key" not in web_linux
+    assert "啟動.command" in sv.groq_key_execute_message("Darwin")
+
+
 def test_no_key_marks_check_not_done_then_rechecks_with_key():
     old = os.environ.pop("GROQ_API_KEY", None)
     try:

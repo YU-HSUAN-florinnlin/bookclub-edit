@@ -119,18 +119,34 @@ def safe_join(base: Path, relative: str) -> Path:
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi")
 
 
-def groq_key_missing_message(system: str | None = None) -> str:
-    """讀不到 Groq 金鑰時給人看的話，依平台只講適用的那一種（10-03 第九批 #29：以前 Linux／WSL2 也叫人
-    「雙擊啟動.command」）。金鑰檔跟 doctor.key_file() 同一個：macOS ~/.zshrc、Linux／WSL2 ~/.profile。"""
+def groq_key_howto(system: str | None = None, *, cli: bool = False) -> str:
+    """讀不到 Groq 金鑰時「怎麼補」那一句，依平台只講適用的那一種。網頁伺服器（`cli=False`）與第 4 步的終端機指令
+    （`cli=True`，`execute.execute_key_problem`）共用，兩邊說法一致。金鑰檔跟 doctor.key_file() 同一個：
+    macOS ~/.zshrc、Linux／WSL2 ~/.profile（Ubuntu 的 ~/.bashrc 在非互動模式會提早結束，寫在裡面讀不到）。"""
     import platform
 
     system = system or platform.system()
-    head = "這個網頁伺服器讀不到 Groq 金鑰，沒辦法轉文字。"
     if system == "Darwin":
-        return (head + "金鑰設在 ~/.zshrc：關掉這個伺服器，改用雙擊「啟動.command」重開，"
+        if cli:
+            return ("金鑰設在 ~/.zshrc：雙擊「啟動.command」開網頁再按開始執行，"
+                    "或在終端機（zsh）開一個新視窗再跑這個指令（也可以用 /bin/zsh -ic '…' 跑）")
+        return ("金鑰設在 ~/.zshrc：關掉這個伺服器，改用雙擊「啟動.command」重開，"
                 "或在終端機（zsh）進工具資料夾執行 .venv/bin/bookclub serve")
-    return (head + "金鑰要寫在 ~/.profile（寫在 ~/.bashrc 讀不到）：加一行 export GROQ_API_KEY=你的金鑰，"
-            "關掉這個伺服器（終端機按 Ctrl+C），開一個新的終端機視窗，進工具資料夾再執行 .venv/bin/bookclub serve")
+    head = "金鑰要寫在 ~/.profile（寫在 ~/.bashrc 讀不到）：加一行 export GROQ_API_KEY=你的金鑰，"
+    if cli:
+        return head + "開一個新的終端機視窗，進工具資料夾再跑這個指令"
+    return head + "關掉這個伺服器（終端機按 Ctrl+C），開一個新的終端機視窗，進工具資料夾再執行 .venv/bin/bookclub serve"
+
+
+def groq_key_missing_message(system: str | None = None) -> str:
+    """讀不到 Groq 金鑰時給人看的話，依平台只講適用的那一種（10-03 第九批 #29：以前 Linux／WSL2 也叫人
+    「雙擊啟動.command」）。怎麼補那一句見 `groq_key_howto`。"""
+    return "這個網頁伺服器讀不到 Groq 金鑰，沒辦法轉文字。" + groq_key_howto(system)
+
+
+def groq_key_execute_message(system: str | None = None, *, cli: bool = False) -> str:
+    """第 4 步要生成、卻讀不到 Groq 金鑰時擋下的那一句（網頁 `start_execute` 與終端機 `run execute` 共用開頭）。"""
+    return "讀不到 Groq 金鑰（GROQ_API_KEY），生成時沒辦法檢查「念對沒有」，先不開始。" + groq_key_howto(system, cli=cli)
 
 
 GROQ_KEY_MISSING = groq_key_missing_message()
@@ -831,7 +847,7 @@ class BookclubServer(ThreadingHTTPServer):
             if not pre["可以開始"]:
                 return {"started": False, "error": "還不能開始：" + "；".join(pre["缺"])}
             if not opts.get("只重新組裝") and not groq_key_ready():   # 10-04 #110：沒金鑰就不檢查念對沒有，先擋下
-                return {"started": False, "error": "生成時要用 Groq 檢查念對沒有，現在讀不到金鑰。" + GROQ_KEY_MISSING}
+                return {"started": False, "error": groq_key_execute_message()}
             from bookclub.execute import final_check
 
             fc = final_check(self.workdir)   # 10-01：開始前總檢查
