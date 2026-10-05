@@ -258,6 +258,13 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     if gaps_new:
         kept = sorted(kept + gaps_new, key=lambda e: e["start"])
     marks += gap_marks
+    # 10-05 #134（宇軒第三點）：不同段落、不同類型的兩筆換聲音之間只隔 ≤0.1 秒、裡面沒有老師的句子 → 墊底噪（以前播原片）
+    swap_gaps = assemble.swap_gap_edits(kept, cuts=cuts, busy=[(m["start"], m["end"]) for m in ov_marks])
+    if swap_gaps:
+        speakers = wd.read_json(wd.speakers_path(workdir), default=None) or {}
+        teacher = [(s["start"], s["end"]) for s in speakers.get("sentences", []) if s.get("label") == "老師"]
+        swap_gaps = assemble.swap_gap_edits(kept, teacher, cuts, [(m["start"], m["end"]) for m in ov_marks])
+        kept = sorted(kept + swap_gaps, key=lambda e: e["start"])
     # 每一處重疊最後實際怎麼了；還留著原聲的列出來，`render_video` 看到就不輸出成品
     left = []
     for m in ov_marks:
@@ -276,9 +283,46 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
         stu_plan = {}
     name_left = assemble.names_left(assemble.plan_name_ranges(plan, stu_plan), kept, cuts, a, b)
     blur = pick_blur(kept, cuts, a, b) if demo_blur else None   # 09-29：模糊只有測試示範才做，正式成品不模糊
+    mark_freeze_offsets(kept, freezes)
     return {"範圍": [a, b], "刪除": cuts, "動作": kept, "停格": sorted(freezes, key=lambda f: f["at"]),
             "模糊": blur, "標記": marks, "警告": warnings, "警告明細": details, "學員聲線": voices, "重疊沒處理": left,
             "名字沒處理": name_left}
+
+
+def mark_freeze_offsets(kept: list[dict], freezes: list[dict]) -> None:
+    """10-04 #134（宇軒 10-05 定）：每一個學員格的停格，停格點（畫面格）跟那一格結尾（AI 聲音的切點）錯開多少、
+    組裝時怎麼接（純函式，就地改）。原則：一格的 AI 聲音從頭到尾連續播完，畫面配合聲音停格；聲音播完之後的空白墊底噪。
+    時間格、停格點、停格秒數都不動，只記：停格 `錯開秒`（停格點－結尾）、`錯開處理`（`assemble.FREEZE_*` 的固定說法）；
+    那一格 `停格錯開秒`、`停格錯開處理`；停格點比結尾晚、開頭被佔用的下一筆 `開頭讓出秒`（後面是原片就只記在這一格）。
+    - 停格點早：`FREEZE_EARLY`（這一格自己的範圍裡處理，不碰別筆）
+    - 停格點晚 ≤ `FREEZE_JOIN_MAX_S`：`FREEZE_LATE_JOIN`——不管後面是學員格、原片、老師、名字或消音，
+      只佔用它開頭這 10–20 毫秒（蓋的是 AI 聲音的尾巴或底噪，不會露出學員原聲），停格結束接回時交叉淡入
+    - 停格點晚更多（不該發生）、或是疊放的格子：`FREEZE_LATE_KEEP`（別筆範圍不動，聲音前後淡出淡入）"""
+    from bookclub import assemble
+
+    by_id = {e["id"]: e for e in kept if e.get("id") and e["類型"] in assemble.SWAP_KINDS}
+    for f in freezes:
+        e = by_id.get(f.get("edit"))
+        if e is None:
+            continue
+        off = f["at"] - e["end"]
+        f["錯開秒"] = round(off, 3) if abs(off) >= 0.0005 else 0.0
+        if f["錯開秒"] == 0.0 or abs(off) > assemble.FREEZE_OFFSET_MAX_S + 1e-9:
+            f["錯開處理"] = assemble.FREEZE_ALIGNED if f["錯開秒"] == 0.0 else "錯開太多，照舊"
+            continue
+        if off < 0:
+            how = assemble.FREEZE_EARLY
+        else:
+            nxt = [k for k in kept if k is not e and k["start"] < f["at"] and k["end"] > e["end"]]
+            ok = off <= assemble.FREEZE_JOIN_MAX_S + 0.0005 and not e.get("疊放") and not any(k.get("疊放") for k in nxt)
+            how = assemble.FREEZE_LATE_JOIN if ok else assemble.FREEZE_LATE_KEEP
+            if ok:
+                for k in nxt:
+                    k["開頭讓出秒"] = round(f["at"] - max(k["start"], e["end"]), 3)
+                if not nxt:
+                    e["結尾多佔原片秒"] = f["錯開秒"]
+        f["錯開處理"] = how
+        e["停格錯開秒"], e["停格錯開處理"] = f["錯開秒"], how
 
 
 def student_gap_edits(workdir: Path, now_by: dict, kept: list[dict], kept_now: set, cuts: list, ov_marks: list[dict],
@@ -387,6 +431,8 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
     placed = {}
     spans = [(int((e["start"] - a) * SR), int((e["end"] - a) * SR)) for e in d["動作"]]
     stacks: dict[str, list[int]] = {}   # 10-01 B 方案：同一處重疊兩邊都生成的，聲音相加
+    fz_by = {f["edit"]: f for f in d["停格"] if f.get("edit")}   # 10-04 #134：每一格的停格（錯開多少、怎麼接）
+    late: list[tuple] = []
     for k, e in enumerate(d["動作"]):
         if e.get("疊放") and e["類型"] not in MUTE_KINDS:
             stacks.setdefault(e["重疊"], []).append(k)
@@ -428,16 +474,41 @@ def build_audio(workdir: Path, video: Path, d: dict, out: Path, tag: str) -> dic
         clip = (clip * gain).astype(np.float32)
         # 10-03 第八批 #60：頭尾從底噪淡入、淡出到底噪，整格不留原片；停格點前後兩截直接接上（見 assemble.voice_over_room）
         fz = int(round(e["停格秒"] * SR)) if e.get("停格秒") else 0
-        room = assemble.room_tone(x, s, t, (t - s) + fz, SR, bed=bed) if ROOM_UNDER else None
-        head, tail, cut = assemble.voice_over_room(clip, room, t - s, fz, SR)
-        y[s:t] = head
+        how = (fz_by.get(e["id"]) or {}).get("錯開處理") if fz else None
+        if how in (assemble.FREEZE_EARLY, assemble.FREEZE_LATE_JOIN, assemble.FREEZE_LATE_KEEP):
+            # 10-04 #134：停格點（畫面格）跟格子結尾錯開：照成品播放順序把整條聲音排進去（見 assemble.freeze_offset_split）
+            pi = int(round((fz_by[e["id"]]["at"] - a) * SR))   # 跟 output_segments 切片段同一種算法
+            off = pi - t
+            join = how == assemble.FREEZE_LATE_JOIN
+            f0 = int(SR * assemble.FADE_S)
+            room = assemble.room_tone(x, s, t, (t - s) + fz + max(0, off) + f0, SR, bed=bed) if ROOM_UNDER else None
+            got = assemble.freeze_offset_split(clip, room, t - s, fz, off, join=join, sr=SR)
+            head, tail, cut = got["head"], got["tail"], got["cut"]
+            if join and off > 0:
+                late.append((s, head, pi, got["resume"]))   # 蓋到下一格的開頭：等每一筆都放好再放
+                head = head[:t - s]
+            y[s:t] = head
+            placed_extra = {"停格錯開取樣點": int(off)}
+        else:
+            room = assemble.room_tone(x, s, t, (t - s) + fz, SR, bed=bed) if ROOM_UNDER else None
+            head, tail, cut = assemble.voice_over_room(clip, room, t - s, fz, SR)
+            y[s:t] = head
+            placed_extra = {}
         if tail is not None:
             tails[e["id"]] = tail
-        placed[e["id"]] = {"增益": round(float(gain), 3)}
+        placed[e["id"]] = {"增益": round(float(gain), 3), **placed_extra}
         if cut >= assemble.CUT_MARK_S:   # 比時間格長又沒停格（或停格不夠）：被切掉，第 5 步標出來
             e["結尾切掉秒"] = round(cut, 2)
             placed[e["id"]]["結尾切掉秒"] = e["結尾切掉秒"]
 
+    for s, head, pi, resume in late:   # 10-04 #134：停格點比結尾晚、下一格讓出開頭：這一格的聲音念到停格點
+        n = min(len(head), len(y) - s)
+        y[s:s + n] = head[:n]
+        if resume is not None and len(resume):   # 停格結束接回下一格：前 10 毫秒從這一格的底噪交叉淡入
+            k = min(len(resume), len(y) - pi)
+            if k > 0:
+                r = np.linspace(0, 1, k, dtype=np.float32)
+                y[pi:pi + k] = y[pi:pi + k] * r + resume[:k] * (1 - r)
     plist = pieces(a, b, d["刪除"], d["停格"])
     # 09-30：一段一段寫進檔案，不在記憶體裡接成一整條（整支 98 分鐘一條 48kHz 就 1.1 GB，以前同時握四、五條）
     dst = out / f"新聲音_{tag}.wav"
@@ -730,7 +801,7 @@ def label_text(e: dict) -> str:
     if e["類型"] == "學員名字消音":
         return f"AI：{e.get('學員', '學員')} 講到名字消音"
     if e["類型"] == GAP_KIND:
-        return "AI：學員段落空隙墊底噪"
+        return "AI：換聲音之間空隙墊底噪" if e.get("跨筆") else "AI：學員段落空隙墊底噪"
     if e["類型"] == "學員名字換代號":
         return f"AI：{e.get('學員', '學員')} 講到名字換代號（學員聲音生成，音色可能有差）"
     return "AI：名字消音"

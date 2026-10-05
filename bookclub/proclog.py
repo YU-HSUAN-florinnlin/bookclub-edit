@@ -89,6 +89,9 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
                 rec["停格秒"] = _r(e["停格秒"])   # 10-03 第八批 #23：內容指紋用（不用從「做了什麼」拆）
                 if rec["成品"][1] is not None:
                     rec["成品"][1] = _r(rec["成品"][1] + e["停格秒"])
+                if e.get("停格錯開秒"):   # 10-04 #134：停格點跟結尾錯開（寫進「做了什麼」→ 內容指紋變了，這一格要重聽）
+                    rec["做了什麼"] += f"；停格點錯開 {e['停格錯開秒'] * 1000:+.0f} 毫秒：{e['停格錯開處理']}"
+                    rec["停格錯開秒"] = _r(e["停格錯開秒"])
         elif kind == "名字整句換掉":
             rec["覆核項目"] = [f"名字:{c}" for c in e.get("候選", [])] + [f"重疊:{x}" for x in e.get("重疊項目") or []]
             rec["做了什麼"] = "老師提到名字：整句用老師 AI 聲音重念、名字換成代號" if e.get("候選") \
@@ -108,11 +111,17 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
             rec["做了什麼"] = student_name_text(e)
             rec["檔案"] = e.get("檔案")
         elif kind == GAP_KIND:   # 10-03 第八批補修 #102
-            rec["覆核項目"] = [f"學員段落:{e['段落']}"]
+            rec["覆核項目"] = [f"學員段落:{e['段落']}"] if e.get("段落") else []
             rec["做了什麼"] = gap_mute_text(e)
             rec["空隙秒"] = _r(e.get("空隙秒"))
         else:
             rec["做了什麼"] = kind
+        if e.get("開頭讓出秒"):   # 10-04 #134：前一格停格點比結尾晚，這一筆開頭讓給前一格的聲音接著播完
+            rec["做了什麼"] += f"；開頭 {e['開頭讓出秒'] * 1000:.0f} 毫秒讓給前一格（前一格停格點錯開）"
+            rec["開頭讓出秒"] = _r(e["開頭讓出秒"])
+        if e.get("結尾多佔原片秒"):   # 10-04 #134：後面接原片，聲音播過格子結尾佔用原片這一小段
+            rec["做了什麼"] += f"；結尾多佔原片 {e['結尾多佔原片秒'] * 1000:.0f} 毫秒（停格點錯開）"
+            rec["結尾多佔原片秒"] = _r(e["結尾多佔原片秒"])
         mark_cut(rec, e)
         recs.append(rec)
 
@@ -144,7 +153,9 @@ def build_records(d: dict, plist: list[dict] | None, links: dict | None = None) 
             items = [k for a, b, k in links.get("重疊", []) if abs(b - f["at"]) <= 0.05 or a <= f["at"] <= b]
         recs.append({"類型": "停格", "原片": [_r(f["at"]), _r(f["at"])], "成品": [_r(t), _r(t + f["dur"]) if t is not None else None],
                      "動到聲音": True, "要人聽": False, "檔案": None, "文字": None, "覆核項目": items,
-                     "停格秒": _r(f["dur"]), "做了什麼": f"停格 {f['dur']:.2f} 秒：{f.get('原因', '')}"})
+                     "停格秒": _r(f["dur"]), "做了什麼": f"停格 {f['dur']:.2f} 秒：{f.get('原因', '')}"
+                     + (f"；停格點錯開 {f['錯開秒'] * 1000:+.0f} 毫秒：{f.get('錯開處理', '')}" if f.get("錯開秒") else ""),
+                     **({"錯開秒": _r(f["錯開秒"]), "錯開處理": f.get("錯開處理")} if f.get("錯開秒") else {})})
 
     if d.get("模糊"):
         s, e = d["模糊"]

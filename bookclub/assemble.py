@@ -286,6 +286,37 @@ def gap_edits(gaps: list[dict], edits: list[dict], teacher: list[tuple[float, fl
     return new, marks
 
 
+SWAP_GAP_MAX_S = 0.1   # 10-05 #134（宇軒第三點）：兩筆換聲音之間只隔這麼短（跟 EDGE_TRIM_TOL_S 同一個量級）→ 墊底噪
+
+
+def swap_gap_edits(edits: list[dict], teacher: list[tuple[float, float]] = (), cuts: list[tuple[float, float]] = (),
+                   busy: list[tuple[float, float]] = (), max_s: float = SWAP_GAP_MAX_S) -> list[dict]:
+    """兩筆換聲音動作（學員重念、名字整句換掉、學員名字換代號；不同段落或不同類型）之間只隔很短的空隙
+    （GAP_MIN_S < 空隙 ≤ max_s）時，那一小段以前播原片（可能是學員原聲的尾巴）→ 墊底噪（純函式，10-05 #134）。
+    同一個學員段落相鄰兩格的空隙 #102 已經處理（`gap_edits`），這裡碰到別的動作就跳過、不重複。
+    不處理：空隙裡有別的動作、剪掉的部分、`busy`（例如選了「不用改」的重疊）、老師的句子（重疊超過 GAP_TEACHER_TOL_S），
+    或是疊放的動作。回傳要加的墊底噪動作（類型 GAP_KIND、`跨筆`＝True）。"""
+    kinds = ("學員重念", "名字整句換掉", "學員名字換代號", "換聲音")
+    sw = sorted([e for e in edits if e["類型"] in kinds and not e.get("疊放")], key=lambda e: (e["start"], e["end"]))
+    out = []
+    for p_, n_ in zip(sw, sw[1:]):
+        g0, g1 = p_["end"], n_["start"]
+        if not (GAP_MIN_S < g1 - g0 <= max_s + 1e-9):
+            continue
+        if any(e["start"] < g1 - GAP_MIN_S and e["end"] > g0 + GAP_MIN_S for e in edits if e is not p_ and e is not n_):
+            continue
+        if any(x < g1 and y > g0 for x, y in list(cuts) + list(busy)):
+            continue
+        if any(min(y, g1) - max(x, g0) > GAP_TEACHER_TOL_S for x, y in teacher):
+            continue
+        sec = round(g1 - g0, 3)
+        tid = next((e.get("段落") or str(e["id"]).rsplit("_", 1)[0] for e in (p_, n_) if e["類型"] == "學員重念"), None)
+        out.append({"類型": GAP_KIND, "start": g0, "end": g1, "id": f"空隙:{_ref_id(p_)}", "段落": tid,
+                    "前一格": _ref_id(p_), "後一格": _ref_id(n_), "候選": [], "空隙秒": sec, "跨筆": True,
+                    **({"併入前一格": True} if sec < GAP_RECORD_MIN_S else {})})
+    return out
+
+
 def gap_keep_text(m: dict) -> str:
     """保留原聲那一筆的說明（處理紀錄「做了什麼」、標記清單共用）。"""
     sec = float(m.get("空隙秒") or 0.0)
@@ -295,6 +326,8 @@ def gap_keep_text(m: dict) -> str:
 
 
 def gap_mute_text(e: dict) -> str:
+    if e.get("跨筆"):   # 10-05 #134
+        return f"兩筆換聲音之間的空隙 {float(e.get('空隙秒') or (e['end'] - e['start'])):.2f} 秒墊底噪（不留原聲）"
     return f"學員段落裡兩格之間的空隙 {float(e.get('空隙秒') or (e['end'] - e['start'])):.2f} 秒墊底噪（不留原聲）"
 
 
@@ -479,6 +512,66 @@ def voice_over_room(clip: np.ndarray, room: np.ndarray | None, n: int, freeze_n:
     head = voice[:n]
     tail = voice[n:] if freeze_n > 0 else None
     return head, tail, round(cut, 3)
+
+
+# 10-04 #134：停格點（畫面格）跟格子結尾錯開時怎麼接（`render.build_decisions` 判斷、`render.build_audio` 照做、
+# 處理紀錄與 `inspect 剪輯決策` 印這幾個固定說法）
+FREEZE_ALIGNED = "對齊"
+FREEZE_EARLY = "停格點比結尾早：畫面先停，聲音連續播完，播完才墊底噪"
+FREEZE_LATE_JOIN = "停格點比結尾晚：聲音連續播過停格點並播完，之後墊底噪（佔用下一筆開頭這一小段）"
+FREEZE_LATE_KEEP = "停格點比結尾晚太多：維持原樣，聲音前後淡出淡入"
+FREEZE_OFFSET_MAX_S = 0.04   # 錯開超過這麼多不處理（照舊）；正常是 snap 造成的 ≤0.02 秒
+FREEZE_JOIN_MAX_S = 0.02     # 停格點比結尾晚：聲音佔用下一筆開頭最多這麼多秒（宇軒 10-05：不能蓋掉別人超過這 10–20 毫秒）
+
+
+def freeze_offset_split(clip: np.ndarray, room: np.ndarray | None, n: int, freeze_n: int, off: int, join: bool = True,
+                        sr: int = SR) -> dict:
+    """有停格的換聲音格，停格點跟格子結尾錯開 off 個取樣點時，這一格的聲音怎麼切（10-04 #134，純函式）。
+
+    成品的順序是：原片時間軸 y 播到停格點 → 停格那一段（tail）→ y 從停格點接著播。停格點是畫面格（`render.snap`），
+    格子結尾是取樣點，以前 head 照格子結尾放、停格點卻在畫面格上，就會：
+    - 停格點早（off < 0）：講話在停格點被切斷、停格那一段從格子結尾的內容接著念（中間 10–20 毫秒先跳過），
+      停格結束後那 10–20 毫秒的聲音才像碎片一樣冒出來。
+    - 停格點晚（off > 0）：格子結尾到停格點這一小段放的是下一筆的開頭（講話中途插進 10–20 毫秒的底噪），再接停格。
+    現在照**成品播放的順序**把這一格整條連續的聲音（`voice_over_room` 的做法：頭尾從底噪淡入、淡出到底噪）依序排進去，
+    不丟任何聲音、中間沒有斷點：
+    - off < 0：y[格子開頭, 停格點] → 停格那一段 → y[停格點, 格子結尾]，三截依序接成整條聲音；
+      停格點後面那 10–20 毫秒放的是這一格最後的一小段（整句最後淡出到底噪的地方），不是碎片。
+    - off > 0 且 join（錯開 ≤ FREEZE_JOIN_MAX_S）：格子結尾～停格點這一小段（本來是下一筆的開頭）放這一格的聲音接著念，
+      停格那一段接著念，整條聲音播完後剩下的停格補長是底噪；`resume` 是停格結束、從停格點接回下一筆（或原片）時，
+      前 10 毫秒從這一格的底噪交叉淡入，不留硬切。
+    - off > 0 但不 join（錯開太多，不該發生）：下一筆的範圍不動；這一格的聲音在格子結尾前 10 毫秒淡出到底噪、
+      停格那一段開頭 10 毫秒從底噪淡入。
+    回傳 {head: 放進 y[s, s+n]（off>0 且 join 時長 n+off，會蓋到下一筆的開頭）, tail: 停格那一段, resume: 停格結束接回 y
+    時前幾個取樣點要跟它交叉淡入的底噪（或 None）, cut: 結尾被切掉幾秒}。"""
+    total = n + max(0, freeze_n)
+    voice = fit_length(clip.astype(np.float32), total).copy()
+    cut = max(0, len(clip) - total) / sr
+    f = min(int(sr * FADE_S), total // 2)
+    if f > 0:
+        voice[:f] *= np.linspace(0, 1, f, dtype=np.float32)
+        voice[-f:] *= np.linspace(1, 0, f, dtype=np.float32)
+    extra = max(0, off) + f
+    rm = fit_length(room.astype(np.float32), total + extra) if room is not None else np.zeros(total + extra, np.float32)
+    if off < 0:
+        k = n + off   # 停格點在這一格裡的位置
+        whole = voice + rm[:total]
+        head = np.concatenate([whole[:k], whole[k + freeze_n:]])
+        return {"head": head, "tail": whole[k:k + freeze_n], "resume": None, "cut": round(cut, 3)}
+    if off > 0 and join:
+        v = np.concatenate([voice, np.zeros(off, np.float32)])   # 整條聲音念完，停格補長最後 off 個取樣點只剩底噪
+        whole = v + rm[:total + off]
+        return {"head": whole[:n + off], "tail": whole[n + off:], "resume": rm[total + off:total + off + f].copy(),
+                "cut": round(cut, 3)}
+    if off > 0:
+        g = min(f, n // 2, freeze_n // 2)
+        if g > 0:
+            voice[n - g:n] *= np.linspace(1, 0, g, dtype=np.float32)
+            voice[n:n + g] *= np.linspace(0, 1, g, dtype=np.float32)
+        whole = voice + rm[:total]
+        return {"head": whole[:n], "tail": whole[n:], "resume": None, "cut": round(cut, 3)}
+    whole = voice + rm[:total]
+    return {"head": whole[:n], "tail": whole[n:], "resume": None, "cut": round(cut, 3)}
 
 
 def splice(y: np.ndarray, s: int, clip: np.ndarray, sr: int = SR) -> None:
