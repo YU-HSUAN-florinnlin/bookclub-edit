@@ -56,7 +56,7 @@
 | # | 要準備的 | 做什麼用 | 怎麼準備 |
 | --- | --- | --- | --- |
 | 1 | 硬碟空間 | 模型、套件、工作區 | 至少 15GB（模型約 7GB、套件約 3GB；WSL2 用只用處理器的 torch）；每支 2 小時影片的工作區另外抓 5–10GB |
-| 2 | ✱ WSL2 記憶體上限 | 找重疊、組裝整支影片 | WSL2 預設只能用主機一半的記憶體。32GB 的電腦：Windows 使用者資料夾建 `.wslconfig`，寫 `[wsl2]`、`memory=24GB`、`swap=16GB`，存檔後在 PowerShell 跑 `wsl --shutdown` 再開（怎麼建、其他記憶體大小怎麼辦，見「Windows：第一次安裝 WSL2 與 Ubuntu」第 7 步） |
+| 2 | ✱ WSL2 記憶體上限 | 找重疊、組裝整支影片 | WSL2 預設只能用主機一半的記憶體。在 Windows 使用者資料夾建 `.wslconfig`：16GB 的電腦寫 `[wsl2]`、`memory=10GB`、`swap=8GB`（推估，還沒實測）；32GB 的電腦寫 `memory=24GB`、`swap=16GB`。存檔後在 PowerShell 跑 `wsl --shutdown` 再開（怎麼建、依據、其他記憶體大小怎麼辦，見「Windows：第一次安裝 WSL2 與 Ubuntu」第 7 步） |
 | 3 | Groq API 金鑰 | 語音轉文字（免費額度通常夠） | 到 [console.groq.com](https://console.groq.com) 申請。把 `export GROQ_API_KEY=你的金鑰` 加進：**macOS → `~/.zshrc`**；**WSL2 → `~/.profile`**（不要放 `~/.bashrc`：Ubuntu 的 `.bashrc` 在非互動模式會提早結束，工具讀不到）。加完開新的終端機視窗（WSL2 的一行指令寫法見「Windows：第一次安裝 WSL2 與 Ubuntu」第 9 步）。**金鑰不要寫進其他檔案、也不要貼給 AI** |
 | 4 | Hugging Face 帳號與同意條款 | 分辨誰在說話（pyannote 是要先同意條款的模型） | ① 註冊／登入 [huggingface.co](https://huggingface.co) ② 打開 [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) 與 [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) 各按一次同意 ③ Settings → Access Tokens 建一把 **Read** 金鑰。登入指令在安裝完之後跑（見下一節） |
 | 5 | Claude Code（登入過） | 段落分析、建議刪除段落、人名清單（第 1 步） | macOS 裝好 Claude Code 即可。**✱ WSL2 要在 WSL2 裡面另外裝一份**（Windows 那份 WSL2 用不到）：`curl -fsSL https://claude.ai/install.sh \| bash`，裝完執行 `claude` 登入一次。沒裝的話第 1 步會跳過段落分析，第 3 步沒有學員段落可以覆核 |
@@ -120,7 +120,7 @@ cd ~/讀書會剪輯資料/影片 && explorer.exe .
 - **輸出方式只有「標準輸出」**（整段軟體編碼）：第 4 步「進階設定」裡的另外兩種（用 Mac 顯示晶片的硬體編碼、只重做有動到的片段）只有 Mac 才會列出來。標準輸出在 Mac 與 Windows 的結果一樣。
 - **`doctor --smoke` 會跳過**：測試用的假錄音要用 Mac 內建的功能產生，Linux／WSL2 上會說「只在 Mac 上跑，這次跳過（不算失敗）」。
 - **標字試看版**（終端機 `render video --label`，測試用）在 Windows 上找不到中文字型、做不出來；正式流程（網頁第 4 步）不會用到。
-- **記憶體**：WSL2 預設只能用電腦一半的記憶體。32GB 的電腦照「準備什麼」第 2 項設 `.wslconfig`；其他大小的電腦見「Windows：第一次安裝 WSL2 與 Ubuntu」第 7 步。第 4 步跑的過程中，WSL2 裡可用記憶體低於 1.5 GB、或 swap 超過門檻，工具會請程式做完目前這一句就停（這項只有模擬測試，還沒在實機跑過）。
+- **記憶體**：WSL2 預設只能用電腦一半的記憶體。16GB、32GB 的電腦怎麼設 `.wslconfig`，見「Windows：第一次安裝 WSL2 與 Ubuntu」第 7 步（16GB 的是推估值）。第 4 步跑的過程中，WSL2 裡可用記憶體低於 1.5 GB、或 swap 超過門檻，工具會請程式做完目前這一句就停（這項只有模擬測試，還沒在實機跑過）。
 - **還沒有雙擊就能開的啟動捷徑**：照「怎麼用」在 Ubuntu 的終端機打指令啟動。
 
 ## 4. 安裝
@@ -179,21 +179,49 @@ cd ~/讀書會剪輯資料/影片 && explorer.exe .
 - 找不到 Ubuntu：開 PowerShell 打 `wsl --list --verbose`，看清單裡有沒有 Ubuntu、`VERSION` 是不是 2。清單是空的，回到第 3 步。在 PowerShell 打 `wsl` 也可以直接進到 Ubuntu。
 - 在 Ubuntu 終端機貼上文字：按滑鼠右鍵，或按 `Ctrl＋Shift＋V`（依視窗不同可能略有差異）。
 
-**第 7 步　（電腦記憶體 32GB 時）設定 WSL2 可以用的記憶體**
+**第 7 步　設定 WSL2 可以用的記憶體（16GB、32GB 的電腦）**
 
-WSL2 預設只能用電腦一半的記憶體，swap（記憶體不夠時拿硬碟頂替）是記憶體的四分之一。這份說明目前只有 32GB 電腦的建議值：`memory=24GB`、`swap=16GB`（還沒實測過這組設定：09-29 在 WSL2 實測時，WSL2 分到的是約 15GB）。**其他記憶體大小該設多少還沒定**：先不要建這個檔、用預設值，裝完跑 `bookclub doctor` 看「記憶體」那一項（WSL2 裡看到的記憶體低於 8GB 會提醒），把結果回報給開發者。
+先看電腦有多少記憶體：「設定」→「系統」→「關於」，「已安裝的 RAM」那一行（名稱可能略有不同）。
 
-32GB 電腦的設定方法：
+| 電腦記憶體 | memory | swap | 依據 |
+| --- | --- | --- | --- |
+| 16GB | `10GB` | `8GB` | **推估，還沒有在 16GB 的 Windows 電腦上實測**。理由見下面 |
+| 32GB | `24GB` | `16GB` | 這份說明原本的建議值；也還沒實測過這組設定（09-29 在 WSL2 實測時，WSL2 分到的是約 15GB，跑得完第 1 步） |
+| 其他 | 先不要設 | 先不要設 | 還沒有建議值：用預設值，裝完跑 `bookclub doctor` 看「記憶體」那一項，把結果回報給開發者 |
 
-- 要做什麼：開一般的 PowerShell（不用系統管理員），打下面這行，按 Enter。它會在 Windows 使用者資料夾（`C:\Users\你的Windows使用者名稱\`）建一個叫 `.wslconfig` 的檔案。**已經有這個檔案的話先不要打**（會蓋掉原本的內容），請開發者協助。
+**16GB 為什麼建議 10GB／8GB**（三個依據）：
+
+1. **WSL2 不設定時的預設值**：微軟官方〈WSL 中的進階設定組態〉（<https://learn.microsoft.com/zh-tw/windows/wsl/wsl-config>）的 `.wslconfig` 設定表寫，`memory` 預設是「Windows 上總記憶體的 50%」，`swap` 預設是「Windows 上 25% 的記憶體大小四捨五入至最接近的 GB」。16GB 的電腦不設定，WSL2 只拿得到約 8GB、swap 約 4GB。
+2. **工具自己的門檻**：
+   - `bookclub doctor` 與 `install.sh` 看到 WSL2 裡的記憶體低於 8GB 會提醒（`bookclub/doctor.py` 的 `check_memory`、`install.sh` 的系統檢查）。預設的「一半」剛好落在 8GB 邊緣，WSL2 裡實際讀到的總量通常比設定的再少一點。
+   - 第 4 步在 Linux／WSL2 上，可用記憶體低於 **1.5 GB** 就請程式做完目前這一句停下來（`bookclub/execute.py` 的 `MIN_AVAILABLE_GB`）；開始前的檢查估計載入模型會用掉約 **5 GB**（同一個檔的 `MEM_LOAD_GB`），可用記憶體扣掉 5 GB 低於 1.5 GB 就提醒「偏滿」。也就是開始前 WSL2 裡最好有 6.5 GB 以上可以用。
+   - swap 用量超過 **8.5 GB** 也會停（`settings.toml` 的 `execute_max_swap_gb`，預設值在 `bookclub/config.py`）。
+3. **已有的實測**：8GB 記憶體的 M1 Mac 跑得完第 4 步（Mac 會自己拿硬碟頂替記憶體）；聲音生成模型約 4.4 GB、逐字對位模型約 1.7 GB，現在一次只載入一個（CHANGELOG 0.2.0b1「第 4 步每一步、每一個聲線各自一支程式跑」）；組裝 98 分鐘的整支影片，記憶體高峰 3.9 GB（CHANGELOG 0.2.0b1「組裝分段處理」）。Windows＋WSL2 那台電腦（WSL2 分到約 15GB）09-29 跑得完第 1 步（見「速度參考」）。
+
+所以 16GB 的電腦給 WSL2 **10GB**：比預設多 2GB，載入最大的模型（約 4.4 GB）之後還留得下 1.5 GB 以上，`doctor` 也不會提醒；Windows 自己與瀏覽器還留約 6GB。swap 給 **8GB**：比預設的 4GB 多，記憶體一時不夠時有地方頂替，又不會超過 8.5 GB 的停止門檻。
+
+**第一次跑完，請回報給開發者兩件事**：第 4 步有沒有被自動停下來（畫面上「已停止」後面會寫原因）、第 4 步花了多久。Windows 在第 4 步跑的時候變得很卡，也請一起說。
+
+設定的方法：
+
+- 要做什麼：開一般的 PowerShell（不用系統管理員），打下面其中一行（照您電腦的記憶體選），按 Enter。它會在 Windows 使用者資料夾（`C:\Users\你的Windows使用者名稱\`）建一個叫 `.wslconfig` 的檔案。**已經有這個檔案的話先不要打**（會蓋掉原本的內容），請開發者協助。
+
+  16GB 的電腦：
+
+  ```powershell
+  Set-Content -Path "$env:USERPROFILE\.wslconfig" -Value "[wsl2]`nmemory=10GB`nswap=8GB"
+  ```
+
+  32GB 的電腦：
 
   ```powershell
   Set-Content -Path "$env:USERPROFILE\.wslconfig" -Value "[wsl2]`nmemory=24GB`nswap=16GB"
   ```
 
   用指令建，是為了避開「記事本存檔時自動在檔名後面加 `.txt`」的問題：檔名變成 `.wslconfig.txt`，WSL2 就讀不到。
-- 確認：打 `Get-Content "$env:USERPROFILE\.wslconfig"`，看到三行 `[wsl2]`、`memory=24GB`、`swap=16GB` 就對了。
+- 確認檔案：打 `Get-Content "$env:USERPROFILE\.wslconfig"`，看到三行（`[wsl2]`、`memory=…`、`swap=…`）就對了。
 - 讓設定生效：關掉所有 Ubuntu 視窗，在 PowerShell 打 `wsl --shutdown`，等大約 10 秒再打開 Ubuntu。
+- 確認設定有生效：在 Ubuntu 終端機打 `free -h`。`Mem:` 那一行的 `total` 會接近您設的 memory（通常會比設的數字少一點），`Swap:` 那一行的 `total` 會接近您設的 swap。如果還是約電腦記憶體的一半，代表設定沒有生效：確認檔名不是 `.wslconfig.txt`，再做一次 `wsl --shutdown`。
 - 官方也提供「WSL 設定」程式（在開始功能表找），可以不改檔案、直接在畫面上設記憶體。
 
 **第 8 步　Windows 的檔案在 Ubuntu 裡在哪裡**
