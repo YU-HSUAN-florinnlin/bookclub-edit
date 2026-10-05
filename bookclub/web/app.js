@@ -422,6 +422,7 @@ async function renderExecuteBody() {
   const running = d.running;
   const redo = d["退回清單"] || [];
   const execBlocked = running || !pre["可以開始"] || (fc && (!fc["可以開始"] || !fc["看過"]));
+  const ra = d["只重新組裝"];   // 10-05 #97：沒有退回時也能只重新組裝（伺服器算好能不能按）
   contentEl.innerHTML = `
     <h1>4　AI 執行</h1>
     <p class="muted">依序跑四步：老師提到名字 → 學員重念 → 保留原聲學員講到名字 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
@@ -454,6 +455,9 @@ async function renderExecuteBody() {
       ${fc && !running && (!fc["可以開始"] || !fc["看過"]) ? `<span class="muted">先處理上面「開始前總檢查」${[fc["可以開始"] ? "" : "一定要處理的列", fc["看過"] ? "" : "「請看一眼」按「我看過了」"].filter(Boolean).join("，")}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
       <span class="muted" id="execEta">${execEtaText(d)}</span>
+      ${ra && !redo.length && !running ? `<p class="exec-reasm"><button id="btnReassembleAll" class="secondary" ${execBlocked || !ra["可以"] ? "disabled" : ""}>只重新組裝（不重新生成）</button>
+        ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
+        <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘。</span></p>` : ""}
       ${!running && fc && ((fc["摘要"] || {})["記憶體"] || {})["偏滿"] ? `<p class="hint fc-mem-warn" id="execMemWarn"><b>記憶體偏滿，按下去可能跑到一半就被停下來。</b>${esc(fc["摘要"]["記憶體"]["怎麼處理"])}</p>` : ""}
       ${!running ? `<p class="muted">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}
       ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「開始執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
@@ -503,6 +507,17 @@ async function renderExecuteBody() {
   const reBtn = document.getElementById("btnReassemble");   // 10-03 第八批 #23：只重新組裝（整支影片的範圍）
   if (reBtn) reBtn.addEventListener("click", async () => {
     if (!confirm(`只重新組裝？\n生成的聲音不動、不重新生成，照現在的做法重新放回去。\n第 5 步退回的 ${redo.length} 筆組裝做完會回到「還沒看」。`)) return;
+    try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value], "只重新組裝": true }, { quiet: true }); }
+    catch (e) { alert(`無法開始：${e.message}`); return; }
+    await renderExecuteBody();
+  });
+  const reAllBtn = document.getElementById("btnReassembleAll");   // 10-05 #97：沒有退回時的只重新組裝（整支影片的範圍）
+  if (reAllBtn) reAllBtn.addEventListener("click", async () => {
+    if (!confirm(["只重新組裝（不重新生成）？", "",
+      "・生成好的聲音都不動，不會重新生成。",
+      "・用現在的程式把整支影片重新組裝一次，現在的成品會被新的蓋掉（檔名沿用）。",
+      "・第 5 步：內容沒變的那幾筆，之前按的通過／退回保留；內容變了的（例如接縫、停格的做法改了）回到「還沒看」，那附近看過的部分也要重看。",
+      `・整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘，跑的時候第 3 步不能修改。`].join("\n"))) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value], "只重新組裝": true }, { quiet: true }); }
     catch (e) { alert(`無法開始：${e.message}`); return; }
     await renderExecuteBody();
