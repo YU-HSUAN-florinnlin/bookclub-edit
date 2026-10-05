@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import _testtmp  # noqa: F401 — 10-01：這支測試建的暫存資料夾跑完自己清（要在 tempfile 之前）
 
+import json
 import shutil
 import sys
 import tempfile
@@ -491,6 +492,25 @@ def test_find_names_ignores_template_example_rows():
                           encoding="utf-8")
         res = nm.find_names(audio_path, workdir, sents, words, roster)
         assert [c["canonical"] for c in res["candidates"]] == ["詩涵"]
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_find_names_input_changed_message_does_not_suggest_rename_after_step3():
+    """#132：說話者判斷／逐字稿改過時的提醒，不能再說「改名重跑、決定會對回去」（決定照順位存，改名重跑可能錯位）。"""
+    tmp_dir = Path(tempfile.mkdtemp())
+    try:
+        workdir, audio_path, sentences, words, roster_path = _setup_find_names_fixture(tmp_dir)
+        nm.find_names(audio_path, workdir, sentences, words, roster_path)
+        changed = [dict(sentences[0], text="詩涵說好嗎？"), sentences[1]]   # 老師句子內容變了 → 輸入指紋不同
+        res = nm.find_names(audio_path, workdir, changed, words, roster_path)
+        msg = res["輸入改過"]
+        assert "對回去" not in msg
+        assert "已經開始第 3 步的工作區，不要把 名字候選.json 改名重跑" in msg
+        assert "＋新增修改" in msg
+        assert "重跑分析不會重找" in msg
+        # 只是提醒，名字候選.json 本身不改寫
+        assert "輸入改過" not in (json.loads((workdir / "名字候選.json").read_text(encoding="utf-8")))
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
