@@ -106,6 +106,20 @@ def test_step4_stop_and_step3_readonly():
     assert 'id="rv-busy"' in rv and "rvApplyReadonly" in rv and 'rv.data["AI執行中"]' in rv
 
 
+def test_step4_eta_hidden():
+    # 10-05 宇軒：網頁第 4 步的預估時間先不顯示（後端照樣算，網頁用 SHOW_EXEC_ETA 一個開關藏起來，之後好恢復）
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    assert "const SHOW_EXEC_ETA = false;" in app
+    # 每一處預估時間的文字都包在開關裡
+    for frag in ("（含組裝約 21 分鐘）", "整支約 ${Math.round", "預估剩餘時間：第一句生成完才算得出來", "預估生成還要約"):
+        for line in app.splitlines():
+            if frag in line:
+                assert "SHOW_EXEC_ETA" in line or "if (s == null)" in line or "return `預估生成還要約" in line, line
+    i = app.index("function execEtaText")
+    body = app[i:app.index("\n}", i)]
+    assert body.index("if (!SHOW_EXEC_ETA) return") < body.index("預估剩餘時間：")
+
+
 def test_no_promises_of_unbuilt_redo():
     # 09-30：第 5 步退回、第 4 步「從這裡開始」的說明要跟實際一致（一鍵只重做還沒做好；第 2 步參考音要選好）
     fc = (WEB / "finalcheck.js").read_text(encoding="utf-8")

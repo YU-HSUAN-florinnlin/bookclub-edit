@@ -1,4 +1,7 @@
 "use strict";
+// 10-05 宇軒：「網頁第四部的『預估時間』先不要顯示」。只是網頁不顯示（後端照樣算、命令列照樣印），
+// 要恢復把這個改回 true。
+const SHOW_EXEC_ETA = false;
 
 /* 讀書會剪輯工具｜前端骨架。原生 HTML/CSS/JS，不用打包工具、不用 CDN 套件。
  * 左側步驟列 0～5 步（09-25 宇軒：原本第 3、4 步合成第 3 步「覆核工作台」；09-29：原本第 5 步逐筆覆核、第 6 步整片檢查
@@ -409,7 +412,7 @@ function finalCheckHtml(fc) {
       ${look.length ? `<table class="kv fc-check fc-look">${look.map((r) => row(r, true)).join("")}</table>` : "<p class=\"muted\">沒有剪掉、消音、超過 10 秒的老師重念。</p>"}
       <p class="muted">自動算處理好的（被別筆涵蓋）：${(m["自動算處理好"] || []).length} 筆
         ${(m["自動算處理好"] || []).length ? `<details><summary>展開</summary>${m["自動算處理好"].map((x) => `${esc(x["名稱"] || fcTime(x.start))} 由〈${esc(x["涵蓋"])}〉涵蓋`).join("<br>")}</details>` : ""}</p>
-      <p class="muted">要生成約 ${Math.round((m["要生成秒數"] || 0) / 60)} 分鐘的聲音，預估 ${((m["預估秒數"] || 0) / 3600).toFixed(1)} 小時（含組裝約 21 分鐘）；硬碟可用 ${m["硬碟可用GB"]} GB。${esc(m["提醒"] || "")}</p>
+      <p class="muted">要生成約 ${Math.round((m["要生成秒數"] || 0) / 60)} 分鐘的聲音${SHOW_EXEC_ETA ? `，預估 ${((m["預估秒數"] || 0) / 3600).toFixed(1)} 小時（含組裝約 21 分鐘）` : ""}；硬碟可用 ${m["硬碟可用GB"]} GB。${esc(m["提醒"] || "")}</p>
       ${mem ? `<p class="${mem["偏滿"] ? "hint fc-mem-warn" : "muted"}" id="fcMem">${mem["偏滿"] ? "<b>記憶體偏滿：</b>" : ""}${esc(mem["說明"])}。${mem["偏滿"] ? esc(mem["怎麼處理"]) : ""}</p>` : ""}
       <audio id="fcAudio" preload="none"></audio>
     </div>`;
@@ -521,7 +524,7 @@ async function renderExecuteBody() {
       <span class="muted" id="execEta">${execEtaText(d)}</span>
       ${ra && !redo.length && !running ? `<p class="exec-reasm"><button id="btnReassembleAll" class="secondary" ${execBlocked || !ra["可以"] ? "disabled" : ""}>只重新組裝（不重新生成）</button>
         ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
-        <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘。</span></p>` : ""}
+        <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音${SHOW_EXEC_ETA ? `，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘` : ""}。</span></p>` : ""}
       ${!running && fc && ((fc["摘要"] || {})["記憶體"] || {})["偏滿"] ? `<p class="hint fc-mem-warn" id="execMemWarn"><b>記憶體偏滿，按下去可能跑到一半就被停下來。</b>${esc(fc["摘要"]["記憶體"]["怎麼處理"])}</p>` : ""}
       ${!running ? `<p class="muted">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}
       ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「開始執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
@@ -581,7 +584,7 @@ async function renderExecuteBody() {
       "・生成好的聲音都不動，不會重新生成。",
       "・用現在的程式把整支影片重新組裝一次，現在的成品會被新的蓋掉（檔名沿用）。",
       "・第 5 步：內容沒變的那幾筆，之前按的通過／退回保留；內容變了的（例如接縫、停格的做法改了）回到「還沒看」，那附近看過的部分也要重看。",
-      `・整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘，跑的時候第 3 步不能修改。`].join("\n"))) return;
+      `・${SHOW_EXEC_ETA ? `整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘，` : ""}跑的時候第 3 步不能修改。`].join("\n"))) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value], "只重新組裝": true }, { quiet: true }); }
     catch (e) { alert(`無法開始：${e.message}`); return; }
     await renderExecuteBody();
@@ -639,8 +642,9 @@ function execStepRows(d) {
 function execEtaText(d) {
   const s = d["預估剩餘秒數"];
   if (!d.running) return "";
+  if (s != null && s <= 0) return "生成都做完了，接著組裝";
+  if (!SHOW_EXEC_ETA) return "";   // 10-05 宇軒：預估時間先不顯示
   if (s == null) return "預估剩餘時間：第一句生成完才算得出來";
-  if (s <= 0) return "生成都做完了，接著組裝";
   const m = Math.round(s / 60);
   return `預估生成還要約 ${m >= 60 ? `${Math.floor(m / 60)} 小時 ${m % 60} 分` : `${Math.max(1, m)} 分`}（不含組裝）`;
 }
