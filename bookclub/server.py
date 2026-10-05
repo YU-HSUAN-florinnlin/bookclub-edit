@@ -1345,9 +1345,10 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/execute/finalcheck":   # 10-01：某一列「我聽過了」、整頁「我看過了」
             from bookclub.execute import ack_final, keep_final
 
-            if "不改" in body:   # 10-05 #177：「一定要處理」某一列「不改（維持目前設定）」或取消
-                self._send_json(200, keep_final(server.workdir, body.get("key"), bool(body["不改"])))
-                return
+            for field in ("照目前設定做", "不改"):   # 10-05 #177：「一定要處理」某一列「照目前設定做」或取消（「不改」是舊名字）
+                if field in body:
+                    self._send_json(200, keep_final(server.workdir, body.get("key"), bool(body[field])))
+                    return
             # 10-05 #178：帶「看一眼」＝「請看一眼」某一列的「我看過了」；沒帶＝整區「全部看過了」
             self._send_json(200, ack_final(server.workdir, body.get("key"), bool(body.get("聽過", True)),
                                            body.get("看過") if "看過" in body else None,

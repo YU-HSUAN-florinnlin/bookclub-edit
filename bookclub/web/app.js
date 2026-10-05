@@ -304,7 +304,7 @@ function fcTime(t) { t = Math.round(t * 10) / 10; const m = Math.floor(t / 60), 
 let fcRowsCache = [];   // 總檢查每一列（按鈕用編號找回那一列）
 let fcLookCache = [];   // 10-02 第五批：「請看一眼」畫面上的那幾列（按「我看過了」時一起送出，之後多了列就回到沒勾）
 
-// 10-02 第四批：確認過的列（勾了「我聽過了」、第 3 步答了「老師的話，不用處理」）留在清單裡顯示成灰色；
+// 10-02 第四批：確認過的列（按了「照目前設定做」、第 3 步答了「老師的話，不用處理」）留在清單裡顯示成灰色；
 // 「把確認好的收合起來」這個開關記在 localStorage（讀不到、私密視窗丟例外時一律當作不收合）
 const FC_FOLD_KEY = "fc-fold-done";
 function fcFoldDone() { try { return localStorage.getItem(FC_FOLD_KEY) === "1"; } catch (e) { return false; } }
@@ -326,15 +326,29 @@ function fcListenBtn(start, end, label) {
   return rg ? `<button class="secondary small" data-fcplay="${rg[0]}|${rg[1]}" title="從 ${esc(fcTime(rg[0]))} 播到 ${esc(fcTime(rg[1]))} 就停（前後不多播）">${esc(label)}</button>` : "";
 }
 
-// 10-05 #177：「一定要處理」每一列的「不改（維持目前設定）」（純函式，回傳 HTML）。
-// 可以按的類別：按了算處理完、再按取消；不開放的類別：按鈕灰掉，下面寫原因（維持現狀可能讓學員原聲或名字留在成品裡）
-function fcKeepHtml(r) {
-  if (r["可以按不改"]) {
-    const on = !!r["已按不改"];
-    return `<button class="${on ? "" : "secondary "}small fc-keep" data-fckeep="${esc(r.key)}" data-on="${on ? "0" : "1"}" aria-pressed="${on}">${on ? "✓ 不改（維持目前設定）・再按取消" : "不改（維持目前設定）"}</button>`;
+// 10-05 #177（宇軒）：「一定要處理」每一列的「照目前設定做」＝按下去就照第 3 步的決定進行（純函式，回傳 HTML）。
+// 原本「我聽過了」的三類也合成這一顆；旁邊一句這一類照目前設定做的後果。
+// 不開放的類別（名字換不了代號、重疊缺東西）：放「回第 3 步補」，按了跳到第 3 步那一張卡片。
+function fcKeepHtml(r, i) {
+  if (r["可以按照目前設定做"]) {
+    const on = !!r["已按照目前設定做"];
+    return `<button class="${on ? "" : "secondary "}small fc-keep" data-fckeep="${esc(r.key)}" data-on="${on ? "0" : "1"}" aria-pressed="${on}">${on ? "✓ 照目前設定做・再按取消" : "照目前設定做"}</button>
+    ${r["照目前設定做的後果"] ? `<div class="muted fc-keepwhy">${esc(r["照目前設定做的後果"])}</div>` : ""}`;
   }
-  return `<button class="secondary small fc-keep" disabled aria-disabled="true">不改（維持目前設定）</button>
-    <div class="muted fc-keepwhy">這一列先不能按「不改」：${esc(r["不改不開放原因"] || "")}</div>`;
+  if (r["回第3步補"]) {
+    return `<button class="small fc-back3" data-fcback="${i}">回第 3 步補</button>
+    <div class="muted fc-keepwhy">${esc(r["照目前設定做不開放原因"] || "")}</div>`;
+  }
+  return `<div class="muted fc-keepwhy">${esc(r["照目前設定做不開放原因"] || "")}</div>`;
+}
+
+// 「回第 3 步補」要帶去哪裡（純函式）：找得到卡片就定位到那一張；找不到就到第 3 步，說明要找哪一類卡片
+const FC_BACK3_CARD = { "名字換不了代號": "老師提到名字", "重疊缺東西": "重疊" };
+function fcBack3Go(r) {
+  const what = `${r["名稱"] ? `〈${r["名稱"]}〉` : ""}${r["去改"] || r["說明"] || ""}`;
+  if (r["第3步"]) return { key: r["第3步"], openMore: true, note: `從開始前總檢查過來：${what}`, backKey: r.key };
+  const card = FC_BACK3_CARD[r["類別"]] || "這一筆";
+  return { key: null, note: `從開始前總檢查過來：在第 3 步找「${card}」的卡片${what ? `：${what}` : ""}`, backKey: r.key };
 }
 
 // 10-05 #178：「請看一眼」每一列的「我看過了」（純函式，回傳 HTML）
@@ -348,7 +362,7 @@ function finalCheckHtml(fc) {
   const row = (r, isLook = false) => {
     const i = fcRowsCache.push(r) - 1;
     const paths = r["有學員聲音"] || [];
-    const done = isLook ? !!r["已看過"] : !!(r["已按聽過"] || r["已按不改"]);
+    const done = isLook ? !!r["已看過"] : !!r["處理好"];
     const isOut = String(r.key).startsWith("段落外:");
     const outNow = r["段落外答案"] || "";
     const outPick = isOut ? `<details class="fc-paths fc-outans"><summary>改答案</summary><p class="muted">這幾秒是誰的聲音？（跟第 3 步卡片上的問題同一題，改這裡兩邊一起改）</p>
@@ -358,15 +372,14 @@ function finalCheckHtml(fc) {
     const sh = r["縮小"];
     const pts = r["時間點"] || [];   // 10-04 #111：學員段落裡自動處理的重疊，每一處一個「聽」按鈕
     return `<tr data-fckey="${esc(r.key)}" class="${done ? "fc-done" : ""}${r["新的"] ? " fc-new" : ""}"><td class="nowrap">${outT ? "原片 " : ""}${esc(fcTime(r.start))}–${esc(fcTime(r.end))}${outT}${r["名稱"] ? `<div class="muted">${esc(r["名稱"])}</div>` : ""}${r["顯示編號"] ? `<div><span class="idtag" title="跟 AI 助手溝通用的編號">${esc(r["顯示編號"])}</span></div>` : ""}
-      ${done ? `<div><span class="badge fc-donetag">${isLook ? "看過了" : r["已按不改"] && !r["已按聽過"] ? "不改" : "已確認"}</span></div>` : ""}${r["新的"] ? `<div><span class="badge fc-newtag">新的</span></div>` : ""}
-      ${r["不改後變了"] ? `<div><span class="badge fc-newtag">按「不改」之後變了</span></div>` : ""}</td>
+      ${done ? `<div><span class="badge fc-donetag">${isLook ? "看過了" : "照目前設定做"}</span></div>` : ""}${r["新的"] ? `<div><span class="badge fc-newtag">新的</span></div>` : ""}
+      ${r["照目前設定做後變了"] ? `<div><span class="badge fc-newtag">按了之後內容變了，要再確認一次</span></div>` : ""}</td>
     <td>${esc(r["說明"])}${r["去改"] ? `<div class="muted fc-todo">${done ? "" : "怎麼改："}${esc(r["去改"])}</div>` : ""}</td>
     <td class="fc-acts">${isLook ? fcLookBtnHtml(r) : ""}${pts.length ? "" : fcListenBtn(r.start, r.end, "跳過去聽")}
     ${pts.length ? `<div class="fc-points">${pts.map((p) => fcListenBtn(p.start, p.end, `聽 ${fcTime(p.start)}`)).join(" ")}</div>` : ""}
     ${sh && sh["可以縮"] ? `<button class="small" data-fcshrink="${i}">照建議縮小</button>` : ""}
-    ${r["第3步"] ? `<button class="secondary small" data-fcgo="${i}">去第 3 步改這一筆</button>` : ""}
-    ${r["可以按聽過"] ? `<label class="nowrap"><input type="checkbox" data-fcheard="${esc(r.key)}" ${r["已按聽過"] ? "checked" : ""}> ${esc(r["聽過字"] || "我聽過了，這裡沒有學員的聲音")}</label>` : ""}
-    ${isLook ? "" : fcKeepHtml(r)}
+    ${r["第3步"] && !r["回第3步補"] ? `<button class="secondary small" data-fcgo="${i}">去第 3 步改這一筆</button>` : ""}
+    ${isLook ? "" : fcKeepHtml(r, i)}
     ${outPick}
     ${paths.length ? `<details class="fc-paths"><summary>有學員的聲音</summary><p class="muted">選一個，會帶著這段時間到第 3 步（起訖先填好，按「新增」或「儲存修改」才會存）：</p>
       <ul>${paths.map((p, j) => `<li><button class="secondary small" data-fcpath="${i}|${j}">${esc(p["文字"])}</button></li>`).join("")}</ul></details>` : ""}</td></tr>`;
@@ -376,7 +389,7 @@ function finalCheckHtml(fc) {
   fcLookCache = look.map((r) => ({ key: r.key, start: r.start, end: r.end }));
   const mem = m["記憶體"] || null;
   const newN = fc["看過後新增"] || 0;
-  const isDone = (r) => !!(r["已按聽過"] || r["已按不改"]);   // 10-05 #177：按了「不改」也算處理好
+  const isDone = (r) => !!r["處理好"];   // 10-05 #177：按了「照目前設定做」（含以前的「我聽過了」）
   const doneN = must.filter(isDone).length;
   const fold = fcFoldDone() && doneN > 0;
   const shown = fold ? must.filter((r) => !isDone(r)) : must;
@@ -387,7 +400,7 @@ function finalCheckHtml(fc) {
       ${doneN ? `<label class="nowrap muted"><input type="checkbox" id="fcFold" ${fold ? "checked" : ""}> 把確認好的收合起來</label>` : ""}
       ${must.length ? `${shown.length ? `<table class="kv fc-check">${shown.map((r) => row(r)).join("")}</table>` : ""}
         ${fold ? `<p><button class="ghost small" id="fcUnfold">已確認 ${doneN} 列（點了展開）</button></p>` : ""}
-        <p class="muted">要改的按「去第 3 步改這一筆」；改完回這一頁會重算。設定好了、不用改的按「不改（維持目前設定）」。確認過的列顯示成灰色，取消勾「我聽過了」、再按一次「不改」或改答案就會回到還要處理。</p>` : ""}
+        <p class="muted">要改的按「去第 3 步改這一筆」；改完回這一頁會重算。第 3 步已經決定好、照那樣做就可以的，按「照目前設定做」。確認過的列顯示成灰色，再按一次「照目前設定做」或改答案就會回到還要處理。</p>` : ""}
       <div class="fc-lookhead" id="fcLookHead">
         <p><b>請看一眼</b>（不擋，但每一列都要按「我看過了」）：${look.length ? `已看過 <b id="fcSeenCount">${seenN}</b>／${look.length} 列` : "沒有要看的列"}</p>
         <button class="${fc["看過"] ? "" : "primary "}small" id="fcSeenAll" data-on="${fc["看過"] ? "0" : "1"}" aria-pressed="${!!fc["看過"]}">${fc["看過"] ? "✓ 全部看過了・再按取消" : look.length ? "全部看過了" : "我看過了（沒有要看的）"}</button>
@@ -428,9 +441,8 @@ function bindFinalCheck(reload) {
     try { await apiPost("/api/review/shrink", { "鍵": h["鍵"] }); } catch (err) { alert(err.message); return; }
     await reload();
   }));
-  document.querySelectorAll("[data-fcheard]").forEach((c) => c.addEventListener("change", async () => {
-    await apiPost("/api/execute/finalcheck", { key: c.dataset.fcheard, "聽過": c.checked }); await reload();
-  }));
+  // 10-05 #177：「回第 3 步補」（名字換不了代號、重疊缺東西）
+  document.querySelectorAll("[data-fcback]").forEach((b) => b.addEventListener("click", () => rvJump(fcBack3Go(fcRowsCache[Number(b.dataset.fcback)]))));
   // 10-02 第四批：切在段落外面的幾秒，在這裡直接改答案（存到第 3 步同一個地方）
   document.querySelectorAll("[data-fcout]").forEach((b) => b.addEventListener("click", async () => {
     const [i, v] = b.dataset.fcout.split("|");
@@ -444,9 +456,9 @@ function bindFinalCheck(reload) {
   if (fold) fold.addEventListener("change", async () => { fcSetFoldDone(fold.checked); await reload(); });
   const unfold = document.getElementById("fcUnfold");
   if (unfold) unfold.addEventListener("click", async () => { fcSetFoldDone(false); await reload(); });
-  // 10-05 #177：「不改（維持目前設定）」／再按取消
+  // 10-05 #177：「照目前設定做」／再按取消
   document.querySelectorAll("[data-fckeep]").forEach((b) => b.addEventListener("click", async () => {
-    try { await apiPost("/api/execute/finalcheck", { key: b.dataset.fckeep, "不改": b.dataset.on === "1" }); }
+    try { await apiPost("/api/execute/finalcheck", { key: b.dataset.fckeep, "照目前設定做": b.dataset.on === "1" }); }
     catch (err) { if (!err.shown) alert(err.message); return; }   // 不開放的類別、列已經不在：伺服器回的原因
     await reload();
   }));

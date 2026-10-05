@@ -240,11 +240,11 @@ def _untranscribed_rows(workdir: Path, dec: dict, heard: set, stu_turns: list[di
             key = untranscribed_key(a, heard)
             row(must, key, a, b,
                 f"這裡有人講話（約 {secs:.1f} 秒）但逐字稿沒有字，工具找不到這裡的名字。請聽一下："
-                "有提到名字就到第 3 步手動補名字卡；沒有就按「我聽過了」", ack=True,
-                name=f"{t1(a)} 沒有字的地方",
-                todo="有提到名字：到第 3 步手動新增名字卡（起訖填這一段時間），補好之後回來按「我聽過了」")
+                "有提到名字就到第 3 步手動補名字卡；沒有就按「照目前設定做」", ack=True,
+                name=f"{t1(a)} 沒有字的地方", kind=KIND_NO_TEXT, basis=f"{a:.2f}|{b:.2f}|{secs:.1f}",
+                todo="有提到名字：到第 3 步手動新增名字卡（起訖填這一段時間），補好之後回來按「照目前設定做」")
             must[-1].update({"人聲秒": secs, "小段數": r["小段數"],
-                             "聽過字": "我聽過了，沒有提到名字（或已經補好名字卡）"})
+                             "聽過字": "聽過了，沒有提到名字（或已經補好名字卡）"})
             continue
         home = next((t for t in again if t["start"] <= (a + b) / 2 <= t["end"]), None)
         look.append({"start": a, "end": b, "秒": secs, "類別": kind,
@@ -495,9 +495,12 @@ def final_check(workdir: str | Path) -> dict:
                 return k
         return None
 
-    def row(lst, key, a, b, text, ack=False, *, name="", card=None, todo="", paths=None, heard_now=None):
+    def row(lst, key, a, b, text, ack=False, *, name="", card=None, todo="", paths=None, heard_now=None, kind=None, basis=None):
+        """kind：10-05 #177「一定要處理」這一列的類別（決定能不能按「照目前設定做」，見 KEEP_OK）；
+        basis：「照目前設定做」記下的內容依據（沒給就用說明；說明會跟著按過沒有變的類別要給穩定的依據）。"""
         card3 = (index.get(card) or {}).get("第3步") if card else None
         lst.append({"key": key, "start": round(a, 3), "end": round(b, 3), "說明": text, "名稱": name,
+                    **({"類別": kind, "依據": _keep_basis(text if basis is None else basis)} if kind else {}),
                     "第3步": card3, "顯示編號": show_id(key, card3),
                     "去改": todo, **({"有學員聲音": paths} if paths else {}),
                     **({"可以按聽過": True, "已按聽過": key in heard if heard_now is None else heard_now} if ack else {})})
@@ -527,9 +530,10 @@ def final_check(workdir: str | Path) -> dict:
              f"〈{tname}〉（{t1(t['start'])}–{t1(t['end'])}）的句子有 {b - a:.1f} 秒在段落外面（{t1(a)}–{t1(b)}）；{part}")
             + ("已確認是老師的話，不用處理（照原聲留著）。" if ans == OUT_A else
                said or "這幾秒會是學員原聲。聽一下：真的有學員的聲音，按「有學員的聲音」選怎麼處理；"
-                       "外面那一段不是學員（例如是老師接話），按「我聽過了」"), ack=True,
-            name=tname, card=f"學員段落:{t['id']}",
-            todo=("要改的話：取消勾「我聽過了」，或在「改答案」選別的" if ans == OUT_A else
+                       "外面那一段不是學員（例如是老師接話），按「照目前設定做」"), ack=True,
+            name=tname, card=f"學員段落:{t['id']}", kind=KIND_OUTSIDE,
+            basis=f"{t['id']}|{a:.2f}|{b:.2f}|{s0:.2f}|{e:.2f}",
+            todo=("要改的話：再按一次「照目前設定做」取消，或在「改答案」選別的" if ans == OUT_A else
                   OUT_GO[ans].format(name=tname) if ans in OUT_GO else
                   f"到第 3 步〈{tname}〉回答「切在外面的這幾秒是誰的聲音」，或按「改時間」把起訖改大包住 {t1(s0)}–{t1(e)}"),
             paths=_fix_paths(s0, e, near(s0, e), index, turn=t), heard_now=ans == OUT_A)
@@ -547,7 +551,7 @@ def final_check(workdir: str | Path) -> dict:
         nm = review.item_name(index, x["卡片"]) if info else x["卡片"].split(":")[0]
         row(must, f"英文代號:{x['卡片']}:{x['欄位']}", float(info.get("start") or 0.0), float(info.get("end") or 0.0),
             f"〈{nm}〉要念的文字裡還有英文代號（{'、'.join(x['代號'])}），送去生成會念英文",
-            name=nm, card=x["卡片"] if info else None,
+            name=nm, card=x["卡片"] if info else None, kind=KIND_CODE,
             todo="到第 3 步「開始前 4 件事」② 上面按「把這一集的英文代號換成中文」，"
                  "或命令列 bookclub codes convert <工作區>；只有這一句的話也可以在卡片上直接改字")
     # 2. 名字換不了代號
@@ -555,7 +559,7 @@ def final_check(workdir: str | Path) -> dict:
         k = f"名字:{m['候選']}"
         info = index.get(k, {})
         nm = review.item_name(index, k)
-        row(must, k, info.get("start", 0.0), info.get("end", 0.0), f"〈{nm}〉：{m['原因']}", name=nm, card=k,
+        row(must, k, info.get("start", 0.0), info.get("end", 0.0), f"〈{nm}〉：{m['原因']}", name=nm, card=k, kind=KIND_NAME,
             todo=f"到第 3 步〈{nm}〉把「老師 AI 聲音要重念的句子」改好（名字寫成代號），或在「改做法」選直接消音")
     # 3. 要念的字數跟那段時間逐字稿的字數差太多
     for g in plan["生成"]:
@@ -564,7 +568,7 @@ def final_check(workdir: str | Path) -> dict:
             nm, k = gen_name(g)
             row(must, f"字太少:{g['id']}", g["slot"][0], g["slot"][1],
                 f"〈{nm}〉：要念 {nameplan.say_count(g['text'])} 個字，這段時間逐字稿有 {nameplan.say_count(src)} 個字，"
-                "其他的話會不見", name=nm, card=k, todo=f"到第 3 步〈{nm}〉把重念範圍改小，或把要念的話補齊")
+                "其他的話會不見", name=nm, card=k, kind=KIND_SHORT, todo=f"到第 3 步〈{nm}〉把重念範圍改小，或把要念的話補齊")
     # 4. 重疊選了要生成、但缺文字或缺學員是誰
     for o in review.overlap_choices(workdir):
         why = review.overlap_gen_problem(o, [tuple(it["slot"]) for it in items if not it.get("重疊")])
@@ -575,7 +579,7 @@ def final_check(workdir: str | Path) -> dict:
             todo = f"到第 3 步〈{nm}〉的「改做法」"
             todo += f"，在「學員說的」旁邊選學員是誰{guess}" if "學員是誰" in why else "，把空的那一欄填好"
             row(must, k, o["start"], o["end"], f"〈{nm}〉（{review.OVERLAP_LABEL.get(o['做法'], o['做法'])}）：{why}",
-                name=nm, card=k, todo=todo)
+                name=nm, card=k, todo=todo, kind=KIND_OVERLAP)
     # 5. 聲紋判成「不是老師」的句子，整句都不在任何處理的範圍、也不在學員段落裡（可能是漏抓的學員發言）
     #    段落的聲音判斷也不是老師的才放「一定要處理」；段落判成老師的（第一堂 92 句，多半是誤判）在「請看一眼」彙總一列
     #    10-01：句子只有一部分被處理蓋到的，沒蓋到的部分（至少 0.3 秒）照樣列（以前整句跳過，例如重疊只蓋到 0.7 秒、
@@ -605,8 +609,8 @@ def final_check(workdir: str | Path) -> dict:
                                      + ("、".join(f"〈{h['名稱']}〉" for h in hit) or "學員段落") + "處理，這裡只列沒處理的這幾秒；")
             row(must, f"聲紋:{x['id']}" if whole else f"聲紋:{x['id']}:{a:.1f}", a, b,
                 f"聲音特徵判斷不是老師、{b - a:.1f} 秒，不在任何學員段落或處理範圍裡：可能是漏抓的學員發言。{part}"
-                "聽一下：沒有學員的聲音就按「我聽過了」；有的話按「有學員的聲音」選怎麼處理", ack=True,
-                name=f"{t1(a)} 這一句",
+                "聽一下：沒有學員的聲音就按「照目前設定做」；有的話按「有學員的聲音」選怎麼處理", ack=True,
+                name=f"{t1(a)} 這一句", kind=KIND_VOICE, basis=f"{x['id']}|{a:.2f}|{b:.2f}",
                 todo="第 3 步沒有這一句的卡片：有學員的聲音時，用下面「有學員的聲音」帶著這段時間去第 3 步新增或延長",
                 paths=_fix_paths(a, b, near(a, b), index, turn=close))
     # 10-04 #117：有人聲但逐字稿沒有字（Groq 漏轉）→ 找名字找不到，名字可能留在成品裡。見 bookclub/untranscribed.py
@@ -747,17 +751,9 @@ def final_check(workdir: str | Path) -> dict:
             oa, ob = timemap.to_output(r["start"], tm), timemap.to_output(r["end"], tm)
             if oa is not None or ob is not None:
                 r["成品起訖"] = [round(oa if oa is not None else ob, 3), round(ob if ob is not None else oa, 3)]
-    keep = (dec.get("總檢查") or {}).get(KEEP_FIELD) or {}
-    for r in must:   # 10-05 #177：「不改（維持目前設定）」
-        ok, why = keep_policy(r["key"])
-        r["可以按不改"] = ok
-        if not ok:
-            r["不改不開放原因"] = why
-        st = keep_state(keep.get(r["key"]), r)
-        r["已按不改"] = ok and st == "有效"
-        if st == "變了":
-            r["不改後變了"] = True   # 按「不改」之後這一列的範圍或內容變了：要重新決定
-        r["處理好"] = bool(r.get("已按聽過") or r["已按不改"])
+    store = keep_records(dec.get("總檢查") or {})
+    for r in must:   # 10-05 #177：「照目前設定做」（跟原本的「我聽過了」是同一個確認）
+        apply_keep(r, store.get(r["key"]))
     left = [r for r in must if not r["處理好"]]
     seen, new_keys, seen_keys = look_state(dec.get("總檢查") or {}, look, dec)
     for r in look:
@@ -766,83 +762,131 @@ def final_check(workdir: str | Path) -> dict:
             r["新的"] = True   # 10-02 第五批：按「我看過了」之後才多出來、或時間範圍變了的那幾列
     return {"一定要處理": sorted(must, key=lambda r: r["start"]), "請看一眼": sorted(look, key=lambda r: r["start"]),
             "摘要": summary, "可以開始": not left, "還要處理": len(left), "已確認": len(must) - len(left),
-            "已按不改": sum(1 for r in must if r["已按不改"]),
+            "已按照目前設定做": sum(1 for r in must if r["已按照目前設定做"]),
             "看過": seen, "看過後新增": len(new_keys), "已看過列數": sum(1 for r in look if r["已看過"])}
 
 
-# ---------- 10-05 #177：「一定要處理」每一列的「不改（維持目前設定）」 ----------
+# ---------- 10-05 #177：「一定要處理」每一列的「照目前設定做」 ----------
+# 宇軒 10-05：意思是「按下去就照我第 3 步的決定來進行」，不是「放著不處理」。
+# 類別看列資料的 `類別` 欄位（不看鍵開頭的字）；不認得的類別一律不開放。
 
-KEEP_FIELD = "不改"   # 存在覆核決定的 總檢查.不改：{鍵: {start, end, 依據, 時間}}
-# 按了「不改」就算處理完的類別（照現在的設定做，成品不會多出學員原聲或名字；最多是念得不好或少幾個字）
+KIND_OUTSIDE, KIND_VOICE, KIND_NO_TEXT = "段落外", "聲紋", "沒有字"            # 原本「我聽過了」的三類
+KIND_CODE, KIND_SHORT = "英文代號", "字太少"
+KIND_NAME, KIND_OVERLAP = "名字換不了代號", "重疊缺東西"                         # 要回第 3 步補
+KEEP_FIELD = "照目前設定做"   # 存在覆核決定的 總檢查.照目前設定做：{鍵: {start, end, 依據, 時間}}
+KEEP_FIELD_OLD = "不改"       # b6291f7 的舊名字（讀的時候一起認）
+ACK_KINDS = (KIND_OUTSIDE, KIND_VOICE, KIND_NO_TEXT)
+# 可以按的類別 → 按鈕旁的一句後果（白話）
 KEEP_OK = {
-    "英文代號": "照現在的文字生成（AI 會念出英文代號；代號不是真名）",
-    "字太少": "照現在要念的文字生成（逐字稿裡其他的話會不見）",
+    KIND_OUTSIDE: "按了：這幾秒照原聲留在成品裡（聽過、確定不是學員的聲音再按）",
+    KIND_VOICE: "按了：這一句照原聲留在成品裡（聽過、確定沒有學員的聲音再按）",
+    KIND_NO_TEXT: "按了：這一段照原聲留在成品裡（聽過、確定沒有提到名字再按）",
+    KIND_CODE: "按了：照現在的文字生成，會念出英文代號（代號不是真名）",
+    KIND_SHORT: "按了：照現在要念的文字生成，逐字稿裡其他的話不會念到",
 }
-# 維持現狀可能讓學員原聲或名字留在成品裡：先不開放「不改」，等宇軒決定（見任務單 #177 回報）
-KEEP_RISK = {
-    "段落外": "維持現狀的話，這幾秒如果有學員的聲音，會照原聲留在成品裡；聽過確定沒有學員的聲音，請按「我聽過了」",
-    "聲紋": "維持現狀的話，這一句如果是學員，會照原聲留在成品裡；聽過確定沒有學員的聲音，請按「我聽過了」",
-    "沒有字": "維持現狀的話，這裡如果有提到名字，會照原聲留在成品裡；聽過確定沒有提到名字，請按「我聽過了」",
-    "名字": "維持現狀的話，成品會照原聲念出這個名字（開始執行也會擋）；請到第 3 步改好要重念的句子，或改成直接消音",
-    "重疊": "維持現狀的話，這一句學員的聲音不會重新生成，學員原聲可能留在成品裡；請到第 3 步把缺的填好，或改別的做法",
+# 不開放、要回第 3 步補的類別 → 原因（開始執行照舊擋）
+BACK3 = {
+    KIND_NAME: "這一類要回第 3 步補：照現在的設定，成品會照原聲念出這個名字",
+    KIND_OVERLAP: "這一類要回第 3 步補：缺的沒填好，學員那一句沒辦法重新生成",
 }
-KEEP_UNKNOWN = "這一類還沒決定能不能「不改」，請照「怎麼改」處理"
+KEEP_UNKNOWN = "這一類還不能「照目前設定做」，請照「怎麼改」處理"
 
 
-def keep_policy(key: str) -> tuple[bool, str]:
-    """這一列可不可以按「不改（維持目前設定）」（純函式）。回傳（可以, 不行的原因）。看鍵的開頭判斷類別。"""
-    kind = str(key).split(":", 1)[0]
+def keep_policy(kind: str | None) -> tuple[bool, str]:
+    """這一類可不可以按「照目前設定做」（純函式）。回傳（可以, 不行的原因）。kind＝列資料的 `類別`。"""
     if kind in KEEP_OK:
         return True, ""
-    return False, KEEP_RISK.get(kind, KEEP_UNKNOWN)
+    return False, BACK3.get(kind, KEEP_UNKNOWN)
 
 
-def _keep_basis(row: dict) -> str:
-    """「不改」記下的依據：說明文字的雜湊（說明裡有字數、代號、做法；內容變了就要重新決定）。不存原文。"""
+def _keep_basis(text: str) -> str:
+    """「照目前設定做」記下的依據：內容的雜湊（說明裡有字數、代號、做法；內容變了就要重新決定）。不存原文。"""
     import hashlib
 
-    return hashlib.sha1(str(row.get("說明", "")).encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha1(str(text).encode("utf-8")).hexdigest()[:12]
+
+
+def keep_records(fc: dict) -> dict:
+    """存檔裡的「照目前設定做」紀錄：新名字優先，舊名字（不改）也認（純函式）。"""
+    old = fc.get(KEEP_FIELD_OLD) if isinstance(fc.get(KEEP_FIELD_OLD), dict) else {}
+    new = fc.get(KEEP_FIELD) if isinstance(fc.get(KEEP_FIELD), dict) else {}
+    return {**old, **new}
 
 
 def keep_state(saved: dict | None, row: dict) -> str | None:
-    """這一列的「不改」現在還算不算（純函式）：None＝沒按過；「有效」；「變了」＝範圍差超過 0.05 秒或說明變了。"""
+    """這一列的紀錄現在還算不算（純函式）：None＝沒有紀錄；「有效」；「變了」＝範圍差超過 0.05 秒或內容變了。"""
     if not isinstance(saved, dict):
         return None
     try:
         same = (abs(float(saved.get("start", 0)) - float(row["start"])) <= LOOK_RANGE_TOL_S
                 and abs(float(saved.get("end", 0)) - float(row["end"])) <= LOOK_RANGE_TOL_S
-                and saved.get("依據") == _keep_basis(row))
+                and saved.get("依據") == row.get("依據"))
     except (TypeError, ValueError, KeyError):
         same = False
     return "有效" if same else "變了"
 
 
+def apply_keep(r: dict, saved: dict | None) -> None:
+    """一列「一定要處理」補上按鈕狀態（純函式，改 r 本身）：
+    - 可以按照目前設定做／照目前設定做的後果（可以按的類別）、回第3步補＋不開放原因（不開放的類別）
+    - 已按照目前設定做、照目前設定做後變了、處理好
+    原本「我聽過了」的三類：存檔裡的「聽過」（舊紀錄）照原本的規則算；這次之後按的會多記起訖與內容，
+    那份紀錄變了就不算（兩種規則都要過，取嚴格的）。"""
+    kind = r.get("類別")
+    ok, why = keep_policy(kind)
+    r["可以按照目前設定做"] = ok
+    if ok:
+        r["照目前設定做的後果"] = KEEP_OK[kind]
+    else:
+        r["照目前設定做不開放原因"] = why
+        if kind in BACK3:
+            r["回第3步補"] = True
+    st = keep_state(saved, r)
+    if kind in ACK_KINDS:
+        heard = bool(r.get("已按聽過"))
+        done = ok and heard and st != "變了"
+        changed = heard and st == "變了"
+    else:
+        done = ok and st == "有效"
+        changed = st == "變了"
+    r["已按照目前設定做"] = done
+    if changed:
+        r["照目前設定做後變了"] = True   # 按了之後這一列的範圍或內容變了：要重新決定
+    r["處理好"] = done
+
+
 def keep_final(workdir: str | Path, key: str, keep: bool = True) -> dict:
-    """`POST /api/execute/finalcheck`（body 有「不改」）：「一定要處理」某一列按「不改（維持目前設定）」或取消。
-    只有 KEEP_OK 的類別可以按；其他類別丟 ValueError（原因寫在 KEEP_RISK）。取消（keep=False）任何類別都可以。"""
+    """`POST /api/execute/finalcheck`（body 有「照目前設定做」）：「一定要處理」某一列按「照目前設定做」或取消。
+    列與起訖一律用伺服器現在重算的（不信網頁送來的）。只有 KEEP_OK 的類別可以按，其他丟 ValueError；取消任何類別都可以。
+    原本「我聽過了」的三類：同時記成「聽過」（段落外那一類＝第 3 步答「老師的話，不用處理」，見 ack_final）。"""
     from bookclub import review
 
     workdir = Path(workdir)
     key = str(key or "")
     if not key:
         raise ValueError("缺少要處理的那一列（key）")
-    row = None
+    row = next((r for r in final_check(workdir)["一定要處理"] if r["key"] == key), None)
     if keep:
-        ok, why = keep_policy(key)
-        if not ok:
-            raise ValueError(why)
-        row = next((r for r in final_check(workdir)["一定要處理"] if r["key"] == key), None)
         if row is None:
             raise ValueError("這一列已經不在「一定要處理」裡（可能已經改好了），重新整理頁面再看一次")
+        ok, why = keep_policy(row.get("類別"))
+        if not ok:
+            raise ValueError(why)
+    if row is not None and row.get("類別") in ACK_KINDS:
+        ack_final(workdir, key, heard=keep)
     with review._lock:
         dec = review.load_decisions(workdir)
         fc = dec.setdefault("總檢查", {"聽過": [], "看過": False})
         kept = fc.setdefault(KEEP_FIELD, {})
         if keep:
             kept[key] = {"start": round(float(row["start"]), 3), "end": round(float(row["end"]), 3),
-                         "依據": _keep_basis(row), "時間": _now()}
+                         "依據": row.get("依據"), "時間": _now()}
         else:
             kept.pop(key, None)
+            if isinstance(fc.get(KEEP_FIELD_OLD), dict):
+                fc[KEEP_FIELD_OLD].pop(key, None)
+            if row is None and key in (fc.get("聽過") or []):   # 那一列已經不在清單：舊的「聽過」一起拿掉
+                fc["聽過"].remove(key)
         review._save_decisions(workdir, dec)
     return {"ok": True, "總檢查": fc}
 
@@ -947,19 +991,21 @@ def ack_final(workdir: str | Path, key: str | None = None, heard: bool = True, s
 
 
 def _ack_look_row(workdir: Path, key: str, seen: bool, rows: list[dict] | None) -> dict:
-    """10-05 #178：「請看一眼」某一列按「我看過了」（seen）或取消。rows＝網頁上顯示的那幾列（沒給、格式不對就照現在算的）。
+    """10-05 #178：「請看一眼」某一列按「我看過了」（seen）或取消。清單與起訖用伺服器現在重算的；
+    rows＝網頁上顯示的那幾列，那一列的起訖跟現在的不一樣（畫面是舊的）就不記、請人重新整理。
     記下那一列當時的起訖（之後範圍變了就回到沒看過）；全部列都看過時 `看過`＝True（跟按「全部看過了」一樣）。"""
     from bookclub import review
 
-    try:
-        cur = look_snapshot(rows) if rows is not None else None
-    except (KeyError, TypeError, ValueError):
-        cur = None
-    if cur is None:
-        cur = look_snapshot(final_check(workdir)["請看一眼"])
+    cur = look_snapshot(final_check(workdir)["請看一眼"])
     hit = next((x for x in cur if x["key"] == key), None)
     if hit is None:
         raise ValueError("這一列已經不在「請看一眼」裡，重新整理頁面再看一次")
+    try:
+        shown = next((x for x in look_snapshot(rows) if x["key"] == key), None) if rows is not None else None
+    except (KeyError, TypeError, ValueError):
+        shown = None
+    if seen and shown and (abs(shown["start"] - hit["start"]) > LOOK_RANGE_TOL_S or abs(shown["end"] - hit["end"]) > LOOK_RANGE_TOL_S):
+        raise ValueError("這一列的時間範圍剛剛變了，重新整理頁面、再看一次")
     with review._lock:
         dec = review.load_decisions(workdir)
         fc = dec.setdefault("總檢查", {"聽過": [], "看過": False})
