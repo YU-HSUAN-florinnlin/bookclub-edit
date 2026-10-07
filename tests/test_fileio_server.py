@@ -258,6 +258,136 @@ def test_final_endpoints_without_product_or_project():
         assert call("POST", "/api/final/reveal", {})[0] == 404
 
 
+@contextmanager
+def _held_copies():
+    """複製工作先不跑（固定在「複製中」），測試自己決定什麼時候讓它做完。"""
+    orig = fileio.CopyJob.start
+    held = []
+
+    def hold(self):
+        self.state = "複製中"
+        held.append(self)
+        return self
+    fileio.CopyJob.start = hold
+    try:
+        yield held
+    finally:
+        fileio.CopyJob.start = orig
+
+
+def test_extra_still_copying_when_analysis_starts():
+    # 10-07 審查必改：開始分析時片頭還在複製 → 複製好寫進那個新專案；之後重選、下一支新影片都不會被舊記號帶走
+    with _server() as (httpd, call, data):
+        win = Path(tempfile.mkdtemp())
+        local = Path(tempfile.mkdtemp())
+        intro_win = win / "片頭.mov"
+        intro_win.write_bytes(b"i" * 500)
+        video = local / "第一堂.mp4"
+        video.write_bytes(b"v" * 100)
+        intro2 = local / "新片頭.mp4"
+        intro2.write_bytes(b"n" * 50)
+        intro3 = local / "第二支的片頭.mp4"
+        intro3.write_bytes(b"t" * 60)
+        fileio.needs_import = lambda p, kind=None: str(p).startswith(str(win))
+        picks = {"影片": video, "片頭": intro_win}
+        fileio.pick_file = lambda title: picks["影片"] if "讀書會" in title else picks["片頭"]
+        assert call("POST", "/api/pick", {"用途": "影片"})[0] == 200
+        with _held_copies() as held:
+            code, r = call("POST", "/api/pick", {"用途": "片頭", "給": "新影片"})
+            assert code == 200 and r["要複製"] and len(held) == 1
+            code, r = call("POST", "/api/projects/start", {"用選的": True})
+            assert code == 202
+            proj1 = Path(r["路徑"])
+            st = call("GET", "/api/picks")[1]
+            assert st["選了"] == {} and st["目前的專案"]["片頭"] is None
+            assert st["複製"][-1]["給"] == "目前" and st["複製"][-1]["狀態"] == "複製中"   # 開始分析後還看得到進度
+            held[0]._run()                                                  # 複製做完
+        assert srv.load_extras(proj1)["片頭"]["檔名"] == "片頭.mov"
+
+        # 再來一次，這次在複製做完之前就在「目前的專案」重選片頭（不用複製的檔）
+        httpd.use_project(Path(tempfile.mkdtemp()))   # 先換到別的專案，才能再開始一支新的
+        picks["影片"] = local / "第二堂.mp4"
+        picks["影片"].write_bytes(b"w" * 10)
+        call("POST", "/api/pick", {"用途": "影片"})
+        with _held_copies() as held:
+            call("POST", "/api/pick", {"用途": "片頭", "給": "新影片"})
+            code, r = call("POST", "/api/projects/start", {"用選的": True})
+            proj2 = Path(r["路徑"])
+            old_job = held[0]
+            picks["片頭"] = intro2
+            assert call("POST", "/api/pick", {"用途": "片頭", "給": "目前"})[0] == 200   # proj2 是目前的專案
+            assert old_job._cancel.is_set()                                  # 舊的複製被取消
+            picks["片頭"] = intro3
+            httpd.use_project(Path(tempfile.mkdtemp()))
+            call("POST", "/api/pick", {"用途": "片頭", "給": "新影片"})     # 下一支新影片的片頭
+            old_job._finish_ok()                                             # 舊的就算剛好做完也不能寫
+        assert srv.load_extras(proj2)["片頭"]["檔名"] == "新片頭.mp4"
+        assert call("GET", "/api/picks")[1]["選了"]["片頭"]["檔名"] == "第二支的片頭.mp4"   # 留在新影片，沒被寫進 proj2
+        assert srv.load_extras(proj2)["片頭"]["檔名"] == "新片頭.mp4"
+
+
+def test_copy_done_right_when_analysis_starts():
+    # 審查指出的競態：複製剛好在「開始分析」中間做完（狀態已經是完成、還沒記下來）→ 照樣寫進新專案
+    with _server() as (httpd, call, data):
+        win = Path(tempfile.mkdtemp())
+        video = Path(tempfile.mkdtemp()) / "第三堂.mp4"
+        video.write_bytes(b"v")
+        outro = win / "片尾.mp4"
+        outro.write_bytes(b"o" * 30)
+        fileio.needs_import = lambda p, kind=None: str(p).startswith(str(win))
+        fileio.pick_file = lambda title: video if "讀書會" in title else outro
+        call("POST", "/api/pick", {"用途": "影片"})
+        with _held_copies() as held:
+            call("POST", "/api/pick", {"用途": "片尾", "給": "新影片"})
+            held[0].state = "完成"                                           # 已經做完、還沒記下來
+            code, r = call("POST", "/api/projects/start", {"用選的": True})
+            held[0]._on_done(held[0])                                        # 這時候才記
+        assert srv.load_extras(Path(r["路徑"]))["片尾"]["檔名"] == "片尾.mp4"
+
+
+def test_repick_cancels_only_same_target():
+    # 審查第 5 點：「目前的專案」選片頭不會取消「新影片」那邊還在複製的片頭
+    w = Path(tempfile.mkdtemp()) / "第四堂_剪輯工作區"
+    w.mkdir()
+    with _server(workdir=w) as (httpd, call, data):
+        win = Path(tempfile.mkdtemp())
+        a, b = win / "a.mp4", win / "b.mp4"
+        a.write_bytes(b"a")
+        b.write_bytes(b"bb")
+        fileio.needs_import = lambda p, kind=None: True
+        nxt = [a]
+        fileio.pick_file = lambda title: nxt[0]
+        with _held_copies() as held:
+            call("POST", "/api/pick", {"用途": "片頭", "給": "新影片"})
+            nxt[0] = b
+            call("POST", "/api/pick", {"用途": "片頭", "給": "目前"})
+            assert not held[0]._cancel.is_set() and len(held) == 2
+            call("POST", "/api/pick", {"用途": "片頭", "給": "目前"})        # 同一邊重選才取消
+            assert held[1]._cancel.is_set() and not held[0]._cancel.is_set()
+            assert call("POST", "/api/extras/clear", {"用途": "片頭"})[0] == 200
+            assert held[2]._cancel.is_set()                                  # 拿掉也一起取消還在複製的
+
+
+def test_startup_cleans_partial_copies():
+    # 審查第 4 點：上次複製到一半伺服器被關掉 → 下次啟動清掉自己取名的暫存檔，別的檔不動
+    data = Path(tempfile.mkdtemp())
+    folder = data / "影片"
+    folder.mkdir()
+    (folder / ".第一堂.mp4.abc123.複製中").write_bytes(b"x")
+    (folder / "第一堂.mp4").write_bytes(b"keep")
+    (folder / ".別的隱藏檔").write_bytes(b"keep")
+    old = os.environ.get("BOOKCLUB_DATA_DIR")
+    os.environ["BOOKCLUB_DATA_DIR"] = str(data)
+    try:
+        httpd = srv.BookclubServer(("127.0.0.1", 0), srv.Handler, workdir=None, video=None)
+        httpd.server_close()
+    finally:
+        if old is None:
+            os.environ.pop("BOOKCLUB_DATA_DIR", None)
+        else:
+            os.environ["BOOKCLUB_DATA_DIR"] = old
+    assert sorted(x.name for x in folder.iterdir()) == [".別的隱藏檔", "第一堂.mp4"]
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

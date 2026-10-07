@@ -94,13 +94,14 @@ function pkRenderExtras() {
   const cur = pkState["目前的專案"];
   if (!cur) { box.innerHTML = ""; return; }
   if (cur["錯誤"]) { box.innerHTML = `<p class="badge error">${esc(cur["錯誤"])}</p>`; return; }
-  const jobs = (pkState["複製"] || []).filter((j) => j["給"] === "目前" && ["複製中", "等待", "失敗"].includes(j["狀態"]));
+  // 10-07 審查：每一格只看最後一個工作（含成功的），舊的「複製失敗」不會一直掛著；開始分析後還在複製的片頭片尾也算「目前」
+  const jobs = (pkState["複製"] || []).filter((j) => j["給"] === "目前");
   const row = (p) => {
     const v = cur[p];
     const job = jobs.filter((j) => j["用途"] === p).slice(-1)[0];
     const missing = v && v["檔案還在"] === false ? `<div class="badge error">找不到這個檔案了（搬走或刪掉了？），重新選一次</div>` : "";
     return `<tr><td class="pk-what">${p}<div class="muted">可以不選</div></td>
-      <td>${v ? pkFileHtml(v) : `<span class="muted">沒有</span>`}${missing}${job ? pkProgressHtml(job) : ""}</td>
+      <td>${v ? pkFileHtml(v) : `<span class="muted">沒有</span>`}${missing}${job && ["複製中", "等待", "失敗"].includes(job["狀態"]) ? pkProgressHtml(job) : ""}</td>
       <td class="pk-btns"><button class="secondary pk-pick" data-p="${p}" data-g="目前">${v ? "換一支" : PK_WHAT[p]}</button>
         ${v ? `<button class="ghost pk-clear" data-p="${p}">拿掉</button>` : ""}</td></tr>`;
   };

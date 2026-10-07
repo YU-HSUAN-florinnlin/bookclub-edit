@@ -298,6 +298,47 @@ def test_reveal_simulated():
         assert "Finder" in str(e)
 
 
+def test_review_fixes_1007():
+    # 審查第 2 點：WSL2 同時看 Ubuntu 與 C 槽，取剩比較少的
+    gb = 1_000_000_000
+    d1, d2 = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+    free = {str(d1): 100 * gb, str(d2): 2 * gb}
+    usage = lambda p: Usage(0, 0, free[p])   # noqa: E731
+    msg = fileio.space_problem(3 * gb, d1, gb, "Ubuntu（WSL2）與 C 槽", usage=usage, also=(d2,))
+    assert msg and "只剩 2.0 GB" in msg
+    assert fileio.space_problem(3 * gb, d1, gb, usage=usage) is None
+    assert fileio.wsl_host_disks("mac") == ()
+    # 第 3 點：暫存檔名帶工作編號，兩個工作同一個目的地不會互刪
+    src = d1 / "a.mp4"
+    src.write_bytes(b"x")
+    j1 = fileio.CopyJob(src, d2 / "a.mp4", purpose="影片")
+    j2 = fileio.CopyJob(src, d2 / "a.mp4", purpose="影片")
+    assert j1.tmp != j2.tmp and j1.id in j1.tmp.name and j1.tmp.name.endswith(".複製中")
+    # 第 4 點：清理只清自己取名的
+    (d2 / f".a.mp4.{j1.id}.複製中").write_bytes(b"1")
+    (d2 / "a.mp4.複製中").write_bytes(b"1")   # 不是點開頭：不是這個工具取的，不動
+    assert fileio.cleanup_partials(d2) == 1 and (d2 / "a.mp4.複製中").exists()
+    assert fileio.cleanup_partials(d2 / "沒有這個資料夾") == 0
+    # 第 7 點：叫 Windows 的程式時 stdin 接空的
+    seen = {}
+
+    def run(cmd, **kw):
+        seen.update(kw)
+        return R(0, (fileio.CANCEL_MARK + "\n").encode(), b"")
+    fileio.pick_file("選", method="wsl", run=run, which=_which("powershell.exe"))
+    assert seen.get("stdin") is subprocess.DEVNULL
+    # 第 8 點：wslpath 卡住 → 當作叫不起來（退回網頁瀏覽）
+    def slow_wslpath(cmd, **kw):
+        if cmd[0] == "wslpath":
+            raise subprocess.TimeoutExpired("wslpath", 20)
+        return R(0, (WIN_VIDEO + "\n").encode(), b"")
+    try:
+        fileio.pick_file("選", method="wsl", run=slow_wslpath, which=_which("powershell.exe"))
+        raise AssertionError("要丟 PickUnavailable")
+    except fileio.PickUnavailable:
+        pass
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

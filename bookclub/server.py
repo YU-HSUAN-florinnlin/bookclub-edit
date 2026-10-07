@@ -862,7 +862,16 @@ class BookclubServer(ThreadingHTTPServer):
         self.pick_lock = threading.Lock()   # 10-07 檔案進出
         self.picks: dict[str, dict] = {}     # 選了還沒用的：影片、給新影片的片頭片尾
         self.copy_jobs: dict = {}            # 複製工作（Windows 的檔複製進 Ubuntu、成品複製到 Windows 的下載）
-        self.extra_target: dict[str, Path] = {}   # 開始分析時還在複製的片頭片尾，複製好寫到哪個專案
+        self.pick_token: dict[tuple[str, str], str] = {}   # 每個 (用途, 去處) 最新的那一次選擇（見 accept_pick 上面的說明）
+        self.exporting = False                     # 「複製成品到 Windows」正在準備（找下載資料夾）
+        try:   # 上次複製到一半伺服器被關掉留下的暫存檔（只清這個工具自己取名的 .*.複製中）
+            from bookclub import fileio
+
+            n = fileio.cleanup_partials(fileio.import_dir())
+            if n:
+                print(f"[網頁伺服器] 清掉 {n} 個上次複製到一半留下的暫存檔")
+        except Exception as e:  # noqa: BLE001 — 清不掉不擋啟動
+            print(f"⚠️ [網頁伺服器] 清不掉上次複製到一半的暫存檔：{e}")
 
     @property
     def workdir(self) -> Path:
@@ -891,13 +900,22 @@ class BookclubServer(ThreadingHTTPServer):
 
     # ---------- 10-07 檔案進出：系統選檔視窗、Windows 的檔案複製進來、成品拿出去 ----------
 
+    def _job_view(self, j) -> dict:
+        """複製工作給網頁看的樣子；「給」照這個工作現在要寫去哪裡算（開始分析後片頭片尾會從「新影片」改成那個專案）。"""
+        d = j.to_dict()
+        proj = getattr(j, "project", None)
+        if j.purpose in EXTRA_PURPOSES:
+            cur = self._workdir
+            d["給"] = "新影片" if proj is None else ("目前" if cur is not None and Path(proj) == Path(cur) else "別的專案")
+        return d
+
     def picks_state(self) -> dict:
         """`GET /api/picks`：總覽要的選檔狀態（選了哪支、片頭片尾、複製進度）。"""
         from bookclub import fileio
 
         with self.pick_lock:
             picks = {k: {kk: vv for kk, vv in v.items()} for k, v in self.picks.items()}
-            jobs = [j.to_dict() for j in self.copy_jobs.values() if j.purpose in PICK_PURPOSES]
+            jobs = [self._job_view(j) for j in self.copy_jobs.values() if j.purpose in PICK_PURPOSES]
         kind = fileio.platform_kind()
         cur = None
         if self.has_workdir:
@@ -924,46 +942,69 @@ class BookclubServer(ThreadingHTTPServer):
                     "說明": "沒有選檔案（按了取消）。要再選一次就再按一次按鈕，也可以在下面的資料夾裡找。"}
         return self.accept_pick(purpose, fileio.check_video(p), target)
 
+    # 「最新的那一次選擇」記號（10-07 審查必改）：鍵是 (用途, 專案路徑或「新影片」)，值是那一次的編號
+    # （要複製的用複製工作的 id）。複製做完時只有記號還是自己的才寫，被後來重選、拿掉、取消蓋掉的就不寫。
+    # 片頭片尾在開始分析時還在複製：把那個複製工作的 `project` 改成新專案、記號搬過去（都在 pick_lock 裡做）。
+
+    @staticmethod
+    def _pick_key(purpose: str, project: Path | None) -> tuple[str, str]:
+        return (purpose, str(project) if project is not None else "新影片")
+
+    def _supersede(self, key: tuple[str, str]) -> None:
+        """（要先拿 pick_lock）同一個用途、同一個去處重選：上一個還在複製的取消掉。別的去處的不動。"""
+        for j in self.copy_jobs.values():
+            if j.running and self._pick_key(j.purpose, getattr(j, "project", None)) == key:
+                j.cancel()
+        self.pick_token.pop(key, None)
+
     def accept_pick(self, purpose: str, p: Path, target: str = "新影片") -> dict:
         """選到一支影片之後：WSL2 的 Windows 檔先背景複製進 Ubuntu；其他照用。
         影片 → 記在記憶體，按「開始分析」才用；片頭片尾 → 給目前的專案就寫進工作區設定，給新影片就等開始分析時一起寫。"""
+        import uuid
+
         from bookclub import fileio
 
         if purpose not in PICK_PURPOSES:
             raise ValueError(f"不認得要選什麼：{purpose}")
         to_current = purpose in EXTRA_PURPOSES and target == "目前"
-        workdir = self.workdir if to_current else None
+        project = self.workdir if to_current else None
+        key = self._pick_key(purpose, project)
         info = {"用途": purpose, "給": "目前" if to_current else "新影片", "檔名": p.name}
         if fileio.needs_import(p):
             dest, reused = fileio.plan_import(p)   # 空間不夠丟 ValueError（訊息說要多少）
-            with self.pick_lock:
-                for j in self.copy_jobs.values():   # 同一個用途重選：上一個還在複製的取消掉
-                    if j.purpose == purpose and j.running:
-                        j.cancel()
-                if purpose in self.picks and not to_current:
-                    self.picks.pop(purpose)
             job = fileio.CopyJob(p, dest, purpose=purpose, reused=reused,
-                                 on_done=lambda j: self._picked(purpose, j.dest, p, workdir, to_current))
+                                 on_done=lambda j: self._picked(j.purpose, j.dest, j.src, j.id, job=j))
+            job.project = project
             job.target = info["給"]
             with self.pick_lock:
+                self._supersede(key)
+                self.pick_token[key] = job.id
                 self.copy_jobs[job.id] = job
-                if not to_current:
+                if project is None:
                     self.picks[purpose] = {**_file_info(p), "路徑": None, "原本的位置": str(p), "複製": job.id}
             job.start()
-            return {**info, "要複製": True, "複製": job.to_dict(), "原本的位置": str(p)}
-        self._picked(purpose, p, None, workdir, to_current)
+            return {**info, "要複製": True, "複製": self._job_view(job), "原本的位置": str(p)}
+        token = uuid.uuid4().hex[:12]
+        with self.pick_lock:
+            self._supersede(key)
+            self.pick_token[key] = token
+        self._picked(purpose, p, None, token, project=project)
         return {**info, "要複製": False, "路徑": str(p)}
 
-    def _picked(self, purpose: str, path: Path, origin: Path | None, workdir: Path | None, to_current: bool) -> None:
-        if to_current and workdir is not None:
-            save_extra(workdir, purpose, path, origin)
-            return
+    def _picked(self, purpose: str, path: Path, origin: Path | None, token: str, *, job=None,
+                project: Path | None = None) -> None:
+        """選好（或複製好）了：記號還是自己的才寫。去處看複製工作現在的 `project`（開始分析時可能被改成新專案）。"""
         with self.pick_lock:
-            later = self.extra_target.pop(purpose, None) if purpose in EXTRA_PURPOSES else None
-            if later is None:
+            if job is not None:
+                project = getattr(job, "project", None)
+            key = self._pick_key(purpose, project)
+            if self.pick_token.get(key) != token:
+                return   # 後來又重選、拿掉或取消了
+            if project is None:
                 self.picks[purpose] = _file_info(path, origin)
-        if later is not None:   # 開始分析時片頭片尾還在複製：複製好直接寫進那個新專案
-            save_extra(later, purpose, path, origin)
+                return
+            self.pick_token.pop(key, None)
+            save_extra(project, purpose, path, origin)
 
     def take_picked_video(self) -> Path:
         from bookclub import fileio
@@ -980,37 +1021,54 @@ class BookclubServer(ThreadingHTTPServer):
         return fileio.check_video(Path(pk["路徑"]))
 
     def apply_new_extras(self, d: Path) -> None:
-        """開始分析時：給新影片選的片頭片尾寫進新專案；還在複製的，複製好再寫。"""
+        """開始分析時：給新影片選的片頭片尾寫進新專案；還在複製的，把那個複製工作的去處改成新專案，複製好再寫。
+        整段在 pick_lock 裡（複製剛好在中間做完也不會寫錯地方：做完的那一刻要等這段結束才拿得到鎖）。"""
         with self.pick_lock:
-            items = {k: self.picks.pop(k) for k in EXTRA_PURPOSES if k in self.picks}
             self.picks.pop("影片", None)
-        for k, v in items.items():
-            if v.get("路徑"):
-                save_extra(d, k, Path(v["路徑"]), Path(v["原本的位置"]) if v.get("原本的位置") else None)
-            else:
+            self.pick_token.pop(self._pick_key("影片", None), None)
+            for k in EXTRA_PURPOSES:
+                v = self.picks.pop(k, None)
+                old = self._pick_key(k, None)
+                token = self.pick_token.pop(old, None)
+                if not v:
+                    continue
+                new = self._pick_key(k, d)
+                self._supersede(new)
+                if v.get("路徑"):
+                    save_extra(d, k, Path(v["路徑"]), Path(v["原本的位置"]) if v.get("原本的位置") else None)
+                    continue
                 job = self.copy_jobs.get(v.get("複製"))
-                if job and job.running:
-                    with self.pick_lock:
-                        self.extra_target[k] = d
+                if job is not None and job.state not in ("取消", "失敗") and token == job.id:
+                    job.project = Path(d)
+                    self.pick_token[new] = job.id
 
     def forget_pick(self, purpose: str) -> None:
+        """給新影片選的拿掉（目前專案的用 clear_extra）。"""
         with self.pick_lock:
             self.picks.pop(purpose, None)
-            for j in self.copy_jobs.values():
-                if j.purpose == purpose and j.running:
-                    j.cancel()
+            self._supersede(self._pick_key(purpose, None))
+
+    def clear_extra(self, purpose: str) -> dict:
+        """目前專案的片頭或片尾拿掉；還在複製的一起取消。"""
+        w = self.workdir
+        if purpose not in EXTRA_PURPOSES:
+            raise ValueError(f"只能設定片頭或片尾：{purpose}")
+        with self.pick_lock:
+            self._supersede(self._pick_key(purpose, w))
+        return save_extra(w, purpose, None)
 
     def cancel_copy(self, job_id: str) -> dict:
         with self.pick_lock:
             job = self.copy_jobs.get(job_id)
-        if job is None:
-            raise FileNotFoundError("找不到這個複製工作（可能伺服器重開過）")
-        job.cancel()
-        with self.pick_lock:
+            if job is None:
+                raise FileNotFoundError("找不到這個複製工作（可能伺服器重開過）")
+            job.cancel()
             for k, v in list(self.picks.items()):
                 if v.get("複製") == job_id and not v.get("路徑"):
                     self.picks.pop(k)
-            self.extra_target.pop(job.purpose, None)
+            for key, tok in list(self.pick_token.items()):
+                if tok == job_id:
+                    self.pick_token.pop(key)
         return {"ok": True}
 
     def final_outputs(self) -> dict:
@@ -1044,18 +1102,23 @@ class BookclubServer(ThreadingHTTPServer):
         target, what = final_target(self.workdir)
         if target is None:
             raise FileNotFoundError("還沒有成品影片，先在第 4 步組裝")
-        with self.pick_lock:
-            if any(j.purpose == "成品" and j.running for j in self.copy_jobs.values()):
+        with self.pick_lock:   # 「有沒有在跑」與「佔位子」同一段鎖：連按兩下也只會有一個
+            if self.exporting or any(j.purpose == "成品" and j.running for j in self.copy_jobs.values()):
                 raise ValueError("上一次的複製還沒做完")
+            self.exporting = True
         try:
-            downloads = fileio.windows_downloads()
-        except RuntimeError as e:
-            raise ValueError(str(e)) from None
-        dest = fileio.plan_export(target, downloads)
-        job = fileio.CopyJob(target, dest, purpose="成品")
-        with self.pick_lock:
-            self.copy_jobs[job.id] = job
-        job.start()
+            try:
+                downloads = fileio.windows_downloads()
+            except RuntimeError as e:
+                raise ValueError(str(e)) from None
+            dest = fileio.plan_export(target, downloads)
+            job = fileio.CopyJob(target, dest, purpose="成品")
+            with self.pick_lock:
+                self.copy_jobs[job.id] = job
+            job.start()
+        finally:
+            with self.pick_lock:
+                self.exporting = False
         return {"ok": True, "成品是": what, "複製": job.to_dict()}
 
     def exec_running(self) -> bool:
@@ -1492,7 +1555,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True})
             return
         if path == "/api/extras/clear":
-            self._send_json(200, save_extra(server.workdir, str(body["用途"]), None))
+            self._send_json(200, server.clear_extra(str(body["用途"])))
             return
         if path == "/api/copy/cancel":
             self._send_json(200, server.cancel_copy(str(body["id"])))

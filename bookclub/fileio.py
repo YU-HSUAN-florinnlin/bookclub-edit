@@ -106,6 +106,8 @@ def _applescript_str(s: str) -> str:
 
 
 def _ps_str(s: str) -> str:
+    """PowerShell 單引號字串：只處理一般的單引號（' → ''）。目前傳進來的都是程式裡寫死的標題與副檔名清單，
+    不會有人輸入的文字；PowerShell 也把「‘ ’」這類彎引號當成單引號，之後要放人輸入的文字時要一起處理。"""
     return "'" + s.replace("'", "''") + "'"
 
 
@@ -200,7 +202,10 @@ def wsl_to_linux(win_path: str, run=None) -> str:
     run = run or subprocess.run
     if win_path.startswith("/"):
         return win_path
-    r = run(["wslpath", "-u", win_path], capture_output=True, timeout=QUICK_TIMEOUT_S)
+    try:
+        r = run(["wslpath", "-u", win_path], capture_output=True, timeout=QUICK_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as e:   # 卡住或叫不起來：當作叫不起選檔視窗，退回網頁瀏覽
+        raise PickUnavailable(f"Windows 路徑換不成 Ubuntu 的路徑（wslpath 沒有回應：{e}）") from None
     out = _decode(r.stdout).strip()
     if r.returncode != 0 or not out:
         raise PickUnavailable(f"Windows 路徑換不成 Ubuntu 的路徑：{win_path}")
@@ -210,7 +215,10 @@ def wsl_to_linux(win_path: str, run=None) -> str:
 def linux_to_windows(path: Path | str, run=None) -> str:
     """Ubuntu 的路徑 → Windows 看得懂的寫法（`wslpath -w`），給檔案總管用。"""
     run = run or subprocess.run
-    r = run(["wslpath", "-w", str(path)], capture_output=True, timeout=QUICK_TIMEOUT_S)
+    try:
+        r = run(["wslpath", "-w", str(path)], capture_output=True, timeout=QUICK_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise RuntimeError(f"路徑換不成 Windows 的寫法（wslpath 沒有回應：{e}）") from None
     out = _decode(r.stdout).strip()
     if r.returncode != 0 or not out:
         raise RuntimeError(f"路徑換不成 Windows 的寫法：{path}")
@@ -235,7 +243,8 @@ def pick_file(title: str, *, method: str | None = None, run=None, exts: tuple[st
         cmd = pick_command(method, title, exts, which=which)
         try:
             kw = {"cwd": "/mnt/c"} if method == "wsl" and Path("/mnt/c").is_dir() else {}
-            r = run(cmd, capture_output=True, timeout=PICK_TIMEOUT_S, **kw)
+            # stdin 接到空的：Windows 的程式不會去讀（或改壞）終端機的輸入狀態
+            r = run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=PICK_TIMEOUT_S, **kw)
         except subprocess.TimeoutExpired:
             raise PickUnavailable("選檔視窗開太久沒有選（超過 15 分鐘），已經不等了") from None
         except OSError as e:   # 找不到程式、WSL interop 關掉（Exec format error）
@@ -303,17 +312,43 @@ def _gb(n: int) -> str:
     return f"{n / 1e9:.1f} GB"
 
 
-def space_problem(size: int, dest_dir: Path, margin: int, where: str = "Ubuntu", usage=None) -> str | None:
-    """空間夠不夠：不夠回一句說明（要多少、剩多少），夠回 None。"""
-    probe = Path(dest_dir)
-    while not probe.exists() and probe != probe.parent:
-        probe = probe.parent
-    free = (usage or shutil.disk_usage)(str(probe)).free
+def space_problem(size: int, dest_dir: Path, margin: int, where: str = "Ubuntu", usage=None,
+                  also: tuple[Path | str, ...] = ()) -> str | None:
+    """空間夠不夠：不夠回一句說明（要多少、剩多少），夠回 None。
+    `also`：另外也要看的地方，取剩最少的那一個（WSL2 的 Ubuntu 是一個會長大的虛擬硬碟，Ubuntu 裡看到的剩餘空間
+    是虛擬硬碟的上限，不是 C 槽實際剩下的；虛擬硬碟預設放在 C 槽，所以也看 /mnt/c）。"""
+    usage = usage or shutil.disk_usage
+    probes = []
+    for d in (dest_dir, *also):
+        probe = Path(d)
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        probes.append(probe)
+    free = min(usage(str(probe)).free for probe in probes)
     need = size + margin
     if free >= need:
         return None
     return (f"{where}的空間不夠：這支檔案 {_gb(size)}，複製之後還要留 {_gb(margin)} 給之後的工作，"
             f"一共要 {_gb(need)}，目前只剩 {_gb(free)}（還差 {_gb(need - free)}）。清出空間後再選一次")
+
+
+PARTIAL_SUFFIX = ".複製中"
+
+
+def cleanup_partials(folder: Path) -> int:
+    """伺服器啟動時清掉上次複製到一半（伺服器被關掉）留下的暫存檔：只清這個工具自己取的名字
+    （以點開頭、結尾是「.複製中」），其他檔不動。回傳清掉幾個。"""
+    n = 0
+    try:
+        items = list(Path(folder).glob(f".*{PARTIAL_SUFFIX}"))
+    except OSError:
+        return 0
+    for f in items:
+        if f.is_file():
+            with _ignore_os():
+                f.unlink()
+                n += 1
+    return n
 
 
 class CopyCancelled(Exception):
@@ -339,10 +374,11 @@ class CopyJob:
         self._chunk = chunk
         self.thread: threading.Thread | None = None
         self.target: str | None = None   # 片頭片尾：給「目前」的專案還是「新影片」（網頁分開顯示用）
+        self.project: Path | None = None   # 複製好要寫進哪個專案（片頭片尾；None＝新影片／影片本身，由伺服器管）
 
     @property
     def tmp(self) -> Path:
-        return self.dest.with_name(f".{self.dest.name}.複製中")
+        return self.dest.with_name(f".{self.dest.name}.{self.id}{PARTIAL_SUFFIX}")   # 帶工作編號：兩個工作不會互刪
 
     def start(self) -> "CopyJob":
         if self.state == "沿用":
@@ -415,14 +451,25 @@ class _ignore_os:
         return et is not None and issubclass(et, OSError)
 
 
-def plan_import(src: Path, dest_dir: Path | None = None, usage=None) -> tuple[Path, bool]:
-    """複製進 Ubuntu 前：決定目的地（同名同大小沿用、不同大小改名），空間不夠丟 ValueError（訊息說要多少）。"""
+def wsl_host_disks(kind: str | None = None) -> tuple[str, ...]:
+    """WSL2 的虛擬硬碟所在的 Windows 磁碟（預設在 C 槽，`%LOCALAPPDATA%\Packages\…\ext4.vhdx`）。
+    使用者把 Ubuntu 搬到別的磁碟（`wsl --export／--import`、`wsl --manage --move`）的話這裡會看錯，實機要確認。"""
+    if (kind or platform_kind()) == "wsl" and Path("/mnt/c").is_dir():
+        return ("/mnt/c",)
+    return ()
+
+
+def plan_import(src: Path, dest_dir: Path | None = None, usage=None, kind: str | None = None) -> tuple[Path, bool]:
+    """複製進 Ubuntu 前：決定目的地（同名同大小沿用、不同大小改名），空間不夠丟 ValueError（訊息說要多少）。
+    WSL2 同時看 Ubuntu 這邊與 C 槽的剩餘空間，取小的。"""
     src = Path(src)
     dest_dir = Path(dest_dir) if dest_dir else import_dir()
     size = src.stat().st_size
     dest, reused = choose_dest(src.name, size, dest_dir, reuse_same_size=True)
     if not reused:
-        why = space_problem(size, dest_dir, IMPORT_MARGIN_BYTES, "Ubuntu（WSL2）", usage=usage)
+        also = wsl_host_disks(kind)
+        why = space_problem(size, dest_dir, IMPORT_MARGIN_BYTES, "Ubuntu（WSL2）與 C 槽" if also else "這台電腦",
+                            usage=usage, also=also)
         if why:
             raise ValueError(why)
     return dest, reused
@@ -461,7 +508,7 @@ def windows_downloads(run=None, which=None) -> Path:
     if ps:
         try:
             r = run([ps, "-NoProfile", "-NonInteractive", "-EncodedCommand", encode_ps(DOWNLOADS_PS)],
-                    capture_output=True, timeout=QUICK_TIMEOUT_S, **kw)
+                    capture_output=True, stdin=subprocess.DEVNULL, timeout=QUICK_TIMEOUT_S, **kw)
             out = _decode(r.stdout).replace("\ufeff", "").strip().splitlines()
             if r.returncode == 0 and out and ":" in out[-1]:
                 win = out[-1].strip()
@@ -472,14 +519,18 @@ def windows_downloads(run=None, which=None) -> Path:
         if not cmd:
             raise RuntimeError("找不到 Windows 的 cmd.exe（WSL 呼叫 Windows 程式的功能可能被關掉了）")
         try:
-            r = run([cmd, "/c", "echo %USERPROFILE%"], capture_output=True, timeout=QUICK_TIMEOUT_S, **kw)
+            r = run([cmd, "/c", "echo %USERPROFILE%"], capture_output=True, stdin=subprocess.DEVNULL,
+                    timeout=QUICK_TIMEOUT_S, **kw)
         except (OSError, subprocess.TimeoutExpired) as e:
             raise RuntimeError(f"問不到 Windows 的使用者資料夾：{e}") from None
         prof = _decode(r.stdout).strip().splitlines()
         if r.returncode != 0 or not prof or "%USERPROFILE%" in prof[-1]:
             raise RuntimeError("問不到 Windows 的使用者資料夾")
         win = prof[-1].strip().rstrip("\\") + "\\Downloads"
-    p = Path(wsl_to_linux(win, run=run))
+    try:
+        p = Path(wsl_to_linux(win, run=run))
+    except PickUnavailable as e:
+        raise RuntimeError(str(e)) from None
     if not p.is_dir():
         raise RuntimeError(f"找不到 Windows 的下載資料夾：{win}")
     return p
