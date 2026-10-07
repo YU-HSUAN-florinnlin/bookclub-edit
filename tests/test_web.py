@@ -42,7 +42,7 @@ def test_steps_zero_to_five():
 
 def test_local_storage_wrapped_in_try():
     # 私密視窗、封鎖網站資料時 localStorage 會丟例外；讀不到要當作預設值，不能讓整頁掛掉
-    for name in ("app.js", "review.js", "finalcheck.js"):
+    for name in ("app.js", "review.js", "finalcheck.js", "fileio.js"):
         path = WEB / name
         if not path.exists():
             continue
@@ -130,6 +130,28 @@ def test_no_promises_of_unbuilt_redo():
     assert "能省掉的是第 2、3 步的人工" not in app and 'id="btnAutoCode"' in app
     skill = (REPO_ROOT / "skills" / "bookclub-edit" / "SKILL.md").read_text(encoding="utf-8")
     assert "0.1.1" not in skill and "總覽選影片" in skill
+
+
+def test_pick_with_system_dialog():
+    # 10-07 宇軒：選影片改用系統內建的選檔視窗，頁面只留路徑；網頁資料夾瀏覽只在叫不起來或按取消時出現
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    fio = (WEB / "fileio.js").read_text(encoding="utf-8")
+    assert html.index('src="app.js"') < html.index('src="fileio.js"') < html.index('src="finalcheck.js"')
+    ov = app[app.index("async function renderOverview"):app.index("async function renderPicker")]
+    assert "pickCardHtml()" in ov and "bindPickCard(" in ov and "renderPicker(" not in ov
+    assert '"用選的": true' in app and "pickBrowsed(" in app
+    assert '"/api/pick"' in fio and "退回網頁" in fio and "pkShowFallback" in fio and "/api/copy/cancel" in fio
+    # 片頭、片尾：可以不選；這一版還不會接上（畫面照實說）
+    assert "可以不選" in fio and "還不會自動接上" in fio
+    # 第 5 步兩顆按鈕：finalcheck.js 只放容器＋呼叫（好合併），按鈕在 fileio.js
+    fc = (WEB / "finalcheck.js").read_text(encoding="utf-8")
+    assert 'id="fc-fileout"' in fc and "fileOutInit(" in fc
+    assert "/api/final/reveal" in fio and "/api/final/to_windows" in fio and "複製成品到 Windows 的下載資料夾" in fio
+    # 這兩個端點不送路徑
+    for ep in ("/api/final/reveal", "/api/final/to_windows"):
+        line = next(x for x in fio.splitlines() if ep in x)
+        assert "{}" in line, line
 
 
 def test_keep_all_voices_needs_confirm():

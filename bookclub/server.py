@@ -116,7 +116,7 @@ def safe_join(base: Path, relative: str) -> Path:
 # 專案（09-26：一支影片一個工作區；總覽選影片、切換專案）
 # ---------------------------------------------------------------------------
 
-VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi")
+from bookclub.fileio import VIDEO_EXTS  # noqa: E402  10-07：跟系統選檔視窗同一份副檔名清單
 
 
 def groq_key_howto(system: str | None = None, *, cli: bool = False) -> str:
@@ -327,6 +327,74 @@ def list_projects(current: Path | None = None) -> dict:
         seen.add(str(d))
         rows.append(_project_row(d, current))
     return {"目前": str(current) if current else None, "工作區根目錄": str(root), "專案": rows}
+
+
+# ---------------------------------------------------------------------------
+# 片頭、片尾（10-07 #146 第一步：先能選、存進工作區設定；組裝時接上留給下一批）
+# ---------------------------------------------------------------------------
+
+EXTRA_PURPOSES = ("片頭", "片尾")
+PICK_PURPOSES = ("影片", *EXTRA_PURPOSES)
+PICK_TITLES = {"影片": "選讀書會的影片", "片頭": "選片頭影片（可以不選）", "片尾": "選片尾影片（可以不選）"}
+_extras_lock = threading.Lock()
+
+
+def workspace_settings_path(workdir: Path) -> Path:
+    """工作區設定：`<工作區>/工作區設定.json`（10-07 起只放片頭、片尾）。"""
+    return Path(workdir) / "工作區設定.json"
+
+
+def _file_info(p: Path, origin: Path | None = None) -> dict:
+    p = Path(p)
+    try:
+        size = round(p.stat().st_size / 1e6, 1)
+    except OSError:
+        size = None
+    return {"路徑": str(p), "檔名": p.name, "大小MB": size, "原本的位置": str(origin) if origin else None}
+
+
+def save_extra(workdir: Path, purpose: str, path: Path | None, origin: Path | None = None) -> dict:
+    """把片頭或片尾記進工作區設定（path=None＝拿掉）。先寫暫存檔再換上（`write_json`）。"""
+    if purpose not in EXTRA_PURPOSES:
+        raise ValueError(f"只能設定片頭或片尾：{purpose}")
+    with _extras_lock:
+        p = workspace_settings_path(workdir)
+        data = read_json(p, default=None) or {}
+        if path is None:
+            data.pop(purpose, None)
+        else:
+            data[purpose] = {**_file_info(path, origin), "選的時間": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        write_json(p, data)
+    return load_extras(workdir)
+
+
+def load_extras(workdir: Path) -> dict:
+    """工作區設定裡的片頭、片尾（加「檔案還在」）。"""
+    data = read_json(workspace_settings_path(workdir), default=None) or {}
+    out = {}
+    for k in EXTRA_PURPOSES:
+        v = data.get(k)
+        out[k] = {**v, "檔案還在": Path(v["路徑"]).is_file()} if isinstance(v, dict) and v.get("路徑") else None
+    return out
+
+
+def final_target(workdir: Path) -> tuple[Path | None, str | None]:
+    """第 5 步要拿出來的成品：按過「輸出成品」的最終成品優先，沒有就用正在檢查的那一支。
+    路徑只從工作區自己的紀錄算，不收網頁傳來的路徑。"""
+    from bookclub import finalcheck
+
+    workdir = Path(workdir)
+    check = finalcheck.load_check(workdir)
+    out = check.get("輸出成品") or {}
+    if out.get("檔案"):
+        p = safe_join(workdir, out["檔案"])
+        if p.is_file():
+            return p, "最終成品"
+    prods = finalcheck.products(workdir)
+    cur = check.get("成品影片") if check.get("成品影片") in prods else (prods[0] if prods else None)
+    if cur:
+        return safe_join(workdir, cur), "還在檢查的成品"
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -791,6 +859,19 @@ class BookclubServer(ThreadingHTTPServer):
         self.run_lock = threading.Lock()
         self.run_state: dict = self._fresh_run_state()
         self.exec_state: dict = self._fresh_run_state()   # 第 4 步「開始執行」（09-29），跟影片分析同一時間只跑一個
+        self.pick_lock = threading.Lock()   # 10-07 檔案進出
+        self.picks: dict[str, dict] = {}     # 選了還沒用的：影片、給新影片的片頭片尾
+        self.copy_jobs: dict = {}            # 複製工作（Windows 的檔複製進 Ubuntu、成品複製到 Windows 的下載）
+        self.pick_token: dict[tuple[str, str], str] = {}   # 每個 (用途, 去處) 最新的那一次選擇（見 accept_pick 上面的說明）
+        self.exporting = False                     # 「複製成品到 Windows」正在準備（找下載資料夾）
+        try:   # 上次複製到一半伺服器被關掉留下的暫存檔（只清這個工具自己取名的 .*.複製中）
+            from bookclub import fileio
+
+            n = fileio.cleanup_partials(fileio.import_dir())
+            if n:
+                print(f"[網頁伺服器] 清掉 {n} 個上次複製到一半留下的暫存檔")
+        except Exception as e:  # noqa: BLE001 — 清不掉不擋啟動
+            print(f"⚠️ [網頁伺服器] 清不掉上次複製到一半的暫存檔：{e}")
 
     @property
     def workdir(self) -> Path:
@@ -816,6 +897,229 @@ class BookclubServer(ThreadingHTTPServer):
         except OSError as e:   # 記不下來只是下次重開要重選，不擋切換
             print(f"⚠️ [網頁伺服器] 記不下目前的專案：{e}")
         _mark_interrupted(self._workdir)
+
+    # ---------- 10-07 檔案進出：系統選檔視窗、Windows 的檔案複製進來、成品拿出去 ----------
+
+    def _job_view(self, j) -> dict:
+        """複製工作給網頁看的樣子；「給」照這個工作現在要寫去哪裡算（開始分析後片頭片尾會從「新影片」改成那個專案）。"""
+        d = j.to_dict()
+        proj = getattr(j, "project", None)
+        if j.purpose in EXTRA_PURPOSES:
+            cur = self._workdir
+            d["給"] = "新影片" if proj is None else ("目前" if cur is not None and Path(proj) == Path(cur) else "別的專案")
+        return d
+
+    def picks_state(self) -> dict:
+        """`GET /api/picks`：總覽要的選檔狀態（選了哪支、片頭片尾、複製進度）。"""
+        from bookclub import fileio
+
+        with self.pick_lock:
+            picks = {k: {kk: vv for kk, vv in v.items()} for k, v in self.picks.items()}
+            jobs = [self._job_view(j) for j in self.copy_jobs.values() if j.purpose in PICK_PURPOSES]
+        kind = fileio.platform_kind()
+        cur = None
+        if self.has_workdir:
+            try:
+                cur = load_extras(self.workdir)
+            except (OSError, ValueError) as e:   # 設定檔壞掉：畫面照樣打得開，說一聲
+                cur = {"錯誤": f"讀不了工作區設定：{e}"}
+        return {"系統": kind, "選檔方式": fileio.pick_method(kind), "選了": picks, "目前的專案": cur, "複製": jobs}
+
+    def pick(self, purpose: str, target: str = "新影片") -> dict:
+        """`POST /api/pick`：叫系統的選檔視窗。叫不起來或按取消 → {退回網頁: True, 說明}，網頁改用資料夾瀏覽。"""
+        from bookclub import fileio
+
+        if purpose not in PICK_PURPOSES:
+            raise ValueError(f"不認得要選什麼：{purpose}")
+        if purpose in EXTRA_PURPOSES and target == "目前" and not self.has_workdir:
+            raise NoProject("還沒有目前的專案：片頭片尾先在「選影片」那裡選，開始分析時會一起記進新專案")
+        try:
+            p = fileio.pick_file(PICK_TITLES[purpose])
+        except fileio.PickUnavailable as e:
+            return {"退回網頁": True, "說明": f"{e}。改用下面的資料夾瀏覽選檔案。"}
+        if p is None:
+            return {"取消": True, "退回網頁": True,
+                    "說明": "沒有選檔案（按了取消）。要再選一次就再按一次按鈕，也可以在下面的資料夾裡找。"}
+        return self.accept_pick(purpose, fileio.check_video(p), target)
+
+    # 「最新的那一次選擇」記號（10-07 審查必改）：鍵是 (用途, 專案路徑或「新影片」)，值是那一次的編號
+    # （要複製的用複製工作的 id）。複製做完時只有記號還是自己的才寫，被後來重選、拿掉、取消蓋掉的就不寫。
+    # 片頭片尾在開始分析時還在複製：把那個複製工作的 `project` 改成新專案、記號搬過去（都在 pick_lock 裡做）。
+
+    @staticmethod
+    def _pick_key(purpose: str, project: Path | None) -> tuple[str, str]:
+        return (purpose, str(project) if project is not None else "新影片")
+
+    def _supersede(self, key: tuple[str, str]) -> None:
+        """（要先拿 pick_lock）同一個用途、同一個去處重選：上一個還在複製的取消掉。別的去處的不動。"""
+        for j in self.copy_jobs.values():
+            if j.running and self._pick_key(j.purpose, getattr(j, "project", None)) == key:
+                j.cancel()
+        self.pick_token.pop(key, None)
+
+    def accept_pick(self, purpose: str, p: Path, target: str = "新影片") -> dict:
+        """選到一支影片之後：WSL2 的 Windows 檔先背景複製進 Ubuntu；其他照用。
+        影片 → 記在記憶體，按「開始分析」才用；片頭片尾 → 給目前的專案就寫進工作區設定，給新影片就等開始分析時一起寫。"""
+        import uuid
+
+        from bookclub import fileio
+
+        if purpose not in PICK_PURPOSES:
+            raise ValueError(f"不認得要選什麼：{purpose}")
+        to_current = purpose in EXTRA_PURPOSES and target == "目前"
+        project = self.workdir if to_current else None
+        key = self._pick_key(purpose, project)
+        info = {"用途": purpose, "給": "目前" if to_current else "新影片", "檔名": p.name}
+        if fileio.needs_import(p):
+            dest, reused = fileio.plan_import(p)   # 空間不夠丟 ValueError（訊息說要多少）
+            job = fileio.CopyJob(p, dest, purpose=purpose, reused=reused,
+                                 on_done=lambda j: self._picked(j.purpose, j.dest, j.src, j.id, job=j))
+            job.project = project
+            job.target = info["給"]
+            with self.pick_lock:
+                self._supersede(key)
+                self.pick_token[key] = job.id
+                self.copy_jobs[job.id] = job
+                if project is None:
+                    self.picks[purpose] = {**_file_info(p), "路徑": None, "原本的位置": str(p), "複製": job.id}
+            job.start()
+            return {**info, "要複製": True, "複製": self._job_view(job), "原本的位置": str(p)}
+        token = uuid.uuid4().hex[:12]
+        with self.pick_lock:
+            self._supersede(key)
+            self.pick_token[key] = token
+        self._picked(purpose, p, None, token, project=project)
+        return {**info, "要複製": False, "路徑": str(p)}
+
+    def _picked(self, purpose: str, path: Path, origin: Path | None, token: str, *, job=None,
+                project: Path | None = None) -> None:
+        """選好（或複製好）了：記號還是自己的才寫。去處看複製工作現在的 `project`（開始分析時可能被改成新專案）。"""
+        with self.pick_lock:
+            if job is not None:
+                project = getattr(job, "project", None)
+            key = self._pick_key(purpose, project)
+            if self.pick_token.get(key) != token:
+                return   # 後來又重選、拿掉或取消了
+            if project is None:
+                self.picks[purpose] = _file_info(path, origin)
+                return
+            self.pick_token.pop(key, None)
+            save_extra(project, purpose, path, origin)
+
+    def take_picked_video(self) -> Path:
+        from bookclub import fileio
+
+        with self.pick_lock:
+            pk = dict(self.picks.get("影片") or {})
+            job = self.copy_jobs.get(pk.get("複製")) if pk.get("複製") else None
+        if not pk:
+            raise ValueError("還沒選影片：先按「選影片」")
+        if not pk.get("路徑"):
+            if job and job.running:
+                raise ValueError("影片還在複製進 Ubuntu，等複製完再按「開始分析」")
+            raise ValueError("影片沒有複製完成（取消或失敗了），重新選一次")
+        return fileio.check_video(Path(pk["路徑"]))
+
+    def apply_new_extras(self, d: Path) -> None:
+        """開始分析時：給新影片選的片頭片尾寫進新專案；還在複製的，把那個複製工作的去處改成新專案，複製好再寫。
+        整段在 pick_lock 裡（複製剛好在中間做完也不會寫錯地方：做完的那一刻要等這段結束才拿得到鎖）。"""
+        with self.pick_lock:
+            self.picks.pop("影片", None)
+            self.pick_token.pop(self._pick_key("影片", None), None)
+            for k in EXTRA_PURPOSES:
+                v = self.picks.pop(k, None)
+                old = self._pick_key(k, None)
+                token = self.pick_token.pop(old, None)
+                if not v:
+                    continue
+                new = self._pick_key(k, d)
+                self._supersede(new)
+                if v.get("路徑"):
+                    save_extra(d, k, Path(v["路徑"]), Path(v["原本的位置"]) if v.get("原本的位置") else None)
+                    continue
+                job = self.copy_jobs.get(v.get("複製"))
+                if job is not None and job.state not in ("取消", "失敗") and token == job.id:
+                    job.project = Path(d)
+                    self.pick_token[new] = job.id
+
+    def forget_pick(self, purpose: str) -> None:
+        """給新影片選的拿掉（目前專案的用 clear_extra）。"""
+        with self.pick_lock:
+            self.picks.pop(purpose, None)
+            self._supersede(self._pick_key(purpose, None))
+
+    def clear_extra(self, purpose: str) -> dict:
+        """目前專案的片頭或片尾拿掉；還在複製的一起取消。"""
+        w = self.workdir
+        if purpose not in EXTRA_PURPOSES:
+            raise ValueError(f"只能設定片頭或片尾：{purpose}")
+        with self.pick_lock:
+            self._supersede(self._pick_key(purpose, w))
+        return save_extra(w, purpose, None)
+
+    def cancel_copy(self, job_id: str) -> dict:
+        with self.pick_lock:
+            job = self.copy_jobs.get(job_id)
+            if job is None:
+                raise FileNotFoundError("找不到這個複製工作（可能伺服器重開過）")
+            job.cancel()
+            for k, v in list(self.picks.items()):
+                if v.get("複製") == job_id and not v.get("路徑"):
+                    self.picks.pop(k)
+            for key, tok in list(self.pick_token.items()):
+                if tok == job_id:
+                    self.pick_token.pop(key)
+        return {"ok": True}
+
+    def final_outputs(self) -> dict:
+        """`GET /api/final/outputs`：第 5 步「打開成品資料夾」「複製到 Windows 的下載資料夾」要的狀態。"""
+        from bookclub import fileio
+
+        target, what = final_target(self.workdir)
+        kind = fileio.platform_kind()
+        with self.pick_lock:
+            jobs = [j.to_dict() for j in self.copy_jobs.values() if j.purpose == "成品"]
+        return {"系統": kind, "成品": target.name if target else None, "成品是": what,
+                "可以複製到Windows": kind == "wsl", "複製": jobs[-1:] if jobs else []}
+
+    def final_reveal(self) -> dict:
+        from bookclub import fileio
+
+        target, _ = final_target(self.workdir)
+        where = target or (self.workdir / "輸出")
+        if not where.exists():
+            raise FileNotFoundError("還沒有成品資料夾（輸出/），先在第 4 步組裝")
+        try:
+            return {"ok": True, "說明": fileio.reveal(where)}
+        except RuntimeError as e:   # 叫不起檔案總管：畫面上說人話（不要出現「RuntimeError：」）
+            raise ValueError(str(e)) from None
+
+    def final_to_windows(self) -> dict:
+        from bookclub import fileio
+
+        if fileio.platform_kind() != "wsl":
+            raise ValueError("這個按鈕只在 Windows（WSL2）上用得到")
+        target, what = final_target(self.workdir)
+        if target is None:
+            raise FileNotFoundError("還沒有成品影片，先在第 4 步組裝")
+        with self.pick_lock:   # 「有沒有在跑」與「佔位子」同一段鎖：連按兩下也只會有一個
+            if self.exporting or any(j.purpose == "成品" and j.running for j in self.copy_jobs.values()):
+                raise ValueError("上一次的複製還沒做完")
+            self.exporting = True
+        try:
+            try:
+                downloads = fileio.windows_downloads()
+            except RuntimeError as e:
+                raise ValueError(str(e)) from None
+            dest = fileio.plan_export(target, downloads)
+            job = fileio.CopyJob(target, dest, purpose="成品")
+            with self.pick_lock:
+                self.copy_jobs[job.id] = job
+            job.start()
+        finally:
+            with self.pick_lock:
+                self.exporting = False
+        return {"ok": True, "成品是": what, "複製": job.to_dict()}
 
     def exec_running(self) -> bool:
         with self.run_lock:
@@ -1110,6 +1414,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {**list_projects(server._workdir), "轉文字金鑰": groq_key_ready(), "轉文字金鑰說明": GROQ_KEY_MISSING})
         elif path == "/api/browse":
             self._send_json(200, browse((query.get("path") or [None])[0]))
+        elif path == "/api/picks":   # 10-07：總覽的選檔狀態（選了哪支、片頭片尾、複製進度）
+            self._send_json(200, server.picks_state())
+        elif path == "/api/final/outputs":   # 10-07：第 5 步「打開成品資料夾」「複製到 Windows 的下載資料夾」
+            self._send_json(200, server.final_outputs())
         elif path == "/api/refs":
             self._send_json(200, build_refs(server.workdir))
         elif path == "/api/roomtone":   # 10-02 第六批第五件：第 2 步「全片底噪」（沒有就自動補挑）
@@ -1232,6 +1540,32 @@ class Handler(BaseHTTPRequestHandler):
             request_stop(server.workdir)
             self._send_json(200, {"ok": True, "停止中": True})
             return
+        if path == "/api/pick":   # 10-07：叫系統的選檔視窗（會等到人選好或按取消）
+            self._send_json(200, server.pick(str(body.get("用途", "影片")), str(body.get("給", "新影片"))))
+            return
+        if path == "/api/pick/browsed":   # 10-07：叫不起系統視窗時，網頁資料夾瀏覽選的（只能家目錄底下）
+            p = home_path(str(body["路徑"]))
+            from bookclub import fileio
+
+            self._send_json(200, server.accept_pick(str(body.get("用途", "影片")), fileio.check_video(p),
+                                                    str(body.get("給", "新影片"))))
+            return
+        if path == "/api/pick/forget":   # 10-07：選錯了、拿掉（給新影片的；目前專案的片頭片尾用 /api/extras/clear）
+            server.forget_pick(str(body["用途"]))
+            self._send_json(200, {"ok": True})
+            return
+        if path == "/api/extras/clear":
+            self._send_json(200, server.clear_extra(str(body["用途"])))
+            return
+        if path == "/api/copy/cancel":
+            self._send_json(200, server.cancel_copy(str(body["id"])))
+            return
+        if path == "/api/final/reveal":   # 10-07：路徑都是伺服器自己算的，不收網頁傳來的路徑
+            self._send_json(200, server.final_reveal())
+            return
+        if path == "/api/final/to_windows":
+            self._send_json(200, server.final_to_windows())
+            return
         if path == "/api/projects/switch":
             d = Path(str(body["路徑"])) if body.get("路徑") else safe_join(workroot(), str(body["名稱"]))
             if not d.is_dir() or not known_project(d):
@@ -1241,9 +1575,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "目前": str(d)})
             return
         if path == "/api/projects/start":
-            video = home_path(str(body["影片"]))
-            if not video.is_file() or video.suffix.lower() not in VIDEO_EXTS:
-                raise FileNotFoundError(f"不是影片檔：{video}")
+            if body.get("用選的"):   # 10-07：用系統選檔視窗選的（伺服器記著的那一支；WSL2 是複製進來的那一份）
+                video = server.take_picked_video()
+            else:
+                video = home_path(str(body["影片"]))
+                if not video.is_file() or video.suffix.lower() not in VIDEO_EXTS:
+                    raise FileNotFoundError(f"不是影片檔：{video}")
             d = project_dir_for(video)
             existed = d.exists()
             if server.run_status_running():
@@ -1251,6 +1588,7 @@ class Handler(BaseHTTPRequestHandler):
             d.mkdir(parents=True, exist_ok=True)          # 按下「開始分析」才建資料夾（在影片旁邊）
             register_project(d)
             server.use_project(d, video)
+            server.apply_new_extras(d)   # 10-07：給新影片選的片頭片尾寫進這個專案
             opts = {k: body[k] for k in ("skip_turns", "skip_overlap", "沒有claude也開始") if k in body}
             result = server.start_analyze({"video": str(video), **opts})
             self._send_json(202 if result.get("started") else 409,

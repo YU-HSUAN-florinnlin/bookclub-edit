@@ -761,6 +761,8 @@ async function renderProfile() {
 // ---------------------------------------------------------------------------
 // 總覽
 // ---------------------------------------------------------------------------
+// 10-07 宇軒：選影片改用系統內建的選檔視窗（fileio.js），頁面上只留檔案路徑。網頁上的資料夾瀏覽（renderPicker）
+// 只在叫不起系統視窗（WSL 的 interop 關掉、沒有桌面）或按了取消時才出現。
 
 async function renderOverview() {
   contentEl.innerHTML = "<p>載入中…</p>";
@@ -780,6 +782,7 @@ async function renderOverview() {
           <tr><td>工作區</td><td>${esc(state.workdir)}</td></tr>
           <tr><td>影片分析</td><td>${done}／${order.length} 個子步驟完成${state["總耗時_s"] ? `，花了 ${esc(fmtElapsed(state["總耗時_s"]))}` : ""}（<a href="#step1">看進度</a>）</td></tr>
         </table>
+        ${extrasHtml()}
       </div>`;
   }
   const list = projects["專案"] || [];
@@ -793,12 +796,7 @@ async function renderOverview() {
   contentEl.innerHTML = `
     <h1>總覽</h1>
     ${projects["轉文字金鑰"] === false ? `<div class="hint">${esc(projects["轉文字金鑰說明"] || "這個網頁伺服器讀不到 Groq 金鑰，新影片沒辦法轉文字。關掉這個伺服器，改用雙擊「啟動.command」重開。")}（已經轉好文字的專案不受影響）</div>` : ""}
-    <div class="card pick">
-      <h2 style="margin-top:0">選影片</h2>
-      <p class="muted">選一支影片，按「開始分析」才會在影片旁邊建這支影片的工作資料夾（<code>影片檔名_剪輯工作區</code>）。同一支影片已經做到一半的，會接著做（做完的步驟自動跳過）。</p>
-      <div id="pickerSel"></div>
-      <div id="picker"></div>
-    </div>
+    ${pickCardHtml()}
     ${current}
     <h2>已有的專案（${list.length}）</h2>
     <div class="card">${list.length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">還沒有專案。</p>`}</div>`;
@@ -806,12 +804,8 @@ async function renderOverview() {
     try { await apiPost("/api/projects/switch", { "路徑": b.dataset.path }); } catch (e) { alert(e.message); return; }
     await render();
   }));
-  let start = null;
-  try { start = localStorage.getItem("pick-dir"); } catch (e) { /* 沒有 localStorage 也沒關係 */ }
-  await renderPicker(start, list);
+  await bindPickCard(list);   // 10-07：系統內建的選檔視窗（fileio.js）；叫不起來才顯示下面的網頁資料夾瀏覽
 }
-
-let pickedVideo = null;
 
 async function renderPicker(path, projectList) {
   const box = document.getElementById("picker");
@@ -835,23 +829,13 @@ async function renderPicker(path, projectList) {
   const up = box.querySelector(".pk-up");
   if (up) up.addEventListener("click", () => renderPicker(d["上一層"], projectList));
   box.querySelectorAll(".pk-dir").forEach((b) => b.addEventListener("click", () => renderPicker(`${d["路徑"]}/${b.dataset.name}`, projectList)));
-  box.querySelectorAll(".pk-video").forEach((b) => b.addEventListener("click", () => {
-    pickedVideo = `${d["路徑"]}/${b.dataset.name}`;
-    const stem = b.dataset.name.replace(/\.[^.]+$/, "");
-    const target = `${d["路徑"]}/${stem}_剪輯工作區`;
-    const existing = (projectList || []).find((p) => p["路徑"] === target);
-    document.getElementById("pickerSel").innerHTML = `
-      <div class="pk-sel"><div>選了：<b>${esc(b.dataset.name)}</b></div>
-        <div class="muted">${existing ? `已經有這支影片的專案（${esc(existing["分析完成"] ? "分析完成" : "還沒分析完")}），按開始分析會接著做。` : `會在影片旁邊建立資料夾：${esc(stem)}_剪輯工作區/`}</div>
-        <button id="pkStart">開始分析</button> <span id="pkMsg"></span></div>`;
-    document.getElementById("pkStart").addEventListener("click", startPicked);
-  }));
+  box.querySelectorAll(".pk-video").forEach((b) => b.addEventListener("click", () => pickBrowsed(`${d["路徑"]}/${b.dataset.name}`)));
 }
 
 async function startPicked() {
   const msg = document.getElementById("pkMsg");
   msg.textContent = "開始中…";
-  const body = { "影片": pickedVideo };
+  const body = { "用選的": true };   // 10-07：用伺服器記著的那一支（系統選檔視窗選的；WSL2 是複製進 Ubuntu 的那一份）
   try {
     let r;
     try {
