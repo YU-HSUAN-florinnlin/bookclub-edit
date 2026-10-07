@@ -373,7 +373,11 @@ def test_startup_cleans_partial_copies():
     data = Path(tempfile.mkdtemp())
     folder = data / "影片"
     folder.mkdir()
-    (folder / ".第一堂.mp4.abc123.複製中").write_bytes(b"x")
+    stale = folder / ".第一堂.mp4.abc123.複製中"
+    stale.write_bytes(b"x")
+    t = time.time() - 7200
+    os.utime(stale, (t, t))   # 10-07：只清超過 1 小時沒改動的
+    (folder / ".第二堂.mp4.def456.複製中").write_bytes(b"y")   # 剛寫的（同資料夾另一個伺服器正在複製）：不動
     (folder / "第一堂.mp4").write_bytes(b"keep")
     (folder / ".別的隱藏檔").write_bytes(b"keep")
     old = os.environ.get("BOOKCLUB_DATA_DIR")
@@ -386,7 +390,7 @@ def test_startup_cleans_partial_copies():
             os.environ.pop("BOOKCLUB_DATA_DIR", None)
         else:
             os.environ["BOOKCLUB_DATA_DIR"] = old
-    assert sorted(x.name for x in folder.iterdir()) == [".別的隱藏檔", "第一堂.mp4"]
+    assert sorted(x.name for x in folder.iterdir()) == [".別的隱藏檔", ".第二堂.mp4.def456.複製中", "第一堂.mp4"]
 
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
