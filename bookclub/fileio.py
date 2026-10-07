@@ -335,17 +335,22 @@ def space_problem(size: int, dest_dir: Path, margin: int, where: str = "Ubuntu",
 PARTIAL_SUFFIX = ".複製中"
 
 
-def cleanup_partials(folder: Path) -> int:
+PARTIAL_STALE_S = 3600   # 暫存檔超過這麼多秒沒改動才算「上次留下的」
+
+
+def cleanup_partials(folder: Path, *, older_than_s: float = PARTIAL_STALE_S, now: float | None = None) -> int:
     """伺服器啟動時清掉上次複製到一半（伺服器被關掉）留下的暫存檔：只清這個工具自己取的名字
-    （以點開頭、結尾是「.複製中」），其他檔不動。回傳清掉幾個。"""
+    （以點開頭、結尾是「.複製中」），而且超過 1 小時沒改動的（同一個資料夾同時開著另一個伺服器、
+    正在複製的不會被誤刪），其他檔不動。回傳清掉幾個。"""
     n = 0
+    now = time.time() if now is None else now
     try:
         items = list(Path(folder).glob(f".*{PARTIAL_SUFFIX}"))
     except OSError:
         return 0
     for f in items:
-        if f.is_file():
-            with _ignore_os():
+        with _ignore_os():
+            if f.is_file() and now - f.stat().st_mtime > older_than_s:
                 f.unlink()
                 n += 1
     return n

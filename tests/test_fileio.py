@@ -9,6 +9,7 @@ from __future__ import annotations
 import _testtmp  # noqa: F401 — 這支測試建的暫存資料夾跑完自己清（要在 tempfile 之前）
 
 import base64
+import os
 import subprocess
 import sys
 import tempfile
@@ -315,9 +316,18 @@ def test_review_fixes_1007():
     j2 = fileio.CopyJob(src, d2 / "a.mp4", purpose="影片")
     assert j1.tmp != j2.tmp and j1.id in j1.tmp.name and j1.tmp.name.endswith(".複製中")
     # 第 4 點：清理只清自己取名的
-    (d2 / f".a.mp4.{j1.id}.複製中").write_bytes(b"1")
+    old = d2 / f".a.mp4.{j1.id}.複製中"
+    old.write_bytes(b"1")
     (d2 / "a.mp4.複製中").write_bytes(b"1")   # 不是點開頭：不是這個工具取的，不動
-    assert fileio.cleanup_partials(d2) == 1 and (d2 / "a.mp4.複製中").exists()
+    # 10-07：只清超過 1 小時沒改動的（同資料夾另一個伺服器正在複製的不動）
+    fresh = d2 / f".b.mp4.{j2.id}.複製中"
+    fresh.write_bytes(b"2")
+    t = time.time()
+    os.utime(old, (t - 7200, t - 7200))
+    os.utime(d2 / "a.mp4.複製中", (t - 7200, t - 7200))
+    assert fileio.cleanup_partials(d2) == 1 and not old.exists()
+    assert fresh.exists() and (d2 / "a.mp4.複製中").exists()
+    assert fileio.cleanup_partials(d2, now=t + 7200) == 1 and not fresh.exists()
     assert fileio.cleanup_partials(d2 / "沒有這個資料夾") == 0
     # 第 7 點：叫 Windows 的程式時 stdin 接空的
     seen = {}
