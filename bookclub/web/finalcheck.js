@@ -80,6 +80,7 @@ async function renderFinal() {
         </div>
       </header>
       <div class="rv-export-msg" id="fc-msg"></div>
+      <div class="fo-box" id="fc-fileout"></div>
       <section class="rv-upper">
         <div class="rv-left">
           ${prodSel}
@@ -109,6 +110,7 @@ async function renderFinal() {
   for (const m of ["逐筆", "整片"]) document.getElementById(`fc-mode-${m}`).addEventListener("click", () => { fc.mode = m; fcRenderAll(); });
   document.getElementById("fc-sendback").addEventListener("click", fcSendBack);
   document.getElementById("fc-export").addEventListener("click", fcExport);
+  fileOutInit(document.getElementById("fc-fileout"));   // 10-07：打開成品資料夾、複製到 Windows 的下載資料夾（fileio.js）
   document.getElementById("fc-rate").addEventListener("change", (e) => { fc.video.playbackRate = Number(e.target.value); });
   document.getElementById("fc-goto").addEventListener("keydown", (e) => {   // 10-03 第八批 #64：照第 3 步的「跳到」框
     if (e.key !== "Enter" || e.isComposing) return;

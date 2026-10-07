@@ -679,3 +679,16 @@ details.adv summary { cursor: pointer; color: var(--muted); }
 .fc-keepwhy { flex-basis: 100%; font-size: .85em; }
 .fc-lookhead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 14px; }
 .fc-lookhead p { margin: 0; }
+
+/* 10-07 檔案進出：總覽選影片／片頭／片尾（系統選檔視窗）、複製進度；第 5 步打開成品資料夾、複製到 Windows */
+.pk-table td { vertical-align: top; }
+table.kv.pk-table td.pk-what { width: 5.5em; font-weight: 600; color: inherit; }
+.pk-table .pk-what .muted { font-weight: normal; font-size: 12px; }
+.pk-path-text { word-break: break-all; font-size: 13px; }
+.pk-copy { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.pk-copy progress, .fo-row progress { width: 160px; }
+.pk-table button + button { margin-left: 6px; }
+.fo-box:empty { display: none; }
+.fo-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+table.kv.pk-table { table-layout: fixed; width: 100%; }
+table.kv.pk-table td.pk-btns { width: 12em; }
