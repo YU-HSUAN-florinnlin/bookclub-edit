@@ -1382,7 +1382,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "代號重複": _dup_codes(workdir, tdata),
         "這一集代號": ep_codes,   # 09-29：名冊拿掉代號欄，② ③ 顯示用這張
         "代號對照": _code_table(workdir),   # 10-07：頂端「代號對照」抽屜、選單標「已給某某」、撞名警告
-        "代號自動配還沒確認": _safe(lambda: epcodes.unconfirmed(workdir), {}),
+        "代號自動配未改過": _safe(lambda: epcodes.auto_unchanged(workdir), {}),
         "代號開始前已配": bool(_safe(lambda: epcodes._load_auto(workdir).get("開始前③已配"), True)),
         "還沒代號": epcodes.missing(workdir),
         "提到的名字": mentioned,

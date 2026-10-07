@@ -555,7 +555,8 @@ def estimate_pitches(workdir: str | Path, log: Callable[[str], None] = print) ->
     for who, sp in spans.items():
         f0 = estimate_student_f0(workdir, sp)
         g, conf = guess_gender(f0)
-        table["音高"][who] = {"hz": round(f0) if f0 else None, "推測性別": g, "信心": conf}   # 10-07：代號依性別配
+        table["音高"][who] = {"hz": round(f0) if f0 else None, "推測性別": g, "信心": conf,   # 10-07：代號依性別配
+                              "秒數": round(sum(b - a for a, b in sp), 1)}   # 合併／拆開後秒數變了就不沿用（epcodes）
     wd.write_json(voices_path(workdir), table)
     log(f"[學員聲音] 估好 {len(spans)} 位學員的音高")
     return {k: v["hz"] for k, v in table["音高"].items()}

@@ -322,7 +322,7 @@ def run_analyze(
         except Exception as exc:  # Claude 失敗就沒有清單，不擋其他步驟（第 3 步 ③ 不能標完成、第 4 步擋住）
             claude_failed.append(claude_failure("人名清單", exc))
             print(f"⚠️ [分析一條龍] 人名清單（Claude）失敗：{exc}；之後可以單獨跑 bookclub run people <工作區>")
-        try:   # 10-07：③ 名冊上的人先自動配一次代號（依名冊性別、不撞名；第 3 步標「自動配的，還沒確認」）
+        try:   # 10-07：③ 名冊上的人先自動配一次代號（依名冊性別、不撞名；算決定好，第 3 步標「自動配」）
             from bookclub import epcodes
 
             r = epcodes.auto_initial(workdir)

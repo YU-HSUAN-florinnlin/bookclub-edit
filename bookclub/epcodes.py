@@ -13,9 +13,23 @@
 
 from __future__ import annotations
 
+import functools
+import threading
 from pathlib import Path
 
 from bookclub import workdir as wd
+
+# 10-07 審查：挑代號到寫進去要在同一把鎖裡（② 連續快速選兩位時，兩個請求同時挑到同一個代號）。
+# 自動配、② 右欄手動選代號（turns.set_name_code）、③ 人名決定（personnames.decide）都拿這把；可重入。
+_auto_lock = threading.RLock()
+
+
+def _locked(fn):
+    @functools.wraps(fn)
+    def wrap(*a, **k):
+        with _auto_lock:
+            return fn(*a, **k)
+    return wrap
 
 
 # 10-02 第七批（任務單 26 號）：代號一律用外國人名的中文寫法（聲音模型念英文名常念得怪、每次不一樣；
@@ -272,11 +286,12 @@ def missing(workdir: str | Path) -> list[str]:
     return sorted(out)
 
 
+@_locked
 def auto_assign(workdir: str | Path) -> dict:
     """「幫還沒代號的自動配」：② 選了本名的學員、③ 名冊上的人（沒選不用處理／不是名字）還沒代號的，
     配這一集還沒用過的代號。② 的寫進右欄，③ 的寫成「換成代號」決定。
     10-07：依性別從女生／男生名單配（名冊性別＞第 1 步聲音推測；沒把握的兩邊都可以）、跟名字撞的不配、
-    配上的都標「自動配的，還沒確認」。"""
+    配上的都算決定好，畫面標「自動配」（人改了就拿掉）。"""
     from bookclub import turns as turns_mod
 
     workdir = Path(workdir)
@@ -289,7 +304,7 @@ def auto_assign(workdir: str | Path) -> dict:
         if not code:
             short = True
             continue
-        turns_mod.set_name_code(workdir, real, code)
+        turns_mod.set_name_code(workdir, real, code, add_roster=False)   # 10-07 宇軒：自動配只記這一集，不動名冊
         _mark(workdir, real, code)
         done2.append(real)
         codes = episode_codes(workdir)
@@ -304,7 +319,7 @@ def auto_assign(workdir: str | Path) -> dict:
 
 
 # ---------- 10-07：選了學員是誰就自動配、依性別配、撞名檢查、「代號對照」抽屜 ----------
-# 自動配的代號標「自動配的，還沒確認」，人改了或按確認就拿掉標記：
+# 10-07 宇軒：自動配的代號寫入時就算決定好（老師會自己改要改的），畫面只標「自動配」讓人知道是程式配的，人一改就拿掉標記：
 # ② 學員（右欄 `本名代號`）的標記記在 `校對/代號自動配.json` 的 `自動配`；③ 名冊上的人記在人名決定的 `自動配: true`。
 # 同一個檔的 `開始前③已配`：進第 3 步時 ③ 名冊上的人只自動配一次，之後人改了不會被蓋回去。
 
@@ -334,19 +349,27 @@ def _people_groups(workdir: Path) -> list[set[str]]:
 
 
 def name_spellings(workdir: str | Path) -> dict[str, str]:
-    """不能拿來當代號的名字 {寫法: 是誰}：名冊上所有人的本名與其他寫法、第 1 步人名清單抓到的名字與其他寫法。
+    """不能拿來當代號的名字 {寫法: 是誰}：名冊上所有人的本名與其他寫法、第 1 步人名清單抓到的名字與其他寫法、
+    ③ 人名決定的名字、名字候選比對到的字（`matched_text`，敏感詞除外）。
     代號跟其中一個寫法一樣，成品裡分不出是代號還是真的有人叫這個名字。"""
-    from bookclub import names
+    from bookclub import names, personnames
     from bookclub.config import data_dir
 
+    workdir = Path(workdir)
     out: dict[str, str] = {}
     for r in names.load_roster(data_dir() / "名冊.csv"):
         out.setdefault(r["寫法"], r["canonical"])
-    for g in _people_groups(Path(workdir)):
+    for g in _people_groups(workdir):
         owner = next((x for x in sorted(g) if x in out), None) or sorted(g)[0]
         for w in g:
             out.setdefault(w, out.get(owner, owner))
-    return out
+    for name in (wd.read_json(personnames.decisions_path(workdir), default={}) or {}):
+        out.setdefault(name, out.get(name, name))
+    for c in (wd.read_json(wd.names_path(workdir), default={}) or {}).get("candidates", []):
+        t = (c.get("matched_text") or "").strip()
+        if t and not c.get("敏感詞"):
+            out.setdefault(t, c.get("canonical") or t)
+    return {k: v for k, v in out.items() if k}
 
 
 def clashes(workdir: str | Path) -> dict[str, list[str]]:
@@ -373,7 +396,17 @@ def person_gender(workdir: str | Path, real: str | None) -> tuple[str | None, st
         return g, "名冊性別"
     tdata = wd.read_json(turns_mod.turns_path(Path(workdir)), default={}) or {}
     pitch = students.load_voice_table(Path(workdir)).get("音高") or {}
-    guesses = [students.pitch_gender(pitch.get(n)) for n, p in (tdata.get("學員") or {}).items() if p.get("本名") == real]
+
+    def fresh(n: str, p: dict) -> dict | None:
+        """10-07 審查：音高是照學員 N 編號存的；合併、拆開、改說話者之後這位的總秒數跟估的時候差超過 10%
+        （可能已經是別人了），當作沒有推測。舊檔沒記秒數的照用。"""
+        e = pitch.get(n)
+        then, now = (e or {}).get("秒數"), p.get("秒數")
+        if e and then and now is not None and abs(float(now) - float(then)) > 0.1 * float(then):
+            return None
+        return e
+
+    guesses = [students.pitch_gender(fresh(n, p)) for n, p in (tdata.get("學員") or {}).items() if p.get("本名") == real]
     sure = {(g, c) for g, c in guesses if g}
     if len({g for g, _ in sure}) == 1:
         g, conf = sorted(sure)[0]
@@ -399,7 +432,7 @@ def _mark(workdir: Path, real: str, code: str) -> None:
 
 
 def clear_auto(workdir: str | Path, real: str) -> None:
-    """人改了代號或按「確認」：拿掉「自動配的，還沒確認」（② 右欄的標記、③ 這個人的人名決定）。"""
+    """人改了代號：拿掉「自動配」標記（② 右欄的標記、③ 這個人的人名決定）。"""
     from bookclub import personnames
 
     workdir = Path(workdir)
@@ -417,8 +450,8 @@ def clear_auto(workdir: str | Path, real: str) -> None:
             wd.write_json(dp, dec)
 
 
-def unconfirmed(workdir: str | Path) -> dict[str, str]:
-    """自動配、還沒人確認的代號 {本名: 代號}（代號後來被改掉的不算）。"""
+def auto_unchanged(workdir: str | Path) -> dict[str, str]:
+    """自動配、人沒改過的代號 {本名: 代號}（代號後來被改掉的不算）。"""
     from bookclub import names, personnames
     from bookclub.config import data_dir
 
@@ -433,8 +466,9 @@ def unconfirmed(workdir: str | Path) -> dict[str, str]:
     return out
 
 
+@_locked
 def auto_for_student(workdir: str | Path, real: str | None) -> str | None:
-    """② 左欄選了學員 N 的本名之後：這個本名這一集還沒代號，就依性別挑一個配上（標自動配、還沒確認）。"""
+    """② 左欄選了學員 N 的本名之後：這個本名這一集還沒代號，就依性別挑一個配上（算決定好，標「自動配」）。"""
     from bookclub import turns as turns_mod
 
     workdir = Path(workdir)
@@ -443,15 +477,16 @@ def auto_for_student(workdir: str | Path, real: str | None) -> str | None:
         return None
     g, _why = person_gender(workdir, real)
     code = pick_code(workdir, g, codes)
-    if not code:
+    if not code or code in set(episode_codes(workdir).values()):   # 寫入前再確認一次還沒被用（同一把鎖裡）
         return None
-    turns_mod.set_name_code(workdir, real, code)
+    turns_mod.set_name_code(workdir, real, code, add_roster=False)   # 10-07 宇軒：自動配只記這一集，不動名冊
     _mark(workdir, real, code)
     return code
 
 
+@_locked
 def release_auto(workdir: str | Path, real: str | None) -> bool:
-    """② 改選了別的本名：原本那個本名的代號是自動配、還沒確認、又沒有別的學員 N 選它 → 收回來（名單上可以再配）。"""
+    """② 改選了別的本名：原本那個本名的代號是自動配、人沒改過、又沒有別的學員 N 選它 → 收回來（名單上可以再配）。"""
     from bookclub import turns as turns_mod
 
     workdir = Path(workdir)
@@ -463,7 +498,7 @@ def release_auto(workdir: str | Path, real: str | None) -> bool:
         return False
     if any(p.get("本名") == real for p in (tdata.get("學員") or {}).values()):
         return False
-    turns_mod.set_name_code(workdir, real, None)
+    turns_mod.set_name_code(workdir, real, None, add_roster=False)   # 10-07 宇軒：自動配只記這一集，不動名冊
     return True
 
 
@@ -491,6 +526,7 @@ def _auto_three(workdir: Path, codes: dict[str, str]) -> list[str]:
     return done
 
 
+@_locked
 def auto_initial(workdir: str | Path) -> dict:
     """進第 3 步（`POST /api/codes/initial`，或第 1 步分析結束）：③ 名冊上的人自動配一次代號。
     做過就不再做（`開始前③已配`），人後來改的不會被蓋回去。人名清單還沒有（第 1 步沒跑完）時先不做、不記旗標。"""
@@ -514,7 +550,7 @@ def auto_initial(workdir: str | Path) -> dict:
 
 def code_table(workdir: str | Path) -> dict:
     """「代號對照」抽屜（只讀不寫）：
-    上半 `對照`：每個人一列（同一人的幾種寫法合成一列）→ 代號、哪幾位學員 N、來源、是不是自動配還沒確認、性別；
+    上半 `對照`：每個人一列（同一人的幾種寫法合成一列）→ 代號、哪幾位學員 N、來源、是不是自動配（人沒改過）、性別；
     下半 `名單`：女／男／其他，每個代號「給了誰」或空著、跟哪個名字撞名；`代號給了`：{代號: [本名…]}（選單標「已給某某」）。"""
     from bookclub import names, personnames
     from bookclub import turns as turns_mod
@@ -527,7 +563,7 @@ def code_table(workdir: str | Path) -> dict:
     roster = names.load_roster(data_dir() / "名冊.csv")
     dec = wd.read_json(personnames.decisions_path(workdir), default={}) or {}
     two = tdata.get("本名代號") or {}
-    pending = unconfirmed(workdir)
+    pending = auto_unchanged(workdir)
 
     parent: dict[str, str] = {}
 
@@ -582,7 +618,7 @@ def code_table(workdir: str | Path) -> dict:
             src = ""
         g, why = person_gender(workdir, main)
         rows.append({"本名": main, "其他寫法": sorted(spell.get(root_, set(members)) - {main}), "代號": "、".join(cs), "學員": who,
-                     "來源": src, "自動配還沒確認": any(pending.get(m) for m in members), "性別": g, "性別依據": why})
+                     "來源": src, "自動配未改過": any(pending.get(m) for m in members), "性別": g, "性別依據": why})
     rows.sort(key=lambda r: (not r["學員"], int(r["學員"][0][2:]) if r["學員"] and r["學員"][0][2:].isdigit() else 0, r["本名"]))
     given: dict[str, list[str]] = {}
     for r in rows:

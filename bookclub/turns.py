@@ -904,7 +904,7 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
         if old:
             from bookclub import epcodes
 
-            epcodes.release_auto(workdir, old)   # 10-07：原本那個本名自動配、還沒確認的代號收回來
+            epcodes.release_auto(workdir, old)   # 10-07：原本那個本名自動配、人沒改過的代號收回來
         return {"ok": True, "學員": person, "本名": None, "本名未知": True, "代號": None}
     if real and real in (teacher, "老師"):
         ids = [t["id"] for t in wd.read_json(turns_path(workdir))["段落"] if t["說話者"] == person]
@@ -929,26 +929,32 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
         if real:
             p["代號"] = epcodes.episode_codes(workdir).get(real) or roster.get(real) or p.get("代號")
         wd.write_json(turns_path(workdir), data)
-    # 10-07 宇軒：選了學員 N 是誰之後當場自動配代號（依性別、不撞名，標「自動配的，還沒確認」，人可以改）
+    # 10-07 宇軒：選了學員 N 是誰之後當場自動配代號（依性別、不撞名，算決定好、標「自動配」，人可以改）
     if old and old != real:
-        epcodes.release_auto(workdir, old)   # 原本那個本名自動配、還沒確認的代號收回來
+        epcodes.release_auto(workdir, old)   # 原本那個本名自動配、人沒改過的代號收回來
     auto = epcodes.auto_for_student(workdir, real) if real else None
     code = epcodes.episode_codes(workdir).get(real) if real else None
     return {"ok": True, "學員": person, "本名": real or None, "代號": code or p.get("代號"), "自動配代號": auto}
 
 
-def set_name_code(workdir: str | Path, real: str, code: str | None) -> dict:
-    """`POST /api/turns/namecode`：這個本名在這支影片用哪個英文代號（右欄）；同一個本名的學員 N 一起改。
-    本名不在名冊上（第 1 步人名清單抓到的）：加進名冊，並補找老師提到這個名字的地方。"""
-    from bookclub import names, personnames
-    from bookclub.config import data_dir
-
-    workdir = Path(workdir)
+def set_name_code(workdir: str | Path, real: str, code: str | None, *, add_roster: bool = True) -> dict:
+    """`POST /api/turns/namecode`：這個本名在這支影片用哪個代號（右欄）；同一個本名的學員 N 一起改。
+    本名不在名冊上（第 1 步人名清單抓到的）：加進名冊，並補找老師提到這個名字的地方（人手動選代號時）。
+    10-07 宇軒：自動配（`add_roster=False`）只記這一集，不動名冊、不重掃名字候選。"""
     from bookclub import epcodes as _ep
+
+    with _ep._auto_lock:   # 10-07 審查：跟自動配同一把鎖，挑代號到寫入之間不會被插隊
+        return _set_name_code(Path(workdir), real, code, add_roster)
+
+
+def _set_name_code(workdir: Path, real: str, code: str | None, add_roster: bool = True) -> dict:
+    from bookclub import names, personnames
+    from bookclub import epcodes as _ep
+    from bookclub.config import data_dir
 
     _ep.clear_auto(workdir, real)   # 10-07：人自己選了代號（自動配的會在這之後再標回去）
     added = 0
-    if code and not any(r["canonical"] == real for r in names.load_roster(data_dir() / "名冊.csv")):
+    if add_roster and code and not any(r["canonical"] == real for r in names.load_roster(data_dir() / "名冊.csv")):
         alts = next((p["其他寫法"] for p in (wd.read_json(personnames.people_path(workdir), default=None) or {}).get("人名", [])
                      if p["名字"] == real), [])
         if personnames.add_to_roster(real, alts, code):

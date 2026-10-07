@@ -294,7 +294,7 @@ function rvRenderCodeMap() {
   const stuNo = (n) => n.replace(/^學員(\d+)$/, "學員 $1");
   const body = rows.length ? rows.map((r) => `<tr>
       <td><b>${esc(r["本名"])}</b>${(r["其他寫法"] || []).length ? `<span class="rv-meta">（也寫成 ${esc(r["其他寫法"].join("、"))}）</span>` : ""}</td>
-      <td>${r["代號"] ? `<b>${esc(r["代號"])}</b>` : '<span class="rv-warnline">還沒代號</span>'}${r["自動配還沒確認"] ? ' <span class="rv-tag">自動配的，還沒確認</span>' : ""}</td>
+      <td>${r["代號"] ? `<b>${esc(r["代號"])}</b>` : '<span class="rv-warnline">還沒代號</span>'}${r["自動配未改過"] ? ' <span class="rv-tag" title="程式自動配的，人還沒改過">自動配</span>' : ""}</td>
       <td>${esc((r["學員"] || []).map(stuNo).join("、") || "—")}</td>
       <td>${esc(r["來源"] || "—")}${r["性別"] ? `<span class="rv-meta">・${esc(r["性別"])}（${esc(r["性別依據"] || "")}）</span>` : ""}</td></tr>`).join("")
     : '<tr><td colspan="4" class="rv-meta">還沒有人有代號：先在「開始前 4 件事」② 選學員是誰。</td></tr>';
@@ -1640,10 +1640,10 @@ function rvPrepPeopleHtml() {
     const who = people.filter(([, p]) => p["本名"] === r).map(([n]) => n).join("、");
     const opts = rvCodeOpts(cur, "（還沒指定）") + '<option value="__new">新的代號…</option>';
     const notInRoster = !reals.includes(r);
-    const auto = cur && (rv.data["代號自動配還沒確認"] || {})[r] === cur;   // 10-07：選了本名當場自動配的
+    const auto = cur && (rv.data["代號自動配未改過"] || {})[r] === cur;   // 10-07：選了本名當場自動配的（算決定好，人一改就拿掉標示）
     return `<li class="rv-person"><div class="nm"><b>${esc(r)}</b><span class="rv-meta">${esc(who)}${notInRoster ? "・名冊上沒有，選了代號會加進名冊" : ""}</span></div>
       <div class="ctl"><label>代號 <select class="rv-namecode" data-real="${esc(r)}">${opts}</select></label>
-        ${auto ? `<span class="rv-tag">自動配的，還沒確認</span><button class="ghost small rv-codeok" data-real="${esc(r)}">就用這個</button>` : ""}
+        ${auto ? `<span class="rv-tag" title="程式自動配的，不用改就不用動">自動配</span>` : ""}
 </div></li>`;
   }).join("") : `<li class="rv-meta">左邊選了本名之後，這裡會列出來。</li>`;
   return `${rvDupHtml()}<p class="rv-meta">左邊是照聲音特徵分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個代號（只影響這一集，老師講到他的名字、學員稿子裡的名字都會照這裡換）。</p>${rvEnglishCodesHtml()}${rvAutoHtml()}
@@ -1752,7 +1752,7 @@ function rvPrepNamesHtml() {
         ${hows.map((h) => `<label class="rv-check"><input type="radio" name="un-${esc(u.id)}" class="rv-unhow" data-name="${esc(u["名字"])}" value="${h}" ${u["做法"] === h ? "checked" : ""}> ${h}</label>`).join("")}
         <select class="rv-uncode" data-name="${esc(u["名字"])}" ${u["做法"] === "換成代號" ? "" : "hidden"}>${codeOpts}</select>
         <select class="rv-unsame" data-name="${esc(u["名字"])}" ${u["做法"] === "是上面的學員" ? "" : "hidden"}>${sameOpts}</select>
-        ${u["已決定"] ? "" : u["做法"] ? `${u["自動配"] ? '<span class="rv-tag">自動配的，還沒確認</span>' : '<span class="rv-meta">（建議，還沒確認）</span>'}${confirmBtn}` : '<span class="rv-warnline">還沒決定</span>'}</div>
+        ${u["已決定"] ? (u["自動配"] ? '<span class="rv-tag" title="程式自動配的，不用改就不用動">自動配</span>' : "") : u["做法"] ? `<span class="rv-meta">（建議，還沒確認）</span>${confirmBtn}` : '<span class="rv-warnline">還沒決定</span>'}</div>
       ${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
   }).join("");
   const twoBlock = fromTwo.length ? `<li class="rv-person"><details><summary class="rv-meta">② 已經定好的學員（${fromTwo.length} 個）：${fromTwo.map((u) => `${esc(u["名字"])} → ${esc(u["代號"] || "還沒選代號")}`).join("、")}</summary>
@@ -1822,10 +1822,6 @@ function rvBindPrep(root) {
     if (!rvCodeClashOk(v)) { el.value = ""; return undefined; }
     return v;
   };
-  root.querySelectorAll(".rv-codeok").forEach((b) => b.addEventListener("click", async () => {   // 10-07：自動配的代號就用這個
-    await apiPost("/api/codes/confirm", { "本名": b.dataset.real });
-    await reload();
-  }));
   root.querySelectorAll(".rv-namecode").forEach((el) => el.addEventListener("change", async () => {
     const code = askCode(el);
     if (code === undefined) return;

@@ -57,20 +57,17 @@ def test_initial_auto_once_by_roster_gender_and_no_clash():
     codes = epcodes.episode_codes(w)
     assert codes["小美"] == "貝拉", "女生：名單第一個「安娜」跟名冊上的人撞名，要跳過"
     assert codes["阿明"] == "傑克", "男生從男生名單配"
-    assert epcodes.unconfirmed(w) == {"小美": "貝拉", "阿明": "傑克"}
+    assert epcodes.auto_unchanged(w) == {"小美": "貝拉", "阿明": "傑克"}
     rows = {u["名字"]: u for u in personnames.mentioned(w)}
-    assert rows["小美"]["自動配"] and not rows["小美"]["已決定"], "自動配的要人確認（③ 還不能算做完）"
+    assert rows["小美"]["自動配"] and rows["小美"]["已決定"], "10-07 宇軒：自動配的就算決定好，畫面只標「自動配」"
     # 名字候選的代號跟著對齊
     assert {c["canonical"]: c["代號"] for c in wd.read_json(wd.names_path(w))["candidates"]} == {"小美": "貝拉", "阿明": "傑克"}
     # 人改了 → 不再是自動配；再進一次第 3 步不會蓋回去
     personnames.decide(w, "小美", "換成代號", "克洛伊")
     assert epcodes.auto_initial(w)["已配過"]
     assert epcodes.episode_codes(w)["小美"] == "克洛伊"
-    assert "小美" not in epcodes.unconfirmed(w)
-    # 「就用這個」：拿掉還沒確認
-    epcodes.clear_auto(w, "阿明")
-    assert epcodes.unconfirmed(w) == {}
-    assert {u["名字"]: u["已決定"] for u in personnames.mentioned(w)}["阿明"]
+    assert "小美" not in epcodes.auto_unchanged(w)
+    assert {u["名字"]: (u["已決定"], u["自動配"]) for u in personnames.mentioned(w)}["小美"] == (True, False), "人改了就拿掉標示"
 
 
 def test_initial_waits_for_people_list():
@@ -87,10 +84,10 @@ def test_pick_real_name_auto_assigns_by_voice():
     res = turns_mod.set_real_name(w, "學員2", "阿華")   # 名冊沒填性別 → 看聲音：118 Hz 男
     assert res["自動配代號"] == "傑克" and res["代號"] == "傑克"
     assert epcodes.person_gender(w, "阿華") == ("男", "聲音推測（信心高）")
-    assert epcodes.unconfirmed(w) == {"阿華": "傑克"}
+    assert epcodes.auto_unchanged(w) == {"阿華": "傑克"}
     # 人在右欄改 → 標記拿掉
     turns_mod.set_name_code(w, "阿華", "湯姆")
-    assert epcodes.unconfirmed(w) == {}
+    assert epcodes.auto_unchanged(w) == {}
     # 已經有代號的本名不重配
     assert turns_mod.set_real_name(w, "學員2", "阿華")["自動配代號"] is None
     # 名冊有性別照名冊（小美 女）
@@ -105,12 +102,12 @@ def test_uncertain_voice_uses_both_lists_and_release():
     assert epcodes.pick_code(w, None, {f"x{i}": c for i, c in enumerate(epcodes.CODE_POOL_F)}) == "傑克", \
         "不確定的兩邊名單都可以"
     assert epcodes.pick_code(w, "男", {f"x{i}": c for i, c in enumerate(epcodes.CODE_POOL_M)}) is None, "男生名單用完回 None"
-    # ② 改選別的本名：原本自動配、還沒確認的代號收回來
+    # ② 改選別的本名：原本自動配、人沒改過的代號收回來
     first = epcodes.episode_codes(w)["阿玉"]
     turns_mod.set_real_name(w, "學員1", "阿華")
     codes = epcodes.episode_codes(w)
     assert "阿玉" not in codes and codes["阿華"] == first
-    assert epcodes.unconfirmed(w) == {"阿華": first}
+    assert epcodes.auto_unchanged(w) == {"阿華": first}
 
 
 def test_auto_button_by_gender_and_marks():
@@ -122,8 +119,26 @@ def test_auto_button_by_gender_and_marks():
     r = epcodes.auto_assign(w)
     codes = epcodes.episode_codes(w)
     assert r["②"] == 2 and codes["阿玉"] in epcodes.CODE_POOL_F and codes["阿華"] in epcodes.CODE_POOL_M
-    assert set(epcodes.unconfirmed(w)) >= {"阿玉", "阿華"}
+    assert set(epcodes.auto_unchanged(w)) >= {"阿玉", "阿華"}
     assert "安娜" not in codes.values()
+
+
+def test_auto_never_touches_roster():
+    # 10-07 宇軒：自動配只記這一集，不動名冊（名冊上沒有的名字、轉錯的字都一樣），不重掃名字候選
+    w = _new()
+    wd.write_json(personnames.people_path(w), {"人名": [
+        {"id": "P001", "名字": "佳佳", "其他寫法": ["家家"], "是誰": "學員", "說明": "", "名冊本名": None,
+         "句子": [], "次數": 2, "老師說": 2, "學員說": 0, "第一次": 30.0}], "模型": "假的"})
+    roster = (_DATA / "名冊.csv").read_bytes()
+    cands = wd.read_json(wd.names_path(w))["candidates"]
+    res = turns_mod.set_real_name(w, "學員1", "佳佳")      # 名冊上沒有
+    assert res["自動配代號"] and epcodes.episode_codes(w)["佳佳"] == res["自動配代號"]
+    turns_mod.set_real_name(w, "學員2", "小美美")          # 轉錯的字（名冊上也沒有）
+    epcodes.auto_assign(w)
+    epcodes.auto_initial(w)
+    assert (_DATA / "名冊.csv").read_bytes() == roster, "自動配不能改名冊"
+    assert len(wd.read_json(wd.names_path(w))["candidates"]) == len(cands), "自動配不重掃名字候選"
+    assert wd.read_json(turns_mod.turns_path(w))["本名代號"]["小美美"], "只記在這一集的段落.json"
 
 
 def test_code_table_labels_and_clash():
@@ -137,7 +152,7 @@ def test_code_table_labels_and_clash():
     tab = epcodes.code_table(w)
     rows = {r["本名"]: r for r in tab["對照"]}
     assert rows["小美"]["學員"] == ["學員1", "學員2"] and rows["小美"]["代號"] == "貝拉"
-    assert rows["小美"]["來源"] == "② 學員是誰" and rows["小美"]["自動配還沒確認"]
+    assert rows["小美"]["來源"] == "② 學員是誰" and rows["小美"]["自動配未改過"]
     assert rows["宜君"]["其他寫法"] == ["怡君"] and rows["宜君"]["代號"] == "露西", "同一人幾種寫法合成一列"
     assert "怡君" not in rows
     assert tab["代號給了"]["貝拉"] == ["小美"]
@@ -151,7 +166,7 @@ def test_code_table_labels_and_clash():
     assert sp["美美"] == "小美" and sp["怡君"] in ("宜君", "怡君")
     # GET /api/review 帶這幾欄（只讀）
     data = review.page_data(w)
-    assert data["代號對照"]["對照"] and data["代號自動配還沒確認"]["小美"] == "貝拉"
+    assert data["代號對照"]["對照"] and data["代號自動配未改過"]["小美"] == "貝拉"
     assert data["代號開始前已配"] is False
 
 
@@ -163,11 +178,65 @@ def test_final_labels_in_page_data():
     assert finalcheck.page_data(w)["學員顯示名"] == {"學員1": "小美（貝拉）"}
 
 
+def test_two_picks_at_once_get_different_codes():
+    # 10-07 審查：② 連續快速選兩位（兩個請求同時進來），挑代號到寫入在同一把鎖裡，不會配到同一個
+    import threading
+    import time
+
+    w = _new()
+    _pitch(w, {"學員1": {"hz": 118}, "學員2": {"hz": 120}})
+    real_spell = epcodes.name_spellings
+
+    def slow(*a, **k):   # 挑代號那一步拖慢，沒有鎖的話兩邊都會挑到「傑克」
+        time.sleep(0.3)
+        return real_spell(*a, **k)
+
+    epcodes.name_spellings = slow
+    try:
+        ts = [threading.Thread(target=turns_mod.set_real_name, args=(w, n, r)) for n, r in (("學員1", "阿華"), ("學員2", "阿玉"))]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+    finally:
+        epcodes.name_spellings = real_spell
+    codes = epcodes.episode_codes(w)
+    assert codes["阿華"] and codes["阿玉"] and codes["阿華"] != codes["阿玉"], codes
+    assert {codes["阿華"], codes["阿玉"]} <= set(epcodes.CODE_POOL_M)
+
+
+def test_stale_pitch_after_merge_is_ignored():
+    # 10-07 審查：音高照學員 N 編號存；之後合併、拆開讓這位的總秒數差超過 10%，當作沒有推測
+    w = _new()
+    secs = wd.read_json(turns_mod.turns_path(w))["學員"]["學員2"]["秒數"]
+    _pitch(w, {"學員2": {"hz": 118, "推測性別": "男", "信心": "高", "秒數": secs}})
+    turns_mod.set_real_name(w, "學員2", "阿華")
+    assert epcodes.person_gender(w, "阿華")[0] == "男"
+    _pitch(w, {"學員2": {"hz": 118, "推測性別": "男", "信心": "高", "秒數": round(secs * 2, 1)}})
+    assert epcodes.person_gender(w, "阿華") == (None, "聲音不確定")
+
+
+def test_clash_includes_decisions_and_matched_text():
+    w = _new()
+    wd.write_json(personnames.decisions_path(w), {"露西": {"做法": "不用處理"}})
+    data = wd.read_json(wd.names_path(w))
+    data["candidates"][0]["matched_text"] = "艾瑪"
+    wd.write_json(wd.names_path(w), data)
+    sp = epcodes.name_spellings(w)
+    assert "露西" in sp and "艾瑪" in sp
+    clash = epcodes.clashes(w)
+    assert "露西" in clash and "艾瑪" in clash
+    assert epcodes.pick_code(w, "女", {}) == "貝拉"
+    taken = {f"x{i}": c for i, c in enumerate(["貝拉", "克洛伊", "黛西"])}
+    assert epcodes.pick_code(w, "女", taken) == "費歐娜", "艾瑪撞名要跳過"
+
+
 def test_web_strings():
     js = (REPO_ROOT / "bookclub" / "web" / "review.js").read_text(encoding="utf-8")
     for want in ('id="rv-code-btn"', 'id="rv-codes"', "rvRenderCodeMap", "截圖或分享螢幕時，這裡會露出本名",
-                 "/api/codes/initial", "/api/codes/confirm", "自動配的，還沒確認", "rvCodeClashOk", "rvWhoHtml"):
+                 "/api/codes/initial", ">自動配</span>", "rvCodeClashOk", "rvWhoHtml"):
         assert want in js, want
+    assert "還沒確認</span><button" not in js and "/api/codes/confirm" not in js and "自動配的，還沒確認" not in js
     fcjs = (REPO_ROOT / "bookclub" / "web" / "finalcheck.js").read_text(encoding="utf-8")
     assert "學員顯示名" in fcjs and "fcWho(" in fcjs
     app = (REPO_ROOT / "bookclub" / "web" / "app.js").read_text(encoding="utf-8")
