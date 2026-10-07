@@ -514,6 +514,30 @@ def _gender_from_hz(hz: float | None) -> tuple[str, str]:
     return ("男" if hz < MALE_F0_HZ else "女"), f"原音中位數基頻 {hz:.0f} Hz（< {MALE_F0_HZ:.0f} 算男聲）"
 
 
+GUESS_MARGIN_HZ = 15.0   # 10-07：代號依性別配用。離 165 Hz 這麼近（150–180 Hz）的算不確定，不指定性別
+
+
+def guess_gender(hz: float | None) -> tuple[str | None, str]:
+    """10-07（第 3 步代號）：原音中位數基頻 → (推測性別, 信心)。給「自動配代號」挑女生／男生名單用。
+    估不出來、或離 165 Hz 不到 15 Hz 的回 (None, ...)：不指定性別，兩邊名單都可以配。
+    信心：離 165 Hz 30 Hz 以上「高」，其他「中」。跟聲線的 `_gender_from_hz` 分開（那邊估不出來先用女聲）。"""
+    if not hz:
+        return None, "估不出來"
+    if abs(hz - MALE_F0_HZ) < GUESS_MARGIN_HZ:
+        return None, "不確定"
+    g = "男" if hz < MALE_F0_HZ else "女"
+    return g, ("高" if abs(hz - MALE_F0_HZ) >= 2 * GUESS_MARGIN_HZ else "中")
+
+
+def pitch_gender(entry: dict | None) -> tuple[str | None, str]:
+    """`學員聲線.json` 的 `音高` 一筆 → (推測性別, 信心)；10-07 以前存的沒有這兩欄，照 hz 現算。"""
+    if not entry:
+        return None, "沒有估"
+    if "推測性別" in entry:
+        return entry.get("推測性別"), entry.get("信心") or ""
+    return guess_gender(entry.get("hz"))
+
+
 def estimate_pitches(workdir: str | Path, log: Callable[[str], None] = print) -> dict:
     """第 1 步段落分析完就先估每位學員的音高（09-30 宇軒：聲線看音質像不像，不看實際男女），
     記在 `生成/學員聲線.json` 的 `音高`，第 3 步「學員是誰」打開就看得到配了哪個聲線。
@@ -530,7 +554,8 @@ def estimate_pitches(workdir: str | Path, log: Callable[[str], None] = print) ->
     table["音高"] = {}
     for who, sp in spans.items():
         f0 = estimate_student_f0(workdir, sp)
-        table["音高"][who] = {"hz": round(f0) if f0 else None}
+        g, conf = guess_gender(f0)
+        table["音高"][who] = {"hz": round(f0) if f0 else None, "推測性別": g, "信心": conf}   # 10-07：代號依性別配
     wd.write_json(voices_path(workdir), table)
     log(f"[學員聲音] 估好 {len(spans)} 位學員的音高")
     return {k: v["hz"] for k, v in table["音高"].items()}

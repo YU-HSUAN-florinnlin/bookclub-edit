@@ -898,8 +898,13 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
         with _lock:
             data = wd.read_json(turns_path(workdir))
             p = data["學員"].setdefault(person, {"秒數": 0.0, "段數": 0, "點名線索": {}})
+            old = p.get("本名")
             p["本名"], p["本名未知"], p["代號"] = None, True, None   # 自動配的代號是名冊上別人的，清掉
             wd.write_json(turns_path(workdir), data)
+        if old:
+            from bookclub import epcodes
+
+            epcodes.release_auto(workdir, old)   # 10-07：原本那個本名自動配、還沒確認的代號收回來
         return {"ok": True, "學員": person, "本名": None, "本名未知": True, "代號": None}
     if real and real in (teacher, "老師"):
         ids = [t["id"] for t in wd.read_json(turns_path(workdir))["段落"] if t["說話者"] == person]
@@ -913,17 +918,23 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
     for p0 in (wd.read_json(personnames.people_path(workdir), default=None) or {}).get("人名", []):
         if real and p0.get("名冊本名") and real in (p0["名字"], *p0["其他寫法"]):
             real = p0["名冊本名"]
+    from bookclub import epcodes
+
     with _lock:
         data = wd.read_json(turns_path(workdir))
         p = data["學員"].setdefault(person, {"秒數": 0.0, "段數": 0, "點名線索": {}})
+        old = p.get("本名")
         p["本名"] = real or None
         p.pop("本名未知", None)
         if real:
-            from bookclub import epcodes
-
             p["代號"] = epcodes.episode_codes(workdir).get(real) or roster.get(real) or p.get("代號")
         wd.write_json(turns_path(workdir), data)
-        return {"ok": True, "學員": person, "本名": p["本名"], "代號": p.get("代號")}
+    # 10-07 宇軒：選了學員 N 是誰之後當場自動配代號（依性別、不撞名，標「自動配的，還沒確認」，人可以改）
+    if old and old != real:
+        epcodes.release_auto(workdir, old)   # 原本那個本名自動配、還沒確認的代號收回來
+    auto = epcodes.auto_for_student(workdir, real) if real else None
+    code = epcodes.episode_codes(workdir).get(real) if real else None
+    return {"ok": True, "學員": person, "本名": real or None, "代號": code or p.get("代號"), "自動配代號": auto}
 
 
 def set_name_code(workdir: str | Path, real: str, code: str | None) -> dict:
@@ -933,6 +944,9 @@ def set_name_code(workdir: str | Path, real: str, code: str | None) -> dict:
     from bookclub.config import data_dir
 
     workdir = Path(workdir)
+    from bookclub import epcodes as _ep
+
+    _ep.clear_auto(workdir, real)   # 10-07：人自己選了代號（自動配的會在這之後再標回去）
     added = 0
     if code and not any(r["canonical"] == real for r in names.load_roster(data_dir() / "名冊.csv")):
         alts = next((p["其他寫法"] for p in (wd.read_json(personnames.people_path(workdir), default=None) or {}).get("人名", [])

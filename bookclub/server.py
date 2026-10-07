@@ -1312,6 +1312,15 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub import epcodes
 
             self._send_json(200, epcodes.auto_assign(server.workdir))
+        elif path == "/api/codes/initial":   # 10-07：進第 3 步時 ③ 名冊上的人自動配一次代號（做過就不再做）
+            from bookclub import epcodes
+
+            self._send_json(200, epcodes.auto_initial(server.workdir))
+        elif path == "/api/codes/confirm":   # 10-07：自動配的代號，人確認不改（拿掉「還沒確認」）
+            from bookclub import epcodes
+
+            epcodes.clear_auto(server.workdir, str(body["本名"]))
+            self._send_json(200, {"ok": True})
         elif path == "/api/people/decide":   # 09-29：名冊上沒有的名字怎麼處理（第 1 步人名清單）
             from bookclub import personnames
 

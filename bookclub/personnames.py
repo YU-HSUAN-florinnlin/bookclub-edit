@@ -330,7 +330,8 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
                     "做法": "換成代號" if in_two else how,
                     "代號": codes.get(canon) if (in_two or how in ("換成代號", "是上面的學員")) else None,
                     "同一人": d.get("同一人"),
-                    "已決定": in_two or bool(d.get("做法"))})
+                    "自動配": bool(d.get("自動配")) and not in_two,   # 10-07：程式自動配的代號，人還沒確認
+                    "已決定": in_two or (bool(d.get("做法")) and not d.get("自動配"))})
     return out
 
 

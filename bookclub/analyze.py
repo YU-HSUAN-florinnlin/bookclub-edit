@@ -322,6 +322,14 @@ def run_analyze(
         except Exception as exc:  # Claude 失敗就沒有清單，不擋其他步驟（第 3 步 ③ 不能標完成、第 4 步擋住）
             claude_failed.append(claude_failure("人名清單", exc))
             print(f"⚠️ [分析一條龍] 人名清單（Claude）失敗：{exc}；之後可以單獨跑 bookclub run people <工作區>")
+        try:   # 10-07：③ 名冊上的人先自動配一次代號（依名冊性別、不撞名；第 3 步標「自動配的，還沒確認」）
+            from bookclub import epcodes
+
+            r = epcodes.auto_initial(workdir)
+            if r.get("③"):
+                print(f"[分析一條龍] 名冊上被提到的人先自動配了 {r['③']} 個代號（第 3 步可以改）")
+        except Exception as exc:  # 配不成不擋分析，進第 3 步會再配
+            print(f"⚠️ [分析一條龍] 代號沒自動配成（{type(exc).__name__}）；進第 3 步會再配")
 
     # 建議刪除段落在背景跑（Claude＋候選附近的畫面檢查），不擋前面的步驟，最後才收
     cut_data = None

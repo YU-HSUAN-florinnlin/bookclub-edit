@@ -694,7 +694,17 @@ def page_data(workdir: str | Path) -> dict:
         "重做中": check.get("重做中"),   # 10-01 第三批：第 4 步正在（或上次沒做完）重做退回的
         "重做過": check.get("重做過") if (check.get("重做過") or {}).get("處理紀錄產生時間") == (log or {}).get("產生時間") else None,
         "狀態": status(log, check),
+        "學員顯示名": _student_labels(workdir),   # 10-07：畫面上「學員3」換成「本名（代號）」（只在畫面換，紀錄檔不寫本名）
     }
+
+
+def _student_labels(workdir: Path) -> dict[str, str]:
+    try:
+        from bookclub import epcodes
+
+        return epcodes.student_labels(workdir)
+    except Exception:  # noqa: BLE001 — 算不出來就照舊顯示「學員 N」
+        return {}
 
 
 def choose_product(workdir: str | Path, rel: str) -> dict:
