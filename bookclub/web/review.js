@@ -108,11 +108,25 @@ function rvStuColor(who) {
   return RV_STU_SHADES[(i < 0 ? 0 : i) % RV_STU_SHADES.length];
 }
 
-function rvWho(name) {
-  if (!name) return "（不知道是誰）";
-  if (name === "老師") return "老師";
-  const code = ((rv.data["學員"] || {})[name] || {})["代號"];
-  return code ? `${name}（${code}）` : name;
+// 10-07 宇軒：卡片上的「學員 N」改顯示「本名（代號）」（不加開關）；沒選本名的照舊；
+// 兩位學員 N 選了同一個本名，後面加「・學員 N」分得出來（rvWhoHtml 用小字）
+function rvWhoParts(name) {
+  if (!name) return ["（不知道是誰）", ""];
+  if (name === "老師") return ["老師", ""];
+  const all = rv.data["學員"] || {};
+  const p = all[name] || {};
+  const real = p["本名"];
+  const code = (real && (rv.data["這一集代號"] || {})[real]) || p["代號"];
+  if (!real) return [code ? `${name}（${code}）` : name, ""];
+  const twin = Object.entries(all).some(([n, q]) => n !== name && q["本名"] === real);
+  return [`${real}（${code || "還沒代號"}）`, twin ? `・${name}` : ""];
+}
+
+function rvWho(name) { return rvWhoParts(name).join(""); }
+
+function rvWhoHtml(name) {
+  const [a, b] = rvWhoParts(name);
+  return esc(a) + (b ? `<small class="rv-meta">${esc(b)}</small>` : "");
 }
 
 function rvPrepDone() {
@@ -155,6 +169,13 @@ function rvGoNoteHtml() {
 async function renderReview() {
   contentEl.innerHTML = "<p>載入中…</p>";
   rv.data = await apiGet("/api/review");
+  // 10-07：進第 3 步時 ③ 名冊上的人自動配一次代號（後端記旗標，只做一次；GET 不寫檔，所以放在這裡 POST）
+  if (!rv.data["代號開始前已配"] && !rv.data["AI執行中"]) {
+    try {
+      const r = await apiPost("/api/codes/initial", {});
+      if (r["③"]) rv.data = await apiGet("/api/review");
+    } catch (e) { /* 配不成不擋第 3 步，「幫還沒代號的自動配」照樣能按 */ }
+  }
   rv.prepOpen = !rvPrepDone();
   const go = rvGoto;
   rvGoto = null;
@@ -171,6 +192,7 @@ async function renderReview() {
           <button class="ghost" id="rv-prep-btn">開始前 4 件事</button>
           <button class="ghost" id="rv-set-btn" aria-expanded="false">設定</button>
           <button class="ghost" id="rv-key-btn" aria-expanded="false">快捷鍵</button>
+          <button class="ghost" id="rv-code-btn" aria-expanded="false" title="本名和代號的對照（截圖或分享螢幕時會露出本名）">代號對照</button>
           <button class="ghost" id="rv-export" title="只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交接整個專案請複製整個工作區資料夾">匯出覆核結果</button>
           <button class="primary" id="rv-go4" disabled>全部通過，開始 AI 修改</button>
         </div>
@@ -188,6 +210,7 @@ async function renderReview() {
         </dl>
       </div>
       <div class="rv-drawer" id="rv-settings" hidden></div>
+      <div class="rv-drawer" id="rv-codes" hidden></div>
       <div class="rv-export-msg" id="rv-export-msg"></div>
       <section class="rv-upper">
         <div class="rv-left">
@@ -220,6 +243,7 @@ async function renderReview() {
   document.getElementById("rv-prep-btn").addEventListener("click", () => { rv.prepOpen = !rv.prepOpen; rvRenderMain(); });
   document.getElementById("rv-set-btn").addEventListener("click", (e) => rvToggleDrawer("rv-settings", e.currentTarget));
   document.getElementById("rv-key-btn").addEventListener("click", (e) => rvToggleDrawer("rv-keys", e.currentTarget));
+  document.getElementById("rv-code-btn").addEventListener("click", (e) => rvToggleDrawer("rv-codes", e.currentTarget));
   document.getElementById("rv-export").addEventListener("click", rvExport);
   document.getElementById("rv-go4").addEventListener("click", rvConfirmGo4);
   rvBindTimeline(document.getElementById("rv-tl"));
@@ -257,6 +281,33 @@ function rvToggleDrawer(id, btn) {
   el.hidden = !el.hidden;
   btn.setAttribute("aria-expanded", String(!el.hidden));
   if (id === "rv-settings" && !el.hidden) rvRenderSettings();
+  if (id === "rv-codes" && !el.hidden) rvRenderCodeMap();
+}
+
+// 10-07 宇軒：「代號對照」抽屜——檢查後面內容的時候隨時叫得出來：上半 本名 → 代號 → 哪幾位學員 N → 來源；
+// 下半 全部代號分女男，標已用（給了誰）／未用。資料是 GET /api/review 的「代號對照」（後端 epcodes.code_table，只讀）
+function rvRenderCodeMap() {
+  const el = document.getElementById("rv-codes");
+  if (!el) return;
+  const t = rv.data["代號對照"] || {};
+  const rows = t["對照"] || [];
+  const stuNo = (n) => n.replace(/^學員(\d+)$/, "學員 $1");
+  const body = rows.length ? rows.map((r) => `<tr>
+      <td><b>${esc(r["本名"])}</b>${(r["其他寫法"] || []).length ? `<span class="rv-meta">（也寫成 ${esc(r["其他寫法"].join("、"))}）</span>` : ""}</td>
+      <td>${r["代號"] ? `<b>${esc(r["代號"])}</b>` : '<span class="rv-warnline">還沒代號</span>'}${r["自動配未改過"] ? ' <span class="rv-tag" title="程式自動配的，人還沒改過">自動配</span>' : ""}</td>
+      <td>${esc((r["學員"] || []).map(stuNo).join("、") || "—")}</td>
+      <td>${esc(r["來源"] || "—")}${r["性別"] ? `<span class="rv-meta">・${esc(r["性別"])}（${esc(r["性別依據"] || "")}）</span>` : ""}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="rv-meta">還沒有人有代號：先在「開始前 4 件事」② 選學員是誰。</td></tr>';
+  const noReal = t["還沒選本名"] || [];
+  const pool = t["名單"] || {};
+  const chips = (list) => list.map((e) => `<span class="rv-codechip${e["給了"].length ? " used" : ""}">${esc(e["代號"])}
+      <span class="rv-meta">${e["給了"].length ? `已用（${esc(e["給了"].join("、"))}）` : "未用"}</span>${(e["撞名"] || []).length ? `<span class="rv-warnline">撞名：${esc(e["撞名"].join("、"))}</span>` : ""}</span>`).join("");
+  el.innerHTML = `<p class="rv-warnline">截圖或分享螢幕時，這裡會露出本名。用完再按一次「代號對照」收起來。</p>
+    <table class="rv-codemap"><thead><tr><th>本名</th><th>代號</th><th>學員</th><th>來源</th></tr></thead><tbody>${body}</tbody></table>
+    ${noReal.length ? `<p class="rv-meta">還沒選本名：${esc(noReal.map(stuNo).join("、"))}</p>` : ""}
+    <h3>全部代號</h3>
+    ${[["女", "女生名單"], ["男", "男生名單"], ["其他", "自己打的、舊的"]].filter(([k]) => (pool[k] || []).length)
+      .map(([k, lab]) => `<div class="rv-codepool"><b>${lab}</b>${chips(pool[k])}</div>`).join("")}`;
 }
 
 function rvFirstPending() {
@@ -278,7 +329,7 @@ function rvRenderAll() {
 // 看、播放、篩選、上一筆下一筆照常；其他按鈕與輸入框鎖住，上方橫幅說明。後端也擋（409）。
 // ---------------------------------------------------------------------------
 
-const RV_RO_ALLOW = "#rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-export, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
+const RV_RO_ALLOW = "#rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-export, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
 
 function rvReadonly() { return !!(rv.data && rv.data["AI執行中"]); }
 
@@ -320,6 +371,8 @@ async function rvReload() {
   rvRenderAll();
   const s = document.getElementById("rv-settings");
   if (s && !s.hidden) rvRenderSettings();
+  const c = document.getElementById("rv-codes");
+  if (c && !c.hidden) rvRenderCodeMap();
 }
 
 // ---------------------------------------------------------------------------
@@ -936,7 +989,7 @@ function rvBodyHtml(it) {
   if (t === "學員段落") {
     const text = it["已確認"] ? it["校對稿"] : it["建議稿"];
     const rows = Math.min(9, Math.max(3, Math.ceil((text || "").length / 34)));
-    return `<p class="rv-who">${esc(rvWho(it["說話者"]))}${it["手動標記"] ? "　（人工標記的段落）" : ""}</p>
+    return `<p class="rv-who">${rvWhoHtml(it["說話者"])}${it["手動標記"] ? "　（人工標記的段落）" : ""}</p>
       <textarea id="rv-text" rows="${rows}" aria-label="逐字稿（可以直接改）">${esc(text)}</textarea>
       ${(it["換過的字"] || []).length && !it["已確認"] ? `<p class="rv-note">自動換成代號的地方：${rvMarkChanges(it["建議稿"], it["換過的字"])}</p>` : ""}
       ${it["代號改過"] ? `<p class="rv-warnline">代號改過，請再看一次（原本的代號：${esc(it["代號改過"])}，別人也在用，沒有自動換）。</p>` : ""}
@@ -947,7 +1000,7 @@ function rvBodyHtml(it) {
   }
   if (t === "學員名字") {
     const w = it["整句"];
-    return `<p class="rv-who">${esc(rvWho(it["學員"]))}（保留原聲）講到名字</p><p class="rv-quote">${it.sentence_html}</p>
+    return `<p class="rv-who">${rvWhoHtml(it["學員"])}（保留原聲）講到名字</p><p class="rv-quote">${it.sentence_html}</p>
       ${w ? `<p class="rv-note">選「換成代號」時，用${esc(rvWho(it["學員"]))}自己的聲音重念這句：${esc(w["換成代號"] || w["原文"])}${w["換成代號"] ? "" : "（句子裡找不到比對到的字，會退回直接消音）"}</p>` : ""}
       <p class="rv-meta">代號 ${esc(it["代號"] || "（沒有）")}${it["信心"] === "低" ? "　低信心，先聽清楚是不是名字" : ""}</p>`;
   }
@@ -1536,7 +1589,7 @@ function rvRenderPrep() {
 function rvSegsOf(who) { return rvItems().filter((x) => x["類型"] === "學員段落" && x["說話者"] === who); }
 
 function rvPrepPeopleHtml() {
-  // 09-29 宇軒：改成左右兩欄。左：照聲音特徵分出來的每一位，試聽＋選本名（最後一個選項是老師）；右：每個本名在這支影片用哪個英文代號
+  // 09-29 宇軒：改成左右兩欄。左：照聲音特徵分出來的每一位，試聽＋選本名（最後一個選項是老師）；右：每個本名在這支影片用哪個代號
   const people = Object.entries(rv.data["學員"] || {});
   if (!people.length) return `<p class="rv-meta">${rv.data["有段落"] ? "這支影片沒有學員段落。" : "還沒有段落分析結果：先跑完第 1 步影片分析。"}</p>`;
   const tp = rv.data["學員資料"] || {};
@@ -1587,8 +1640,10 @@ function rvPrepPeopleHtml() {
     const who = people.filter(([, p]) => p["本名"] === r).map(([n]) => n).join("、");
     const opts = rvCodeOpts(cur, "（還沒指定）") + '<option value="__new">新的代號…</option>';
     const notInRoster = !reals.includes(r);
+    const auto = cur && (rv.data["代號自動配未改過"] || {})[r] === cur;   // 10-07：選了本名當場自動配的（算決定好，人一改就拿掉標示）
     return `<li class="rv-person"><div class="nm"><b>${esc(r)}</b><span class="rv-meta">${esc(who)}${notInRoster ? "・名冊上沒有，選了代號會加進名冊" : ""}</span></div>
       <div class="ctl"><label>代號 <select class="rv-namecode" data-real="${esc(r)}">${opts}</select></label>
+        ${auto ? `<span class="rv-tag" title="程式自動配的，不用改就不用動">自動配</span>` : ""}
 </div></li>`;
   }).join("") : `<li class="rv-meta">左邊選了本名之後，這裡會列出來。</li>`;
   return `${rvDupHtml()}<p class="rv-meta">左邊是照聲音特徵分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個代號（只影響這一集，老師講到他的名字、學員稿子裡的名字都會照這裡換）。</p>${rvEnglishCodesHtml()}${rvAutoHtml()}
@@ -1611,16 +1666,21 @@ function rvVoiceSelect(n, p) {
 }
 
 // 10-02 第七批：代號選單分女男、只顯示中文（後端 epcodes.code_groups）；這一集用到的其他代號放最後
+// 10-07：已經給別人的標「（已給某某）」，跟名冊或人名清單上的名字一樣的標「（撞名）」
 function rvCodeOpts(cur, first) {
   const g = rv.data["代號分組"] || {};
   const flat = rv.data["代號選項"] || [];
-  const opt = (c) => `<option ${cur === c ? "selected" : ""}>${esc(c)}</option>`;
+  const map = rv.data["代號對照"] || {};
+  const given = map["代號給了"] || {};
+  const clash = map["撞名"] || {};
+  const note = (c) => c === cur ? "" : (given[c] || []).length ? `（已給${given[c].join("、")}）` : clash[c] ? "（撞名）" : "";
+  const opt = (c) => `<option value="${esc(c)}" ${cur === c ? "selected" : ""}>${esc(c + note(c))}</option>`;
   const groups = g["女"] ? [["女", g["女"]], ["男", g["男"] || []], ["這一集用到的其他代號", g["這一集用到的其他代號"] || []]]
     : [["代號", flat]];
   const all = groups.flatMap(([, cs]) => cs);
   return [`<option value="">${esc(first)}</option>`]
     .concat(groups.filter(([, cs]) => cs.length).map(([lab, cs]) => `<optgroup label="${esc(lab)}">${cs.map(opt).join("")}</optgroup>`))
-    .concat(cur && !all.includes(cur) ? [`<option selected>${esc(cur)}</option>`] : [])
+    .concat(cur && !all.includes(cur) ? [`<option value="${esc(cur)}" selected>${esc(cur)}</option>`] : [])
     .join("");
 }
 
@@ -1638,10 +1698,17 @@ function rvEnglishCodesHtml() {
 }
 
 function rvAutoHtml() {
-  // 09-29：名冊拿掉代號欄後，每一集要自己選代號；還沒選的一鍵配常用英文名（之後可以改）
+  // 09-29：名冊拿掉代號欄後，每一集要自己選代號；還沒選的一鍵配（10-07：依性別、不撞名，之後可以改）
   const lack = rv.data["還沒代號"] || [];
   return `<div class="rv-actions">${lack.length ? `<span class="rv-warnline">還有 ${lack.length} 個名字這一集沒有代號</span>` : ""}
     <button class="ghost small" id="rv-autocode">幫還沒代號的自動配</button></div>`;
+}
+
+// 10-07：手動選到跟名字撞的代號（名冊上有人、或這一集被叫到的人叫這個名字）→ 先問一次
+function rvCodeClashOk(code) {
+  const who = ((rv.data["代號對照"] || {})["撞名"] || {})[code];
+  if (!who || !who.length) return true;
+  return confirm(`「${code}」跟名字撞名（${who.join("、")} 也叫這個）。成品裡會分不出是代號還是真的在叫這個人。\n還是要用嗎？`);
 }
 
 function rvDupHtml() {
@@ -1685,7 +1752,7 @@ function rvPrepNamesHtml() {
         ${hows.map((h) => `<label class="rv-check"><input type="radio" name="un-${esc(u.id)}" class="rv-unhow" data-name="${esc(u["名字"])}" value="${h}" ${u["做法"] === h ? "checked" : ""}> ${h}</label>`).join("")}
         <select class="rv-uncode" data-name="${esc(u["名字"])}" ${u["做法"] === "換成代號" ? "" : "hidden"}>${codeOpts}</select>
         <select class="rv-unsame" data-name="${esc(u["名字"])}" ${u["做法"] === "是上面的學員" ? "" : "hidden"}>${sameOpts}</select>
-        ${u["已決定"] ? "" : u["做法"] ? `<span class="rv-meta">（建議，還沒確認）</span>${confirmBtn}` : '<span class="rv-warnline">還沒決定</span>'}</div>
+        ${u["已決定"] ? (u["自動配"] ? '<span class="rv-tag" title="程式自動配的，不用改就不用動">自動配</span>' : "") : u["做法"] ? `<span class="rv-meta">（建議，還沒確認）</span>${confirmBtn}` : '<span class="rv-warnline">還沒決定</span>'}</div>
       ${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
   }).join("");
   const twoBlock = fromTwo.length ? `<li class="rv-person"><details><summary class="rv-meta">② 已經定好的學員（${fromTwo.length} 個）：${fromTwo.map((u) => `${esc(u["名字"])} → ${esc(u["代號"] || "還沒選代號")}`).join("、")}</summary>
@@ -1745,10 +1812,14 @@ function rvBindPrep(root) {
     if (res["補找到的老師名字"]) alert(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
     await reload();
   }));
-  const askCode = (el) => {   // 「新的代號…」：自己打一個英文代號
-    if (el.value !== "__new") return el.value || null;
-    const v = (prompt("輸入新的代號（外國人名的中文寫法，例如 葛蕾絲）") || "").trim();
-    if (!v) { el.value = ""; return undefined; }
+  const askCode = (el) => {   // 「新的代號…」：自己打一個代號
+    let v = el.value;
+    if (v === "__new") {
+      v = (prompt("輸入新的代號（外國人名的中文寫法，例如 葛蕾絲）") || "").trim();
+      if (!v) { el.value = ""; return undefined; }
+    }
+    if (!v) return null;
+    if (!rvCodeClashOk(v)) { el.value = ""; return undefined; }
     return v;
   };
   root.querySelectorAll(".rv-namecode").forEach((el) => el.addEventListener("change", async () => {
@@ -2009,7 +2080,7 @@ const rvEdCtx = {
       const kind = el.querySelector("[data-te-kind]");
       if (kind) kind.addEventListener("change", () => { ed.kind = kind.value || null; ed.result = null; rvRenderIO(); });
       const who = el.querySelector("#rv-ed-who"); if (who) who.addEventListener("change", () => { ed.who = who.value; });
-      const code = el.querySelector("#rv-ed-code"); if (code) code.addEventListener("change", () => { ed.code = code.value; });
+      const code = el.querySelector("#rv-ed-code"); if (code) code.addEventListener("change", () => { if (!rvCodeClashOk(code.value)) code.value = ""; ed.code = code.value; });
       const word = el.querySelector("#rv-ed-word"); if (word) word.addEventListener("change", () => { ed.word = word.value; });
       el.querySelectorAll(".rv-ed-way").forEach((r) => r.addEventListener("change", () => { ed.way = r.value; }));
     },

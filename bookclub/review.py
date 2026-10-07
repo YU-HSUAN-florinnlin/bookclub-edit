@@ -251,6 +251,21 @@ def people_list_missing(workdir: Path) -> bool:
     return wd.merged_transcript_path(workdir).exists() and not personnames.people_path(workdir).exists()
 
 
+def _safe(fn, default):
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001 — 算不出來不要擋住工作台
+        print(f"⚠️ 第 3 步資料有一項算不出來：{type(exc).__name__}")
+        return default
+
+
+def _code_table(workdir: Path) -> dict:
+    """10-07：「代號對照」抽屜的資料（epcodes.code_table）；算不出來給空的，不擋第 3 步。"""
+    from bookclub import epcodes
+
+    return _safe(lambda: epcodes.code_table(workdir), {"對照": [], "代號給了": {}, "撞名": {}, "還沒選本名": [], "名單": {}})
+
+
 def prep_pending(dec: dict, people: dict, suggestions: list[dict], mentioned: list[dict],
                  codes: dict[str, str], people_missing: bool = False) -> dict[str, list[str]]:
     """開始前 4 件事，每一件底下還沒處理的（純函式，09-30）：
@@ -1366,6 +1381,9 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "學員資料": {k: tdata.get(k) for k in ("本名選項", "名冊代號", "老師名稱", "本名代號", "這一集的名字")},   # 09-29「學員是誰」兩欄
         "代號重複": _dup_codes(workdir, tdata),
         "這一集代號": ep_codes,   # 09-29：名冊拿掉代號欄，② ③ 顯示用這張
+        "代號對照": _code_table(workdir),   # 10-07：頂端「代號對照」抽屜、選單標「已給某某」、撞名警告
+        "代號自動配未改過": _safe(lambda: epcodes.auto_unchanged(workdir), {}),
+        "代號開始前已配": bool(_safe(lambda: epcodes._load_auto(workdir).get("開始前③已配"), True)),
         "還沒代號": epcodes.missing(workdir),
         "提到的名字": mentioned,
         "名冊重複寫法": _roster_dups(),   # 10-03 第八批（#12）：③ 上面提醒「名冊裡同一個寫法出現在兩列」

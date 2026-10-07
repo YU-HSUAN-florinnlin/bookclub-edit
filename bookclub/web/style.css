@@ -536,7 +536,7 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .rv-person .nm { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
 .rv-person .nm .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .rv-person .ctl { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; font-size: 15px; }
-/* 09-29「學員是誰」左右兩欄：左邊聲紋分出來的人→本名，右邊本名→英文代號；窄螢幕上下排 */
+/* 09-29「學員是誰」左右兩欄：左邊聲紋分出來的人→本名，右邊本名→代號；窄螢幕上下排 */
 .rv-people2 { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 0 28px; }
 .rv-people2 h4 { margin: 8px 0 0; font-size: 15px; color: var(--rv-muted, #666); font-weight: 600; }
 .rv-people2 > div + div { border-left: 1px solid var(--rv-line); padding-left: 24px; }
@@ -692,3 +692,13 @@ table.kv.pk-table td.pk-what { width: 5.5em; font-weight: 600; color: inherit; }
 .fo-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
 table.kv.pk-table { table-layout: fixed; width: 100%; }
 table.kv.pk-table td.pk-btns { width: 12em; }
+
+/* 10-07「代號對照」抽屜：上半本名 → 代號 → 學員 N → 來源；下半全部代號分女男、已用／未用 */
+.rv-codemap { width: 100%; border-collapse: collapse; font-size: 14px; margin: 6px 0 10px; }
+.rv-codemap th, .rv-codemap td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.rv-codemap th { font-weight: 600; color: var(--muted); }
+.rv-codepool { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: baseline; margin: 6px 0; font-size: 14px; }
+.rv-codepool > b { min-width: 7em; }
+.rv-codechip { display: inline-flex; gap: 4px; align-items: baseline; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border); }
+.rv-codechip.used { font-weight: 600; }
+.rv-codechip .rv-warnline { margin: 0; font-size: 12px; }

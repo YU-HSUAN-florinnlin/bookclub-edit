@@ -330,6 +330,7 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
                     "做法": "換成代號" if in_two else how,
                     "代號": codes.get(canon) if (in_two or how in ("換成代號", "是上面的學員")) else None,
                     "同一人": d.get("同一人"),
+                    "自動配": bool(d.get("自動配")) and not in_two,   # 10-07：程式自動配的代號（算決定好，人沒改過）
                     "已決定": in_two or bool(d.get("做法"))})
     return out
 
@@ -338,7 +339,15 @@ unlisted = mentioned   # 舊名字
 
 
 def decide(workdir: str | Path, name: str, how: str, code: str | None = None, same_as: str | None = None) -> dict:
-    """`POST /api/people/decide`：名冊上沒有的名字怎麼處理。換成代號＝加進名冊＋補找老師提到的地方。"""
+    """`POST /api/people/decide`：名冊上沒有的名字怎麼處理。換成代號＝加進名冊＋補找老師提到的地方。
+    10-07 審查：跟自動配同一把鎖（epcodes._auto_lock）。"""
+    from bookclub import epcodes
+
+    with epcodes._auto_lock:
+        return _decide(workdir, name, how, code, same_as)
+
+
+def _decide(workdir: str | Path, name: str, how: str, code: str | None = None, same_as: str | None = None) -> dict:
     from datetime import datetime
 
     workdir = Path(workdir)

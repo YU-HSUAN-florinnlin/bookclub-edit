@@ -27,6 +27,11 @@ const fcSourceName = (src) => String(src || "").replace(/^render video\s*/, "成
 const FC_MAX_RATE = 2;
 
 const fc = { seen: [], seg: null, data: null, video: null, audio: null, cur: null, mode: "逐筆", sentRanges: "", timer: null, redoOpen: false, lastT: 0, ab: null };
+// 10-07 宇軒：畫面上的「學員3」換成「本名（代號）」（GET /api/final 的「學員顯示名」；只在畫面換，處理紀錄不寫本名）
+function fcWho(text) {
+  const names = (fc.data && fc.data["學員顯示名"]) || {};
+  return String(text == null ? "" : text).replace(/學員\s?(\d+)(?!\d)/g, (m, n) => names[`學員${n}`] || m);
+}
 let fcBackKey = null;   // 10-01 第三批 13：從第 3 步按「回第 5 步成品檢查」回來時，回到出發的那一筆（影片跳到那裡、卡片捲進畫面）
 
 function fcFmt(t, d = 1) { return typeof rvFmt === "function" ? rvFmt(t, d) : String(t); }
@@ -308,15 +313,15 @@ function fcRenderRight() {
   const done = r["已改範圍"];
   const state = r["結果"] === "通過" ? `<span class="rv-state ok">✓ 通過</span>`
     : r["結果"] === "退回重做" ? `<span class="rv-warnline">退回重做：${esc(r["原因"])}</span>${done && done["改成"]
-      ? `<br><span class="rv-meta">範圍改了：${done["原本"] ? `${esc(fcFmt(done["原本"][0]))}–${esc(fcFmt(done["原本"][1]))} → ` : ""}${esc(fcFmt(done["改成"][0]))}–${esc(fcFmt(done["改成"][1]))}（原片時間，第 3 步〈${esc(done["名稱"] || "")}〉看得到）。第 4 步按「開始執行」會${esc(done["重做"] || "重新組裝")}</span>` : ""}` : "";
+      ? `<br><span class="rv-meta">範圍改了：${done["原本"] ? `${esc(fcFmt(done["原本"][0]))}–${esc(fcFmt(done["原本"][1]))} → ` : ""}${esc(fcFmt(done["改成"][0]))}–${esc(fcFmt(done["改成"][1]))}（原片時間，第 3 步〈${esc(fcWho(done["名稱"] || ""))}〉看得到）。第 4 步按「開始執行」會${esc(done["重做"] || "重新組裝")}</span>` : ""}` : "";
   box.innerHTML = `<article class="rv-card">
       <header><span class="rv-chip fc-${FC_TYPE[r["類型"]] || "ov"}"><i></i>${esc(fcKind(r["類型"]))}</span>
         <span class="rv-when">${esc(fcBoth(r))}</span>${fcIdTag(r)}
         <span class="rv-count">第 ${idx + 1}／${all.length} 筆</span></header>
       <div class="rv-body">
-        <p>${esc(r["做了什麼"])}</p>
+        <p>${esc(fcWho(r["做了什麼"]))}</p>
         ${r["文字"] ? `<p class="rv-note">念的稿子：${esc(r["文字"])}</p>` : ""}
-        ${(r["覆核名稱"] || []).length ? `<p class="rv-meta">第 3 步：${esc(r["覆核名稱"].join("、"))}</p>` : ""}
+        ${(r["覆核名稱"] || []).length ? `<p class="rv-meta">第 3 步：${esc(fcWho(r["覆核名稱"].join("、")))}</p>` : ""}
         ${r["要人聽"] ? `<p class="rv-warnline">生成檢查沒過或放不進時間格：仔細聽</p>` : ""}
         ${fcEdgeHtml(r)}
       </div>
@@ -407,13 +412,13 @@ function fcSrcTime(t) {   // 成品時間 → 原片時間（跟後端 finalchec
 
 function fcRetimeHtml(r) {
   const t = r["改範圍"] || {};
-  const go = t["第3步"] ? `<button class="ghost small" id="fc-go3">去第 3 步〈${esc(t["名稱"] || "這一筆")}〉</button>` : "";
+  const go = t["第3步"] ? `<button class="ghost small" id="fc-go3">去第 3 步〈${esc(fcWho(t["名稱"] || "這一筆"))}〉</button>` : "";
   if (!t["可以"]) {
     return `<div class="rv-field fc-retime"><b>調整時間範圍</b>
       <p class="rv-meta">這一筆不能在這裡改範圍：${esc(t["原因"] || "")}。下一步：${esc(t["下一步"] || "")}</p>${go}</div>`;
   }
   return `<div class="rv-field fc-retime"><b>調整時間範圍</b>（原片時間）
-      <p class="rv-meta">時間點抓得不準，在這裡直接改起點終點：存到第 3 步〈${esc(t["名稱"])}〉同一個地方，這一筆自動標成退回重做，第 4 步按「開始執行」會${esc(t["重做"])}（其他做好的不重做）。</p>
+      <p class="rv-meta">時間點抓得不準，在這裡直接改起點終點：存到第 3 步〈${esc(fcWho(t["名稱"]))}〉同一個地方，這一筆自動標成退回重做，第 4 步按「開始執行」會${esc(t["重做"])}（其他做好的不重做）。</p>
       <div id="fc-retime"></div>${go}</div>`;
 }
 
@@ -443,7 +448,7 @@ function fcBindRetime(r) {
     st: { kind: t["類型"], id: t.id, a: t.start, b: t.end, busy: false, result: fc.retimeResult || null },
     o: {
       aria: "調整時間範圍",
-      head: () => `<span class="rv-meta">〈${esc(t["名稱"])}〉${range ? "的重念範圍" : gen ? "會換成學員生成聲音的範圍" : ""}</span>`,
+      head: () => `<span class="rv-meta">〈${esc(fcWho(t["名稱"]))}〉${range ? "的重念範圍" : gen ? "會換成學員生成聲音的範圍" : ""}</span>`,
       hint: () => fcRetimeHint(t),
       now: () => (fc.video ? Math.round(fcSrcTime(fc.video.currentTime) * 100) / 100 : null),
       nowLabel: "用影片目前位置（換成原片時間）",
@@ -603,7 +608,7 @@ function fcRenderWhole() {
         <input id="fc-flag-why" placeholder="例如：這裡聲音突然變小"></label></div>
       <div class="rv-actions"><button class="primary" id="fc-flag">這裡有問題（退回重做）</button></div>
       ${flags.length ? `<ul class="fc-flags">${flags.map((x) => `<li><button class="linkish" data-t="${x["成品秒"]}">${esc(fcFmt(x["成品秒"]))}</button>
-        ${esc(x["原因"])}${(x["覆核名稱"] || []).length ? `<span class="rv-meta">（${esc(x["覆核名稱"].join("、"))}）</span>` : ""}
+        ${esc(x["原因"])}${(x["覆核名稱"] || []).length ? `<span class="rv-meta">（${esc(fcWho(x["覆核名稱"].join("、")))}）</span>` : ""}
         <button class="ghost small" data-rm="${esc(x.id)}">刪掉</button></li>`).join("")}</ul>` : ""}
     </article>`;
   document.getElementById("fc-flag").addEventListener("click", async () => {
@@ -636,8 +641,8 @@ function fcRenderLower() {
   const rows = fcShown().map((r) => `<li data-key="${esc(r["鍵"])}" class="${r["鍵"] === fc.cur ? "cur" : ""} ${r["結果"] ? "done" : ""}">
       <span class="tm">${r["原片"] ? `原片 ${esc(fcFmt(r["原片"][0]))}` : "—"}<br><small>${fcHasTime(r) ? `成品 ${esc(fcFmt(r["成品"][0]))}` : r["原片"] ? "成品裡沒有" : ""}</small></span>
       <span class="ty"><span class="rv-chip fc-${FC_TYPE[r["類型"]] || "ov"}"><i></i>${esc(fcKind(r["類型"]))}</span></span>
-      <span class="tx">${fcIdTag(r)}${r["重做過"] ? `<span class="rv-tag">${esc(r["重做過"]["標籤"] || "重做過")}${r["重做過"]["第幾版"] && r["重做過"]["做法"] === "重新生成" ? `・第 ${r["重做過"]["第幾版"]} 版` : ""}</span>` : ""}${esc(r["做了什麼"])}</span>
-      <span class="sg">${esc((r["覆核名稱"] || []).join("、"))}</span>
+      <span class="tx">${fcIdTag(r)}${r["重做過"] ? `<span class="rv-tag">${esc(r["重做過"]["標籤"] || "重做過")}${r["重做過"]["第幾版"] && r["重做過"]["做法"] === "重新生成" ? `・第 ${r["重做過"]["第幾版"]} 版` : ""}</span>` : ""}${esc(fcWho(r["做了什麼"]))}</span>
+      <span class="sg">${esc(fcWho((r["覆核名稱"] || []).join("、")))}</span>
       <span class="st ${r["結果"] === "通過" ? "ok" : ""}">${r["結果"] === "通過" ? "✓ 通過" : r["結果"] === "退回重做" ? "退回" : "—"}</span></li>`).join("");
   lower.innerHTML = `${unHtml}<h2 class="fc-h2">處理紀錄（${fcRecs().length} 筆）</h2>
     <div class="rv-row fc-filter"><label class="nowrap"><input type="checkbox" id="fc-only" ${only ? "checked" : ""}> 只看要人聽的（${lookN} 筆）</label>

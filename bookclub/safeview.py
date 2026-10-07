@@ -856,6 +856,10 @@ def topic_codes(w: Path, f: Filter, out: list[str]) -> None:
     out.append(f"這一集的代號表：{len(used)} 個代號")
     for code, n in sorted(used.items(), key=lambda kv: str(kv[0])):
         out.append("  " + fmt_row({"代號": code, "人數": n}, ("代號", "人數")))
+    # 10-07：自動配、人沒改過的代號（只印個數與代號，不印本名）；進第 3 步的一次性自動配做過沒
+    pend = epcodes.auto_unchanged(w)
+    out.append(f"自動配（未改過）的代號 {len(pend)} 個：{'、'.join(sorted(c for c in pend.values() if c in epcodes.CODE_POOL)) or '—'}"
+               f"；開始前 ③ 自動配過：{'是' if epcodes._load_auto(w).get('開始前③已配') else '否'}")
     rows = codeswap.plan(w)["英文代號"]
     out.append(f"還在用的英文代號 {len(rows)} 個（換代號：bookclub codes convert <工作區> --map 舊=新）")
     for r in rows:
