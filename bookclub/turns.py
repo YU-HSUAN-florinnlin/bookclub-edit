@@ -939,7 +939,7 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
 
 def set_name_code(workdir: str | Path, real: str, code: str | None, *, add_roster: bool = True) -> dict:
     """`POST /api/turns/namecode`：這個本名在這支影片用哪個代號（右欄）；同一個本名的學員 N 一起改。
-    本名不在名冊上（第 1 步人名清單抓到的）：加進名冊，並補找老師提到這個名字的地方（人手動選代號時）。
+    本名不在名冊上（第 1 步人名清單抓到的）：名字加進名冊（代號不寫進名冊），並補找老師提到這個名字的地方（人手動選代號時）。
     10-07 宇軒：自動配（`add_roster=False`）只記這一集，不動名冊、不重掃名字候選。"""
     from bookclub import epcodes as _ep
 
@@ -957,7 +957,7 @@ def _set_name_code(workdir: Path, real: str, code: str | None, add_roster: bool 
     if add_roster and code and not any(r["canonical"] == real for r in names.load_roster(data_dir() / "名冊.csv")):
         alts = next((p["其他寫法"] for p in (wd.read_json(personnames.people_path(workdir), default=None) or {}).get("人名", [])
                      if p["名字"] == real), [])
-        if personnames.add_to_roster(real, alts, code):
+        if personnames.add_to_roster(real, alts):   # 10-07：名字加進名冊，代號只記這一集
             added = personnames.rescan_names(workdir)
     with _lock:
         data = wd.read_json(turns_path(workdir))

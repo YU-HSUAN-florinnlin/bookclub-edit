@@ -178,9 +178,11 @@ def decisions_path(workdir: Path) -> Path:
     return Path(workdir) / "校對" / DECISIONS_FILE
 
 
-def add_to_roster(name: str, alts: list[str], code: str) -> bool:
+def add_to_roster(name: str, alts: list[str], code: str | None = None) -> bool:
     """名冊上沒有的名字加進 `~/讀書會剪輯資料/名冊.csv`（中文名、其他寫法）。已經有這個名字就不重寫。
-    09-29：名冊拿掉英文代號欄，代號記在這一集（`bookclub/epcodes.py`）；舊名冊還有代號欄才會寫進去。"""
+    09-29：名冊拿掉英文代號欄，代號記在這一集（`bookclub/epcodes.py`）。
+    10-07 宇軒：名冊只負責認得出誰是誰（越用越準），代號每一集可以不同，**一律不寫進名冊**——舊名冊還有代號欄也留空
+    （以前會寫進去，名冊上的代號又會被當成每一集的預設，收不回來）。`code` 參數留著相容，不使用。"""
     import csv
 
     from bookclub import names
@@ -197,7 +199,7 @@ def add_to_roster(name: str, alts: list[str], code: str) -> bool:
     if not new_file:
         with io.StringIO(csvfile.read_text(path), newline="") as f:   # 10-03 #35：Excel 另存的 Big5 也讀得了
             header = next(csv.reader(f), None) or header
-    row = {"中文名": name, "其他寫法": "、".join(a for a in alts if a != name), "英文代號": code}
+    row = {"中文名": name, "其他寫法": "、".join(a for a in alts if a != name)}   # 10-07：代號不寫進名冊
     with open(path, "a", encoding="utf-8", newline="") as f:
         if not new_file and tail not in (b"\n", b""):
             f.write("\n")
@@ -379,13 +381,13 @@ def _decide(workdir: str | Path, name: str, how: str, code: str | None = None, s
         if same_as in roster:
             add_roster_alias(same_as, [name, *p["其他寫法"]])
         else:
-            added = int(add_to_roster(name, p["其他寫法"], code))
+            added = int(add_to_roster(name, p["其他寫法"]))
         rescanned = rescan_names(workdir)
     elif how == "換成代號":
         code = (code or "").strip()
         if not code:
             raise ValueError("換成代號要選一個代號")
-        added = int(add_to_roster(name, p["其他寫法"], code))   # 已經在名冊上：不改名冊，這一集的代號記在決定裡（epcodes）
+        added = int(add_to_roster(name, p["其他寫法"]))   # 名字加進名冊（已經在就不改）；代號只記在這一集的決定裡（epcodes）
         rescanned = rescan_names(workdir)
     elif how == "不是名字":
         from bookclub.server import _append_exclusion

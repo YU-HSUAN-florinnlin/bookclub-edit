@@ -242,6 +242,33 @@ def test_web_strings():
     app = (REPO_ROOT / "bookclub" / "web" / "app.js").read_text(encoding="utf-8")
     assert "英文代號" not in app
 
+def test_manual_pick_adds_name_to_roster_but_not_code():
+    # 10-07 宇軒：人手動選代號（② 右欄、③「換成代號」）時，名冊上沒有的名字照樣加進名冊並補找名字，
+    # 但代號不寫進名冊——舊名冊還有代號欄也留空（代號每一集可以不同，只記在這一集）
+    import csv
+
+    path = _DATA / "名冊.csv"
+    saved = path.read_bytes()
+    try:
+        path.write_text("中文名,其他寫法,英文代號,聲線,性別\n小美,美美,,,女\n阿明,,,,男\n", encoding="utf-8")
+        w = _new()
+        wd.write_json(personnames.people_path(w), {"人名": [
+            {"id": "P001", "名字": "佳佳", "其他寫法": ["家家"], "是誰": "學員", "說明": "", "名冊本名": None,
+             "句子": [], "次數": 2, "老師說": 2, "學員說": 0, "第一次": 30.0},
+            {"id": "P002", "名字": "阿德", "其他寫法": [], "是誰": "其他人", "說明": "", "名冊本名": None,
+             "句子": [], "次數": 1, "老師說": 1, "學員說": 0, "第一次": 40.0}], "模型": "假的"})
+        turns_mod.set_name_code(w, "佳佳", "露西")                 # ② 右欄手動選
+        personnames.decide(w, "阿德", "換成代號", "湯姆")          # ③ 手動選「換成代號」
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            rows = {r["中文名"]: r for r in csv.DictReader(f)}
+        assert "佳佳" in rows and "阿德" in rows, "名字要加進名冊"
+        assert rows["佳佳"]["其他寫法"] == "家家"
+        assert rows["佳佳"]["英文代號"] == "" and rows["阿德"]["英文代號"] == "", "代號不能寫進名冊"
+        codes = epcodes.episode_codes(w)
+        assert codes["佳佳"] == "露西" and codes["阿德"] == "湯姆", "代號記在這一集"
+    finally:
+        path.write_bytes(saved)
+
 
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
