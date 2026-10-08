@@ -3,7 +3,7 @@
 /* 第 5 步「成品檢查」（09-29 宇軒：原本第 5 步逐筆覆核＋第 6 步整片檢查合成一步）。
  * 版面沿用第 3 步：最上面固定一行「沒列在時間軸上的地方＝原片沒動」→ 頂端（進度、看過比例、模式、送回 AI 重做、輸出成品）
  *   → 左邊成品影片＋時間軸（處理紀錄的每一筆都標出來、沒登記的變動標紅、看過的區段）；右邊「目前這一筆」或整片看的面板
- *   → 下面：沒登記的變動（要人確認）＋「有修改的」（依類型分組）＋「第 3 步有卡片、選定不修改的」（不擋輸出，10-08）。
+ *   → 下面：沒登記的變動（要人確認）＋分頁（全部、還沒通過、每一種類型、第 3 步選定不修改；10-08 照第 3 步的分頁）。
  * 逐筆看：處理前／處理後試聽、通過、退回重做（要寫原因）。整片看：記錄實際播放過的區段（只算 2 倍速以下連續播的，取聯集），
  * 看到問題按一下就在目前時間建一筆退回重做。全部通過、整片看過 100% 才能按「輸出成品」。
  * 資料：GET /api/final；存檔：/api/final/*（bookclub/finalcheck.py）。依賴 app.js 的 apiGet／apiPost／esc／contentEl。 */
@@ -26,7 +26,7 @@ const fcSourceName = (src) => String(src || "").replace(/^render video\s*/, "成
 // 09-29 宇軒：2 倍速以下播過的才算「看過」（快轉看完不算有人完整看過）
 const FC_MAX_RATE = 2;
 
-const fc = { span: null, grpOpen: {}, seen: [], seg: null, data: null, video: null, audio: null, cur: null, mode: "逐筆", sentRanges: "", timer: null, redoOpen: false, lastT: 0, ab: null };
+const fc = { span: null, seen: [], seg: null, data: null, video: null, audio: null, cur: null, mode: "逐筆", sentRanges: "", timer: null, redoOpen: false, lastT: 0, ab: null };
 // 10-07 宇軒：畫面上的「學員3」換成「本名（代號）」（GET /api/final 的「學員顯示名」；只在畫面換，處理紀錄不寫本名）
 function fcWho(text) {
   const names = (fc.data && fc.data["學員顯示名"]) || {};
@@ -45,7 +45,12 @@ function fcBoth(r) {
 const FC_ONLY_KEY = "fc-only-look";
 function fcOnlyLook() { try { return localStorage.getItem(FC_ONLY_KEY) === "1"; } catch (e) { return false; } }
 function fcSetOnlyLook(on) { try { localStorage.setItem(FC_ONLY_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係 */ } }
-function fcShown() { return fcOnlyLook() ? fcRecs().filter((r) => r["要人看"]) : fcRecs(); }
+// 10-08 宇軒：目前這一頁（分頁）列出來的處理紀錄；開了「只看要人聽的」再篩一次。「上一筆／下一筆」、通過後找下一筆都只在這裡面走
+function fcShown() {
+  const t = fcTabs().find((x) => x.id === fcTab());
+  const recs = t && !t["不修改"] ? t.recs : fcRecs();
+  return fcOnlyLook() ? recs.filter((r) => r["要人看"]) : recs;
+}
 function fcRecs() { return fc.data["紀錄"]; }
 function fcRec(key) { return fcRecs().find((r) => r["鍵"] === key); }
 function fcHasTime(r) { return r["成品"] && r["成品"][0] != null; }
@@ -134,9 +139,10 @@ async function renderFinal() {
   if (fcBackKey) {
     const key = fcBackKey;
     fcBackKey = null;
-    if (fcRec(key)) { fc.mode = "逐筆"; fcRenderAll(); fcSelect(key); }
-    const row = !fcRec(key) && document.querySelector(`#fc-ulist li[data-ukey="${CSS.escape(key)}"]`);   // 10-08：從「不修改」那一列出發的
-    if (row) { const g = row.closest("details"); if (g) g.open = true; row.classList.add("cur"); row.scrollIntoView({ block: "center" }); }
+    if (fcRec(key)) { fc.mode = "逐筆"; fcTabSet(fcTabOf(key)); fcRenderAll(); fcSelect(key); }   // 10-08：切到那一筆所在的頁
+    else if ((fc.data["不修改"] || []).some((u) => u["鍵"] === key)) { fcTabSet(FC_TAB_KEEP); fcRenderLower(); }   // 從「不修改」那一列出發的
+    const row = !fcRec(key) && document.querySelector(`#fc-ulist li[data-ukey="${CSS.escape(key)}"]`);
+    if (row) { row.classList.add("cur"); row.scrollIntoView({ block: "center" }); }
     const card = row ? null : document.getElementById("fc-right");
     if (card) card.scrollIntoView({ block: "nearest" });
   }
@@ -591,7 +597,8 @@ async function fcDecide(r, result, reason = "") {
   fc.redoOpen = false;
   if (result === "通過") {   // 通過了就換下一筆還沒看的（影片不跳，照常播）
     // 10-03 第八批 #65：從目前這一筆往後找（以前從頭找，前面跳過沒看的會一直被拉回去）；開了「只看要人聽的」只在那幾筆裡找
-    const next = fcNextUnseen(fcRecs(), r["鍵"], fcOnlyLook() ? fcShown().map((x) => x["鍵"]) : null);
+    // 10-08：只在目前這一頁（分頁）裡找；在「全部」又沒開篩選就是全部
+    const next = fcNextUnseen(fcRecs(), r["鍵"], fcOnlyLook() || fcTab() !== FC_TAB_ALL ? fcShown().map((x) => x["鍵"]) : null);
     if (next) fc.cur = next;
   }
   fcRenderTop(); fcRenderRight(); fcRenderTimeline(); fcRenderLower();
@@ -625,9 +632,14 @@ function fcRenderWhole() {
   box.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", async () => { await apiPost("/api/final/unflag", { id: b.dataset.rm }); await fcReload(); }));
 }
 
-// ---------- 下面：沒登記的變動、有修改的（依類型分組）、第 3 步選定不修改的 ----------
+// ---------- 下面：沒登記的變動＋分頁（全部、還沒通過、每一種類型、第 3 步選定不修改） ----------
 
-// 10-08 宇軒：「有修改的」照類型分組（純函式）。groups＝GET /api/final 的「修改類型」（順序、名稱）；
+// 10-08 宇軒：下方照第 3 步的樣子用分頁切換類型。分頁列：全部 → 還沒通過 → 每一組（1008-1 的組，有筆數的才列）
+// → 第 3 步選定不修改（有才列）。目前在哪一頁記在瀏覽器（localStorage，讀不到就回「全部」）
+const FC_TAB_KEY = "fc-tab";
+const FC_TAB_ALL = "全部", FC_TAB_TODO = "還沒通過", FC_TAB_KEEP = "不修改";
+
+// 「有修改的」照類型分組（純函式）。groups＝GET /api/final 的「修改類型」（順序、名稱）；
 // 紀錄沒有「組」（舊的後端）或組不在清單裡的歸「其他」。回傳 [{組, 名稱, 說明, recs, 通過, 要人看}]，沒有紀錄的組不列。
 function fcGroupRecs(recs, groups) {
   const defs = (groups && groups.length ? groups : [{ "組": "其他", "名稱": "處理紀錄", "說明": "" }]).slice();
@@ -641,7 +653,7 @@ function fcGroupRecs(recs, groups) {
   });
 }
 
-// 10-08：「第 3 步有卡片但選定不修改」照子類分組（純函式）。kinds＝「不修改類型」（順序、名稱、怎麼改）
+// 「第 3 步有卡片但選定不修改」照子類分組（純函式）。kinds＝「不修改類型」（順序、名稱、怎麼改）
 function fcGroupUnchanged(rows, kinds) {
   const defs = (kinds || []).slice();
   const by = new Map(defs.map((k) => [k["子類"], []]));
@@ -652,8 +664,32 @@ function fcGroupUnchanged(rows, kinds) {
   return defs.filter((k) => by.get(k["子類"]).length).map((k) => ({ ...k, rows: by.get(k["子類"]) }));
 }
 
-// 收合狀態只記在這次打開的頁面（預設：有修改的組還有沒通過的就展開；不修改的組收著）
-function fcGrpOpen(id, dflt) { return fc.grpOpen && id in fc.grpOpen ? fc.grpOpen[id] : dflt; }
+// 分頁列（純函式）：[{id, 名稱, 說明, recs（這一頁的處理紀錄，不管「只看要人聽的」）, 通過, 要人看, 筆數}]。
+// 「還沒通過」＝還沒按通過的（目前這一筆按了也先留著，跟第 3 步「還沒確認」一樣，不會一按就從清單消失）
+function fcTabList(recs, groups, unchanged, curKey) {
+  const pack = (id, name, note, list) => ({ id, "名稱": name, "說明": note, recs: list, "筆數": list.length,
+    "通過": list.filter((r) => r["結果"] === "通過").length, "要人看": list.filter((r) => r["要人看"]).length });
+  const tabs = [pack(FC_TAB_ALL, "全部", "", recs),
+    pack(FC_TAB_TODO, "還沒通過", "", recs.filter((r) => r["結果"] !== "通過" || r["鍵"] === curKey))];
+  for (const g of fcGroupRecs(recs, groups)) tabs.push(pack(`組:${g["組"]}`, g["名稱"], g["說明"], g.recs));
+  if ((unchanged || []).length) tabs.push({ id: FC_TAB_KEEP, "名稱": "第 3 步選定不修改", "說明": "", recs: [], "筆數": unchanged.length, "通過": 0, "要人看": 0, "不修改": true });
+  return tabs;
+}
+// 目前在哪一頁：記住的那一頁現在沒有了（例如那一類都沒了）就回「全部」（純函式）
+function fcPickTab(tabs, want) { return tabs.some((t) => t.id === want) ? want : FC_TAB_ALL; }
+function fcTabGet() { try { return localStorage.getItem(FC_TAB_KEY) || FC_TAB_ALL; } catch (e) { return FC_TAB_ALL; } }
+function fcTabSet(id) { try { localStorage.setItem(FC_TAB_KEY, id); } catch (e) { /* 存不了也沒關係 */ } }
+function fcTabs() { return fcTabList(fcRecs(), fc.data["修改類型"], fc.data["不修改"], fc.cur); }
+function fcTab() { return fcPickTab(fcTabs(), fcTabGet()); }
+// 一筆處理紀錄在哪一頁：目前這一頁有它就留著，不然去它那一組（從第 3 步回來、時間軸點到別類的）
+function fcTabOf(key) {
+  const tabs = fcTabs(), cur = fcTab();
+  const has = (t) => t.recs.some((r) => r["鍵"] === key);
+  const here = tabs.find((t) => t.id === cur);
+  if (here && has(here)) return cur;
+  const g = tabs.find((t) => t.id.startsWith("組:") && has(t));
+  return g ? g.id : FC_TAB_ALL;
+}
 
 function fcRecRow(r) {
   return `<li data-key="${esc(r["鍵"])}" class="${r["鍵"] === fc.cur ? "cur" : ""} ${r["結果"] ? "done" : ""}">
@@ -676,6 +712,13 @@ function fcUnchangedRow(u, i) {
         <button class="ghost small fc-u-go" data-i="${i}">回第 3 步改</button></span></li>`;
 }
 
+// 分頁按鈕上的徽章：處理紀錄的頁寫「通過 x／n」（＋要人聽幾筆）；不修改那一頁寫筆數
+function fcTabBadge(t) {
+  if (t["不修改"]) return `<span>${t["筆數"]}</span>`;
+  if (t.id === FC_TAB_TODO) return `<span>${t["筆數"] - t["通過"]}</span>${t["要人看"] ? `<span class="fc-tab-look">要人聽 ${t["要人看"]}</span>` : ""}`;   // 跟第 3 步「還沒確認」一樣只寫筆數
+  return `<span>通過 ${t["通過"]}／${t["筆數"]}</span>${t["要人看"] ? `<span class="fc-tab-look">要人聽 ${t["要人看"]}</span>` : ""}`;
+}
+
 function fcRenderLower() {
   const lower = document.getElementById("fc-lower");
   const un = fc.data["未登記的變動"];
@@ -688,39 +731,33 @@ function fcRenderLower() {
         <span>${u["結果"] === "沒問題" ? `<span class="rv-state ok">✓ 沒問題</span>` : u["結果"] === "退回重做" ? `<span class="rv-warnline">退回：${esc(u["原因"])}</span>` : ""}</span>
         <span class="rv-row"><button class="ghost small fc-un" data-r="沒問題">沒問題</button><button class="ghost small fc-un" data-r="退回重做">退回重做</button></span>
       </li>`).join("")}</ul></section>` : "";
+  const tabs = fcTabs();
+  const tab = fcPickTab(tabs, fcTabGet());
+  const t = tabs.find((x) => x.id === tab);
   const only = fcOnlyLook();
-  const lookN = fcRecs().filter((r) => r["要人看"]).length;
-  const groups = fcGroupRecs(fcShown(), fc.data["修改類型"]);
-  const all = fcGroupRecs(fcRecs(), fc.data["修改類型"]);
-  const grpHtml = groups.map((g) => {
-    const whole = all.find((x) => x["組"] === g["組"]) || g;   // 筆數、通過照整組算（篩選只影響列出哪幾筆）
-    const open = fcGrpOpen(`改:${g["組"]}`, whole["通過"] < whole.recs.length);
-    return `<details class="fc-grp" data-grp="改:${esc(g["組"])}" ${open ? "open" : ""}>
-      <summary><b>${esc(g["名稱"])}</b>　${whole.recs.length} 筆　<span class="${whole["通過"] === whole.recs.length ? "ok" : ""}">通過 ${whole["通過"]}／${whole.recs.length}</span>${whole["要人看"] ? `　<span class="rv-warnline">要人聽 ${whole["要人看"]} 筆</span>` : ""}${only ? `　<span class="rv-meta">列出 ${g.recs.length} 筆</span>` : ""}
-        <span class="rv-meta fc-grp-note">${esc(g["說明"] || "")}</span></summary>
-      <ol class="rv-list">${g.recs.map(fcRecRow).join("")}</ol></details>`;
-  }).join("");
-  const unRows = fc.data["不修改"] || [];
-  const uGroups = fcGroupUnchanged(unRows, fc.data["不修改類型"]);
+  const nav = `<nav class="rv-filters fc-tabs" aria-label="類型">${tabs.map((x) =>
+    `<button class="${x.id === tab ? "on" : ""}" data-tab="${esc(x.id)}" title="${esc(x["說明"] || "")}">${esc(x["名稱"])} ${fcTabBadge(x)}</button>`).join("")}</nav>`;
   const flat = [];
-  const uHtml = uGroups.map((k) => {
-    const open = fcGrpOpen(`不:${k["子類"]}`, false);
-    const lis = k.rows.map((u) => { flat.push(u); return fcUnchangedRow(u, flat.length - 1); }).join("");
-    return `<details class="fc-grp" data-grp="不:${esc(k["子類"])}" ${open ? "open" : ""}>
-      <summary><b>${esc(k["名稱"])}</b>　${k.rows.length} 筆<span class="rv-meta fc-grp-note">${esc(k["去改"] || "")}</span></summary>
-      <ul class="fc-ulist">${lis}</ul></details>`;
-  }).join("");
-  lower.innerHTML = `${unHtml}<h2 class="fc-h2">有修改的（${fcRecs().length} 筆）</h2>
-    <div class="rv-row fc-filter"><label class="nowrap"><input type="checkbox" id="fc-only" ${only ? "checked" : ""}> 只看要人聽的（${lookN} 筆）</label>
-      <span class="rv-meta">要人聽＝生成檢查沒過、放不進時間格（標紅）、名字沒有自動處理的。${only ? `現在列 ${fcShown().length}／${fcRecs().length} 筆。` : ""}</span></div>
-    <div class="fc-groups" id="fc-list">${grpHtml || `<p class="empty rv-meta">${only ? "沒有要人聽的。" : "沒有處理紀錄。"}</p>`}</div>
-    <h2 class="fc-h2">第 3 步有卡片、選定不修改的（${unRows.length} 筆）</h2>
-    <p class="rv-meta">這幾處照原聲留著。不用按通過、不擋輸出；想確認就按「跳過去聽」（只播那一段），要改就「回第 3 步改」，改完要重新組裝。</p>
-    <p class="rv-warnline">這一區會顯示學員本名，截圖或分享螢幕時請注意。</p>
-    <div class="fc-groups" id="fc-ulist">${uHtml || `<p class="empty rv-meta">沒有。</p>`}</div>`;
+  let body;
+  if (t["不修改"]) {
+    const uRows = fc.data["不修改"] || [];
+    body = `<p class="rv-meta">第 3 步看過、決定照原聲留著的地方。不用按通過、不擋輸出；想確認就按「跳過去聽」（只播那一段），要改就「回第 3 步改」，改完要重新組裝。</p>
+      <p class="rv-warnline">這一頁會顯示學員本名，截圖或分享螢幕時請注意。</p>
+      <div class="fc-ugroups" id="fc-ulist">${fcGroupUnchanged(uRows, fc.data["不修改類型"]).map((k) => {
+        const lis = k.rows.map((u) => { flat.push(u); return fcUnchangedRow(u, flat.length - 1); }).join("");
+        return `<h3 class="fc-sub">${esc(k["名稱"])}　${k.rows.length} 筆<span class="rv-meta">${esc(k["去改"] || "")}</span></h3><ul class="fc-ulist">${lis}</ul>`;
+      }).join("")}</div>`;
+  } else {
+    const lookN = t.recs.filter((r) => r["要人看"]).length;
+    const shown = fcShown();
+    body = `<div class="rv-row fc-filter"><label class="nowrap"><input type="checkbox" id="fc-only" ${only ? "checked" : ""}> 只看要人聽的（${lookN} 筆）</label>
+      <span class="rv-meta">${t["說明"] ? `${esc(t["說明"])}。` : ""}要人聽＝生成檢查沒過、放不進時間格（標紅）、名字沒有自動處理的。${only ? `現在列 ${shown.length}／${t.recs.length} 筆。` : ""}</span></div>
+      <ol class="rv-list" id="fc-list">${shown.map(fcRecRow).join("") || `<li class="empty">${only ? "這一頁沒有要人聽的。" : "這一頁沒有處理紀錄。"}</li>`}</ol>`;
+  }
+  lower.innerHTML = `${unHtml}${nav}${body}`;
+  lower.querySelectorAll(".fc-tabs button").forEach((b) => b.addEventListener("click", () => { fcTabSet(b.dataset.tab); fcRenderLower(); }));
   const onlyBox = document.getElementById("fc-only");
   if (onlyBox) onlyBox.addEventListener("change", () => { fcSetOnlyLook(onlyBox.checked); fcRenderLower(); });
-  lower.querySelectorAll("details.fc-grp").forEach((d) => d.addEventListener("toggle", () => { (fc.grpOpen = fc.grpOpen || {})[d.dataset.grp] = d.open; }));
   lower.querySelectorAll("#fc-list li[data-key]").forEach((li) => li.addEventListener("click", () => { fc.mode = "逐筆"; fcRenderAll(); fcSelect(li.dataset.key); }));
   lower.querySelectorAll(".fc-u-play").forEach((b) => b.addEventListener("click", () => { const u = flat[Number(b.dataset.i)]; fcPlaySpan(u["成品"][0], u["成品"][1]); }));
   lower.querySelectorAll(".fc-u-go").forEach((b) => b.addEventListener("click", () => {
@@ -747,8 +784,6 @@ function fcMarkRow() {
   const li = fc.cur && list.querySelector(`li[data-key="${CSS.escape(fc.cur)}"]`);
   if (!li) return;
   li.classList.add("cur");
-  const grp = li.closest("details");
-  if (grp && !grp.open) grp.open = true;   // 換到收著的那一組：打開
   const top = li.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
   if (top < list.scrollTop || top + li.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = Math.max(0, top - list.clientHeight / 3);
 }
