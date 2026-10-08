@@ -163,6 +163,12 @@ def test_project_label():
     assert a == {"所在": "自動化剪輯流程-開發專案", "標示": "正式", "顯示名稱": "2025-04-09 第一堂_剪輯工作區（自動化剪輯流程-開發專案）"}
     assert b["所在"] == "第一步從零_1004b" and b["標示"] == "測試" and b["顯示名稱"] != a["顯示名稱"]
     assert server.project_label("/tmp/驗證_0926d")["標示"] == "測試"
+    # 上一層資料夾也同名：往上多帶幾層，直到分得出來
+    rows = [{"名稱": "工作區", "路徑": "/s/甲_ui/base/工作區", **server.project_label("/s/甲_ui/base/工作區")},
+            {"名稱": "工作區", "路徑": "/s/乙_ui/base/工作區", **server.project_label("/s/乙_ui/base/工作區")},
+            {"名稱": "別的", "路徑": "/s/丙/別的", **server.project_label("/s/丙/別的")}]
+    server.unique_labels(rows)
+    assert [r["顯示名稱"] for r in rows] == ["工作區（甲_ui／base）", "工作區（乙_ui／base）", "別的（丙）"]
     w = TE._fresh()
     rows = server.list_projects(w)["專案"]
     assert all({"所在", "標示", "顯示名稱"} <= set(r) for r in rows)

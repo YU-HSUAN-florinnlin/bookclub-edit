@@ -340,7 +340,29 @@ def list_projects(current: Path | None = None) -> dict:
             continue
         seen.add(str(d))
         rows.append(_project_row(d, current))
+    unique_labels(rows)
     return {"目前": str(current) if current else None, "工作區根目錄": str(root), "專案": rows}
+
+
+def _ancestors(path: str) -> list[str]:
+    return [p.name for p in Path(path).parents if p.name and p.name != "工作區"]
+
+
+def unique_labels(rows: list[dict], max_depth: int = 4) -> None:
+    """（純函式，就地改）顯示名稱還是一樣的幾列（上一層資料夾也同名），往上多帶幾層資料夾名，直到分得出來。"""
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(r.get("顯示名稱") or r["名稱"], []).append(r)
+    for same in groups.values():
+        if len(same) < 2:
+            continue
+        for depth in range(2, max_depth + 1):
+            labels = ["／".join(reversed(_ancestors(r["路徑"])[:depth])) for r in same]
+            if len(set(labels)) == len(labels) or depth == max_depth:
+                for r, lab in zip(same, labels):
+                    r["所在"] = lab
+                    r["顯示名稱"] = f"{r['名稱']}（{lab}）"
+                break
 
 
 # ---------------------------------------------------------------------------
