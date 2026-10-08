@@ -67,7 +67,7 @@ def test_find_claude_same_for_doctor_and_call():
 
 def test_claude_steps_failed_are_visible():
     """假的 call_claude 丟例外 → 分析結果.json 的「要注意」與「Claude沒跑成功」列出三步、怎麼重跑；
-    網頁的 /api/state 帶得到；人名清單沒產出 → 第 3 步 ③ 不能標完成、第 4 步 precheck 擋住。"""
+    網頁的 /api/state 帶得到；人名清單沒產出 → 第 3 步 ③ 不能標完成、第 4 步 precheck 提醒（10-08 起不擋）。"""
     from bookclub import analyze, execute, review, roomtone, server, students
     from bookclub import turns as turns_mod
 
@@ -118,7 +118,7 @@ def test_claude_steps_failed_are_visible():
         assert [f["步驟"] for f in st["Claude沒跑成功"]] == steps and st["要注意"] == saved["要注意"]
         assert review.people_list_missing(w)
 
-    # ③ 不能標完成、precheck 擋住（用假工作區：其他都齊，只拿掉人名清單）
+    # ③ 不能標完成、precheck 提醒（用假工作區：其他都齊，只拿掉人名清單）
     base = Path(tempfile.mkdtemp()) / "base"
     fake_workdir.make(base)
     w = base / "工作區"
@@ -132,8 +132,8 @@ def test_claude_steps_failed_are_visible():
         raise AssertionError("人名清單沒跑成功還能標完成")
     except ValueError as e:
         assert "人名清單沒跑成功" in str(e)
-    pre = execute.precheck(w)
-    assert not pre["可以開始"] and any("人名清單沒跑成功" in m for m in pre["缺"])
+    pre = execute.precheck(w)   # 10-08 宇軒（流程簡化）：只提醒、不擋
+    assert not any("人名清單沒跑成功" in m for m in pre["缺"]) and any("人名清單沒跑成功" in m for m in pre["提醒"])
 
 
 def test_empty_turns_reply_is_a_claude_failure():

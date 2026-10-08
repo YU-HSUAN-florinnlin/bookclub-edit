@@ -855,6 +855,84 @@ def unchanged_rows(workdir: str | Path, log: dict | None) -> list[dict]:
         return []
 
 
+# ---------- 第 5 步「⚠️ 需留意」（10-08 宇軒，流程簡化）：第 4 步總檢查預設略過的、成品裡還留著原聲的地方 ----------
+
+# (類別, 畫面上的名稱, 一行說明)。依這個順序顯示；名字換不了代號紅字置頂（會念出本名）
+ATTENTION_KINDS = (
+    ("名字換不了代號", "名字換不了代號（會念出本名）", "程式在句子裡找不到名字、換不了代號，成品照原聲念出本名"),
+    ("段落外", "學員段落外面的幾秒", "學員段落切短後，句子有幾秒落在段落外面、沒被處理：可能是學員原聲"),
+    ("聲紋", "聲音不像老師、沒被處理", "聲音特徵判斷不是老師、不在任何處理裡：可能是漏抓的學員發言（原聲）"),
+    ("沒有字", "有人聲但逐字稿沒有字", "這裡如果有提到名字，工具找不到、照原聲留著"),
+    ("重疊缺東西", "重疊缺學員是誰或文字", "學員那一句沒辦法重新生成：還留著的這幾秒是原聲"),
+    ("英文代號", "要念的文字裡還有英文代號", "成品會念出英文代號（代號不是本名）"),
+    ("字太少", "要念的字太少", "重念的字比原本少很多：這一段其他的話不見了"),
+)
+ATTENTION_NAME = "名字換不了代號"
+ATTENTION_TEXT_KINDS = ("英文代號", "字太少")   # 看的是要念的文字（不是原聲）：只扣剪掉的地方
+ATTENTION_MIN_S = 0.3   # 扣掉被處理蓋到的地方之後剩不到這麼久就不列（跟「不修改」一樣）
+
+
+def place_attention(rows: list[dict], log: dict | None) -> list[dict]:
+    """（純函式）第 4 步執行當下沒處理的列（execute.skipped_rows 的「列」）→ 第 5 步「需留意」：
+    原聲類扣掉處理紀錄會動到聲音的範圍（學員重念、名字換掉、剪掉、消音…，proclog.audio_spans），文字類只扣剪掉的；
+    剩不到 0.3 秒、超出這次組裝範圍的不列。每一列多 `原片`、`剩下`（原片時間的幾段）、`剩下秒`、
+    `成品段`（每一段的成品時間）、`成品`（第一段起點～最後一段終點）、`名字`（名字換不了代號＝會念出本名）。
+    排序：名字置頂，其他照 ATTENTION_KINDS 的順序、再照時間。"""
+    if not log:
+        return []
+    plist = log.get("片段")
+    recs = log.get("紀錄", [])
+    holes = [list(x) for x in proclog.audio_spans(recs)]
+    cuts = [list(r["原片"]) for r in recs if r.get("類型") == "刪除" and r.get("原片")]
+    rng = log.get("範圍")
+    order = {k: i for i, (k, _n, _x) in enumerate(ATTENTION_KINDS)}
+    out = []
+    for r in rows or []:
+        try:
+            a, b = float(r["start"]), float(r["end"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if b <= a:
+            continue
+        kind = r.get("類別")
+        left = [[a, b]]
+        if rng:
+            left = [[max(x, rng[0]), min(y, rng[1])] for x, y in left if min(y, rng[1]) > max(x, rng[0])]
+        left = [seg for seg in subtract_ranges(left, cuts if kind in ATTENTION_TEXT_KINDS else holes) if seg[1] - seg[0] > 1e-6]
+        secs = round(sum(y - x for x, y in left), 3)
+        if secs < ATTENTION_MIN_S:
+            continue
+        segs = [[round(near_output_time(x, plist), 3), round(near_output_time(y, plist), 3)] for x, y in left]
+        out.append({"鍵": r.get("key"), "類別": kind, "第3步": r.get("第3步"), "原片": [round(a, 3), round(b, 3)],
+                    "剩下": [[round(x, 3), round(y, 3)] for x, y in left], "剩下秒": secs,
+                    "成品段": segs, "成品": [segs[0][0], segs[-1][1]], "名字": kind == ATTENTION_NAME})
+    out.sort(key=lambda x: (not x["名字"], order.get(x["類別"], 99), x["原片"][0]))
+    return out
+
+
+def attention_snapshot(workdir: str | Path) -> dict | None:
+    """這次成品執行時記下的「總檢查略過」（生成/執行進度.json）；舊工具組裝的、沒有紀錄的回 None。"""
+    from bookclub import execute
+
+    prog = wd.read_json(execute.progress_path(Path(workdir)), default=None) or {}
+    snap = prog.get(execute.SKIPPED_FIELD)
+    return snap if isinstance(snap, dict) else None
+
+
+def attention_rows(workdir: str | Path, log: dict | None) -> dict:
+    """`GET /api/final` 的「需留意」：{有紀錄, 列[], 總數, 名字, 第4步沒處理}。不擋輸出、不用按通過。
+    有紀錄＝這次成品是新版工具組裝的（第 4 步開始時記了略過的列）；舊的成品回 有紀錄=False、列是空的。"""
+    snap = attention_snapshot(workdir)
+    if not log or snap is None:
+        return {"有紀錄": snap is not None, "列": [], "總數": 0, "名字": 0, "第4步沒處理": (snap or {}).get("沒處理")}
+    try:
+        rows = place_attention(snap.get("列") or [], log)
+    except Exception:  # noqa: BLE001 — 算不出來不擋第 5 步
+        rows = []
+    return {"有紀錄": True, "列": rows, "總數": len(rows), "名字": sum(1 for r in rows if r["名字"]),
+            "第4步沒處理": snap.get("沒處理")}
+
+
 def group_counts(log: dict | None, index: dict | None = None) -> dict[str, int]:
     """處理紀錄每一組幾筆（inspect 用，純函式）。"""
     out: dict[str, int] = {}
@@ -916,8 +994,19 @@ def page_data(workdir: str | Path) -> dict:
         "修改類型": [{"組": g, "名稱": n, "說明": x} for g, n, x in CHANGE_GROUPS],
         "不修改類型": [{"子類": k, "名稱": n, "去改": x} for k, n, x in UNCHANGED_KINDS],
         "不修改": unchanged_rows(workdir, log),
+        # 10-08 宇軒（流程簡化）：第 4 步總檢查預設略過的、成品裡還留著原聲的地方（不擋輸出）
+        "需留意類型": [{"類別": k, "名稱": n, "說明": x} for k, n, x in ATTENTION_KINDS],
+        "需留意": _attention_with_names(workdir, log, index),
         "學員顯示名": _student_labels(workdir),   # 10-07：畫面上「學員3」換成「本名（代號）」（只在畫面換，紀錄檔不寫本名）
     }
+
+
+def _attention_with_names(workdir: Path, log: dict | None, index: dict) -> dict:
+    """需留意每一列補上第 3 步卡片的名稱（畫面用；inspect 不印名稱）。"""
+    att = attention_rows(workdir, log)
+    for r in att["列"]:
+        r["卡片名稱"] = review_name(index, r["第3步"]) if r.get("第3步") else ""
+    return att
 
 
 def _student_labels(workdir: Path) -> dict[str, str]:
@@ -1071,25 +1160,25 @@ def export_gaps(st: dict) -> dict:
     if st.get("退回數") and not st["逐筆"]["退回"]:
         why.append(f"有 {st['退回數']} 處退回重做還沒重做")
     return {"看過比例": st["看過比例"], "看過百分比": pct, "沒通過": left, "退回": st["逐筆"]["退回"],
-            "沒確認的變動": un, "說明": why, "擋下": [], "退回清單": [], "提醒": []}
+            "沒確認的變動": un, "說明": why, "擋下": [], "名字提醒": [], "退回清單": [], "提醒": []}
 
 
-PRIVACY_PREFIXES = ("名字:", "學員名字:", "重疊:")   # 退回重做的這幾類跟名字、重疊有關：沒重做不能輸出
+PRIVACY_PREFIXES = ("名字:", "學員名字:", "重疊:")   # 退回重做的這幾類跟名字、重疊有關：確認視窗紅字列出
 
 
 def export_blocks(log: dict | None, check: dict, product: str | None) -> dict:
-    """輸出前一定要先處理、確認了也不能輸出的（純函式，10-08 審查）：
-    - 「名字要人處理」（程式換不了代號、原片名字還在原聲裡）沒按通過的
-    - 退回重做、對應名字或重疊的（覆核項目是 名字:／學員名字:／重疊:）還沒重做的
-    - 檢查的是「標字版」（給人看 AI 改了哪裡用的，畫面上有字）
+    """輸出前要提醒、要擋的（純函式，10-08 審查；10-08 宇軒流程簡化後名字不再擋）：
+    - 擋下（確認了也不能輸出）：只剩檢查的是「標字版」（給人看 AI 改了哪裡用的，畫面上有字）
+    - 名字提醒（確認視窗紅字，可以確認輸出）：「名字要人處理」（程式換不了代號、原片名字還在原聲裡）沒按通過的；
+      退回重做、對應名字或重疊的（覆核項目是 名字:／學員名字:／重疊:）還沒重做的
     另外回：其他退回重做的每一筆（時間、原因，只顯示）、第 4 步正在重做的提醒。
-    回傳 {擋下: [白話句子], 退回清單: [{成品秒, 原片秒, 原因, 來源}], 提醒: [白話句子]}。"""
+    回傳 {擋下: [白話句子], 名字提醒: [白話句子], 退回清單: [{成品秒, 原片秒, 原因, 來源}], 提醒: [白話句子]}。"""
     recs = (log or {}).get("紀錄", [])
     items = check.get("逐筆", {})
-    block, others, note = [], [], []
+    block, names, others, note = [], [], [], []
     manual = [r for r in recs if r.get("類型") == "名字要人處理" and items.get(record_key(r), {}).get("結果") != PASS]
     if manual:
-        block.append(f"還有 {len(manual)} 處名字程式沒處理、原片沒動（名字還在原聲裡），要先在清單裡看過、按通過")
+        names.append(f"還有 {len(manual)} 處名字程式沒處理、原片沒動（名字還在原聲裡，成品會念出本名），清單裡還沒按通過")
     privacy = 0
     for x in redo_items(log, check):
         if any(str(k).startswith(PRIVACY_PREFIXES) for k in x.get("覆核項目") or []):
@@ -1099,12 +1188,19 @@ def export_blocks(log: dict | None, check: dict, product: str | None) -> dict:
         src = (x.get("原片") or [None])[0]
         others.append({"成品秒": out, "原片秒": src, "原因": x.get("原因", ""), "來源": x.get("來源")})
     if privacy:
-        block.append(f"有 {privacy} 筆退回重做的跟名字或聲音重疊有關，還沒重做：要先送回 AI 重做、重新組裝")
+        names.append(f"有 {privacy} 筆退回重做的跟名字或聲音重疊有關，還沒重做（輸出的是重做之前的樣子）")
     if product and "標字版" in Path(product).stem:
         block.append("現在檢查的是「標字版」（畫面上標了 AI 改了哪裡，給人對照用），不能當成品輸出：在影片上方「檢查哪一支」換成正式的成品")
     if check.get("重做中"):
         note.append("第 4 步正在重做退回的那幾筆（或上次沒做完）：現在輸出的是重做之前的版本")
-    return {"擋下": block, "退回清單": others, "提醒": note}
+    return {"擋下": block, "名字提醒": names, "退回清單": others, "提醒": note}
+
+
+def attention_gaps(att: dict) -> dict:
+    """（純函式）輸出確認視窗的「需留意」那一句：{需留意, 需留意名字, 需留意說明}。"""
+    n, m = int(att.get("總數") or 0), int(att.get("名字") or 0)
+    text = f"需留意 {n} 處" + (f"（含名字 {m} 處）" if m else "") + "還沒聽過" if n else ""
+    return {"需留意": n, "需留意名字": m, "需留意說明": text}
 
 
 def export_final(workdir: str | Path, confirm: bool = False) -> dict:
@@ -1113,8 +1209,9 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
     不蓋掉舊的；`輸出成品` 記最新一次，`輸出紀錄` 記每一次（含當時選的片頭片尾，這一版只記錄、還沒接上）。
     10-08 宇軒放寬：沒全部通過、沒看完也可以輸出，但要確認——還沒達標又沒帶 `confirm` 時不輸出，回傳
     {要確認: True, 還差: export_gaps}；帶 `confirm` 就照目前的狀態輸出，輸出紀錄記下當時看過幾 %、幾筆沒通過、幾處變動沒確認。
-    還沒有處理紀錄或成品影片照樣不能輸出；`export_blocks` 的幾種（程式處理不了的名字沒按通過、名字／重疊退回沒重做、標字版）
-    確認了也不能輸出。第 4 步正在重做時也要確認（輸出的是重做前的版本；第 4 步換成品檔是先寫暫存檔再換名，不會拿到半支）。"""
+    還沒有處理紀錄或成品影片照樣不能輸出；標字版確認了也不能輸出（`export_blocks` 的擋下）。
+    10-08 宇軒（流程簡化）：名字不再擋——程式處理不了的名字沒按通過、名字／重疊退回沒重做、第 5 步「需留意」有名字的，
+    都要確認（確認視窗紅字列出），確認了就輸出。第 4 步正在重做時也要確認（輸出的是重做前的版本；第 4 步換成品檔是先寫暫存檔再換名，不會拿到半支）。"""
     from datetime import datetime
 
     workdir = Path(workdir)
@@ -1124,11 +1221,15 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
         if not log or not check.get("成品影片"):
             raise ValueError("還不能輸出：" + ("還沒有處理紀錄（第 4 步還沒組裝）" if not log else "找不到成品影片"))
         gaps = {**export_gaps(st), **export_blocks(log, check, check.get("成品影片"))}
-        if gaps["擋下"]:   # 10-08 審查：名字沒處理、名字／重疊退回沒重做、標字版：確認了也不能輸出
+        try:   # 10-08 宇軒（流程簡化）：第 5 步「需留意」的數字（不擋，確認視窗多一句）
+            gaps.update(attention_gaps(attention_rows(workdir, log)))
+        except Exception:  # noqa: BLE001 — 算不出來不擋輸出
+            gaps.update(attention_gaps({}))
+        if gaps["擋下"]:   # 標字版：確認了也不能輸出
             if confirm:
                 raise ValueError("還不能輸出：" + "；".join(gaps["擋下"]))
             return {"ok": False, "要確認": True, "不能輸出": True, "還差": gaps}
-        if (not st["可以輸出"] or gaps["提醒"]) and not confirm:
+        if (not st["可以輸出"] or gaps["提醒"] or gaps["名字提醒"] or gaps["需留意名字"]) and not confirm:
             return {"ok": False, "要確認": True, "還差": gaps}
         src = workdir / check["成品影片"]
         dst = src.with_name(final_name(src.name, datetime.now().strftime("%Y%m%d-%H%M%S")))
@@ -1149,6 +1250,7 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
                "接上片頭片尾": False,
                # 10-08：輸出當時的檢查狀態（沒看完、沒全部通過也能輸出，第 5 步會提示「這次輸出時還沒看完」）
                "看過百分比": gaps["看過百分比"], "沒通過筆數": gaps["沒通過"], "沒確認變動筆數": gaps["沒確認的變動"],
+               "需留意": gaps["需留意"], "需留意名字": gaps["需留意名字"], "名字提醒": len(gaps["名字提醒"]),
                "檢查完才輸出": st["可以輸出"]}
         check["輸出成品"] = rec
         check.setdefault("輸出紀錄", []).append(rec)

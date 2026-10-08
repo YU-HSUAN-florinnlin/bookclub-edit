@@ -266,7 +266,7 @@ def test_third_batch_1001():
     assert "硬體編碼（Mac）" not in app and "軟體編碼" not in app and "輸出做法選項" in app
     assert "<b>匿名聲線</b>" not in app and "替代聲音" in app
     assert "聲紋分出來" not in rv and "匿名聲線" not in rv and '"霧化": "聲音霧化"' in rv
-    assert "execGoCheck" in rv and "execGoCheck" in app                          # 9：帶去第 4 步的總檢查
+    assert "execGoCheck" not in rv and "execGoCheck" in app   # 9：10-08 流程簡化後第 3 步不再帶去第 4 步總檢查（總檢查預設略過）
     assert "第 5 步退回：" in rv                                                   # 5
     assert "現在狀態" in app and "上次執行：" in app                               # 4
     assert "不會像第 3 步那樣自動對齊到句子的開頭、結尾，切點要自己聽準" in fcj        # 11

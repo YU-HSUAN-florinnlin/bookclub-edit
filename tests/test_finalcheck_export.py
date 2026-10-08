@@ -87,24 +87,27 @@ def test_api_asks_before_export_then_exports_with_confirm():
 
 
 def test_export_blocks_pure():
-    """確認了也不能輸出的幾種、只顯示的退回清單、第 4 步重做中的提醒（純函式）。"""
+    """確認了也不能輸出的（10-08 流程簡化後只剩標字版）、名字提醒（紅字、可以確認輸出）、只顯示的退回清單、
+    第 4 步重做中的提醒（純函式）。"""
     name = {"類型": "名字要人處理", "原片": None, "成品": None, "覆核項目": ["名字:4"]}
     ov = {"類型": "局部消音", "原片": [5.0, 6.0], "成品": [5.0, 6.0], "覆核項目": ["重疊:O5.00"]}
     stu = {"類型": "學員重念", "原片": [10.0, 18.0], "成品": [9.0, 17.0], "覆核項目": ["學員段落:T003"]}
     log = {"紀錄": [name, ov, stu], "未登記的變動": []}
     k = fc.record_key
-    # 沒按通過的名字要人處理、名字／重疊退回 → 擋；學員段落退回 → 只列出來
+    # 沒按通過的名字要人處理、名字／重疊退回 → 名字提醒（不擋）；學員段落退回 → 只列出來
     chk = {"逐筆": {k(ov): {"結果": "退回重做", "原因": "還聽得到"}, k(stu): {"結果": "退回重做", "原因": "第二句念錯"}},
            "整片退回": [], "未登記確認": {}}
     b = fc.export_blocks(log, chk, "輸出/成品_0-0_sw.mp4")
-    assert len(b["擋下"]) == 2 and "1 處名字程式沒處理、原片沒動" in b["擋下"][0] and "名字或聲音重疊" in b["擋下"][1]
+    assert b["擋下"] == []
+    assert len(b["名字提醒"]) == 2 and "1 處名字程式沒處理、原片沒動" in b["名字提醒"][0] and "名字或聲音重疊" in b["名字提醒"][1]
     assert b["退回清單"] == [{"成品秒": 9.0, "原片秒": 10.0, "原因": "第二句念錯", "來源": "逐筆"}] and b["提醒"] == []
-    # 名字要人處理按了通過、重疊那一筆沒退回 → 不擋
+    # 名字要人處理按了通過、重疊那一筆沒退回 → 沒有提醒
     chk2 = {"逐筆": {k(name): {"結果": "通過"}}, "整片退回": [], "未登記確認": {}}
-    assert fc.export_blocks(log, chk2, "輸出/成品_0-0_sw.mp4")["擋下"] == []
-    # 名字要人處理退回（不是通過）也擋
+    assert fc.export_blocks(log, chk2, "輸出/成品_0-0_sw.mp4")["名字提醒"] == []
+    # 名字要人處理退回（不是通過）也提醒
     chk3 = {"逐筆": {k(name): {"結果": "退回重做", "原因": "x"}}, "整片退回": [], "未登記確認": {}}
-    assert len(fc.export_blocks(log, chk3, "輸出/成品_0-0_sw.mp4")["擋下"]) == 2   # 沒通過＋名字退回
+    b3 = fc.export_blocks(log, chk3, "輸出/成品_0-0_sw.mp4")
+    assert b3["擋下"] == [] and len(b3["名字提醒"]) == 2   # 沒通過＋名字退回
     # 標字版：擋；重做中：提醒
     b4 = fc.export_blocks({"紀錄": []}, {"逐筆": {}, "重做中": {"項目": []}}, "輸出/成品_0-0_標字版.mp4")
     assert "標字版" in b4["擋下"][0] and "重做之前的版本" in b4["提醒"][0]
@@ -131,7 +134,8 @@ def _check_all(w):
     fc.add_watched(w, [[0.0, 10.0]])
 
 
-def test_name_needs_person_blocks_even_with_confirm():
+def test_name_needs_person_asks_then_exports_with_confirm():
+    """10-08 宇軒（流程簡化）：名字沒處理不再擋——要確認（紅字列出），確認了就輸出；全部看過、按了通過就不用問。"""
     if not shutil.which("ffmpeg"):
         return
     name = {"類型": "名字要人處理", "原片": None, "成品": None, "動到聲音": False, "要人聽": True, "覆核項目": ["名字:4"],
@@ -139,14 +143,11 @@ def test_name_needs_person_blocks_even_with_confirm():
     w = _export_workdir([name])
     fc.page_data(w)
     r = fc.export_final(w)
-    assert r["要確認"] and r["不能輸出"] and "名字程式沒處理" in r["還差"]["擋下"][0]
-    try:
-        fc.export_final(w, confirm=True)
-        raise AssertionError("名字沒處理，確認了也不能輸出")
-    except ValueError as e:
-        assert "名字程式沒處理" in str(e)
+    assert r["要確認"] and not r.get("不能輸出") and r["還差"]["擋下"] == [] and "名字程式沒處理" in r["還差"]["名字提醒"][0]
     assert not list((w / "輸出").glob("最終成品_*"))
-    _check_all(w)                                     # 看過、按了通過：可以輸出
+    r2 = fc.export_final(w, confirm=True)
+    assert r2["ok"] and r2["名字提醒"] == 1 and len(list((w / "輸出").glob("最終成品_*"))) == 1
+    _check_all(w)                                     # 看過、按了通過：不用問直接輸出
     assert fc.export_final(w)["ok"]
 
 
@@ -193,7 +194,7 @@ def test_api_confirm_must_be_true():
 def test_web_blocked_dialog_has_no_export_button():
     if not NODE:
         return
-    blocked = {"說明": ["整片還沒看完（看過 10%）"], "擋下": ["還有 1 處名字程式沒處理、原片沒動（名字還在原聲裡），要先在清單裡看過、按通過"],
+    blocked = {"說明": ["整片還沒看完（看過 10%）"], "擋下": ["現在檢查的是「標字版」（畫面上標了 AI 改了哪裡，給人對照用），不能當成品輸出"],
                "退回清單": [], "提醒": []}
     redo = {"說明": ["還有 1 筆沒通過（其中 1 筆是退回重做、還沒重做）"], "擋下": [],
             "退回清單": [{"成品秒": 9.0, "原片秒": 10.0, "原因": "第二句念錯"}, {"成品秒": None, "原片秒": 30.0, "原因": "x"}],
@@ -202,7 +203,7 @@ def test_web_blocked_dialog_has_no_export_button():
       console.log(JSON.stringify([fcExportAsk({json.dumps(blocked, ensure_ascii=False)}, true),
                                   fcExportAsk({json.dumps(redo, ensure_ascii=False)}, false)]));""")
     b, r = got
-    assert b["blocked"] and b["title"] == "還不能輸出" and "名字程式沒處理" in b["body"] and b["win"] == ""
+    assert b["blocked"] and b["title"] == "還不能輸出" and "標字版" in b["body"] and b["win"] == ""
     assert not r["blocked"] and r["redoHead"] == "有 2 筆退回重做還沒重做，輸出的是重做之前的樣子"
     assert r["redo"] == [{"t": 9.0, "kind": "成品", "why": "第二句念錯"}, {"t": 30.0, "kind": "原片", "why": "x"}]
     assert "重做之前的版本" in r["warn"][0]

@@ -730,3 +730,19 @@ table.kv.pk-table td.pk-btns { width: 11em; white-space: nowrap; }
 
 /* 10-08：輸出成品的確認視窗，列出還沒重做的退回（只顯示） */
 .fc-export-redo { max-height: 30vh; overflow-y: auto; margin: 4px 0 8px; padding-left: 20px; font-size: 14px; font-variant-numeric: tabular-nums; }
+
+/* 10-08 宇軒（流程簡化）：第 4 步總檢查兩區預設收合成一行摘要；第 3 步「全部照建議通過」；第 5 步「需留意」 */
+details.fc-fold { border-top: 1px solid var(--line, #ddd); padding: 8px 0; }
+details.fc-fold > summary { cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+details.fc-fold > summary::-webkit-details-marker { display: none; }
+details.fc-fold > summary .fc-foldbtn { font-size: 13px; border: 1px solid var(--line, #ccc); border-radius: 6px; padding: 2px 8px; }
+details.fc-fold[open] > summary .fc-foldbtn::after { content: "（點了收合）"; }
+.rv-passbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
+.fc-att-red { border: 2px solid var(--danger); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+.fc-att-red h3 { color: var(--danger); margin: 0 0 6px; }
+.fc-attlist { list-style: none; padding: 0; margin: 0; }
+.fc-attlist li { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line, #eee); }
+.fc-attlist li .tm { min-width: 9em; }
+.fc-attlist li .tx { flex: 1 1 14em; min-width: 0; overflow-wrap: anywhere; }
+.fc-attlist li.fc-att-name .tx { color: var(--danger); }
+.fc-export-names { color: var(--danger); }

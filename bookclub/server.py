@@ -1159,13 +1159,8 @@ class BookclubServer(ThreadingHTTPServer):
                 return {"started": False, "error": "還不能開始：" + "；".join(pre["缺"])}
             if not opts.get("只重新組裝") and not groq_key_ready():   # 10-04 #110：沒金鑰就不檢查念對沒有，先擋下
                 return {"started": False, "error": groq_key_execute_message()}
-            from bookclub.execute import final_check
-
-            fc = final_check(self.workdir)   # 10-01：開始前總檢查
-            if not fc["可以開始"]:
-                return {"started": False, "error": f"開始前總檢查還有 {fc['還要處理']} 列一定要處理的"}
-            if not fc["看過"]:
-                return {"started": False, "error": "開始前總檢查的「請看一眼」還沒按「我看過了」"}
+            # 10-08 宇軒（流程簡化）：開始前總檢查不再擋——「一定要處理」「請看一眼」沒處理＝預設略過，照目前設定做；
+            # 開始時記下沒處理的列（execute.skipped_snapshot），第 5 步「需留意」列出成品裡還留著原聲的地方
             if opts.get("只重新組裝") and not self._has_returned():   # 10-05 #97：沒有退回時只重新組裝，先確定聲音都生成好了
                 from bookclub.execute import reassemble_problem
                 from bookclub.review import parse_time
@@ -1719,6 +1714,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, silentedge.apply(server.workdir, str(body["鍵"]), body.get("第5步鍵") or None))
             elif path == "/api/review/voice":
                 self._send_json(200, rv.set_voice(server.workdir, body.get("學員"), str(body["聲音"])))
+            elif path == "/api/review/passall":   # 10-08 宇軒（流程簡化）：「全部照建議通過」
+                self._send_json(200, rv.pass_all(server.workdir))
             elif path == "/api/review/prep":
                 self._send_json(200, rv.set_prep(server.workdir, str(body["項目"]), bool(body.get("完成", True))))
             elif path == "/api/review/cutsuggest":
