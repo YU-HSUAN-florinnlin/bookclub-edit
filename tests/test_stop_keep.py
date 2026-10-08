@@ -162,11 +162,12 @@ def test_project_label():
     a = server.project_label("/Users/x/Downloads/課程/自動化剪輯流程-開發專案/2025-04-09 第一堂_剪輯工作區")
     b = server.project_label("/Users/x/讀書會剪輯資料/舊測試工作區/第一步從零_1004b/工作區/2025-04-09 第一堂_剪輯工作區")
     assert a == {"所在": "自動化剪輯流程-開發專案", "標示": "正式", "顯示名稱": "2025-04-09 第一堂_剪輯工作區（自動化剪輯流程-開發專案）"}
-    assert b["所在"] == "第一步從零_1004b" and b["標示"] == "正式" and b["顯示名稱"] != a["顯示名稱"]
+    assert b["所在"] == "第一步從零_1004b" and b["標示"] == "測試" and b["顯示名稱"] != a["顯示名稱"]
     assert server.project_label("/tmp/驗證_0926d")["標示"] == "測試"
-    # 10-08 審查：只看工作區資料夾本身與上一層（所在）的名稱；test 這類英文不算
+    # 10-08 審查：只看工作區資料夾本身、上一層、上上層（跳過「工作區」）的名稱；test 這類英文不算
     assert server.project_label("/Users/x/latest/tester/第一堂_剪輯工作區")["標示"] == "正式"
-    assert server.project_label("/Users/x/讀書會剪輯資料/舊測試工作區/第一步從零_1004b/工作區/第一堂")["標示"] == "正式"   # 上上層有「測試」不算
+    assert server.project_label("/Users/x/讀書會剪輯資料/舊測試工作區/第一步從零_1004b/工作區/第一堂")["標示"] == "測試"   # 上上層
+    assert server.project_label("/Users/x/測試/a/b/第一堂")["標示"] == "正式"   # 再往上一層的不算
     assert server.project_label("/Users/x/舊測試工作區/第一堂")["標示"] == "測試"
     # 上一層資料夾也同名：往上多帶幾層，直到分得出來
     rows = [{"名稱": "工作區", "路徑": "/s/甲_ui/base/工作區", **server.project_label("/s/甲_ui/base/工作區")},
