@@ -49,8 +49,11 @@ def test_platform_and_method():
 
 def test_pick_commands():
     mac = fileio.pick_command("mac", "選 \"片頭\"")
-    assert mac[0] == "osascript" and any("choose file" in x and "public.movie" in x and '"mp4"' in x for x in mac)
-    assert any('\\"片頭\\"' in x for x in mac)   # 引號有跳脫
+    # 10-08：改用 JXA（AppleScript 的 activate 每次多等約 2.2 秒）；不再用 AppleScript 的 activate
+    assert mac[:3] == ["osascript", "-l", "JavaScript"] and "-e" in mac and "activate" not in mac
+    js = mac[-1]
+    assert "chooseFile(" in js and '"public.movie"' in js and '"mp4"' in js and "app.activate()" in js
+    assert '"選 \\"片頭\\""' in js   # 標題用 JSON 字串（引號有跳脫）
     wsl = fileio.pick_command("wsl", "選影片", which=_which("powershell.exe"))
     assert wsl[0] == "/fake/powershell.exe" and "-STA" in wsl and "-EncodedCommand" in wsl
     script = base64.b64decode(wsl[wsl.index("-EncodedCommand") + 1]).decode("utf-16-le")

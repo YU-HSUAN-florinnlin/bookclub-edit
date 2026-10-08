@@ -212,7 +212,7 @@ function fcRenderTop() {
   ex.disabled = !st["可以輸出"];
   ex.title = st["可以輸出"] ? "全部通過、整片看過 100%：可以輸出" : st["還不能輸出的原因"].join("；");
   const msg = document.getElementById("fc-msg");
-  if (fc.data["輸出成品"]) msg.innerHTML = `<span class="badge done">已輸出</span> <code>${esc(fc.data["輸出成品"]["檔案"])}</code>（${esc(fmtStamp(fc.data["輸出成品"]["時間"]))}）`;
+  if (fc.data["輸出成品"]) msg.innerHTML = `<span class="badge done">已輸出</span> <code>${esc(fc.data["輸出成品"]["檔案"])}</code>（${esc(fmtStamp(fc.data["輸出成品"]["時間"]))}）<span class="muted">　要重新輸出可以再按一次，會產生新的一支、舊的不會被蓋掉</span>`;
   else if (fc.data["重做中"]) msg.innerHTML = `第 4 步正在重做退回的 ${fc.data["重做中"]["項目"].length} 筆（或上次沒做完）：做完會重新組裝，這幾筆回到「還沒看」。`;
   else if (fc.data["送回AI重做"]) msg.innerHTML = `已送回 AI 重做 ${fc.data["送回AI重做"]["項目"].length} 筆（${esc(fmtStamp(fc.data["送回AI重做"]["時間"]))}）：到 <a href="#step4">第 4 步</a> 按「只重做退回的這幾筆」。`;
   else if (fc.data["重做過"]) msg.innerHTML = `上一次重做了 ${fc.data["重做過"]["項目"].length} 筆（${esc(fmtStamp(fc.data["重做過"]["時間"]))}）：清單上標「重做過」的要重新看。`;

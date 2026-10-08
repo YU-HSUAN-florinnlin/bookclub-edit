@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import shutil
 import subprocess
@@ -146,10 +147,13 @@ def encode_ps(script: str) -> str:
 def pick_command(method: str, title: str, exts: tuple[str, ...] = VIDEO_EXTS, which=None) -> list[str]:
     which = which or shutil.which
     if method == "mac":
-        types = ", ".join(_applescript_str(x) for x in ("public.movie", *(e.lstrip(".") for e in exts)))
-        return ["osascript", "-e", "activate",
-                "-e", f"set f to choose file with prompt {_applescript_str(title)} of type {{{types}}}",
-                "-e", "POSIX path of f"]
+        # 10-08：改用 JavaScript 版的 osascript（JXA）。AppleScript 的 `activate` 每次要等約 2.2 秒才回來
+        # （開發者的 Mac 實測：osascript -e 'activate' 3 次都是 2.15～2.18 秒；不 activate 0.09 秒、JXA 的 activate 0.2 秒），
+        # 宇軒按「選影片」覺得卡的主要原因就是它。JXA 照樣先 activate（讓視窗盡量跳在前面），只多約 0.15 秒。
+        types = json.dumps(["public.movie", *(e.lstrip(".") for e in exts)], ensure_ascii=False)
+        script = ("var app = Application.currentApplication(); app.includeStandardAdditions = true; app.activate(); "
+                  f"String(app.chooseFile({{withPrompt: {json.dumps(title, ensure_ascii=False)}, ofType: {types}}}))")
+        return ["osascript", "-l", "JavaScript", "-e", script]
     if method == "wsl":
         ps = _find_exe("powershell.exe", PS_CANDIDATES, which) or "powershell.exe"
         return [ps, "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass",
@@ -338,14 +342,16 @@ PARTIAL_SUFFIX = ".複製中"
 PARTIAL_STALE_S = 3600   # 暫存檔超過這麼多秒沒改動才算「上次留下的」
 
 
-def cleanup_partials(folder: Path, *, older_than_s: float = PARTIAL_STALE_S, now: float | None = None) -> int:
+def cleanup_partials(folder: Path, *, older_than_s: float = PARTIAL_STALE_S, now: float | None = None,
+                     suffix: str = PARTIAL_SUFFIX) -> int:
     """伺服器啟動時清掉上次複製到一半（伺服器被關掉）留下的暫存檔：只清這個工具自己取的名字
     （以點開頭、結尾是「.複製中」），而且超過 1 小時沒改動的（同一個資料夾同時開著另一個伺服器、
-    正在複製的不會被誤刪），其他檔不動。回傳清掉幾個。"""
+    正在複製的不會被誤刪），其他檔不動、不往子資料夾找。回傳清掉幾個。
+    `suffix`：10-08 起第 5 步「輸出成品」也用這支清 `輸出/` 裡中途斷掉的 `.最終成品_….mp4.輸出中`。"""
     n = 0
     now = time.time() if now is None else now
     try:
-        items = list(Path(folder).glob(f".*{PARTIAL_SUFFIX}"))
+        items = list(Path(folder).glob(f".*{suffix}"))
     except OSError:
         return 0
     for f in items:

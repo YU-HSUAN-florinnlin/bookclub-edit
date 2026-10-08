@@ -266,8 +266,30 @@ def test_save_flow_sendback_and_export():
     assert fc.page_data(w)["狀態"]["看過比例"] < 1
     r = fc.add_watched(w, [[3.5, 10.0]])
     assert r["看過比例"] == 1.0 and r["看過區段"] == [[0.0, 10.0]]
+    import os
+    import time
+
+    stale = w / "輸出" / ".最終成品_0-0_sw_20261001-000000.mp4.輸出中"   # 上次輸出到一半斷掉留下的
+    fresh = w / "輸出" / ".最終成品_0-0_sw_20261008-000000.mp4.輸出中"   # 剛剛才在寫的（別的伺服器）不動
+    keep = w / "輸出" / "成品_其他.輸出中"                                # 不是點開頭：不是這個工具取的，不動
+    for f in (stale, fresh, keep):
+        f.write_bytes(b"x")
+    os.utime(stale, (time.time() - 7200, time.time() - 7200))
     out = fc.export_final(w)
-    assert (w / out["檔案"]).is_file() and out["檔案"] == "輸出/最終成品_0-0_sw.mp4"
+    assert not stale.exists() and fresh.exists() and keep.exists()
+    # 10-08：每次輸出產生一支新的（檔名帶時間），可以輸出很多次、舊的不蓋掉
+    assert (w / out["檔案"]).is_file() and out["檔案"].startswith("輸出/最終成品_0-0_sw_") and out["檔案"].endswith(".mp4")
+    assert out["第幾次"] == 1 and out["接上片頭片尾"] is False and out["片頭"] is None
+    wd.write_json(w / "工作區設定.json", {"片頭": {"路徑": "/x/片頭.mp4", "檔名": "片頭.mp4"}})
+    out2 = fc.export_final(w)
+    out3 = fc.export_final(w)   # 同一秒再按：加編號
+    files = {out["檔案"], out2["檔案"], out3["檔案"]}
+    assert len(files) == 3 and all((w / f).is_file() for f in files)
+    assert out3["第幾次"] == 3 and out2["片頭"] == "片頭.mp4"
+    saved = wd.read_json(fc.check_path(w))
+    assert saved["輸出成品"]["檔案"] == out3["檔案"] and len(saved["輸出紀錄"]) == 3
+    assert list((w / "輸出").glob(".*輸出中")) == [fresh]   # 這幾次輸出自己的暫存檔都換上了，只剩那個別人的
+    assert fc.final_name("成品_0-98_sw.mp4", "20261008-153012") == "最終成品_0-98_sw_20261008-153012.mp4"
 
 
 def test_whole_flags_survive_rerender_until_redone():

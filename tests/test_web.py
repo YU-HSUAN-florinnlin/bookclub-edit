@@ -142,8 +142,18 @@ def test_pick_with_system_dialog():
     assert "pickCardHtml()" in ov and "bindPickCard(" in ov and "renderPicker(" not in ov
     assert '"用選的": true' in app and "pickBrowsed(" in app
     assert '"/api/pick"' in fio and "退回網頁" in fio and "pkShowFallback" in fio and "/api/copy/cancel" in fio
-    # 片頭、片尾：可以不選；這一版還不會接上（畫面照實說）
-    assert "可以不選" in fio and "還不會自動接上" in fio
+    # 10-08 宇軒：片頭、片尾搬到第 5 步輸出成品這一區（總覽不再有）；可以不選；這一版只先記錄、還不會接上（畫面照實說）
+    assert "可以不選" in fio and "還不會接上" in fio and "feRenderExtras" in fio
+    overview_rows = fio[fio.index("function pkRenderState"):fio.index("function feRenderExtras")]
+    assert '"片頭"' not in overview_rows and '"片尾"' not in overview_rows and "extrasHtml" not in app
+    init = fio[fio.index("async function fileOutInit"):]
+    assert 'id="feExtras"' in init and 'id="pkFallback"' in init and 'id="picker"' in init
+    # 10-08 宇軒：「先把片頭片尾的選取功能隱藏掉」——用開關關掉，程式留著
+    assert "const SHOW_EXTRAS = false;" in fio
+    fe = fio[fio.index("function feRenderExtras"):fio.index("function pkBind")]
+    assert fe.index("if (!SHOW_EXTRAS)") < fe.index("box.innerHTML = `<h3")
+    # 按下去馬上換字（10-08：宇軒覺得按了沒反應）
+    assert "正在打開選檔視窗…" in fio
     # 第 5 步兩顆按鈕：finalcheck.js 只放容器＋呼叫（好合併），按鈕在 fileio.js
     fc = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     assert 'id="fc-fileout"' in fc and "fileOutInit(" in fc

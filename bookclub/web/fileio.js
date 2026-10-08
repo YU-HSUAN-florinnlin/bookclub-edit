@@ -1,7 +1,11 @@
 "use strict";
-/* 10-07 檔案進出：總覽的「選影片／片頭／片尾」（系統內建的選檔視窗）、Windows 的檔案複製進 Ubuntu 的進度、
- * 第 5 步「打開成品資料夾」「複製成品到 Windows 的下載資料夾」。後端在 bookclub/server.py（/api/pick…、/api/final/outputs…）
+/* 10-07 檔案進出：總覽的「選影片」（系統內建的選檔視窗）、Windows 的檔案複製進 Ubuntu 的進度、
+ * 第 5 步「打開成品資料夾」「複製成品到 Windows 的下載資料夾」「片頭、片尾」（10-08 宇軒：片頭片尾從總覽搬到第 5 步輸出成品這一區）。後端在 bookclub/server.py（/api/pick…、/api/final/outputs…）
  * 與 bookclub/fileio.py。叫不起系統視窗（或按取消）時退回 app.js 的網頁資料夾瀏覽（renderPicker）。 */
+
+// 10-08 宇軒：「先把片頭片尾的選取功能隱藏掉」。第 5 步的片頭片尾選檔先不顯示；程式與 API（/api/pick 的「片頭」「片尾」、
+// /api/extras/clear、工作區設定.json）都留著，之後接上成品時把這個改回 true 就會出現。
+const SHOW_EXTRAS = false;
 
 const PK_WHAT = { "影片": "選影片", "片頭": "選片頭", "片尾": "選片尾" };
 let pkState = null;            // 上一次 /api/picks
@@ -75,26 +79,22 @@ function pkRenderState() {
   box.innerHTML = `
     <table class="kv pk-table"><tbody>
       ${pkRowHtml("影片", v, "新影片")}
-      ${pkRowHtml("片頭", sel["片頭"], "新影片", "可以不選")}
-      ${pkRowHtml("片尾", sel["片尾"], "新影片", "可以不選")}
     </tbody></table>
-    <p class="muted">片頭、片尾：這一版先選好、記在這支影片的工作資料夾裡；成品還不會自動接上（下一版做）。</p>
     ${startHtml}`;
   pkBind(box);
   const st = document.getElementById("pkStart");
   if (st) st.addEventListener("click", startPicked);
 }
 
-// 目前專案的片頭、片尾（app.js renderOverview「目前的專案」卡片裡）
-function extrasHtml() { return `<div id="pjExtras"></div>`; }
-
-function pkRenderExtras() {
-  const box = document.getElementById("pjExtras");
+// 第 5 步「輸出成品」這一區的片頭、片尾（10-08 宇軒：要最終輸出的時候才選；可以換、可以拿掉，輸出可以做很多次）
+function feRenderExtras() {
+  const box = document.getElementById("feExtras");
   if (!box || !pkState) return;
+  if (!SHOW_EXTRAS) { box.innerHTML = ""; return; }
   const cur = pkState["目前的專案"];
   if (!cur) { box.innerHTML = ""; return; }
   if (cur["錯誤"]) { box.innerHTML = `<p class="badge error">${esc(cur["錯誤"])}</p>`; return; }
-  // 10-07 審查：每一格只看最後一個工作（含成功的），舊的「複製失敗」不會一直掛著；開始分析後還在複製的片頭片尾也算「目前」
+  // 每一格只看最後一個工作（含成功的），舊的「複製失敗」不會一直掛著
   const jobs = (pkState["複製"] || []).filter((j) => j["給"] === "目前");
   const row = (p) => {
     const v = cur[p];
@@ -105,9 +105,9 @@ function pkRenderExtras() {
       <td class="pk-btns"><button class="secondary pk-pick" data-p="${p}" data-g="目前">${v ? "換一支" : PK_WHAT[p]}</button>
         ${v ? `<button class="ghost pk-clear" data-p="${p}">拿掉</button>` : ""}</td></tr>`;
   };
-  box.innerHTML = `<h3>片頭、片尾</h3>
-    <table class="kv pk-table"><tbody>${row("片頭")}${row("片尾")}</tbody></table>
-    <p class="muted">記在這個工作資料夾的 <code>工作區設定.json</code>。這一版成品還不會自動接上片頭片尾（下一版做）。</p>`;
+  box.innerHTML = `<h3 class="fe-title">片頭、片尾</h3>
+    <p class="hint fe-note">這一版只先記錄選了哪一支（存在這個工作資料夾的 <code>工作區設定.json</code>），按「輸出成品」時<b>還不會接上</b>。選錯了可以換、可以拿掉；「輸出成品」可以按很多次，每次都會產生一支新的最終成品，舊的不會被蓋掉。</p>
+    <table class="kv pk-table"><tbody>${row("片頭")}${row("片尾")}</tbody></table>`;
   pkBind(box);
 }
 
@@ -135,10 +135,11 @@ async function pkRefresh() {
     return;
   }
   pkRenderState();
-  pkRenderExtras();
+  feRenderExtras();
   const copying = (pkState["複製"] || []).some((j) => j["狀態"] === "複製中" || j["狀態"] === "等待");
   clearTimeout(pkPollTimer);
-  if (copying) pkPollTimer = setTimeout(() => { if (document.getElementById("pkState")) pkRefresh(); }, 1000);
+  const shown = () => document.getElementById("pkState") || document.getElementById("feExtras");
+  if (copying) pkPollTimer = setTimeout(() => { if (shown()) pkRefresh(); }, 1000);
 }
 
 async function bindPickCard(projectList) {
@@ -151,26 +152,30 @@ function pkShowFallback(why, purpose, target) {
   const fb = document.getElementById("pkFallback");
   if (!fb) return;
   fb.hidden = false;
-  const label = purpose === "影片" ? "影片" : `${purpose}（${target === "目前" ? "目前的專案" : "新影片"}）`;
+  const label = purpose === "影片" ? "影片" : purpose;
   document.getElementById("pkFallbackWhy").textContent = `${why}（現在在幫「${label}」選）`;
   let start = null;
   try { start = localStorage.getItem("pick-dir"); } catch (e) { /* 沒有 localStorage 也沒關係 */ }
   renderPicker(start, pkProjects);
-  fb.scrollIntoView({ block: "nearest", behavior: "smooth" });   // 片頭片尾的按鈕在下面，資料夾瀏覽在上面的卡片裡
+  fb.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 async function pkPick(purpose, target, btn) {
   const old = btn.textContent;
   btn.disabled = true;
-  btn.textContent = `選檔視窗開著…（沒看到的話，看一下瀏覽器後面或工作列）`;
+  // 10-08：按下去馬上換字，讓人知道有反應；過 1.5 秒還沒選好才提醒視窗可能躲在後面
+  btn.textContent = "正在打開選檔視窗…";
+  const later = setTimeout(() => { btn.textContent = "選檔視窗開著…（沒看到的話，看一下瀏覽器後面或工作列）"; }, 1500);
   let r;
   try {
     r = await apiPost("/api/pick", { "用途": purpose, "給": target }, { quiet: true });
   } catch (e) {
+    clearTimeout(later);
     btn.disabled = false; btn.textContent = old;
     alert(e.message);
     return;
   }
+  clearTimeout(later);
   btn.disabled = false; btn.textContent = old;
   if (r["退回網頁"]) { pkShowFallback(r["說明"], purpose, target); return; }
   const fb = document.getElementById("pkFallback");
@@ -189,15 +194,21 @@ async function pickBrowsed(path) {
 }
 
 // ---------------------------------------------------------------------------
-// 第 5 步：打開成品資料夾、複製成品到 Windows 的下載資料夾（finalcheck.js 只放一個容器、呼叫 fileOutInit）
+// 第 5 步：打開成品資料夾、複製成品到 Windows 的下載資料夾、片頭片尾（finalcheck.js 只放一個容器、呼叫 fileOutInit）
 // ---------------------------------------------------------------------------
 
 let foPollTimer = null;
 
 async function fileOutInit(el) {
   if (!el) return;
+  if (!el.querySelector("#foMain")) {   // 第一次：排好三塊（按鈕列每秒重畫時，片頭片尾與資料夾瀏覽不會被洗掉）
+    el.innerHTML = `<div id="foMain"></div><div id="feExtras"></div>
+      <div id="pkFallback" hidden><p class="hint" id="pkFallbackWhy"></p><div id="picker"></div></div>`;
+    if (SHOW_EXTRAS) pkRefresh();
+  }
+  const main = el.querySelector("#foMain");
   let d;
-  try { d = await apiGet("/api/final/outputs"); } catch (e) { el.innerHTML = ""; return; }
+  try { d = await apiGet("/api/final/outputs"); } catch (e) { main.innerHTML = ""; return; }
   if (!document.body.contains(el)) return;
   const openName = d["系統"] === "wsl" ? "在檔案總管打開成品資料夾" : d["系統"] === "mac" ? "在 Finder 打開成品資料夾" : "打開成品資料夾";
   const job = (d["複製"] || [])[0];
@@ -208,17 +219,17 @@ async function fileOutInit(el) {
     else if (job["狀態"] === "完成") jobHtml = `<span class="badge done">已複製</span> Windows 的下載資料夾：<code>${esc(job["檔名"])}</code>`;
     else if (job["狀態"] === "失敗") jobHtml = `<span class="badge error">複製失敗</span> ${esc(job["錯誤"] || "")}`;
   }
-  el.innerHTML = `<div class="fo-row">
+  main.innerHTML = `<div class="fo-row">
       <button class="secondary" id="fo-open" ${d["成品"] ? "" : "disabled"}>${openName}</button>
       ${d["可以複製到Windows"] ? `<button class="secondary" id="fo-win" ${d["成品"] && !running ? "" : "disabled"}>複製成品到 Windows 的下載資料夾</button>` : ""}
       ${d["成品"] ? `<span class="muted">${esc(d["成品是"] || "")}：${esc(d["成品"])}</span>` : ""}
       <span id="fo-msg" role="status">${jobHtml}</span></div>`;
-  const msg = el.querySelector("#fo-msg");
-  el.querySelector("#fo-open").addEventListener("click", async () => {
+  const msg = main.querySelector("#fo-msg");
+  main.querySelector("#fo-open").addEventListener("click", async () => {
     try { const r = await apiPost("/api/final/reveal", {}, { quiet: true }); msg.textContent = r["說明"] || ""; }
     catch (e) { msg.innerHTML = `<span class="badge error">打不開</span> ${esc(e.message)}`; }
   });
-  const win = el.querySelector("#fo-win");
+  const win = main.querySelector("#fo-win");
   if (win) win.addEventListener("click", async () => {
     win.disabled = true;
     try { await apiPost("/api/final/to_windows", {}, { quiet: true }); }
