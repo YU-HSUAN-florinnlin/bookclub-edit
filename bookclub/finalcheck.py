@@ -647,6 +647,221 @@ def gen_id(r: dict) -> str | None:
     return m.group(1) if m and safe_id(m.group(1)) else None
 
 
+# ---------- 第 5 步下方清單分兩區（10-08 宇軒）：「有修改的」依類型分組＋「第 3 步有卡片但選定不修改」 ----------
+
+# 「有修改的」每一組：(組, 畫面上的名稱, 一行說明)。依這個順序顯示；處理紀錄的 `類型` 怎麼歸組見 `change_group`
+CHANGE_GROUPS = (
+    ("學員重念", "學員段落：AI 重念", "學員的話用 AI 聲音重念（加快、結尾停格、結尾切掉都寫在這一筆裡）"),
+    ("學員空隙", "學員段落：兩格之間的空隙", "第 4 步組裝時處理的：兩格重念之間的空隙墊底噪；空隙裡有別的聲音的照原聲留著、要人聽"),
+    ("名字重念", "老師講到名字：整句重念", "老師講到名字，整句用老師 AI 聲音重念、名字換成代號"),
+    ("名字消音", "老師講到名字：消音", "老師講到名字，名字那幾個字消音（墊環境底噪）"),
+    ("名字要人處理", "名字：沒有自動處理", "程式換不了、原片沒動，要人看"),
+    ("學員名字", "保留原聲的學員講到名字", "保留原聲的學員講到名字：消音，或用他自己的聲音重念這句"),
+    ("重疊", "聲音重疊", "老師和學員聲音疊在一起的地方：重念、消音，或只標出來"),
+    ("剪掉", "剪掉（連畫面）", "聲音和畫面一起拿掉，影片變短"),
+    ("消音", "消音（第 3 步標的）", "第 3 步手動標的局部消音（墊環境底噪）"),
+    ("停格", "停格（第 4 步組裝時加的）", "重念比原本長，畫面停一下補長"),
+    ("其他", "其他", "模糊示範等"),
+)
+_GROUP_OF_KIND = {"學員重念": "學員重念", "學員空隙消音": "學員空隙", "學員空隙保留原聲": "學員空隙",
+                  "名字整句換掉": "名字重念", "換聲音": "名字重念", "名字消音": "名字消音", "消音": "名字消音",
+                  "名字要人處理": "名字要人處理", "學員名字消音": "學員名字", "學員名字換代號": "學員名字",
+                  "重疊": "重疊", "刪除": "剪掉", "局部消音": "消音", "停格": "停格"}
+
+
+def change_group(r: dict, index: dict | None = None) -> str:
+    """處理紀錄一筆 → 「有修改的」哪一組（純函式）。對到第 3 步重疊卡片的（`覆核項目` 第一個是 `重疊:`，
+    或重疊卡片自己生成的學員那一句）歸「重疊」，一筆只列一次（照 `覆核項目` 第一個）。"""
+    kind = r.get("類型")
+    first = (r.get("覆核項目") or [""])[0]
+    if kind in ("局部消音", "名字整句換掉", "換聲音", "學員重念") and str(first).startswith("重疊:"):
+        return "重疊"
+    if kind == "學員重念" and index and (index.get(first) or {}).get("類型") == "重疊":
+        return "重疊"
+    return _GROUP_OF_KIND.get(kind, "其他")
+
+
+# 「第 3 步有卡片但選定不修改」每一種：(子類, 畫面上的名稱, 回第 3 步怎麼改)
+UNCHANGED_KINDS = (
+    ("改成老師", "改成老師的段落（照原聲）", "要改回學員、改時間或改成老師重念，在這張卡片的「改做法」裡選"),
+    ("保留原聲", "保留原聲的學員段落", "要改成 AI 重念：在「開始前 4 件事」的學員聲音改成「重新生成」"),
+    ("重疊不用改", "聲音重疊：選了「不用改」", "要處理就在這張卡片換做法"),
+    ("名字略過", "老師講到名字：標成「不是名字」或「是地名」", "其實是名字的話，把標記拿掉"),
+    ("學員名字略過", "保留原聲的學員講到名字：標成「不是名字」或「是地名」", "其實是名字的話，把標記拿掉"),
+    ("不剪", "建議剪掉：選了「不剪」", "要剪掉：在「設定」的「已還原的」救回"),
+    ("剪掉還原", "手動剪掉、後來還原的", "要剪掉：在「設定」的「已還原的」救回"),
+    ("消音還原", "手動消音、後來還原的", "要消音：在「設定」的「已還原的」救回"),
+    ("段落外老師", "段落外面那幾秒：答「老師的話，不用處理」", "答錯了：在這張學員段落卡片的「切在段落外面的這幾秒」改答案"),
+    ("人名不處理", "名字清單：選「不用處理」或「不是名字」", "要換成代號：在「開始前 4 件事」的 ③ 改"),
+)
+UNCHANGED_MIN_S = 0.3        # 扣掉被別筆處理動到的地方之後剩不到 0.3 秒就不列（整段都改了、剪掉了）
+
+
+def _unchanged_sources(workdir: Path) -> list[dict]:
+    """第 3 步有卡片但選定不修改的（原片時間，還沒扣掉被動到的地方）：[{鍵, 子類, 名稱, start, end, 第3步, 處數?}]。
+    只讀檔，不寫任何檔；每一種各自算，哪一種讀不到就跳過那一種（不擋第 5 步）。"""
+    from bookclub import review
+
+    workdir = Path(workdir)
+    rows: list[dict] = []
+
+    def add(kind: str, key: str, name: str, a, b, card: str | None, **extra) -> None:
+        try:
+            a, b = float(a), float(b)
+        except (TypeError, ValueError):
+            return
+        if b > a:
+            rows.append({"鍵": key, "子類": kind, "名稱": name, "start": round(a, 3), "end": round(b, 3), "第3步": card, **extra})
+
+    def safe(fn) -> None:
+        try:
+            fn()
+        except Exception:  # noqa: BLE001 — 某一種算不出來就不列那一種
+            pass
+
+    dec = review.load_decisions(workdir)
+    kept = {k for k, v in (dec.get("學員聲音") or {}).items() if v == "保留原聲"}
+
+    def turns() -> None:
+        from bookclub import turns as turns_mod
+
+        data = wd.read_json(turns_mod.turns_path(workdir), default=None) or {}
+        for t in data.get("段落", []):
+            if t.get("說話者") == "老師" and t.get("說話者是人改的"):
+                add("改成老師", f"不修改:改成老師:{t['id']}", f"改成老師 {wd.fmt_time(t['start'])}", t["start"], t["end"],
+                    f"改成老師:{t['id']}")
+            elif t.get("說話者") in kept:
+                add("保留原聲", f"不修改:保留原聲:{t['id']}", f"學員段落 {wd.fmt_time(t['start'])}", t["start"], t["end"],
+                    f"學員段落:{t['id']}", 學員=t.get("說話者"))
+
+    def overlaps() -> None:
+        for o in review.overlap_choices(workdir):
+            if o.get("做法") == "不用改":
+                add("重疊不用改", f"不修改:重疊:{o['id']}", f"重疊 {wd.fmt_time(o['start'])}", o["start"], o["end"], f"重疊:{o['id']}")
+
+    def names() -> None:
+        from bookclub.nameplan import SKIP_TAGS
+
+        data = wd.read_json(wd.names_path(workdir), default=None) or {}
+        ndec = wd.read_json(review.name_decisions_path(workdir), default={}) or {}
+        cands = review.effective_name_candidates(workdir, data.get("candidates", []), ndec)
+        decs = review.card_decisions(cands, ndec)
+        cards = review.card_of(cands)
+        seen: dict[str, dict] = {}
+        for i, c in enumerate(cands, start=1):
+            cid = str(c.get("id") or i)
+            if c.get("同一處") or not set((decs.get(cid) or {}).get("tags") or []) & SKIP_TAGS:
+                continue
+            card = cards.get(cid, cid)
+            if card in seen:   # 同一張卡片（同一句同代號）的另一處：併成一列
+                r = seen[card]
+                r["start"], r["end"] = min(r["start"], round(float(c["start"]), 3)), max(r["end"], round(float(c["end"]), 3))
+                r["處數"] += 1
+                continue
+            n = len(rows)
+            add("名字略過", f"不修改:名字:{card}", f"老師提到名字 {wd.fmt_time(c['start'])}", c["start"], c["end"],
+                f"名字:{card}", 處數=1)
+            if len(rows) > n:
+                seen[card] = rows[-1]
+
+    def student_names() -> None:
+        from bookclub import studentnames
+
+        cands = (wd.read_json(studentnames.cands_path(workdir), default=None) or {}).get("candidates", [])
+        sdec = wd.read_json(studentnames.decisions_path(workdir), default={}) or {}
+        for c in cands:
+            if c.get("學員") not in kept:
+                continue
+            if set((sdec.get(c["id"]) or {}).get("tags") or []) & studentnames.SKIP_TAGS:
+                add("學員名字略過", f"不修改:學員名字:{c['id']}", f"學員提到名字 {wd.fmt_time(c['start'])}", c["start"], c["end"],
+                    f"學員名字:{c['id']}")
+
+    def restored() -> None:
+        linked = {c["建議id"]: c for c in dec["刪除段落"] if c.get("建議id")}
+        for sg in review.load_cut_suggestions(workdir):
+            if (dec["刪除建議"].get(sg["id"]) or {}).get("決定") == "不刪":
+                c = linked.get(sg["id"], {})
+                add("不剪", f"不修改:還原:{sg['id']}", f"建議剪掉 {wd.fmt_time(c.get('start', sg['start']))}",
+                    c.get("start", sg["start"]), c.get("end", sg["end"]), None)
+        for c in dec["刪除段落"]:
+            if not c.get("建議id") and c.get("狀態") == "還原":
+                add("剪掉還原", f"不修改:還原:{c['id']}", f"剪掉 {wd.fmt_time(c['start'])}", c["start"], c["end"], None)
+        for m in dec["局部消音"]:
+            if m.get("狀態") == "還原":
+                add("消音還原", f"不修改:還原:{m['id']}", f"消音 {wd.fmt_time(m['start'])}", m["start"], m["end"], None)
+
+    def outside() -> None:
+        from bookclub.execute import OUT_A
+
+        for k, a in (dec.get("段落外答案") or {}).items():
+            if (a or {}).get("答案") == OUT_A and str(k).startswith("段落外:"):
+                tid = a.get("段落") or str(k).split(":")[1]
+                add("段落外老師", str(k), f"學員段落外面 {wd.fmt_time(a['start'])}", a["start"], a["end"], f"學員段落:{tid}")
+
+    def people() -> None:
+        from bookclub import personnames
+
+        pdec = wd.read_json(personnames.decisions_path(workdir), default={}) or {}
+        skip = {n for n, d in pdec.items() if (d or {}).get("做法") in ("不是名字", "不用處理")}
+        if not skip:
+            return
+        sents = {s["id"]: s for s in (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])}
+        for k, p in enumerate((wd.read_json(personnames.people_path(workdir), default=None) or {}).get("人名", []), start=1):
+            if p.get("名字") not in skip:
+                continue
+            ss = sorted((sents[i] for i in p.get("句子") or [] if i in sents), key=lambda s: s["start"])
+            if ss:   # 有句子編號的才有時間；一個名字一列，時間是第一次出現的那一句
+                add("人名不處理", f"不修改:人名:{p.get('id') or k}", p["名字"], ss[0]["start"], ss[0]["end"], None,
+                    處數=len(ss), 做法=pdec[p["名字"]].get("做法"))
+
+    for fn in (turns, overlaps, names, student_names, restored, outside, people):
+        safe(fn)
+    return rows
+
+
+def place_unchanged(rows: list[dict], log: dict | None) -> list[dict]:
+    """不修改的每一列換成成品時間（純函式）：扣掉處理紀錄會動到聲音的範圍（剪掉、重念、消音…），
+    剩不到 0.3 秒的不列；超出這次組裝範圍的不列。回傳每一列多 `原片`、`剩下`、`剩下秒`、`成品`（剩下的第一段起點～最後一段終點）。"""
+    if not log:
+        return []
+    plist = log.get("片段")
+    holes = [list(x) for x in proclog.audio_spans(log.get("紀錄", []))]
+    rng = log.get("範圍")
+    order = {k: i for i, (k, _n, _g) in enumerate(UNCHANGED_KINDS)}
+    out = []
+    for r in rows:
+        left = [[r["start"], r["end"]]]
+        if rng:
+            left = [[max(a, rng[0]), min(b, rng[1])] for a, b in left if min(b, rng[1]) > max(a, rng[0])]
+        left = subtract_ranges(left, holes)
+        secs = round(sum(b - a for a, b in left), 3)
+        if secs < UNCHANGED_MIN_S:
+            continue
+        a, b = near_output_time(left[0][0], plist), near_output_time(left[-1][1], plist)
+        out.append({**r, "原片": [r["start"], r["end"]], "剩下": left, "剩下秒": secs, "成品": [round(a, 3), round(b, 3)]})
+    out.sort(key=lambda x: (order.get(x["子類"], 99), x["start"]))
+    return out
+
+
+def unchanged_rows(workdir: str | Path, log: dict | None) -> list[dict]:
+    """`GET /api/final` 的「不修改」：第 3 步有卡片但選定不修改的，換成成品時間（不擋輸出、不用按通過）。"""
+    if not log:
+        return []
+    try:
+        return place_unchanged(_unchanged_sources(Path(workdir)), log)
+    except Exception:  # noqa: BLE001 — 算不出來不擋第 5 步
+        return []
+
+
+def group_counts(log: dict | None, index: dict | None = None) -> dict[str, int]:
+    """處理紀錄每一組幾筆（inspect 用，純函式）。"""
+    out: dict[str, int] = {}
+    for r in (log or {}).get("紀錄", []):
+        g = change_group(r, index)
+        out[g] = out.get(g, 0) + 1
+    return out
+
+
 def page_data(workdir: str | Path) -> dict:
     """`GET /api/final`：成品檢查頁一次要的全部資料。"""
     workdir = Path(workdir)
@@ -678,6 +893,7 @@ def page_data(workdir: str | Path) -> dict:
         if hit:
             recs[-1]["前後沒聲音"] = hit
         recs[-1]["要人看"] = needs_look(r, d)   # 10-02 第六批：「只看要人聽的」篩選
+        recs[-1]["組"] = change_group(r, index)   # 10-08：下方「有修改的」依類型分組
     flags = label_items([dict(x) for x in check["整片退回"]], index)
     un = []
     for u in (log or {}).get("未登記的變動", []):
@@ -694,6 +910,10 @@ def page_data(workdir: str | Path) -> dict:
         "重做中": check.get("重做中"),   # 10-01 第三批：第 4 步正在（或上次沒做完）重做退回的
         "重做過": check.get("重做過") if (check.get("重做過") or {}).get("處理紀錄產生時間") == (log or {}).get("產生時間") else None,
         "狀態": status(log, check),
+        # 10-08 宇軒：下方清單分兩區——「有修改的」依類型分組（組的順序、名稱）、「第 3 步有卡片但選定不修改」（不擋輸出）
+        "修改類型": [{"組": g, "名稱": n, "說明": x} for g, n, x in CHANGE_GROUPS],
+        "不修改類型": [{"子類": k, "名稱": n, "去改": x} for k, n, x in UNCHANGED_KINDS],
+        "不修改": unchanged_rows(workdir, log),
         "學員顯示名": _student_labels(workdir),   # 10-07：畫面上「學員3」換成「本名（代號）」（只在畫面換，紀錄檔不寫本名）
     }
 

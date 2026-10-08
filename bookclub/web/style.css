@@ -595,6 +595,22 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
   border-top: 1px solid rgba(0,0,0,.08); font-size: 15px; }
 .fc-h2 { font-size: 17px; margin: 8px 0; }
 @media (max-width: 760px) { .fc-unlogged li { grid-template-columns: 1fr; } }
+/* 10-08 宇軒：下方清單分兩區——「有修改的」依類型分組、「第 3 步有卡片、選定不修改的」；每組可收合 */
+.fc-groups { max-height: 55vh; overflow-y: auto; background: var(--rv-card); border-radius: 12px; margin-bottom: 14px; }
+.fc-groups > .empty { padding: 10px 14px; margin: 0; }
+.fc-grp { border-bottom: 1px solid var(--rv-line); }
+.fc-grp:last-child { border-bottom: none; }
+.fc-grp > summary { cursor: pointer; padding: 9px 14px; font-size: 15px; list-style-position: inside; }
+.fc-grp > summary:hover { background: var(--bg-soft); }
+.fc-grp > summary .ok { color: var(--rv-stu); }
+.fc-grp-note { display: block; margin: 2px 0 0 18px; font-size: 13px; }
+.fc-grp .rv-list { max-height: none; overflow: visible; border-radius: 0; }
+.fc-ulist { list-style: none; margin: 0; padding: 0; }
+.fc-ulist li { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 14px;
+  border-top: 1px solid var(--rv-line); font-size: 15px; }
+.fc-ulist li.cur { background: var(--rv-cur); }
+.fc-ulist .tm { font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) { .fc-ulist li { grid-template-columns: 1fr; } }
 
 /* ---------- 第 4 步：AI 執行（09-29） ---------- */
 .exec-opts { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 12px; font-size: 14px; }
