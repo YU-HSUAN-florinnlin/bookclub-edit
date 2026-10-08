@@ -931,11 +931,21 @@ async function fcExport() {
   fileOutInit(document.getElementById("fc-fileout"));   // 「打開成品資料夾」「複製到 Windows」改指向剛輸出的這一支
 }
 
-// 確認視窗的文字（純函式）：還差什麼一句一句寫、最後問要不要照目前的狀態輸出；Windows（WSL）多提醒要再按複製那一顆
+// 確認視窗的文字（純函式）：還差什麼一句一句寫、最後問要不要照目前的狀態輸出；Windows（WSL）多提醒要再按複製那一顆。
+// 10-08 審查：有「擋下」的（程式處理不了的名字沒按通過、名字／重疊退回沒重做、標字版）只說要先做什麼、不給輸出（block）；
+// 其他退回重做還沒重做的放最前面紅字（redoHead），底下列每一筆的時間與原因（redo，只顯示）；第 4 步正在重做的寫在 warn
 function fcExportAsk(gaps, win) {
-  const why = (gaps && gaps["說明"]) || [];
-  return { title: "還沒檢查完，確定要輸出嗎？",
-    body: `${why.join("、")}。確定要以目前的狀態輸出嗎？`,
+  const g = gaps || {};
+  const why = g["說明"] || [], block = g["擋下"] || [], redo = g["退回清單"] || [], warn = g["提醒"] || [];
+  if (block.length) {
+    return { blocked: true, title: "還不能輸出", body: `${block.join("；")}。`, note: "處理好之後再按一次「輸出成品」。",
+      redoHead: "", redo: [], warn: [], win: "" };
+  }
+  return { blocked: false, title: "還沒檢查完，確定要輸出嗎？",
+    redoHead: redo.length ? `有 ${redo.length} 筆退回重做還沒重做，輸出的是重做之前的樣子` : "",
+    redo: redo.map((x) => ({ t: x["成品秒"] != null ? x["成品秒"] : x["原片秒"], kind: x["成品秒"] != null ? "成品" : "原片", why: x["原因"] || "" })),
+    warn,
+    body: `${why.length ? why.join("、") + "。" : ""}確定要以目前的狀態輸出嗎？`,
     note: "輸出的是現在檢查的這一支成品（照目前的樣子），會另外存一支新的，舊的不會被蓋掉。之後要重新輸出可以再按一次。",
     win: win ? "成品在 Ubuntu 裡：輸出之後，再按「複製成品到 Windows 的下載資料夾」，才拿得到。" : "" };
 }
@@ -946,15 +956,20 @@ function fcConfirmExport(gaps, win) {
     const dlg = document.createElement("dialog");
     dlg.className = "rv-confirm";
     dlg.setAttribute("aria-labelledby", "fc-export-title");
-    dlg.innerHTML = `<h2 id="fc-export-title">${esc(a.title)}</h2><p>${esc(a.body)}</p>
+    dlg.innerHTML = `<h2 id="fc-export-title">${esc(a.title)}</h2>
+      ${a.redoHead ? `<p class="rv-warnline"><b>${esc(a.redoHead)}</b></p>` : ""}
+      ${a.warn.map((x) => `<p class="rv-warnline">${esc(x)}</p>`).join("")}
+      <p>${esc(a.body)}</p>
+      ${a.redo.length ? `<ul class="fc-export-redo">${a.redo.map((x) => `<li>${esc(x.kind)} ${esc(x.t != null ? fcFmt(x.t) : "—")}　${esc(x.why)}</li>`).join("")}</ul>` : ""}
       <p class="muted">${esc(a.note)}</p>${a.win ? `<p><b>${esc(a.win)}</b></p>` : ""}
-      <div class="rv-confirm-btns"><button class="ghost" id="fc-export-no">回去繼續檢查</button>
-        <button class="primary" id="fc-export-yes">照目前的狀態輸出</button></div>`;
+      <div class="rv-confirm-btns">${a.blocked ? `<button class="primary" id="fc-export-no">知道了</button>`
+        : `<button class="ghost" id="fc-export-no">回去繼續檢查</button><button class="primary" id="fc-export-yes">照目前的狀態輸出</button>`}</div>`;
     document.body.appendChild(dlg);
     const done = (v) => { dlg.close(); dlg.remove(); resolve(v); };
     dlg.addEventListener("cancel", (e) => { e.preventDefault(); done(false); });   // Esc＝回去繼續檢查
     dlg.querySelector("#fc-export-no").addEventListener("click", () => done(false));
-    dlg.querySelector("#fc-export-yes").addEventListener("click", () => done(true));
+    const yes = dlg.querySelector("#fc-export-yes");
+    if (yes) yes.addEventListener("click", () => done(true));
     dlg.showModal();
   });
 }
