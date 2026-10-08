@@ -708,7 +708,9 @@ table.kv.pk-table td.pk-what { width: 5.5em; font-weight: 600; color: inherit; }
 .fo-box:empty { display: none; }
 .fo-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
 table.kv.pk-table { table-layout: fixed; width: 100%; }
-table.kv.pk-table td.pk-btns { width: 12em; }
+table.kv.pk-table td.pk-btns { width: 11em; white-space: nowrap; }
+/* 10-08：按鈕在路徑左邊；路徑太長就換行，不把按鈕擠出畫面 */
+.pk-table td.pk-file { min-width: 0; overflow-wrap: anywhere; word-break: break-all; }
 
 /* 10-07「代號對照」抽屜：上半本名 → 代號 → 學員 N → 來源；下半全部代號分女男、已用／未用 */
 .rv-codemap { width: 100%; border-collapse: collapse; font-size: 14px; margin: 6px 0 10px; }

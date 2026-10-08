@@ -106,6 +106,17 @@ def test_step4_stop_and_step3_readonly():
     assert 'id="rv-busy"' in rv and "rvApplyReadonly" in rv and 'rv.data["AI執行中"]' in rv
 
 
+def test_pick_button_left_of_path():
+    # 10-08 宇軒：總覽「選影片」按鈕放在「影片」字樣右邊、路徑左邊（以前在最右邊，版面寬就看不到）；片頭片尾同一個版型
+    fio = (WEB / "fileio.js").read_text(encoding="utf-8")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    for fn in ("function pkRowHtml", "const row = (p) =>"):
+        i = fio.index(fn)
+        body = fio[i:fio.index("</tr>`", i)]
+        assert body.index('class="pk-what"') < body.index('class="pk-btns"') < body.index('class="pk-file"'), fn
+    assert "td.pk-file" in css and "overflow-wrap: anywhere" in css
+
+
 def test_step4_eta_hidden():
     # 10-05 宇軒：網頁第 4 步的預估時間先不顯示（後端照樣算，網頁用 SHOW_EXEC_ETA 一個開關藏起來，之後好恢復）
     app = (WEB / "app.js").read_text(encoding="utf-8")

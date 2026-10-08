@@ -54,10 +54,11 @@ function pickCardHtml() {
 
 function pkRowHtml(purpose, v, target, note) {
   const has = !!v;
+  // 10-08 宇軒：按鈕放在「影片」字樣右邊、路徑左邊（以前在最右邊，版面寬一點就跑出去看不到）
   return `<tr><td class="pk-what">${esc(purpose)}${note ? `<div class="muted">${esc(note)}</div>` : ""}</td>
-    <td>${pkFileHtml(v)}</td>
     <td class="pk-btns"><button class="${purpose === "影片" ? "" : "secondary"} pk-pick" data-p="${purpose}" data-g="${target}">${has ? "換一支" : PK_WHAT[purpose]}</button>
-      ${has && purpose !== "影片" ? `<button class="ghost pk-forget" data-p="${purpose}" data-g="${target}">不用了</button>` : ""}</td></tr>`;
+      ${has && purpose !== "影片" ? `<button class="ghost pk-forget" data-p="${purpose}" data-g="${target}">不用了</button>` : ""}</td>
+    <td class="pk-file">${pkFileHtml(v)}</td></tr>`;
 }
 
 function pkRenderState() {
@@ -101,9 +102,9 @@ function feRenderExtras() {
     const job = jobs.filter((j) => j["用途"] === p).slice(-1)[0];
     const missing = v && v["檔案還在"] === false ? `<div class="badge error">找不到這個檔案了（搬走或刪掉了？），重新選一次</div>` : "";
     return `<tr><td class="pk-what">${p}<div class="muted">可以不選</div></td>
-      <td>${v ? pkFileHtml(v) : `<span class="muted">沒有</span>`}${missing}${job && ["複製中", "等待", "失敗"].includes(job["狀態"]) ? pkProgressHtml(job) : ""}</td>
       <td class="pk-btns"><button class="secondary pk-pick" data-p="${p}" data-g="目前">${v ? "換一支" : PK_WHAT[p]}</button>
-        ${v ? `<button class="ghost pk-clear" data-p="${p}">拿掉</button>` : ""}</td></tr>`;
+        ${v ? `<button class="ghost pk-clear" data-p="${p}">拿掉</button>` : ""}</td>
+      <td class="pk-file">${v ? pkFileHtml(v) : `<span class="muted">沒有</span>`}${missing}${job && ["複製中", "等待", "失敗"].includes(job["狀態"]) ? pkProgressHtml(job) : ""}</td></tr>`;
   };
   box.innerHTML = `<h3 class="fe-title">片頭、片尾</h3>
     <p class="hint fe-note">這一版只先記錄選了哪一支（存在這個工作資料夾的 <code>工作區設定.json</code>），按「輸出成品」時<b>還不會接上</b>。選錯了可以換、可以拿掉；「輸出成品」可以按很多次，每次都會產生一支新的最終成品，舊的不會被蓋掉。</p>
