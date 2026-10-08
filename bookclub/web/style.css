@@ -120,6 +120,7 @@ html, body {
 
 .content {
   flex: 1;
+  min-width: 0;   /* 1008-5：flex 子項預設不會比內容窄，長路徑會把整頁撐寬、出現橫向捲軸；設 0 讓它照視窗寬度排 */
   padding: 24px 28px 80px;
   max-width: 1100px;
 }
@@ -256,7 +257,9 @@ button.linkish:hover { text-decoration: underline; background: none; }
 .pk-sel { background: var(--accent-bg); border-radius: 8px; padding: 10px 14px; margin: 8px 0 12px; }
 .pk-sel button { margin-top: 8px; }
 .pj-list tr.cur td { font-weight: 600; }
-.pj-list td:first-child { width: auto; color: var(--fg); }
+table.kv.pj-list td:first-child { width: auto; color: var(--fg); white-space: normal; }
+/* 1008-5：總覽的長路徑（目前的專案、已有的專案、選了的影片、網頁資料夾瀏覽）一律可以換行，不把頁面撐寬 */
+table.kv td, .pj-list .muted, .pk-path, .pk-list li, .pk-sel { overflow-wrap: anywhere; }
 
 /* ---------- 手機寬度 ---------- */
 

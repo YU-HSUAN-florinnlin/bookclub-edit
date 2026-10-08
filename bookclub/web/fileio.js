@@ -158,7 +158,8 @@ function pkShowFallback(why, purpose, target) {
   let start = null;
   try { start = localStorage.getItem("pick-dir"); } catch (e) { /* 沒有 localStorage 也沒關係 */ }
   renderPicker(start, pkProjects);
-  fb.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  // 1008-5：只縱向捲（inline: "nearest"）；以前頁面被長路徑撐寬時，按取消、Esc 退回這裡會整頁往右滑
+  fb.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
 }
 
 async function pkPick(purpose, target, btn) {

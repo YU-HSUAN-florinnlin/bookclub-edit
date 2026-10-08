@@ -175,6 +175,35 @@ def test_pick_with_system_dialog():
         assert "{}" in line, line
 
 
+def test_pick_button_always_released():
+    # 1008-5：選檔視窗按取消（或叫不起來、出錯）之後，按鈕一定要恢復可以按、1.5 秒提示要清掉
+    fio = (WEB / "fileio.js").read_text(encoding="utf-8")
+    body = fio[fio.index("async function pkPick"):]
+    body = body[:body.index("\n}\n")]
+    after = body[body.index('await apiPost("/api/pick"'):]
+    # 正常回來（含「取消」「退回網頁」）：先清提示、放開按鈕，才去處理退回網頁
+    ok_part = after[after.index("} catch (e) {"):]
+    ok_part = ok_part[ok_part.index("\n  }\n"):]
+    assert ok_part.index("clearTimeout(later)") < ok_part.index('if (r["退回網頁"])')
+    assert ok_part.index("btn.disabled = false") < ok_part.index('if (r["退回網頁"])')
+    # 出錯：一樣放開按鈕
+    err = after[after.index("} catch (e) {"):after.index("\n  }\n")]
+    assert "clearTimeout(later)" in err and "btn.disabled = false" in err
+
+
+def test_overview_no_horizontal_scroll():
+    # 1008-5：按取消／Esc 退回網頁瀏覽時頁面不往右滑：只縱向捲、主內容區可以比內容窄、長路徑可以換行（不是硬藏橫向捲軸）
+    fio = (WEB / "fileio.js").read_text(encoding="utf-8")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    for line in fio.splitlines():
+        if "scrollIntoView(" in line:
+            assert 'inline: "nearest"' in line, line
+    content = css[css.index(".content {"):]
+    content = content[:content.index("}")]
+    assert "min-width: 0" in content
+    assert "overflow-wrap: anywhere" in css and "overflow-x: hidden" not in css.split("body")[1].split("}")[0]
+
+
 def test_keep_all_voices_needs_confirm():
     # 09-30：「全部保留原聲」先跳確認視窗（會讓 N 位學員保留原聲、不換聲音），取消不變
     js = (WEB / "review.js").read_text(encoding="utf-8")

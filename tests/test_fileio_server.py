@@ -392,6 +392,48 @@ def test_startup_cleans_partial_copies():
             os.environ["BOOKCLUB_DATA_DIR"] = old
     assert sorted(x.name for x in folder.iterdir()) == [".別的隱藏檔", ".第二堂.mp4.def456.複製中", "第一堂.mp4"]
 
+CANCEL_PICKER = """#!{py}
+import json, sys
+print(json.dumps({{"ready": True}}), flush=True)
+for line in sys.stdin:
+    print(json.dumps({{"opening": True}}), flush=True)
+    print(json.dumps({{"cancel": True}}), flush=True)
+"""
+
+
+def test_mac_cancel_returns_and_frees_lock():
+    # 1008-5：Mac 常駐小程式按「取消」後，API 要馬上回「退回網頁」、鎖要放掉，再按一次照樣能開
+    import sys as _sys
+
+    if _sys.platform != "darwin":
+        print("（不是 Mac，略過）")
+        return
+    fake = Path(tempfile.mkdtemp()) / "cancel_picker"
+    fake.write_text(CANCEL_PICKER.format(py=_sys.executable), encoding="utf-8")
+    fake.chmod(0o755)
+    mp = fileio.MacPicker()
+    mp.build = lambda which=None: fake
+    assert mp.start()
+    saved = fileio.MAC_PICKER
+    fileio.MAC_PICKER = mp
+    try:
+        with _server() as (httpd, call, _):
+            fileio.pick_file = saved_pick   # 用真的 pick_file（走常駐小程式），不要被別的測試換掉的
+            fileio.platform_kind = lambda *a, **k: "mac"
+            for _ in range(3):
+                t0 = time.time()
+                code, r = call("POST", "/api/pick", {"用途": "影片"})
+                assert code == 200 and r.get("取消") and r.get("退回網頁"), r
+                assert time.time() - t0 < 5
+                assert not mp.lock.locked() and not fileio._pick_lock.locked() and mp.usable()
+    finally:
+        fileio.MAC_PICKER = saved
+        mp._kill()
+
+
+saved_pick = fileio.pick_file
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:
