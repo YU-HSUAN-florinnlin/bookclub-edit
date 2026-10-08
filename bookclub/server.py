@@ -67,6 +67,7 @@ class SecurityError(Exception):
 
 
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+AWAKE_STARTING = "正在請電腦不要睡⋯"   # 10-07 #172：exec_state／run_state「防睡眠」欄位，開成沒有之前先顯示這句
 
 
 def _hostname(value: str) -> str:
@@ -1168,7 +1169,7 @@ class BookclubServer(ThreadingHTTPServer):
                 if why:
                     return {"started": False, "error": why}
             self.exec_state = self._fresh_run_state()
-            self.exec_state.update(running=True, started_at=time.time())
+            self.exec_state.update(running=True, started_at=time.time(), 防睡眠=AWAKE_STARTING)
             threading.Thread(target=self._exec_job, args=(opts,), daemon=True).start()
         return {"started": True}
 
@@ -1182,10 +1183,24 @@ class BookclubServer(ThreadingHTTPServer):
             return False
         return bool(r.get("項目") or r.get("重做中"))
 
+    def _awake_setter(self, state: dict):
+        """10-07 #172：防睡眠開成沒有，記進 exec_state／run_state 的「防睡眠」欄位（網頁固定顯示，不會被訊息洗掉）。"""
+        def set_status(msg: str) -> None:
+            with self.run_lock:
+                state["防睡眠"] = msg
+        return set_status
+
+    def _awake_done(self, state: dict) -> None:
+        """跑完還停在「正在開」（例如還沒開到就出錯）：拿掉，免得畫面一直寫著。"""
+        with self.run_lock:
+            if state.get("防睡眠") == AWAKE_STARTING:
+                state["防睡眠"] = None
+
     def _exec_job(self, opts: dict) -> None:
         from bookclub.execute import run_execute
         from bookclub.review import parse_time
 
+        state = self.exec_state
         tee = _TeeWriter(sys.stdout, self.exec_state["messages"], self.run_lock)
         try:
             with contextlib.redirect_stdout(tee):
@@ -1193,13 +1208,15 @@ class BookclubServer(ThreadingHTTPServer):
                                    end=parse_time(opts["end"]) if opts.get("end") else None,
                                    methods=opts.get("methods") or None, skip_precheck=True,
                                    redo_returned=True,   # 10-01 第三批：第 5 步退回的一起重做（沒有退回的就照常）
-                                   reassemble_only=bool(opts.get("只重新組裝")))   # 10-03 第八批 #23：第 4 步「只重新組裝」
+                                   reassemble_only=bool(opts.get("只重新組裝")),   # 10-03 第八批 #23：第 4 步「只重新組裝」
+                                   awake_status=self._awake_setter(state))   # 10-07 #172：防睡眠開成沒有
             with self.run_lock:
                 self.exec_state["stopped"] = bool((prog or {}).get("停止"))
         except Exception as e:  # noqa: BLE001 — 背景執行緒要把失敗記下來給網頁看
             with self.run_lock:
                 self.exec_state["error"] = f"{type(e).__name__}：{e}"
         finally:
+            self._awake_done(state)
             with self.run_lock:
                 self.exec_state["running"] = False
                 self.exec_state["finished_at"] = time.time()
@@ -1264,16 +1281,22 @@ class BookclubServer(ThreadingHTTPServer):
             self.run_state = self._fresh_run_state()
             self.run_state["running"] = True
             self.run_state["started_at"] = time.time()
+            self.run_state["防睡眠"] = AWAKE_STARTING
             thread = threading.Thread(target=self._run_job, args=(video, opts), daemon=True)
             thread.start()
         return {"started": True}
 
     def _run_job(self, video: str, opts: dict) -> None:
         from bookclub.analyze import run_analyze  # 延後載入：避免 serve --help 這類指令也要載入重依賴
+        from bookclub import keepawake
 
+        state = self.run_state
         tee = _TeeWriter(sys.stdout, self.run_state["messages"], self.run_lock)
+        awake_off = keepawake._noop
         try:
             with contextlib.redirect_stdout(tee):
+                # 10-07 #172：第 1 步也不讓電腦睡著（Mac caffeinate、WSL2 請 Windows 不要睡），跟第 4 步同一套
+                awake_off = keepawake.keep_awake(print, prefix="[分析一條龍]", on_status=self._awake_setter(state))
                 d = data_dir()
                 default = lambda name: str(d / name) if (d / name).exists() else None  # noqa: E731
                 run_analyze(
@@ -1290,6 +1313,8 @@ class BookclubServer(ThreadingHTTPServer):
             with self.run_lock:
                 self.run_state["error"] = f"{type(e).__name__}：{e}"
         finally:
+            awake_off()
+            self._awake_done(state)
             with self.run_lock:
                 self.run_state["running"] = False
                 self.run_state["finished_at"] = time.time()

@@ -532,6 +532,7 @@ async function renderExecuteBody() {
         ? esc(prog["停止原因"].replace("（swap）", "")) : "上次按了停止；按「開始執行」會接著做（做好的不重做）。"}</p>` : ""}
       ${!running && prog["中斷"] ? `<p><span class="badge error">中斷</span> 上次跑到一半網頁伺服器被關掉了；按「開始執行」會接著做（做好的不重做）。</p>` : ""}
       ${d.error ? `<p><span class="badge error">失敗</span> ${esc(d.error)}</p>` : ""}
+      <div id="execAwake">${awakeLine(d)}</div>
       <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
     </div>
     ${redo.length ? `<h2>第 5 步退回重做的（${redo.length} 筆）</h2>
@@ -676,6 +677,13 @@ function fmtRange(r) {
   return `${f(r[0])}–${f(r[1])}`;
 }
 
+// 10-07 #172：第 1、4 步跑的時候固定顯示防睡眠開成沒有（伺服器的「防睡眠」欄位；執行訊息會被洗掉，這行不會）
+function awakeLine(s) {
+  const t = s && s["防睡眠"];
+  if (!t || !(s.running || t.startsWith("沒開成"))) return "";
+  return `<p><span class="badge ${t.startsWith("沒開成") ? "error" : ""}">防睡眠</span> ${esc(t)}</p>`;
+}
+
 function startExecPoll() {
   if (execPollTimer) clearInterval(execPollTimer);
   execPollTimer = setInterval(async () => {
@@ -691,6 +699,8 @@ function startExecPoll() {
       if (sp) sp.innerHTML = execStepRows(d);
       const eta = document.getElementById("execEta");
       if (eta) eta.textContent = execEtaText(d);
+      const aw = document.getElementById("execAwake");
+      if (aw) aw.innerHTML = awakeLine(d);
       if (!d.running) { clearInterval(execPollTimer); execPollTimer = null; await renderExecuteBody(); }
     } catch (e) { pollFailed(e); /* 輪詢失敗，下一次再試；連續幾次連不上就出橫幅 */ }
   }, 2000);
@@ -907,6 +917,7 @@ async function renderStep1Body() {
       <button id="btnAnalyze" ${running ? "disabled" : ""}>${running ? "分析執行中…" : allDone ? "重新分析（做完的會跳過）" : "開始分析"}</button>
       ${!running && allDone ? `<span class="muted">每一步都做完了；再按一次只會補做沒做完的，做完的直接沿用</span>` : ""}
       ${errorMsg ? `<p><span class="badge error">失敗</span> ${esc(errorMsg)}</p>` : ""}
+      <div id="runAwake">${awakeLine(status)}</div>
       <div class="log" id="runLog">${messages.map(esc).join("\n") || "（還沒有訊息）"}</div>
     </div>
   `;
@@ -948,6 +959,8 @@ function startStatusPoll() {
       pollOk();
       const logEl = document.getElementById("runLog");
       if (logEl) logEl.textContent = (status.messages || []).join("\n") || "（還沒有訊息）";
+      const aw = document.getElementById("runAwake");
+      if (aw) aw.innerHTML = awakeLine(status);
       if (!status.running) {
         stopStatusPoll();
         await renderStep1Body();

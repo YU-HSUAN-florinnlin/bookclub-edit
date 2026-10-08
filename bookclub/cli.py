@@ -272,13 +272,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run":
         if args.run_command == "analyze":
+            from bookclub import keepawake
             from bookclub.analyze import run_analyze
 
-            run_analyze(
-                args.video, args.workdir, roster_path=args.roster, sensitive_path=args.sensitive,
-                exclusion_path=args.exclusions,
-                skip_overlap=args.skip_overlap, ref_n=args.ref_n, skip_turns=args.skip_turns,
-            )
+            awake_off = keepawake.keep_awake(print, prefix="[分析一條龍]")   # 10-07 #172：第 1 步也不讓電腦睡著
+            try:
+                run_analyze(
+                    args.video, args.workdir, roster_path=args.roster, sensitive_path=args.sensitive,
+                    exclusion_path=args.exclusions,
+                    skip_overlap=args.skip_overlap, ref_n=args.ref_n, skip_turns=args.skip_turns,
+                )
+            finally:
+                awake_off()
             return 0
         if args.run_command == "people":
             from bookclub import personnames

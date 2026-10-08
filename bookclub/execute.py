@@ -1604,28 +1604,13 @@ def run_part(workdir: str | Path, step: str, phase: str | None = None, *, voice:
             log(f"{PEAK_PREFIX} {peak:.2f} GB")
 
 
-def keep_awake(log: Callable[[str], None] = print):
-    """第 4 步掛著跑的時候不讓電腦睡著（09-30）。macOS 用內建的 `caffeinate`（螢幕可以關，電腦不睡）；
-    其他系統不處理（Windows／WSL 照 README 設電源選項）。回傳要在結束時呼叫的函式。"""
-    import os
-    import shutil
-    import subprocess
-    import sys
+def keep_awake(log: Callable[[str], None] = print, on_status: Callable[[str], None] | None = None):
+    """第 4 步掛著跑的時候不讓電腦睡著。10-07 #172 搬到 `bookclub/keepawake.py`（第 1 步也用）：
+    macOS 用 caffeinate（跟 09-30 一樣）；WSL2 叫 Windows 的 PowerShell 請 Windows 不要睡；都不行就安靜退回。
+    回傳要在結束時呼叫的函式。on_status：網頁「防睡眠」欄位要顯示的那一句。"""
+    from bookclub import keepawake
 
-    if sys.platform != "darwin" or not shutil.which("caffeinate"):
-        return lambda: None
-    try:
-        p = subprocess.Popen(["caffeinate", "-i", "-m", "-s", "-w", str(os.getpid())])
-    except OSError:
-        return lambda: None
-    log("[AI 執行] 執行期間不讓電腦睡著（caffeinate），做完自動恢復")
-
-    def stop() -> None:
-        try:
-            p.terminate()
-        except OSError:
-            pass
-    return stop
+    return keepawake.keep_awake(log, prefix="[AI 執行]", on_status=on_status)
 
 
 def execute_key_problem(*, reassemble_only: bool = False, only_steps: list[str] | None = None,
@@ -1649,7 +1634,7 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
                 methods: list[str] | None = None, redo: bool = False, only_steps: list[str] | None = None,
                 runners: dict | None = None, checks: dict | None = None, skip_precheck: bool = False,
                 parts: PartOptions | None = None, redo_returned: bool = False, reassemble_only: bool = False,
-                log: Callable[[str], None] = print) -> dict:
+                log: Callable[[str], None] = print, awake_status: Callable[[str], None] | None = None) -> dict:
     """依序跑第 4 步。回傳進度。
 
     redo_returned（10-01 第三批）：第 5 步退回的那幾筆一起重做——開始前先清掉那幾句的生成結果
@@ -1724,7 +1709,7 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
 
     _clear_stop(workdir)   # 上次按的停止不算這一次
     save()
-    awake_off = keep_awake(log) if not runners_given and opts.keep_awake else (lambda: None)   # 測試用假步驟時不用
+    awake_off = keep_awake(log, awake_status) if not runners_given and opts.keep_awake else (lambda: None)   # 測試用假步驟時不用
     try:
         for key, _desc in STEPS:
             st = prog["步驟"][key]
