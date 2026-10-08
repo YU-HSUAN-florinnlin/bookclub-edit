@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import shutil
 import subprocess
@@ -146,10 +147,13 @@ def encode_ps(script: str) -> str:
 def pick_command(method: str, title: str, exts: tuple[str, ...] = VIDEO_EXTS, which=None) -> list[str]:
     which = which or shutil.which
     if method == "mac":
-        types = ", ".join(_applescript_str(x) for x in ("public.movie", *(e.lstrip(".") for e in exts)))
-        return ["osascript", "-e", "activate",
-                "-e", f"set f to choose file with prompt {_applescript_str(title)} of type {{{types}}}",
-                "-e", "POSIX path of f"]
+        # 10-08：改用 JavaScript 版的 osascript（JXA）。AppleScript 的 `activate` 每次要等約 2.2 秒才回來
+        # （開發者的 Mac 實測：osascript -e 'activate' 3 次都是 2.15～2.18 秒；不 activate 0.09 秒、JXA 的 activate 0.2 秒），
+        # 宇軒按「選影片」覺得卡的主要原因就是它。JXA 照樣先 activate（讓視窗盡量跳在前面），只多約 0.15 秒。
+        types = json.dumps(["public.movie", *(e.lstrip(".") for e in exts)], ensure_ascii=False)
+        script = ("var app = Application.currentApplication(); app.includeStandardAdditions = true; app.activate(); "
+                  f"String(app.chooseFile({{withPrompt: {json.dumps(title, ensure_ascii=False)}, ofType: {types}}}))")
+        return ["osascript", "-l", "JavaScript", "-e", script]
     if method == "wsl":
         ps = _find_exe("powershell.exe", PS_CANDIDATES, which) or "powershell.exe"
         return [ps, "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass",

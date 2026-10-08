@@ -782,7 +782,6 @@ async function renderOverview() {
           <tr><td>工作區</td><td>${esc(state.workdir)}</td></tr>
           <tr><td>影片分析</td><td>${done}／${order.length} 個子步驟完成${state["總耗時_s"] ? `，花了 ${esc(fmtElapsed(state["總耗時_s"]))}` : ""}（<a href="#step1">看進度</a>）</td></tr>
         </table>
-        ${extrasHtml()}
       </div>`;
   }
   const list = projects["專案"] || [];

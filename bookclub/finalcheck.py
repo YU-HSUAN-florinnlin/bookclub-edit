@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import threading
@@ -827,8 +828,18 @@ def send_back(workdir: str | Path) -> dict:
         return {"ok": True, "筆數": len(items), "送回AI重做": check["送回AI重做"]}
 
 
+def final_name(src_name: str, stamp: str) -> str:
+    """最終成品的檔名（純函式）：`成品_0-98_sw.mp4` → `最終成品_0-98_sw_20261008-153012.mp4`。"""
+    p = Path(src_name)
+    return f"最終成品_{p.stem.removeprefix('成品_')}_{stamp}{p.suffix}"
+
+
 def export_final(workdir: str | Path) -> dict:
-    """`POST /api/final/export`：全部通過、整片看過 100% 才能輸出——把檢查過的成品複製成 `輸出/最終成品_<檔名>`。"""
+    """`POST /api/final/export`：全部通過、整片看過 100% 才能輸出——把檢查過的成品複製成 `輸出/最終成品_<檔名>_<時間>.mp4`。
+    10-08 宇軒：輸出可以做很多次（片頭片尾、前面的步驟可能選錯，要重新設定再輸出）。每次產生一支新的、檔名帶時間，
+    不蓋掉舊的；`輸出成品` 記最新一次，`輸出紀錄` 記每一次（含當時選的片頭片尾，這一版只記錄、還沒接上）。"""
+    from datetime import datetime
+
     workdir = Path(workdir)
     with _lock:
         log, check = _current(workdir)
@@ -836,12 +847,22 @@ def export_final(workdir: str | Path) -> dict:
         if not st["可以輸出"]:
             raise ValueError("還不能輸出：" + "；".join(st["還不能輸出的原因"]))
         src = workdir / check["成品影片"]
-        dst = src.with_name("最終成品_" + src.name.removeprefix("成品_"))
-        wd.unlink_if_link(dst)   # 10-02 第五批
-        shutil.copy2(src, dst)
-        check["輸出成品"] = {"時間": _now(), "來源": check["成品影片"], "檔案": str(dst.relative_to(workdir))}
+        dst = src.with_name(final_name(src.name, datetime.now().strftime("%Y%m%d-%H%M%S")))
+        n = 2
+        while dst.exists() or dst.is_symlink():   # 同一秒按兩次：加編號，一樣不蓋掉
+            dst = src.with_name(f"{Path(final_name(src.name, datetime.now().strftime('%Y%m%d-%H%M%S'))).stem} ({n}){src.suffix}")
+            n += 1
+        tmp = dst.with_name(f".{dst.name}.輸出中")
+        shutil.copy2(src, tmp)   # 先複製到暫存檔、完整了才換上（複製到一半中斷不會留下半個最終成品）
+        os.replace(tmp, dst)
+        extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
+        rec = {"時間": _now(), "來源": check["成品影片"], "檔案": str(dst.relative_to(workdir)),
+               "片頭": (extras.get("片頭") or {}).get("檔名"), "片尾": (extras.get("片尾") or {}).get("檔名"),
+               "接上片頭片尾": False}
+        check["輸出成品"] = rec
+        check.setdefault("輸出紀錄", []).append(rec)
         _save(workdir, check)
-        return {"ok": True, **check["輸出成品"]}
+        return {"ok": True, **rec, "第幾次": len(check["輸出紀錄"])}
 
 
 def redo_list(workdir: str | Path) -> dict:

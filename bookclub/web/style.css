@@ -702,3 +702,6 @@ table.kv.pk-table td.pk-btns { width: 12em; }
 .rv-codechip { display: inline-flex; gap: 4px; align-items: baseline; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border); }
 .rv-codechip.used { font-weight: 600; }
 .rv-codechip .rv-warnline { margin: 0; font-size: 12px; }
+/* 10-08：片頭片尾搬到第 5 步輸出成品這一區 */
+#feExtras .fe-title { margin: 10px 0 4px; font-size: 15px; }
+#feExtras .fe-note { margin: 4px 0 6px; }
