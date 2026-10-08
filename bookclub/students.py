@@ -431,6 +431,45 @@ def overlap_items(workdir: Path, turn_items: list[dict], spans: dict, kept: set,
     return out
 
 
+def overlap_student_range(o: dict) -> list[float]:
+    """重疊卡片要換掉的學員那一句（原片時間）：兩邊都重新生成照學員那邊的起訖，其他照學員生成起訖（純函式）。"""
+    from bookclub import review
+
+    return list(o["學員起訖"] if review.is_stacked(o.get("做法"), o.get("排法")) else o["學員生成起訖"])
+
+
+OVERLAP_MISSING_REASON = "重疊：學員那句沒資料，整句消音"
+
+
+def missing_overlap_mutes(workdir: Path, lo: float = 0.0, hi: float = 1e12, kept: set | None = None) -> list[dict]:
+    """10-08 宇軒（流程簡化）：重疊選了要生成學員聲音、但缺「學員是誰」或「學員說的」（`overlap_gen_problem`），
+    開始執行不再擋——組裝時把學員那一整句（`overlap_student_range`）墊底噪，不留學員原聲（跟局部消音同一套做法）。
+    保留原聲的學員不消。回傳局部消音的格式（帶 `重疊`、`重疊缺資料`），處理紀錄寫「重疊：學員那句沒資料，整句消音」。"""
+    from bookclub import review
+
+    workdir = Path(workdir)
+    kept = kept or set()
+    try:
+        items, _ = build_items(workdir)
+    except FileNotFoundError:
+        items = []
+    slots = [tuple(it["slot"]) for it in items if not it.get("重疊")]
+    out = []
+    for o in review.overlap_choices(workdir):
+        if not review.overlap_student_gen(o, slots):
+            continue
+        why = review.overlap_gen_problem(o, slots)
+        if not why or (o.get("學員") and o["學員"] in kept):
+            continue
+        a, b = overlap_student_range(o)
+        a, b = max(a, lo), min(b, hi)
+        if b - a < 0.05:
+            continue
+        out.append({"id": f"重疊{o['id']}_學員整句", "start": round(a, 3), "end": round(b, 3), "方式": "墊底噪",
+                    "重疊": o["id"], "做法": o.get("做法"), "重疊缺資料": why})
+    return out
+
+
 def split_edited(turn: dict, sents: list[dict]) -> dict[str, str] | None:
     """人在第 3 步改過的校對稿 → 分回每一句（09-29：重念要照校對稿念，不是照原始轉文字）。
 

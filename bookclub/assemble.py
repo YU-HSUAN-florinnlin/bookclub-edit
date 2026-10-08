@@ -368,7 +368,8 @@ def add_local_mutes(edits: list[dict], mutes: list[dict], cuts: list[tuple[float
         for s, e in parts:
             out.append({"類型": "局部消音", "start": s, "end": e, "id": m["id"], "方式": m.get("方式", "墊底噪"),
                         "霧化": m.get("方式") == "霧化", "候選": [],
-                        **({"重疊": ov, "做法": m.get("做法")} if ov else {})})
+                        **({"重疊": ov, "做法": m.get("做法")} if ov else {}),
+                        **({"重疊缺資料": m["重疊缺資料"], "要人聽": True} if m.get("重疊缺資料") else {})})
     out.sort(key=lambda e: e["start"])
     return out, warnings
 

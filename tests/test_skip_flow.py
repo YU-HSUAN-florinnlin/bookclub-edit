@@ -72,6 +72,7 @@ def test_bulk_skip_rules_pure():
         ({**stu, "人工新增": True}, "人工新增"),
         ({**stu, "手動標記": True}, "人工新增"),
         ({**stu, "第5步退回": ["念錯"]}, "第5步退回"),
+        ({**stu, "學員是猜的": True}, "學員是猜的"),
         ({"類型": "重疊", "id": "O1", "建議": {"做法": "只留學員"}, "還缺": "還沒選學員是誰"}, "重疊缺資料"),
         ({"類型": "重疊", "id": "O1", "建議": {}}, "沒有建議"),
         ({"類型": "名字", "id": "3", "做法": "整句換掉", "整句": {"換成代號": "Amy 好"}}, "名字換不了代號"),   # stuck 裡有 3
@@ -276,7 +277,7 @@ def test_attention_rows_old_and_new_workdir():
     w = TE._fresh()
     log = {"片段": None, "紀錄": [], "範圍": [0.0, 180.0]}
     old = finalcheck.attention_rows(w, log)                          # 舊工作區：沒有執行進度、沒有紀錄
-    assert old == {"有紀錄": False, "列": [], "總數": 0, "名字": 0, "第4步沒處理": None}
+    assert old == {"有紀錄": False, "列": [], "總數": 0, "名字": 0, "第4步沒處理": None, "名冊外沒找": False}
     wd.write_json(execute.progress_path(w), {"開始時間": "x"})       # 舊工具的執行進度（沒有這個欄位）
     assert not finalcheck.attention_rows(w, log)["有紀錄"]
     wd.write_json(execute.progress_path(w), {execute.SKIPPED_FIELD: {"沒處理": 3, "列": [
@@ -284,7 +285,8 @@ def test_attention_rows_old_and_new_workdir():
         {"key": "聲紋:S1", "類別": "聲紋", "start": 2.0, "end": 4.0, "第3步": None}]}})
     att = finalcheck.attention_rows(w, log)
     assert att["有紀錄"] and att["總數"] == 2 and att["名字"] == 1 and att["第4步沒處理"] == 3
-    assert finalcheck.attention_gaps(att) == {"需留意": 2, "需留意名字": 1, "需留意說明": "需留意 2 處（含名字 1 處）還沒聽過"}
+    assert finalcheck.attention_gaps(att) == {"需留意": 2, "需留意名字": 1, "需留意說明": "需留意 2 處（含名字 1 處）還沒聽過",
+                                              "名冊外沒找": False}
     assert finalcheck.attention_gaps({})["需留意說明"] == ""
 
 
@@ -375,7 +377,8 @@ def test_web_step5_badges_tab_and_attention():
       const flat = [];
       console.log(JSON.stringify({{ ids: tabs.map((t) => t.id), badges: tabs.map(fcTabBadge), html: fcAttentionHtml(att, kinds, flat), n: flat.length,
         go1: fcAttentionGo(att["列"][0]), go2: fcAttentionGo(att["列"][1]), old: fcAttentionHtml({{"有紀錄": false, "列": []}}, kinds, []),
-        noAtt: fcTabList(recs, [], [], null, undefined).map((t) => t.id) }}));""")
+        noAtt: fcTabList(recs, [], [], null, undefined).map((t) => t.id),
+        unsearched: fcAttentionHtml({{"有紀錄": true, "列": [], "名冊外沒找": true}}, kinds, []) }}));""")
     assert got["ids"] == ["全部", "還沒通過", "組:剪掉", "不修改", "需留意"]          # 需留意在最後、不修改旁邊
     assert got["badges"] == ["<span>完成 1／2</span>", "<span>1</span>", "<span>完成 1／2</span>", "<span>1</span>", "<span>2</span>"]
     h = got["html"]
@@ -384,6 +387,7 @@ def test_web_step5_badges_tab_and_attention():
     assert got["go1"]["key"] == "名字:4" and got["go1"]["back"] == "step5"
     assert got["go2"]["key"] is None and got["go2"]["edit"] == {"類型": "學員發言", "start": 2, "end": 3}
     assert "舊版工具組裝的" in got["old"] and "需留意" not in got["noAtt"]
+    assert "名冊外的名字這次沒有找" in got["unsearched"] and "沒有要留意的地方" in got["unsearched"]
 
 
 def test_web_export_dialog_names_not_blocked():
@@ -396,6 +400,81 @@ def test_web_export_dialog_names_not_blocked():
     assert not got["blocked"] and got["names"] == g["名字提醒"] and got["att"] == g["需留意說明"] and got["title"] == "確定要輸出嗎？"
     dlg = _fn(fcj, "fcConfirmExport")
     assert "fc-export-names" in dlg and "fc-export-att" in dlg
+
+
+# ---------- 第十七輪審查：重疊缺東西整句消音、猜的學員、名冊外沒找、組裝成功才換略過紀錄 ----------
+
+def _missing_overlap(w):
+    review.manual_edit(w, {"類型": "重疊", "start": 120.2, "end": 121.0})   # 老師段落裡、學員那一句不在學員段落
+    oid = [o["id"] for o in review.overlap_choices(w) if o["start"] > 100][0]
+    review.save_overlap(w, oid, {"做法": "只留學員", "學員文字": ""})       # 缺「學員說的」、沒選學員是誰
+    return oid
+
+
+def test_missing_overlap_whole_sentence_muted():
+    from bookclub import proclog, render, students
+
+    w = TE._fresh()
+    oid = _missing_overlap(w)
+    o = next(x for x in review.overlap_choices(w) if x["id"] == oid)
+    whole = students.overlap_student_range(o)
+    miss = students.missing_overlap_mutes(w)
+    assert [(m["重疊"], [m["start"], m["end"]]) for m in miss] == [(oid, whole)] and miss[0]["重疊缺資料"]
+    assert not students.missing_overlap_mutes(w, kept={o["學員"]}) or not o["學員"]   # 保留原聲的不消
+    d = render.build_decisions(w, 0.0, 180.0)
+    mine = [e for e in d["動作"] if e.get("重疊") == oid]
+    assert len(mine) == 1 and mine[0]["重疊缺資料"] and [mine[0]["start"], mine[0]["end"]] == whole   # 不重複列重疊那一小段
+    assert not d["重疊沒處理"]
+    recs = [r for r in proclog.build_records(d, None) if r["覆核項目"] == [f"重疊:{oid}"] and r["類型"] == "局部消音"]
+    assert len(recs) == 1 and recs[0]["做了什麼"].startswith(students.OVERLAP_MISSING_REASON) and recs[0]["要人聽"]
+    assert recs[0]["原片"] == whole and finalcheck.change_group(recs[0]) == "重疊"   # 第 5 步「有修改的」重疊那一頁
+    # 略過紀錄存學員整句（不是重疊那一小段）；需留意扣掉整句消音之後不再列
+    snap = execute.skipped_rows(execute.final_check(w))
+    row = next(r for r in snap["列"] if r["key"] == f"重疊:{oid}")
+    assert [row["start"], row["end"]] == whole
+    log = {"片段": None, "紀錄": proclog.build_records(d, None), "範圍": [0.0, 180.0]}
+    assert not [r for r in finalcheck.place_attention([row], log)]
+    assert "學員那一整句改成消音" in execute.BACK3[execute.KIND_OVERLAP]
+
+
+def test_guessed_kept_rows_and_unsearched_flag():
+    turns = [{"id": "T1", "start": 1.0, "end": 2.0, "說話者": "學員1", "學員是猜的": True},
+             {"id": "T2", "start": 3.0, "end": 4.0, "說話者": "學員2", "學員是猜的": True},
+             {"id": "T3", "start": 5.0, "end": 6.0, "說話者": "學員1"}]
+    rows = execute.guessed_kept_rows(turns, {"學員1": "保留原聲", "學員2": "重新生成"})
+    assert rows == [{"key": "學員是猜的:T1", "類別": "學員是猜的", "start": 1.0, "end": 2.0, "第3步": "學員段落:T1"}]
+    log = {"片段": None, "紀錄": [], "範圍": [0.0, 10.0]}
+    assert [r["類別"] for r in finalcheck.place_attention(rows, log)] == ["學員是猜的"]
+    w = TE._fresh()
+    wd.write_json(execute.progress_path(w), {execute.SKIPPED_FIELD: {"沒處理": 0, "列": [], "人名清單沒跑成功": True}})
+    att = finalcheck.attention_rows(w, log)
+    assert att["名冊外沒找"] and att["總數"] == 0
+    g = finalcheck.attention_gaps(att)
+    assert g["名冊外沒找"] and g["需留意說明"] == "名冊外的名字這次沒有找"
+    from bookclub import personnames
+
+    personnames.people_path(w).unlink()
+    snap = execute.skipped_snapshot(w)
+    assert snap["人名清單沒跑成功"] and snap["猜的學員"] == 0
+
+
+def test_skipped_kept_until_assembly_succeeds():
+    """組裝那一步做完才把這一次的略過紀錄換上去；組裝失敗時沿用上一支成品的。"""
+    w = TE._fresh()
+    wd.write_json(execute.progress_path(w), {execute.SKIPPED_FIELD: {"沒處理": 99, "列": [], "時間": "舊的"}})
+    review.manual_edit(w, {"類型": "名字", "start": 84.12, "end": 84.8, "代號": "Tom", "名字": "逐字稿沒有的字"})
+    calls = []
+    runners, checks = TE._fake(calls, {"失敗": "組裝"})
+    try:
+        execute.run_execute(w, only_steps=["組裝"], runners=runners, checks=checks, skip_precheck=True, log=lambda m: None)
+        raise AssertionError("組裝應該失敗")
+    except RuntimeError:
+        pass
+    prog = wd.read_json(execute.progress_path(w))
+    assert prog[execute.SKIPPED_FIELD]["時間"] == "舊的" and prog[execute.SKIPPED_PENDING]["沒處理"] >= 1
+    runners, checks = TE._fake(calls)
+    prog = execute.run_execute(w, only_steps=["組裝"], runners=runners, checks=checks, skip_precheck=True, log=lambda m: None)
+    assert prog[execute.SKIPPED_FIELD]["時間"] != "舊的" and execute.SKIPPED_PENDING not in prog
 
 
 if __name__ == "__main__":

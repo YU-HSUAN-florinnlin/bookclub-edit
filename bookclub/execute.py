@@ -599,6 +599,10 @@ def final_check(workdir: str | Path) -> dict:
             todo += f"，在「學員說的」旁邊選學員是誰{guess}" if "學員是誰" in why else "，把空的那一欄填好"
             row(must, k, o["start"], o["end"], f"〈{nm}〉（{review.OVERLAP_LABEL.get(o['做法'], o['做法'])}）：{why}",
                 name=nm, card=k, todo=todo, kind=KIND_OVERLAP)
+            try:   # 10-08：略過的話組裝時整句消音的範圍（第 5 步需留意照這個範圍算）
+                must[-1]["學員整句"] = [round(x, 3) for x in students.overlap_student_range(o)]
+            except (KeyError, TypeError, ValueError):
+                pass
     # 5. 聲紋判成「不是老師」的句子，整句都不在任何處理的範圍、也不在學員段落裡（可能是漏抓的學員發言）
     #    段落的聲音判斷也不是老師的才放「一定要處理」；段落判成老師的（第一堂 92 句，多半是誤判）在「請看一眼」彙總一列
     #    10-01：句子只有一部分被處理蓋到的，沒蓋到的部分（至少 0.3 秒）照樣列（以前整句跳過，例如重疊只蓋到 0.7 秒、
@@ -809,7 +813,7 @@ KEEP_OK = {
 # 第 4 步列上紅字寫略過的後果，第 5 步「需留意」再列一次（名字那一類紅字置頂）
 BACK3 = {
     KIND_NAME: "不處理的話（預設略過）：成品會照原聲念出這個名字。要換掉就回第 3 步補",
-    KIND_OVERLAP: "不處理的話（預設略過）：缺的沒填好，學員那一句沒辦法重新生成，組裝時這一小段改成消音。要補齊就回第 3 步補",
+    KIND_OVERLAP: "不處理的話（預設略過）：缺的沒填好，學員那一句沒辦法重新生成，組裝時學員那一整句改成消音（墊底噪）。要補齊就回第 3 步補",
 }
 KEEP_UNKNOWN = "這一類還不能「照目前設定做」，請照「怎麼改」處理"
 
@@ -1636,8 +1640,11 @@ def keep_awake(log: Callable[[str], None] = print, on_status: Callable[[str], No
 
 
 # 10-08 宇軒（流程簡化）：第 4 步「一定要處理」「請看一眼」預設略過（沒按任何東西也能開始）。
-# 開始執行當下沒處理的列記在 生成/執行進度.json 的這個欄位，第 5 步「需留意」照它列（finalcheck.attention_rows）。
+# 開始執行當下沒處理的列先記在 `總檢查略過（這次）`，組裝那一步做完（成品換新）才搬進 `總檢查略過`，
+# 第 5 步「需留意」照 `總檢查略過` 列（finalcheck.attention_rows）。組裝失敗、停下來時沿用上一次的，不會拿新清單配舊成品。
 SKIPPED_FIELD = "總檢查略過"
+SKIPPED_PENDING = "總檢查略過（這次）"
+GUESS_KIND = "學員是猜的"   # 第 4 步開始時：保留原聲的學員、段落是猜的（猜錯就是別人的原聲留在成品）
 SKIPPED_ROW_KEYS = ("key", "類別", "start", "end", "第3步")   # 只記鍵、類別、時間、卡片（不記說明、名稱：可能有本名）
 
 
@@ -1648,13 +1655,38 @@ def skipped_rows(fc: dict) -> dict:
     must = [r for r in fc.get("一定要處理") or [] if not r.get("處理好")]
     look = [r for r in fc.get("請看一眼") or [] if not r.get("已看過")]
     rows = [{k: r.get(k) for k in SKIPPED_ROW_KEYS} for r in must]
+    for row, r in zip(rows, must):   # 重疊缺東西：記學員那一整句（組裝時整句消音的範圍），不是重疊那一小段
+        if r.get("學員整句"):
+            row["start"], row["end"] = r["學員整句"]
     return {"一定要處理": len(must), "請看一眼": len(look), "沒處理": len(must) + len(look), "列": rows}
 
 
+def guessed_kept_rows(turns: list[dict], voices: dict) -> list[dict]:
+    """（純函式）學員是猜的、又是保留原聲的那幾段（不會重念，猜錯的話別的學員的原聲留在成品）→ 需留意的列。"""
+    kept = {k for k, v in (voices or {}).items() if v == "保留原聲"}
+    return [{"key": f"{GUESS_KIND}:{t['id']}", "類別": GUESS_KIND, "start": t["start"], "end": t["end"],
+             "第3步": f"學員段落:{t['id']}"}
+            for t in turns if t.get("學員是猜的") and t.get("說話者") in kept]
+
+
 def skipped_snapshot(workdir: str | Path) -> dict | None:
-    """開始執行當下的總檢查沒處理的列（skipped_rows），加上記下的時間；算不出來回 None（不擋執行）。"""
+    """開始執行當下的總檢查沒處理的列（skipped_rows），加上記下的時間、保留原聲又是猜的學員段落（列在需留意）、
+    人名清單有沒有跑成功（沒有＝名冊外的名字這次沒有找）；算不出來回 None（不擋執行）。"""
     try:
-        return {**skipped_rows(final_check(workdir)), "時間": _now()}
+        from bookclub import review
+        from bookclub import turns as turns_mod
+
+        snap = {**skipped_rows(final_check(workdir)), "時間": _now()}
+        try:
+            tdata = turns_mod.page_data(workdir)
+            guess = guessed_kept_rows(tdata.get("段落", []) if not tdata.get("尚未準備") else [],
+                                      review.load_decisions(Path(workdir))["學員聲音"])
+        except Exception:  # noqa: BLE001
+            guess = []
+        snap["列"] += guess
+        snap["猜的學員"] = len(guess)
+        snap["人名清單沒跑成功"] = bool(review.people_list_missing(Path(workdir)))
+        return snap
     except Exception as e:  # noqa: BLE001 — 算不出來不擋執行，第 5 步「需留意」會寫沒有紀錄
         print(f"[AI 執行] ⚠️ 開始前總檢查算不出來（第 5 步「需留意」這次不會列）：{type(e).__name__}")
         return None
@@ -1729,7 +1761,8 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
             log(f"[AI 執行] 開始前總檢查有 {skipped['沒處理']} 列沒處理（一定要處理 {skipped['一定要處理']}、"
                 f"請看一眼 {skipped['請看一眼']}）：預設略過、照目前設定做；做完到第 5 步「需留意」看成品裡還留著原聲的地方")
     else:
-        skipped = (wd.read_json(progress_path(workdir), default=None) or {}).get(SKIPPED_FIELD)
+        skipped = None
+    old_skipped = (wd.read_json(progress_path(workdir), default=None) or {}).get(SKIPPED_FIELD)
     a = 0.0 if start is None else float(start)
     b = float(end) if end is not None else float(video_duration(workdir) or 0.0)
     if b <= a:
@@ -1751,8 +1784,10 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     checks = {**_default_checks(), **(checks or {})}
     prog = {"開始時間": _now(), "結束時間": None, "範圍": ctx["範圍"], "輸出做法": ctx["輸出做法"],
             "步驟": {k: {"說明": desc, "狀態": "等待"} for k, desc in STEPS}, "錯誤": None}
+    if old_skipped is not None:   # 上一支成品的（組裝做完才換成這一次的）
+        prog[SKIPPED_FIELD] = old_skipped
     if skipped is not None:
-        prog[SKIPPED_FIELD] = skipped
+        prog[SKIPPED_PENDING] = skipped
 
     def save() -> None:
         wd.write_json(progress_path(workdir), prog)
@@ -1815,6 +1850,8 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
                 log(f"[AI 執行] ⚠️ {key}：跑完了，但還沒做好（{why_after}）")
                 raise RuntimeError(f"{key}：跑完了，但還沒做好：{why_after}")
             st.update({"狀態": "做完", "結束": _now(), "訊息": why if "子程式" not in st else f"{why}｜{len(st['子程式'])} 支程式做完"})
+            if key == "組裝" and prog.get(SKIPPED_PENDING) is not None:   # 成品換新了：略過紀錄跟著換成這一次的
+                prog[SKIPPED_FIELD] = prog.pop(SKIPPED_PENDING)
             save()
             log(f"[AI 執行] {key}：做完")
             if key == "組裝" and redoing:

@@ -1522,6 +1522,7 @@ BULK_SKIP = (
     ("代號改過", "代號改過，請再看一次"),
     ("重疊缺資料", "重疊還缺東西（學員是誰或文字）"),
     ("字太少", "要念的字太少（這一段其他的話會不見）"),
+    ("學員是猜的", "學員是程式猜的（這段太短，聽一下是誰）"),
     ("建議剪掉", "建議剪掉這段（會連畫面一起剪掉）"),
     ("沒有建議", "沒有建議的做法"),
     ("分開決定過", "同一句的名字以前分開決定過"),
@@ -1554,6 +1555,8 @@ def bulk_skip_reason(it: dict, stuck: set[str], words: list[str]) -> str | None:
             return "建議剪掉"
         if it.get("含本名") or has_real_name(it.get("建議稿") or "", words):
             return "還有本名"
+        if it.get("學員是猜的"):   # 10-08 審查：猜錯的話用錯的人的聲線、代號
+            return "學員是猜的"
         return None
     if t == "名字":
         ids = {str(it.get("id"))} | {str(k) for k in it.get("同一張卡候選") or []}

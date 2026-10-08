@@ -866,7 +866,9 @@ ATTENTION_KINDS = (
     ("重疊缺東西", "重疊缺學員是誰或文字", "學員那一句沒辦法重新生成：還留著的這幾秒是原聲"),
     ("英文代號", "要念的文字裡還有英文代號", "成品會念出英文代號（代號不是本名）"),
     ("字太少", "要念的字太少", "重念的字比原本少很多：這一段其他的話不見了"),
+    ("學員是猜的", "學員是程式猜的（保留原聲）", "這幾段太短、學員是程式猜的，又設成保留原聲：猜錯的話是別人的原聲留在成品"),
 )
+PEOPLE_UNSEARCHED = "名冊外的名字這次沒有找（人名清單沒跑成功）：成品裡可能有沒換掉的名字"
 ATTENTION_NAME = "名字換不了代號"
 ATTENTION_TEXT_KINDS = ("英文代號", "字太少")   # 看的是要念的文字（不是原聲）：只扣剪掉的地方
 ATTENTION_MIN_S = 0.3   # 扣掉被處理蓋到的地方之後剩不到這麼久就不列（跟「不修改」一樣）
@@ -923,14 +925,16 @@ def attention_rows(workdir: str | Path, log: dict | None) -> dict:
     """`GET /api/final` 的「需留意」：{有紀錄, 列[], 總數, 名字, 第4步沒處理}。不擋輸出、不用按通過。
     有紀錄＝這次成品是新版工具組裝的（第 4 步開始時記了略過的列）；舊的成品回 有紀錄=False、列是空的。"""
     snap = attention_snapshot(workdir)
+    unsearched = bool((snap or {}).get("人名清單沒跑成功"))   # 10-08 審查：名冊外的名字這次沒有找
     if not log or snap is None:
-        return {"有紀錄": snap is not None, "列": [], "總數": 0, "名字": 0, "第4步沒處理": (snap or {}).get("沒處理")}
+        return {"有紀錄": snap is not None, "列": [], "總數": 0, "名字": 0, "第4步沒處理": (snap or {}).get("沒處理"),
+                "名冊外沒找": unsearched}
     try:
         rows = place_attention(snap.get("列") or [], log)
     except Exception:  # noqa: BLE001 — 算不出來不擋第 5 步
         rows = []
     return {"有紀錄": True, "列": rows, "總數": len(rows), "名字": sum(1 for r in rows if r["名字"]),
-            "第4步沒處理": snap.get("沒處理")}
+            "第4步沒處理": snap.get("沒處理"), "名冊外沒找": unsearched}
 
 
 def group_counts(log: dict | None, index: dict | None = None) -> dict[str, int]:
@@ -1200,7 +1204,9 @@ def attention_gaps(att: dict) -> dict:
     """（純函式）輸出確認視窗的「需留意」那一句：{需留意, 需留意名字, 需留意說明}。"""
     n, m = int(att.get("總數") or 0), int(att.get("名字") or 0)
     text = f"需留意 {n} 處" + (f"（含名字 {m} 處）" if m else "") + "還沒聽過" if n else ""
-    return {"需留意": n, "需留意名字": m, "需留意說明": text}
+    if att.get("名冊外沒找"):
+        text = "；".join(x for x in (text, "名冊外的名字這次沒有找") if x)
+    return {"需留意": n, "需留意名字": m, "需留意說明": text, "名冊外沒找": bool(att.get("名冊外沒找"))}
 
 
 def export_final(workdir: str | Path, confirm: bool = False) -> dict:
@@ -1229,7 +1235,7 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
             if confirm:
                 raise ValueError("還不能輸出：" + "；".join(gaps["擋下"]))
             return {"ok": False, "要確認": True, "不能輸出": True, "還差": gaps}
-        if (not st["可以輸出"] or gaps["提醒"] or gaps["名字提醒"] or gaps["需留意名字"]) and not confirm:
+        if (not st["可以輸出"] or gaps["提醒"] or gaps["名字提醒"] or gaps["需留意名字"] or gaps["名冊外沒找"]) and not confirm:
             return {"ok": False, "要確認": True, "還差": gaps}
         src = workdir / check["成品影片"]
         dst = src.with_name(final_name(src.name, datetime.now().strftime("%Y%m%d-%H%M%S")))
