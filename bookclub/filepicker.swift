@@ -38,11 +38,15 @@ _ = warm.directoryURL
 warm.layoutIfNeeded()
 emit(["ready": true])
 
-while let line = readLine() {
+// 10-08 修正：以前主執行緒在兩次之間卡在 readLine() 等下一個要求，但選檔視窗關掉後這支小程式還是「最前面的程式」，
+// macOS 看到最前面的程式不處理事件，就整個畫面轉彩色圈圈、網頁點不動（宇軒按取消後遇到）。
+// 現在：主執行緒一直跑事件迴圈（app.run()），另一條執行緒讀 stdin、把要求交給主執行緒；視窗關掉後馬上 hide，
+// 把「最前面」還給原本的程式（瀏覽器）。
+func handle(_ line: String) {
     guard let data = line.data(using: .utf8),
           let req = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
         emit(["error": "看不懂的要求"])
-        continue
+        return
     }
     let p = NSOpenPanel()
     p.message = req["title"] as? String ?? "選影片"
@@ -58,9 +62,21 @@ while let line = readLine() {
         RunLoop.main.add(t, forMode: .modalPanel)
     }
     emit(["opening": true])
-    if p.runModal() == .OK, let u = p.url {
-        emit(["path": u.path])
+    let ok = p.runModal() == .OK
+    let path = p.url?.path
+    p.orderOut(nil)
+    app.hide(nil)   // 選好、取消、按 Esc 都一樣：把最前面還給原本的程式
+    if ok, let path = path {
+        emit(["path": path])
     } else {
         emit(["cancel": true])
     }
 }
+
+DispatchQueue.global(qos: .userInitiated).async {
+    while let line = readLine() {
+        DispatchQueue.main.async { handle(line) }
+    }
+    DispatchQueue.main.async { exit(0) }   // stdin 關掉（伺服器結束）→ 自己結束
+}
+app.run()

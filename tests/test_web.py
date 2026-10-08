@@ -175,6 +175,22 @@ def test_pick_with_system_dialog():
         assert "{}" in line, line
 
 
+def test_pick_button_always_released():
+    # 1008-5：選檔視窗按取消（或叫不起來、出錯）之後，按鈕一定要恢復可以按、1.5 秒提示要清掉
+    fio = (WEB / "fileio.js").read_text(encoding="utf-8")
+    body = fio[fio.index("async function pkPick"):]
+    body = body[:body.index("\n}\n")]
+    after = body[body.index('await apiPost("/api/pick"'):]
+    # 正常回來（含「取消」「退回網頁」）：先清提示、放開按鈕，才去處理退回網頁
+    ok_part = after[after.index("} catch (e) {"):]
+    ok_part = ok_part[ok_part.index("\n  }\n"):]
+    assert ok_part.index("clearTimeout(later)") < ok_part.index('if (r["退回網頁"])')
+    assert ok_part.index("btn.disabled = false") < ok_part.index('if (r["退回網頁"])')
+    # 出錯：一樣放開按鈕
+    err = after[after.index("} catch (e) {"):after.index("\n  }\n")]
+    assert "clearTimeout(later)" in err and "btn.disabled = false" in err
+
+
 def test_keep_all_voices_needs_confirm():
     # 09-30：「全部保留原聲」先跳確認視窗（會讓 N 位學員保留原聲、不換聲音），取消不變
     js = (WEB / "review.js").read_text(encoding="utf-8")
