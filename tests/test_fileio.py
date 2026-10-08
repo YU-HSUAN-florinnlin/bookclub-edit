@@ -362,6 +362,9 @@ for line in sys.stdin:
         print(json.dumps({{"cancel": True}}), flush=True)
     elif req["title"] == "掛掉":
         sys.exit(3)
+    elif req["title"] == "等很久":
+        import time
+        time.sleep(30)
     else:
         print(json.dumps({{"path": "/Users/x/影片 一/" + req["title"] + "." + req["exts"][0]}}, ensure_ascii=False), flush=True)
 """
@@ -418,6 +421,77 @@ def test_filepicker_swift_compiles():
     r = subprocess.run(["swiftc", "-O", "-o", str(out), str(REPO_ROOT / "bookclub" / "filepicker.swift")],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0 and out.is_file(), r.stderr[-500:]
+
+
+def test_mac_picker_timeout_really_works():
+    # 1008-4 審查：15 分鐘逾時要真的生效（以前 readline 會一直等）。逾時就關掉小程式、放掉鎖，下次再重開
+    fake = Path(tempfile.mkdtemp()) / "fake_picker"
+    fake.write_text(FAKE_PICKER.format(py=sys.executable), encoding="utf-8")
+    fake.chmod(0o755)
+    mp = fileio.MacPicker()
+    mp.build = lambda which=None: fake
+    assert mp.start()
+    t0 = time.time()
+    try:
+        mp.pick("等很久", (".mp4",), timeout=0.5)
+        raise AssertionError("要逾時")
+    except fileio.PickUnavailable as e:
+        assert "太久" in str(e)
+    assert time.time() - t0 < 5 and mp.proc is None and not mp.lock.locked()
+    assert mp.start() and mp.pick("第三堂", (".mov",))[0] == "/Users/x/影片 一/第三堂.mov"
+    # 小程式一次送好幾行（開視窗、取消馬上接著來）也不會漏讀、卡住
+    assert mp.pick("取消", (".mp4",), timeout=2)[0] is None
+    mp._kill()
+
+
+def test_swift_build_checks_dev_tools_hash_and_timeout():
+    # 1008-4 審查：沒裝 Xcode 命令列工具不叫 swiftc（免得跳安裝視窗）；檔名帶原始碼雜湊；編譯逾時算失敗
+    import os as _os
+
+    if sys.platform != "darwin":
+        print("（不是 Mac，略過）")
+        return
+    home = Path(tempfile.mkdtemp())
+    old_home = _os.environ.get("HOME")
+    _os.environ["HOME"] = str(home)          # 不碰真的 ~/.cache
+    src = home / "x.swift"
+    src.write_text("print(1)\n", encoding="utf-8")
+    calls = []
+
+    def run_ok(cmd, **kw):
+        calls.append(cmd[0])
+        if cmd[0] == "xcode-select":
+            return R(0, str(home) + "\n", "")
+        if cmd[0] == "swiftc":
+            assert kw.get("timeout") == fileio.SWIFT_BUILD_TIMEOUT_S
+            Path(cmd[cmd.index("-o") + 1]).write_text("exe")
+            return R(0, "", "")
+        raise AssertionError(cmd)
+    try:
+        assert fileio.swift_build(src, "fp", which=_which("swiftc"),
+                                  run=lambda c, **k: R(2, "", "error: no developer tools")) is None   # 沒裝：不編
+        exe = fileio.swift_build(src, "fp", which=_which("swiftc"), run=run_ok)
+        import hashlib
+        assert exe == home / ".cache" / "bookclub" / f"fp-{hashlib.sha1(src.read_bytes()).hexdigest()[:8]}"
+        assert exe.is_file() and calls == ["xcode-select", "swiftc"]
+        assert fileio.swift_build(src, "fp", which=_which("swiftc"), run=run_ok) == exe and calls.count("swiftc") == 1
+        src.write_text("print(2)\n", encoding="utf-8")   # 原始碼不同：另一支
+        exe2 = fileio.swift_build(src, "fp", which=_which("swiftc"), run=run_ok)
+        assert exe2 != exe and exe2.is_file()
+        src.write_text("print(3)\n", encoding="utf-8")
+
+        def run_slow(cmd, **kw):
+            if cmd[0] == "xcode-select":
+                return R(0, str(home) + "\n", "")
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        assert fileio.swift_build(src, "fp", which=_which("swiftc"), run=run_slow) is None
+        assert not list((home / ".cache" / "bookclub").glob(".*編譯中"))
+        assert not fileio.dev_tools_ready(run=lambda c, **k: R(0, str(home / "沒有") + "\n", ""))
+    finally:
+        if old_home is None:
+            _os.environ.pop("HOME", None)
+        else:
+            _os.environ["HOME"] = old_home
 
 
 def _run_all():

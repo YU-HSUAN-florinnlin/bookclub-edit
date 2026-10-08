@@ -1,14 +1,14 @@
 // 常駐的 Mac 選檔小程式（10-08）：網頁「選影片」叫的系統選檔視窗。
 //
-// 為什麼不每次叫 osascript：開發者的 Mac 實測，osascript 每次從啟動到選檔視窗真的出現在畫面上要 1.2～1.4 秒
-// （第一次 2～3 秒），時間都花在建選檔視窗本身；同一支程式第二次以後開只要約 0.55 秒。
+// 為什麼不每次叫 osascript：開發者的 Mac 實測，從網頁按下到視窗出現，每次叫 osascript 第一次 2.00 秒、之後 0.94～1.45 秒，
+// 時間都花在建選檔視窗本身；改用這支常駐小程式（先預熱）後第一次 0.67 秒、之後 0.27～0.41 秒；預熱含第一次編譯約 5 秒。
 // 所以伺服器啟動時就在背景把這支小程式開起來、先建一個選檔視窗預熱（不顯示），之後每次按「選影片」都用它開。
 //
 // 跟伺服器（bookclub/fileio.py 的 MacPicker）用一行一個 JSON 溝通：
 //   啟動、預熱好 → 印 {"ready": true}
 //   收到 {"title": "...", "exts": ["mp4", ...]} → 印 {"opening": true}（馬上要開視窗）→ 選好印 {"path": "..."}；取消印 {"cancel": true}
 //   stdin 關掉（伺服器結束）→ 自己結束
-// 編譯：swiftc -O -o ~/.cache/bookclub/filepicker bookclub/filepicker.swift（fileio.py 會自己編，原始碼比較新才重編）
+// 編譯：fileio.swift_build 編到 ~/.cache/bookclub/filepicker-<原始碼雜湊前 8 碼>（有裝 Xcode 命令列工具才編）
 
 import AppKit
 import UniformTypeIdentifiers

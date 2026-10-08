@@ -650,20 +650,12 @@ def smart_plan(plist: list[dict], keys: list[float], blur: list[float] | None) -
 
 
 def avconcat_helper() -> Path | None:
-    """macOS 上把 `avconcat.swift` 編譯到 ~/.cache/bookclub/avconcat（原始碼比較新才重編）；不是 macOS 或沒有 swiftc 回傳 None。"""
-    import shutil
-    import sys
+    """macOS 上把 `avconcat.swift` 編譯到 ~/.cache/bookclub/avconcat-<原始碼雜湊前 8 碼>（10-08 起跟選檔小程式共用
+    `fileio.swift_build`：先確認有裝 Xcode 命令列工具才編，免得跳出「要安裝開發者工具嗎？」視窗；編譯超過 120 秒算失敗）。
+    不是 macOS、沒有工具或編譯失敗回傳 None。"""
+    from bookclub.fileio import swift_build
 
-    if sys.platform != "darwin" or not shutil.which("swiftc"):
-        return None
-    src = Path(__file__).with_name("avconcat.swift")
-    exe = Path.home() / ".cache" / "bookclub" / "avconcat"
-    if not exe.is_file() or exe.stat().st_mtime < src.stat().st_mtime:
-        exe.parent.mkdir(parents=True, exist_ok=True)
-        r = subprocess.run(["swiftc", "-O", "-swift-version", "5", "-o", str(exe), str(src)], capture_output=True, text=True)
-        if r.returncode != 0:
-            return None
-    return exe
+    return swift_build(Path(__file__).with_name("avconcat.swift"), "avconcat")
 
 
 def quicktime_ok(path: Path) -> bool | None:

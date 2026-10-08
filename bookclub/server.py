@@ -1892,7 +1892,7 @@ def serve(
         return 0 if ours else 1
     if workdir:
         adopt_project(workdir)
-    if sys.platform == "darwin":   # 10-08：背景開好 Mac 的常駐選檔小程式並預熱（第一次要編譯，約十幾秒；不擋啟動）
+    if sys.platform == "darwin":   # 10-08：背景開好 Mac 的常駐選檔小程式並預熱（含第一次編譯約 5 秒；不擋啟動）
         from bookclub import fileio
 
         fileio.MAC_PICKER.start_in_background()
