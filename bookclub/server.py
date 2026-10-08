@@ -934,10 +934,16 @@ class BookclubServer(ThreadingHTTPServer):
             raise ValueError(f"不認得要選什麼：{purpose}")
         if purpose in EXTRA_PURPOSES and target == "目前" and not self.has_workdir:
             raise NoProject("還沒有目前的專案：片頭片尾先在「選影片」那裡選，開始分析時會一起記進新專案")
+        t0 = time.time()
+        fileio.timing_log(f"收到「選{purpose}」的請求，開始叫選檔視窗"
+                          f"（Mac 常駐小程式{'已經準備好' if fileio.MAC_PICKER.usable() else '還沒準備好，這次叫 osascript'}）"
+                          if fileio.platform_kind() == "mac" else f"收到「選{purpose}」的請求，開始叫選檔視窗")
         try:
             p = fileio.pick_file(PICK_TITLES[purpose])
         except fileio.PickUnavailable as e:
+            fileio.timing_log(f"叫不起來，退回網頁瀏覽（{time.time() - t0:.1f} 秒）")
             return {"退回網頁": True, "說明": f"{e}。改用下面的資料夾瀏覽選檔案。"}
+        fileio.timing_log(f"這次請求共 {time.time() - t0:.1f} 秒（含人在視窗裡選的時間）")
         if p is None:
             return {"取消": True, "退回網頁": True,
                     "說明": "沒有選檔案（按了取消）。要再選一次就再按一次按鈕，也可以在下面的資料夾裡找。"}
@@ -1886,6 +1892,10 @@ def serve(
         return 0 if ours else 1
     if workdir:
         adopt_project(workdir)
+    if sys.platform == "darwin":   # 10-08：背景開好 Mac 的常駐選檔小程式並預熱（第一次要編譯，約十幾秒；不擋啟動）
+        from bookclub import fileio
+
+        fileio.MAC_PICKER.start_in_background()
     _mark_interrupted(workdir or None)   # 09-30：上次跑到一半伺服器被關掉，進度改「中斷」（要在確定埠拿到之後）
     url = browser_url(port, plan)
     print(f"[網頁伺服器] 網址：{url}")

@@ -352,6 +352,74 @@ def test_review_fixes_1007():
         pass
 
 
+FAKE_PICKER = """#!{py}
+import json, sys
+print(json.dumps({{"ready": True}}), flush=True)
+for line in sys.stdin:
+    req = json.loads(line)
+    print(json.dumps({{"opening": True}}), flush=True)
+    if req["title"] == "取消":
+        print(json.dumps({{"cancel": True}}), flush=True)
+    elif req["title"] == "掛掉":
+        sys.exit(3)
+    else:
+        print(json.dumps({{"path": "/Users/x/影片 一/" + req["title"] + "." + req["exts"][0]}}, ensure_ascii=False), flush=True)
+"""
+
+
+def test_mac_resident_picker_protocol():
+    # 10-08：Mac 改用常駐的選檔小程式（預熱好之後約 0.3～0.7 秒出視窗）。這裡用假的小程式測溝通方式，不會跳出視窗
+    fake = Path(tempfile.mkdtemp()) / "fake_picker"
+    fake.write_text(FAKE_PICKER.format(py=sys.executable), encoding="utf-8")
+    fake.chmod(0o755)
+    mp = fileio.MacPicker()
+    mp.build = lambda which=None: fake
+    assert not mp.usable()
+    assert mp.start() and mp.usable()
+    got, opened = mp.pick("第一堂", (".mp4",))
+    assert got == "/Users/x/影片 一/第一堂.mp4" and opened >= 0
+    assert mp.pick("取消", (".mp4",))[0] is None
+    try:
+        mp.pick("掛掉", (".mp4",))
+        raise AssertionError("小程式掛掉要丟 PickUnavailable")
+    except fileio.PickUnavailable:
+        pass
+    assert not mp.usable() and mp.proc is None
+    assert mp.start() and mp.usable()          # 下一次重開
+    # pick_file：常駐小程式好了就用它；它掛掉就這一次改叫 osascript
+    saved = fileio.MAC_PICKER
+    fileio.MAC_PICKER = mp
+    try:
+        assert fileio.pick_file("第二堂", method="mac", run=lambda *a, **k: 1 / 0) == Path("/Users/x/影片 一/第二堂.mp4")
+        calls = []
+        mp.start_in_background = lambda: calls.append("重開")
+        def osa(cmd, **kw):
+            calls.append(cmd[0])
+            return R(0, b"/a/b.mp4\n", b"")
+        assert fileio.pick_file("掛掉", method="mac", run=osa) == Path("/a/b.mp4")
+        assert calls == ["重開", "osascript"]
+    finally:
+        fileio.MAC_PICKER = saved
+    # 沒有 swiftc（或不是 Mac）：不編譯、回 None，照舊叫 osascript
+    assert fileio.MacPicker.build(which=lambda name: None) is None
+
+
+def test_filepicker_swift_compiles():
+    # 原始碼編得過（不執行，不會跳出視窗）。沒有 swiftc 的電腦略過
+    import shutil as _sh
+
+    if sys.platform != "darwin" or not _sh.which("swiftc"):
+        print("（沒有 swiftc，略過）")
+        return
+    out = Path(tempfile.mkdtemp()) / "filepicker"
+    import os as _os
+
+    env = {k: v for k, v in _os.environ.items() if k not in ("TMPDIR", "TEMP", "TMP")}   # swiftc 遇到中文暫存路徑會當掉
+    r = subprocess.run(["swiftc", "-O", "-o", str(out), str(REPO_ROOT / "bookclub" / "filepicker.swift")],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0 and out.is_file(), r.stderr[-500:]
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:
