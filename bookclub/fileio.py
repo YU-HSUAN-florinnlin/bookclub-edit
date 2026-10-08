@@ -147,9 +147,9 @@ def encode_ps(script: str) -> str:
 def pick_command(method: str, title: str, exts: tuple[str, ...] = VIDEO_EXTS, which=None) -> list[str]:
     which = which or shutil.which
     if method == "mac":
-        # 10-08：改用 JavaScript 版的 osascript（JXA）。AppleScript 的 `activate` 每次要等約 2.2 秒才回來
-        # （開發者的 Mac 實測：osascript -e 'activate' 3 次都是 2.15～2.18 秒；不 activate 0.09 秒、JXA 的 activate 0.2 秒），
-        # 宇軒按「選影片」覺得卡的主要原因就是它。JXA 照樣先 activate（讓視窗盡量跳在前面），只多約 0.15 秒。
+        # 10-08：退回用的叫法（常駐選檔小程式不能用時，見下面 MacPicker）。用 JavaScript 版的 osascript（JXA）：
+        # AppleScript 的 `activate` 本身每次要等約 2.2 秒，JXA 的 activate 只要約 0.2 秒。從網頁按下到視窗出現，
+        # 這種叫法第一次 2.00 秒、之後 0.94～1.45 秒（時間多花在建選檔視窗本身）。
         types = json.dumps(["public.movie", *(e.lstrip(".") for e in exts)], ensure_ascii=False)
         script = ("var app = Application.currentApplication(); app.includeStandardAdditions = true; app.activate(); "
                   f"String(app.chooseFile({{withPrompt: {json.dumps(title, ensure_ascii=False)}, ofType: {types}}}))")
@@ -244,6 +244,16 @@ def pick_file(title: str, *, method: str | None = None, run=None, exts: tuple[st
     if not _pick_lock.acquire(blocking=False):
         raise PickUnavailable("選檔視窗已經開著了（可能躲在瀏覽器後面），先在那個視窗選好或按取消")
     try:
+        if method == "mac" and MAC_PICKER.usable():   # 10-08：常駐小程式（0.3～0.7 秒出視窗）；還沒好就照舊叫 osascript
+            t0 = time.time()
+            try:
+                got, opened = MAC_PICKER.pick(title, exts)
+                timing_log(f"常駐小程式：送出到開視窗 {opened:.2f} 秒，到選好／取消共 {time.time() - t0:.1f} 秒")
+                return Path(got) if got else None
+            except PickUnavailable as e:
+                timing_log(f"常駐小程式不能用（{e}），這次改叫 osascript；下次重開小程式")
+                MAC_PICKER.start_in_background()
+        t0 = time.time()
         cmd = pick_command(method, title, exts, which=which)
         try:
             kw = {"cwd": "/mnt/c"} if method == "wsl" and Path("/mnt/c").is_dir() else {}
@@ -253,6 +263,8 @@ def pick_file(title: str, *, method: str | None = None, run=None, exts: tuple[st
             raise PickUnavailable("選檔視窗開太久沒有選（超過 15 分鐘），已經不等了") from None
         except OSError as e:   # 找不到程式、WSL interop 關掉（Exec format error）
             raise PickUnavailable(f"叫不起系統的選檔視窗（{e.strerror or e}）") from None
+        timing_log(f"{'osascript' if method == 'mac' else method}：叫起到選好／取消共 {time.time() - t0:.1f} 秒"
+                   "（這一種量不到視窗什麼時候出現）")
         got = parse_pick(method, r.returncode, r.stdout, r.stderr)
         if got is None:
             return None
@@ -261,6 +273,185 @@ def pick_file(title: str, *, method: str | None = None, run=None, exts: tuple[st
         return Path(got)
     finally:
         _pick_lock.release()
+
+
+# ---------------------------------------------------------------------------
+# Mac：常駐的選檔小程式（10-08，bookclub/filepicker.swift）
+# ---------------------------------------------------------------------------
+#
+# 10-08 宇軒在 8775 實按：第一次 4 秒、之後約 2 秒才跳出視窗。開發者的 Mac（跟 8775 一樣用 zsh -ic 開伺服器，
+# 從網頁 API 按、看畫面上什麼時候多出視窗）量：
+# - 改前（每次叫 osascript）：第一次 2.00 秒，之後 0.94～1.45 秒。時間花在「建選檔視窗」本身，每次重開程式都要重建
+# - 改後（伺服器啟動時背景開好一支常駐小程式、先建一個視窗預熱）：第一次 0.67 秒，之後 0.27～0.41 秒；
+#   預熱（含第一次編譯）約 5 秒，不擋啟動
+# 沒裝 Xcode 命令列工具、編譯失敗、小程式還沒好或掛掉時，退回每次叫 osascript（照樣能用，只是慢約 1 秒）。
+
+SWIFT_BUILD_TIMEOUT_S = 120
+
+
+def dev_tools_ready(run=None) -> bool:
+    """Mac 有沒有裝 Xcode 命令列工具。沒裝時 /usr/bin/swiftc 只是轉接殼，一叫就會跳「要安裝開發者工具嗎？」視窗，
+    所以先問 `xcode-select -p`（結束碼 0、而且那個資料夾在）才編譯。"""
+    run = run or subprocess.run
+    try:
+        r = run(["xcode-select", "-p"], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    out = (r.stdout or "").strip()
+    return r.returncode == 0 and bool(out) and Path(out).is_dir()
+
+
+def swift_build(src: Path, name: str, which=None, run=None) -> Path | None:
+    """把 Swift 小程式編譯到 `~/.cache/bookclub/<name>-<原始碼雜湊前 8 碼>`（同一份原始碼才共用；
+    主資料夾與分身資料夾的原始碼不同就各編各的）。不是 Mac、沒裝 Xcode 命令列工具、沒有 swiftc、
+    編譯失敗或超過 120 秒都回 None。`render.avconcat_helper` 也用這一支。"""
+    import hashlib
+    import sys
+
+    which = which or shutil.which
+    run = run or subprocess.run
+    if sys.platform != "darwin" or not dev_tools_ready(run) or not which("swiftc"):
+        return None
+    src = Path(src)
+    digest = hashlib.sha1(src.read_bytes()).hexdigest()[:8]
+    exe = Path.home() / ".cache" / "bookclub" / f"{name}-{digest}"
+    if exe.is_file():
+        return exe
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    tmp = exe.with_name(f".{exe.name}.{os.getpid()}.編譯中")
+    env = dict(os.environ)
+    if not env.get("TMPDIR", "").isascii():   # swiftc 遇到含中文的暫存資料夾路徑會當掉（測試時遇過）
+        env.pop("TMPDIR", None)
+    try:
+        r = run(["swiftc", "-O", "-swift-version", "5", "-o", str(tmp), str(src)], capture_output=True, text=True,
+                stdin=subprocess.DEVNULL, env=env, timeout=SWIFT_BUILD_TIMEOUT_S)
+        ok = r.returncode == 0 and tmp.is_file()
+    except (OSError, subprocess.TimeoutExpired):
+        ok = False
+    if not ok:
+        with _ignore_os():
+            tmp.unlink()
+        return None
+    os.replace(tmp, exe)
+    return exe
+
+
+class MacPicker:
+    """常駐選檔小程式的管理：編譯、背景啟動預熱、送一次要求、逾時或掛掉就關掉（下一次再重開）。"""
+
+    def __init__(self):
+        self.proc: subprocess.Popen | None = None
+        self.ready = False
+        self.lock = threading.Lock()
+        self.failed: str | None = None
+        self.lines = None   # 讀小程式輸出的佇列（另一條執行緒在讀，讀的時候才能設逾時）
+
+    @classmethod
+    def build(cls, which=None) -> Path | None:
+        return swift_build(Path(__file__).with_name("filepicker.swift"), "filepicker", which=which)
+
+    def start(self) -> bool:
+        """（背景執行緒呼叫）編譯＋啟動＋等預熱好。成功回 True。"""
+        import queue
+
+        with self.lock:
+            if self.proc is not None and self.proc.poll() is None and self.ready:
+                return True
+            t0 = time.time()
+            exe = self.build()
+            if exe is None:
+                self.failed = "沒有 Xcode 命令列工具、沒有 swiftc 或編譯失敗"
+                return False
+            try:
+                self.proc = subprocess.Popen([str(exe)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                             stderr=subprocess.DEVNULL, text=True, encoding="utf-8", bufsize=1)
+            except OSError as e:
+                self.failed, self.ready = str(e), False
+                return False
+            q = queue.Queue()
+            proc = self.proc
+
+            def pump() -> None:
+                try:
+                    for line in proc.stdout:
+                        q.put(line)
+                except (OSError, ValueError):
+                    pass
+                q.put(None)   # 小程式結束
+
+            threading.Thread(target=pump, daemon=True).start()
+            self.lines = q
+            try:
+                first = q.get(timeout=SWIFT_BUILD_TIMEOUT_S)
+            except queue.Empty:
+                first = None
+            self.ready = bool(first) and '"ready"' in first
+            if not self.ready:
+                self._kill()
+                self.failed = "選檔小程式沒有準備好"
+                return False
+            timing_log(f"Mac 選檔小程式預熱好了（{time.time() - t0:.2f} 秒）")
+            return True
+
+    def start_in_background(self) -> None:
+        threading.Thread(target=self.start, daemon=True).start()
+
+    def usable(self) -> bool:
+        return self.ready and self.proc is not None and self.proc.poll() is None and not self.lock.locked()
+
+    def pick(self, title: str, exts: tuple[str, ...], timeout: float = PICK_TIMEOUT_S) -> tuple[str | None, float]:
+        """開一次選檔視窗。回傳 (路徑或 None＝取消, 送出要求到視窗要開的秒數)。
+        小程式掛掉、或超過 `timeout` 秒還沒選好：關掉小程式、丟 PickUnavailable（鎖會放掉，下一次重開）。"""
+        import queue
+
+        with self.lock:
+            p, q = self.proc, self.lines
+            if p is None or p.poll() is not None or not self.ready or q is None:
+                raise PickUnavailable("選檔小程式還沒準備好")
+            t0 = time.time()
+            opened = None
+            try:
+                p.stdin.write(json.dumps({"title": title, "exts": [e.lstrip(".") for e in exts]}, ensure_ascii=False) + "\n")
+                p.stdin.flush()
+                while True:
+                    left = t0 + timeout - time.time()
+                    try:
+                        line = q.get(timeout=max(0.0, left))
+                    except queue.Empty:
+                        self._kill()
+                        raise PickUnavailable("選檔視窗開太久沒有選（超過 15 分鐘），已經不等了") from None
+                    if line is None:
+                        self._kill()
+                        raise PickUnavailable("Mac 的選檔小程式中途結束了")
+                    msg = json.loads(line)
+                    if msg.get("opening"):
+                        opened = time.time() - t0
+                    elif "path" in msg:
+                        return msg["path"], opened or 0.0
+                    elif msg.get("cancel"):
+                        return None, opened or 0.0
+            except (OSError, ValueError) as e:
+                self._kill()
+                raise PickUnavailable(f"Mac 的選檔小程式出錯（{e}）") from None
+
+    def _kill(self) -> None:
+        self.ready = False
+        if self.proc is not None:
+            with _ignore_os():
+                self.proc.kill()
+        self.proc = None
+        self.lines = None
+
+
+MAC_PICKER = MacPicker()
+
+
+def timing_log(msg: str) -> None:
+    """選檔的計時紀錄，寫到伺服器的終端機（跟網頁伺服器其他紀錄同一個地方），不含檔名以外的內容。"""
+    import sys
+
+    sys.stderr.write(f"[選檔計時] {msg}\n")
+    sys.stderr.flush()
 
 
 def check_video(p: Path, exts: tuple[str, ...] = VIDEO_EXTS) -> Path:

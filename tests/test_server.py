@@ -27,7 +27,11 @@ import soundfile as sf
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from bookclub import fileio  # noqa: E402
 from bookclub import server as srv
+
+# 1008-4 審查：serve() 在 Mac 上會背景編譯、開常駐選檔小程式；測試不碰真的 ~/.cache 與真的小程式
+fileio.MAC_PICKER.start_in_background = lambda: None
 from bookclub.workdir import (
     analysis_result_path,
     merged_transcript_path,

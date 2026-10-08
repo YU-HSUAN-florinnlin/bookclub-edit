@@ -21,6 +21,10 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import bookclub
 from bookclub import doctor as dr
+from bookclub import fileio as _fileio
+
+# 1008-4：serve() 在 Mac 上會背景編譯、開常駐選檔小程式；測試不碰真的 ~/.cache 與真的小程式
+_fileio.MAC_PICKER.start_in_background = lambda: None
 
 
 # ── #25：doctor 印工具版本 ─────────────────────────────────────
