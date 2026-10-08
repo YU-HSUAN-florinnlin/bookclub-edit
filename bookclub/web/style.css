@@ -746,3 +746,9 @@ details.fc-fold[open] > summary .fc-foldbtn::after { content: "（點了收合�
 .fc-attlist li .tx { flex: 1 1 14em; min-width: 0; overflow-wrap: anywhere; }
 .fc-attlist li.fc-att-name .tx { color: var(--danger); }
 .fc-export-names { color: var(--danger); }
+/* 10-08 宇軒：第 4 步「開始前總檢查」整區預設收成一行 */
+details.fc-whole { margin: 12px 0; }
+details.fc-whole > summary { cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 17px; }
+details.fc-whole > summary::-webkit-details-marker { display: none; }
+details.fc-whole > summary .fc-foldbtn { font-size: 13px; border: 1px solid var(--line, #ccc); border-radius: 6px; padding: 2px 8px; }
+details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合）"; }

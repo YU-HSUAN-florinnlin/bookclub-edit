@@ -376,6 +376,16 @@ function fcFoldHeads(fc) {
     mustLeft, lookLeft,
   };
 }
+// 10-08 宇軒：整個「開始前總檢查」區塊預設收成一行（純函式）；展開狀態記在瀏覽器（讀不到就當作收合）
+function fcWholeHead(fc) {
+  const h = fcFoldHeads(fc);
+  const n = (fc["一定要處理"] || []).length, k = (fc["請看一眼"] || []).length;
+  if (!n && !k) return "開始前總檢查：沒有要處理、要看的";
+  return `開始前總檢查：一定要處理 ${h.mustLeft} 列、請看一眼 ${h.lookLeft} 處${h.mustLeft || h.lookLeft ? "（預設先略過）" : "（都處理好了）"}`;
+}
+const FC_CHECK_OPEN_KEY = "fc-check-open";
+function fcCheckOpen() { try { return localStorage.getItem(FC_CHECK_OPEN_KEY) === "1"; } catch (e) { return false; } }
+function fcSetCheckOpen(on) { try { localStorage.setItem(FC_CHECK_OPEN_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係 */ } }
 let execOpen = {};   // 展開了哪一區（同一個分頁裡重畫時記得；重新整理網頁就回到收合）
 
 function finalCheckHtml(fc) {
@@ -417,7 +427,9 @@ function finalCheckHtml(fc) {
   const seenN = look.filter((r) => r["已看過"]).length;
   const hd = fcFoldHeads(fc);
   const openMust = !!execOpen["一定要處理"] || !!execGoCheck || !!execBackRow, openLook = !!execOpen["請看一眼"] || !!execBackRow;
-  return `<h2 id="fcCheckTitle">開始前總檢查</h2>${execGoCheck ? `<p class="hint" id="fcGoNote">${esc(execGoCheck)}</p>` : ""}
+  const openAll = fcCheckOpen() || !!execGoCheck || !!execBackRow;
+  return `<details class="fc-whole" id="fcWhole" ${openAll ? "open" : ""}><summary><b id="fcCheckTitle">${esc(fcWholeHead(fc))}</b> <span class="fc-foldbtn">展開</span></summary>
+    ${execGoCheck ? `<p class="hint" id="fcGoNote">${esc(execGoCheck)}</p>` : ""}
     <div class="card">
       <p class="muted">兩區預設都先略過：不用按任何東西就能「開始執行」，沒處理的照目前的設定做。做完到第 5 步，「需留意」那一頁列出成品裡還留著原聲、要聽一下的地方。想現在處理的話，展開來逐列處理。</p>
       <details class="fc-fold" data-fcfold="一定要處理" ${openMust ? "open" : ""}><summary><b>${esc(hd.must)}</b> <span class="fc-foldbtn">展開查看</span></summary>
@@ -439,11 +451,13 @@ function finalCheckHtml(fc) {
       <p class="muted">要生成約 ${Math.round((m["要生成秒數"] || 0) / 60)} 分鐘的聲音${SHOW_EXEC_ETA ? `，預估 ${((m["預估秒數"] || 0) / 3600).toFixed(1)} 小時（含組裝約 21 分鐘）` : ""}；硬碟可用 ${m["硬碟可用GB"]} GB。${esc(m["提醒"] || "")}</p>
       ${mem ? `<p class="${mem["偏滿"] ? "hint fc-mem-warn" : "muted"}" id="fcMem">${mem["偏滿"] ? "<b>記憶體偏滿：</b>" : ""}${esc(mem["說明"])}。${mem["偏滿"] ? esc(mem["怎麼處理"]) : ""}</p>` : ""}
       <audio id="fcAudio" preload="none"></audio>
-    </div>`;
+    </div></details>`;
 }
 
 function bindFinalCheck(reload) {
   document.querySelectorAll("details[data-fcfold]").forEach((d) => d.addEventListener("toggle", () => { execOpen[d.dataset.fcfold] = d.open; }));
+  const whole = document.getElementById("fcWhole");
+  if (whole) whole.addEventListener("toggle", () => fcSetCheckOpen(whole.open));
   document.querySelectorAll("[data-fcplay]").forEach((b) => b.addEventListener("click", () => {
     const [a, e] = b.dataset.fcplay.split("|").map(Number);
     const au = document.getElementById("fcAudio");
@@ -549,16 +563,17 @@ async function renderExecuteBody() {
           ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
           <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音${SHOW_EXEC_ETA ? `，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘` : ""}。</span></p>` : ""}
       </details>
+      ${!running && pre["缺"].length ? `<div class="hint" id="execBlockNear"><b>還不能開始：</b>${esc(pre["缺"].join("；"))}</div>` : ""}
       <button id="btnExec" ${execBlocked ? "disabled" : ""}>${esc(btn.label)}</button>${btn.note ? ` <span class="muted small" id="execDoneNote">${esc(btn.note)}</span>` : ""}
       ${fc && !running && pre["可以開始"] ? `<span class="muted" id="execSkipNote">${esc(execSkipNote(fc))}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
       <span class="muted" id="execEta">${execEtaText(d)}</span>
       ${!running && fc && ((fc["摘要"] || {})["記憶體"] || {})["偏滿"] ? `<p class="hint fc-mem-warn" id="execMemWarn"><b>記憶體偏滿，按下去可能跑到一半就被停下來。</b>${esc(fc["摘要"]["記憶體"]["怎麼處理"])}</p>` : ""}
       ${!running ? `<p class="muted">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}
-      ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「開始執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
+      ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「繼續執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
       ${!running && prog["停止"] ? `<p><span class="badge">已停止</span> ${prog["停止原因"] && !prog["停止原因"].startsWith("按了停止")
-        ? esc(prog["停止原因"].replace("（swap）", "")) : "上次按了停止；按「開始執行」會接著做（做好的不重做）。"}</p>` : ""}
-      ${!running && prog["中斷"] ? `<p><span class="badge error">中斷</span> 上次跑到一半網頁伺服器被關掉了；按「開始執行」會接著做（做好的不重做）。</p>` : ""}
+        ? esc(prog["停止原因"].replace("（swap）", "")) : "上次按了停止；按「繼續執行」會接著做（做好的不重做）。"}</p>` : ""}
+      ${!running && prog["中斷"] ? `<p><span class="badge error">中斷</span> 上次跑到一半網頁伺服器被關掉了；按「繼續執行」會接著做（做好的不重做）。</p>` : ""}
       ${d.error ? `<p><span class="badge error">失敗</span> ${esc(d.error)}</p>` : ""}
       <div id="execAwake">${awakeLine(d)}</div>
       <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
