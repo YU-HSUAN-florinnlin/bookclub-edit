@@ -380,7 +380,7 @@ def test_web_step5_badges_tab_and_attention():
     assert got["badges"] == ["<span>完成 1／2</span>", "<span>1</span>", "<span>完成 1／2</span>", "<span>1</span>", "<span>2</span>"]
     h = got["html"]
     assert h.index("fc-att-red") < h.index("聲音不像老師") and "這 1 處會照原聲念出本名" in h and got["n"] == 2
-    assert h.count("fc-a-play") == 3 and "還留著 2 秒原聲（其餘被別筆處理蓋到），2 段" in h and "總檢查有 5 列沒處理" in h
+    assert h.count("fc-a-play") == 3 and "還留著 2 秒原聲（其餘被別筆處理蓋到），2 段" in h and "還留著 1 秒原聲" in h and "總檢查有 5 列沒處理" in h
     assert got["go1"]["key"] == "名字:4" and got["go1"]["back"] == "step5"
     assert got["go2"]["key"] is None and got["go2"]["edit"] == {"類型": "學員發言", "start": 2, "end": 3}
     assert "舊版工具組裝的" in got["old"] and "需留意" not in got["noAtt"]

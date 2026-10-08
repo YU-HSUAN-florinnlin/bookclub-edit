@@ -775,7 +775,7 @@ function fcAttentionRow(r, i) {
   const part = r["原片"] && r["剩下秒"] < r["原片"][1] - r["原片"][0] - 0.05 ? `（其餘被別筆處理蓋到）` : "";
   return `<li class="${r["名字"] ? "fc-att-name" : ""}" data-akey="${esc(r["鍵"] || "")}">
       <span class="tm">原片 ${esc(fcSpan(r["原片"]))}<br><small>成品 ${esc(fcSpan(r["成品"]))}</small></span>
-      <span class="tx">${name}還留著 ${esc(fcFmt(r["剩下秒"], 1))} 秒原聲${part}${segs.length > 1 ? `，${segs.length} 段` : ""}</span>
+      <span class="tx">${name}還留著 ${esc(String(Math.round(Number(r["剩下秒"]) * 10) / 10))} 秒原聲${part}${segs.length > 1 ? `，${segs.length} 段` : ""}</span>
       <span class="rv-row">${plays}<button class="ghost small fc-a-go" data-i="${i}">回第 3 步改</button></span></li>`;
 }
 
