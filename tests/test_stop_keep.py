@@ -192,7 +192,7 @@ def test_web_pure_functions():
     if not NODE:
         return
     fmt = _fn(app, "fmtStamp")
-    got = _node(_ESC + fmt + _fn(app, "execBtnState") + _fn(app, "pjNowHtml") + """
+    got = _node(_ESC + fmt + 'const EXEC_UPDATE_NOTE = "只補做第 3 步改過的部分，做過的不重做";\n' + _fn(app, "execBtnState") + _fn(app, "pjNowHtml") + """
       const st = (r, p, h) => execBtnState(r, p, h);
       const p0 = {"開始時間": "2026-10-08T23:39:10"};
       console.log(JSON.stringify({
@@ -204,10 +204,15 @@ def test_web_pure_functions():
         now: pjNowHtml({"顯示名稱": "第一堂（開發專案）", "標示": "正式"}), none: pjNowHtml(null) }));""")
     assert got["never"]["label"] == "開始執行" and "還沒執行過" in got["never"]["status"]
     assert got["running"]["label"] == "執行中…" and "第 5 步看的還是上一支成品" in got["running"]["status"]
-    assert got["stopped"]["label"] == "上次被停止，繼續執行" and "第 5 步看的是上一支完整的成品" in got["stopped"]["status"]
-    assert got["failed"]["label"] == "上次失敗，再執行一次" and "第 5 步還沒有成品" in got["failed"]["status"]
-    assert got["cut"]["label"] == "上次被中斷，繼續執行"
-    assert got["done"]["label"] == "重新執行" and got["done"]["note"] == "已完成（10-09 01:02）"
+    assert got["stopped"]["label"] == "繼續執行" and "第 5 步看的是上一支完整的成品" in got["stopped"]["status"]
+    assert got["failed"]["label"] == "繼續執行" and "第 5 步還沒有成品" in got["failed"]["status"]
+    assert got["cut"]["label"] == "繼續執行" and "跑到一半網頁伺服器被關掉" in got["cut"]["status"]
+    assert got["done"]["label"] == "更新成品" and got["done"]["note"] == "只補做第 3 步改過的部分，做過的不重做"
+    assert "已完成（10-09 01:02）" in got["done"]["status"]
+    body = _fn(app, "renderExecuteBody")   # 「只重新組裝」收在「進階設定」裡（平常不顯示）
+    adv = body[body.index('<details class="adv">'):body.index("</details>", body.index('<details class="adv">'))]
+    assert 'id="btnReassembleAll"' in adv and body.count('id="btnReassembleAll"') == 1
+    assert 'const EXEC_UPDATE_NOTE = "只補做第 3 步改過的部分，做過的不重做";' in app
     assert "現在在：第一堂（開發專案）" in got["now"] and got["none"] == ""
     got = _node(_ESC + "const FC_NO_PRODUCT = 1;\n" + _fn(fcj, "fcRunNoteHtml") + _fn(fcj, "fcWhereHtml") + """
       const run = {"說明": "第 4 步上次執行到一半被停止（10-08 23:39 開始）"};

@@ -545,14 +545,14 @@ async function renderExecuteBody() {
       <details class="adv"><summary>進階設定</summary>
         <label>輸出方式 <select id="exMethod">${(d["輸出做法選項"] || [["sw", "標準輸出"]]).map(([m, label]) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
         <p class="muted">一般用標準輸出就好。其他方式只有這台電腦支援時才會列出來。</p>
+        ${ra && !redo.length && !running ? `<p class="exec-reasm"><button id="btnReassembleAll" class="secondary" ${execBlocked || !ra["可以"] ? "disabled" : ""}>只重新組裝（不重新生成）</button>
+          ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
+          <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音${SHOW_EXEC_ETA ? `，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘` : ""}。</span></p>` : ""}
       </details>
       <button id="btnExec" ${execBlocked ? "disabled" : ""}>${esc(btn.label)}</button>${btn.note ? ` <span class="muted small" id="execDoneNote">${esc(btn.note)}</span>` : ""}
       ${fc && !running && pre["可以開始"] ? `<span class="muted" id="execSkipNote">${esc(execSkipNote(fc))}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
       <span class="muted" id="execEta">${execEtaText(d)}</span>
-      ${ra && !redo.length && !running ? `<p class="exec-reasm"><button id="btnReassembleAll" class="secondary" ${execBlocked || !ra["可以"] ? "disabled" : ""}>只重新組裝（不重新生成）</button>
-        ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
-        <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音${SHOW_EXEC_ETA ? `，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘` : ""}。</span></p>` : ""}
       ${!running && fc && ((fc["摘要"] || {})["記憶體"] || {})["偏滿"] ? `<p class="hint fc-mem-warn" id="execMemWarn"><b>記憶體偏滿，按下去可能跑到一半就被停下來。</b>${esc(fc["摘要"]["記憶體"]["怎麼處理"])}</p>` : ""}
       ${!running ? `<p class="muted">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}
       ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「開始執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
@@ -650,6 +650,8 @@ function execSkipNote(fc) {
 }
 
 // 10-08 宇軒（跑完之後按鈕還寫「開始執行」，老師以為哪裡出錯）：第 4 步按鈕文字與頂端一行狀態（純函式）
+// 10-09 宇軒定：開始執行 →（中斷／停止／失敗後）繼續執行 →（跑完有成品）更新成品
+const EXEC_UPDATE_NOTE = "只補做第 3 步改過的部分，做過的不重做";
 function execBtnState(running, prog, hasProduct) {
   prog = prog || {};
   const when = prog["開始時間"] ? fmtStamp(prog["開始時間"]) : "";
@@ -657,12 +659,12 @@ function execBtnState(running, prog, hasProduct) {
   const assembled = ((prog["步驟"] || {})["組裝"] || {})["狀態"] === "做完";
   const old = hasProduct ? "第 5 步看的是上一支完整的成品（沒有被動到）" : "第 5 步還沒有成品";
   if (running) return { label: "執行中…", note: "", status: `現在：第 4 步執行中（${when} 開始）。${hasProduct ? "做完之前，第 5 步看的還是上一支成品" : "做完才會有成品"}` };
-  if (prog["中斷"]) return { label: "上次被中斷，繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半網頁伺服器被關掉。${old}` };
-  if (prog["停止"]) return { label: "上次被停止，繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半被停止。${old}` };
-  if (prog["錯誤"]) return { label: "上次失敗，再執行一次", note: "", status: `現在：上次執行（${when} 開始）沒有跑完（失敗）。${old}` };
+  if (prog["中斷"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半網頁伺服器被關掉。${old}` };
+  if (prog["停止"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半被停止。${old}` };
+  if (prog["錯誤"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）沒有跑完（失敗）。${old}` };
   if (prog["開始時間"] && prog["結束時間"] && (assembled || hasProduct))
-    return { label: "重新執行", note: `已完成（${end}）`, status: `現在：已完成（${end}），到第 5 步檢查成品；改了第 3 步要重新執行` };
-  if (hasProduct) return { label: "重新執行", note: "", status: "現在：有成品，到第 5 步檢查；改了第 3 步要重新執行" };
+    return { label: "更新成品", note: EXEC_UPDATE_NOTE, status: `現在：已完成（${end}），到第 5 步檢查成品；改了第 3 步按「更新成品」` };
+  if (hasProduct) return { label: "更新成品", note: EXEC_UPDATE_NOTE, status: "現在：有成品，到第 5 步檢查；改了第 3 步按「更新成品」" };
   return { label: "開始執行", note: "", status: "現在：還沒執行過，第 5 步還沒有成品" };
 }
 
