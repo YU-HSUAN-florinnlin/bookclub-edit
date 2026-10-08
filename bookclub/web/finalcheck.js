@@ -5,7 +5,7 @@
  *   → 左邊成品影片＋時間軸（處理紀錄的每一筆都標出來、沒登記的變動標紅、看過的區段）；右邊「目前這一筆」或整片看的面板
  *   → 下面：沒登記的變動（要人確認）＋分頁（全部、還沒通過、每一種類型、第 3 步選定不修改；10-08 照第 3 步的分頁）。
  * 逐筆看：處理前／處理後試聽、通過、退回重做（要寫原因）。整片看：記錄實際播放過的區段（只算 2 倍速以下連續播的，取聯集），
- * 看到問題按一下就在目前時間建一筆退回重做。全部通過、整片看過 100% 才能按「輸出成品」。
+ * 看到問題按一下就在目前時間建一筆退回重做。全部通過、整片看過 100% 就直接輸出；還沒檢查完按「輸出成品」會先問一次（10-08 宇軒放寬）。
  * 資料：GET /api/final；存檔：/api/final/*（bookclub/finalcheck.py）。依賴 app.js 的 apiGet／apiPost／esc／contentEl。 */
 
 const FC_TYPE = {
@@ -180,7 +180,7 @@ function fcPreviewHtml(why) {
       </div>
       <div class="fc-preview-note" role="status">
         <h2>${esc(why)}</h2>
-        <p>第 4 步 AI 修改跑完之後，這一頁會變成<b>成品檢查</b>：逐筆聽處理前後、按通過或退回重做，再把整片看完（看過 100%）才能輸出成品。</p>
+        <p>第 4 步 AI 修改跑完之後，這一頁會變成<b>成品檢查</b>：逐筆聽處理前後、按通過或退回重做，再把整片看完（看過 100%）再輸出成品（沒看完也能輸出，會先問一次）。</p>
         <p class="muted">後面霧霧的是之後的樣子，現在還不能按。</p>
         <p><a class="btn" href="#step4">到第 4 步 AI 執行</a></p>
       </div>
@@ -215,14 +215,15 @@ function fcRenderTop() {
   sb.textContent = `送回 AI 重做（${st["退回數"]} 筆）`;
   sb.disabled = !st["退回數"];
   const ex = document.getElementById("fc-export");
-  ex.disabled = !st["可以輸出"];
-  ex.title = st["可以輸出"] ? "全部通過、整片看過 100%：可以輸出" : st["還不能輸出的原因"].join("；");
+  ex.disabled = !fc.data["有處理紀錄"] || !fc.data["成品影片"];   // 10-08 宇軒放寬：沒檢查完也能按，按下去先確認
+  ex.title = st["可以輸出"] ? "全部通過、整片看過 100%：可以輸出" : `還沒檢查完（${st["還不能輸出的原因"].join("；")}），按下去會先問一次`;
   const msg = document.getElementById("fc-msg");
-  if (fc.data["輸出成品"]) msg.innerHTML = `<span class="badge done">已輸出</span> <code>${esc(fc.data["輸出成品"]["檔案"])}</code>（${esc(fmtStamp(fc.data["輸出成品"]["時間"]))}）<span class="muted">　要重新輸出可以再按一次，會產生新的一支、舊的不會被蓋掉</span>`;
+  const early = fcExportedEarly(fc.data["輸出成品"]);
+  if (fc.data["輸出成品"]) msg.innerHTML = `<span class="badge done">已輸出</span> <code>${esc(fc.data["輸出成品"]["檔案"])}</code>（${esc(fmtStamp(fc.data["輸出成品"]["時間"]))}）${early ? `<span class="rv-warnline">　${esc(early)}</span>` : ""}<span class="muted">　要重新輸出可以再按一次，會產生新的一支、舊的不會被蓋掉；成品在下面的按鈕拿</span>`;
   else if (fc.data["重做中"]) msg.innerHTML = `第 4 步正在重做退回的 ${fc.data["重做中"]["項目"].length} 筆（或上次沒做完）：做完會重新組裝，這幾筆回到「還沒看」。`;
   else if (fc.data["送回AI重做"]) msg.innerHTML = `已送回 AI 重做 ${fc.data["送回AI重做"]["項目"].length} 筆（${esc(fmtStamp(fc.data["送回AI重做"]["時間"]))}）：到 <a href="#step4">第 4 步</a> 按「只重做退回的這幾筆」。`;
   else if (fc.data["重做過"]) msg.innerHTML = `上一次重做了 ${fc.data["重做過"]["項目"].length} 筆（${esc(fmtStamp(fc.data["重做過"]["時間"]))}）：清單上標「重做過」的要重新看。`;
-  else if (!st["可以輸出"]) msg.innerHTML = `<span class="rv-meta">還不能輸出：${esc(st["還不能輸出的原因"].join("；"))}（最後一定要有人完整看過整支）</span>`;
+  else if (!st["可以輸出"]) msg.innerHTML = `<span class="rv-meta">還沒檢查完：${esc(st["還不能輸出的原因"].join("；"))}（還是可以輸出，按下去會先問一次）</span>`;
   else msg.innerHTML = "";
 }
 
@@ -652,7 +653,7 @@ function fcRenderWhole() {
       <header><span class="rv-chip"><i></i>整片看</span></header>
       <p class="fc-big">已經看過全片的 <b>${pct}%</b></p>
       <div class="fc-seen" aria-hidden="true">${fc.data["看過區段"].map(([s, e]) => `<i style="left:${(s / (st["成品長度"] || 1)) * 100}%;width:${((e - s) / (st["成品長度"] || 1)) * 100}%"></i>`).join("")}</div>
-      <p class="rv-meta">看過 ${esc(fcFmt(st["看過秒數"], 0))}／${esc(fcFmt(st["成品長度"], 0))}。只算用 2 倍速以下真的播過的地方（拖過去跳過的、超過 2 倍速快轉的都不算），看到 100% 才能輸出。</p>
+      <p class="rv-meta">看過 ${esc(fcFmt(st["看過秒數"], 0))}／${esc(fcFmt(st["成品長度"], 0))}。只算用 2 倍速以下真的播過的地方（拖過去跳過的、超過 2 倍速快轉的都不算）。看到 100% 才算檢查完；沒看完也能輸出，按「輸出成品」會先問一次。</p>
       <div class="rv-field"><label>看到問題：寫一句原因，按下去就在目前時間建一筆退回重做
         <input id="fc-flag-why" placeholder="例如：這裡聲音突然變小"></label></div>
       <div class="rv-actions"><button class="primary" id="fc-flag">這裡有問題（退回重做）</button></div>
@@ -915,12 +916,57 @@ async function fcSendBack() {
   await fcReload();
 }
 
+// 10-08 宇軒放寬輸出：沒看完、沒全部通過也可以輸出，按下去先問一次（都達標就直接輸出不問）。
+// 後端回「要確認」＋「還差」；按「照目前的狀態輸出」才帶 確定 再送一次
 async function fcExport() {
-  try {
-    const r = await apiPost("/api/final/export", {});
-    document.getElementById("fc-msg").innerHTML = `<span class="badge done">已輸出</span> <code>${esc(r["檔案"])}</code>`;
-    await fcReload();
-  } catch (e) { alert(e.message); }
+  let r;
+  try { r = await apiPost("/api/final/export", {}); } catch (e) { alert(e.message); return; }
+  if (r["要確認"]) {
+    let win = false;
+    try { win = !!(await apiGet("/api/final/outputs"))["可以複製到Windows"]; } catch (e) { /* 讀不到就不提 Windows */ }
+    if (!(await fcConfirmExport(r["還差"], win))) return;
+    try { r = await apiPost("/api/final/export", { "確定": true }); } catch (e) { alert(e.message); return; }
+  }
+  await fcReload();
+  fileOutInit(document.getElementById("fc-fileout"));   // 「打開成品資料夾」「複製到 Windows」改指向剛輸出的這一支
+}
+
+// 確認視窗的文字（純函式）：還差什麼一句一句寫、最後問要不要照目前的狀態輸出；Windows（WSL）多提醒要再按複製那一顆
+function fcExportAsk(gaps, win) {
+  const why = (gaps && gaps["說明"]) || [];
+  return { title: "還沒檢查完，確定要輸出嗎？",
+    body: `${why.join("、")}。確定要以目前的狀態輸出嗎？`,
+    note: "輸出的是現在檢查的這一支成品（照目前的樣子），會另外存一支新的，舊的不會被蓋掉。之後要重新輸出可以再按一次。",
+    win: win ? "成品在 Ubuntu 裡：輸出之後，再按「複製成品到 Windows 的下載資料夾」，才拿得到。" : "" };
+}
+
+function fcConfirmExport(gaps, win) {
+  return new Promise((resolve) => {
+    const a = fcExportAsk(gaps, win);
+    const dlg = document.createElement("dialog");
+    dlg.className = "rv-confirm";
+    dlg.setAttribute("aria-labelledby", "fc-export-title");
+    dlg.innerHTML = `<h2 id="fc-export-title">${esc(a.title)}</h2><p>${esc(a.body)}</p>
+      <p class="muted">${esc(a.note)}</p>${a.win ? `<p><b>${esc(a.win)}</b></p>` : ""}
+      <div class="rv-confirm-btns"><button class="ghost" id="fc-export-no">回去繼續檢查</button>
+        <button class="primary" id="fc-export-yes">照目前的狀態輸出</button></div>`;
+    document.body.appendChild(dlg);
+    const done = (v) => { dlg.close(); dlg.remove(); resolve(v); };
+    dlg.addEventListener("cancel", (e) => { e.preventDefault(); done(false); });   // Esc＝回去繼續檢查
+    dlg.querySelector("#fc-export-no").addEventListener("click", () => done(false));
+    dlg.querySelector("#fc-export-yes").addEventListener("click", () => done(true));
+    dlg.showModal();
+  });
+}
+
+// 輸出紀錄當時沒檢查完的提示（純函式）：「這次輸出時還沒看完（看過 73%）、還有 12 筆沒通過」；檢查完才輸出的、舊紀錄沒這幾欄的回空字串
+function fcExportedEarly(rec) {
+  if (!rec || rec["檢查完才輸出"] !== false) return "";
+  const parts = [];
+  if (rec["看過百分比"] != null && rec["看過百分比"] < 100) parts.push(`還沒看完（看過 ${rec["看過百分比"]}%）`);
+  if (rec["沒通過筆數"]) parts.push(`還有 ${rec["沒通過筆數"]} 筆沒通過`);
+  if (rec["沒確認變動筆數"]) parts.push(`還有 ${rec["沒確認變動筆數"]} 處沒登記的變動沒確認`);
+  return parts.length ? `這次輸出時${parts.join("、")}` : "這次輸出時還沒檢查完";
 }
 
 document.addEventListener("keydown", (e) => {

@@ -254,12 +254,11 @@ def test_save_flow_sendback_and_export():
     # 10-01 第三批：一鍵只重做：終端機的指令是 run execute --redo-returned；每一筆寫按下去會怎麼重做
     assert lst["已送回"] and lst["項目"][0]["建議指令"].endswith("--redo-returned")
     assert lst["項目"][0]["做法"] == "重新組裝" and lst["項目"][0]["說明"]   # 假工作區沒有學員段落可以重新生成
-    # 還不能輸出：有退回、沒看完
-    try:
-        fc.export_final(w)
-        raise AssertionError("還沒全部通過、沒看完，應該不能輸出")
-    except ValueError as e:
-        assert "100%" in str(e)
+    # 還沒檢查完（有退回、沒看完）：10-08 放寬——不直接輸出，回「要確認」與還差什麼；沒有產生任何最終成品
+    ask = fc.export_final(w)
+    assert ask["要確認"] is True and ask["ok"] is False and ask["還差"]["沒通過"] == 1 and ask["還差"]["退回"] == 1
+    assert ask["還差"]["看過百分比"] == 0 and any("整片還沒看完" in x for x in ask["還差"]["說明"])
+    assert not list((w / "輸出").glob("最終成品_*")) and "輸出成品" not in wd.read_json(fc.check_path(w))
     fc.decide_record(w, k1, "通過")
     fc.remove_whole_redo(w, "R001")
     fc.add_watched(w, [[0, 4.0]])
@@ -280,6 +279,8 @@ def test_save_flow_sendback_and_export():
     # 10-08：每次輸出產生一支新的（檔名帶時間），可以輸出很多次、舊的不蓋掉
     assert (w / out["檔案"]).is_file() and out["檔案"].startswith("輸出/最終成品_0-0_sw_") and out["檔案"].endswith(".mp4")
     assert out["第幾次"] == 1 and out["接上片頭片尾"] is False and out["片頭"] is None
+    # 都檢查完：直接輸出不問；輸出紀錄記下當時的狀態
+    assert out["檢查完才輸出"] is True and out["看過百分比"] == 100 and out["沒通過筆數"] == 0 and out["沒確認變動筆數"] == 0
     wd.write_json(w / "工作區設定.json", {"片頭": {"路徑": "/x/片頭.mp4", "檔名": "片頭.mp4"}})
     out2 = fc.export_final(w)
     out3 = fc.export_final(w)   # 同一秒再按：加編號
@@ -290,6 +291,51 @@ def test_save_flow_sendback_and_export():
     assert saved["輸出成品"]["檔案"] == out3["檔案"] and len(saved["輸出紀錄"]) == 3
     assert list((w / "輸出").glob(".*輸出中")) == [fresh]   # 這幾次輸出自己的暫存檔都換上了，只剩那個別人的
     assert fc.final_name("成品_0-98_sw.mp4", "20261008-153012") == "最終成品_0-98_sw_20261008-153012.mp4"
+
+
+def test_export_before_checked_needs_confirm():
+    """10-08 宇軒放寬輸出：沒看完、沒全部通過也可以輸出，但要先確認。沒帶確認不輸出、回還差什麼；
+    帶確認就照目前的狀態輸出（檢查用的那一支），輸出紀錄記看過幾 %、幾筆沒通過、幾處變動沒確認。"""
+    if not shutil.which("ffmpeg"):
+        return
+    w = _workdir()
+    d = fc.page_data(w)
+    k1, _k2 = (r["鍵"] for r in d["紀錄"])
+    fc.decide_record(w, k1, "通過")
+    fc.add_watched(w, [[0, 7.3]])
+    ask = fc.export_final(w)
+    g = ask["還差"]
+    assert ask["要確認"] and g["看過百分比"] == 73 and g["沒通過"] == 1 and g["退回"] == 0
+    assert g["說明"][0] == "整片還沒看完（看過 73%）" and g["說明"][1] == "還有 1 筆沒通過"
+    assert not list((w / "輸出").glob("最終成品_*"))
+    out = fc.export_final(w, confirm=True)
+    assert out["ok"] and (w / out["檔案"]).is_file() and out["來源"] == "輸出/成品_0-0_sw.mp4"
+    assert out["檢查完才輸出"] is False and out["看過百分比"] == 73 and out["沒通過筆數"] == 1 and out["沒確認變動筆數"] == g["沒確認的變動"] == 1
+    saved = wd.read_json(fc.check_path(w))
+    assert saved["輸出紀錄"][-1]["看過百分比"] == 73 and saved["輸出成品"]["檢查完才輸出"] is False
+    # 逐筆結果、看過區段沒被動到；狀態照舊算「還沒檢查完」
+    assert saved["逐筆"][k1]["結果"] == "通過" and fc.page_data(w)["狀態"]["可以輸出"] is False
+
+
+def test_export_gaps_text():
+    """確認視窗要寫的白話句子（純函式）。"""
+    st = {"看過比例": 0.5, "逐筆": {"通過": 3, "退回": 2, "總數": 10}, "未登記": {"沒問題": 1, "總數": 3}, "退回數": 2}
+    g = fc.export_gaps(st)
+    assert g["說明"] == ["整片還沒看完（看過 50%）", "還有 7 筆沒通過（其中 2 筆是退回重做、還沒重做）", "還有 2 處沒登記的變動沒確認"]
+    ok = {"看過比例": 1.0, "逐筆": {"通過": 2, "退回": 0, "總數": 2}, "未登記": {"沒問題": 0, "總數": 0}, "退回數": 0}
+    assert fc.export_gaps(ok)["說明"] == []
+    # 只有整片看時退回的（不是逐筆退回）
+    assert fc.export_gaps({**ok, "退回數": 1})["說明"] == ["有 1 處退回重做還沒重做"]
+
+
+def test_export_without_product_still_blocked():
+    w = Path(tempfile.mkdtemp()) / "空"
+    (w / "輸出").mkdir(parents=True)
+    try:
+        fc.export_final(w, confirm=True)
+        raise AssertionError("沒有處理紀錄不能輸出")
+    except ValueError as e:
+        assert "處理紀錄" in str(e)
 
 
 def test_whole_flags_survive_rerender_until_redone():

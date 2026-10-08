@@ -10,7 +10,8 @@
 另外一區：處理紀錄的「未登記的變動」（聲音變了但沒有紀錄），要人一筆一筆確認（沒問題／退回重做）。
 
 按「送回 AI 重做（N 筆）」寫進 `覆核/成品檢查.json` 的 `送回AI重做`，`bookclub redo list <工作區>` 列得出來。
-**全部通過、而且整片看過 100% 才能按「輸出成品」**（09-18 宇軒：最後一定要有人完整看過整支）。
+**全部通過、而且整片看過 100% 才算檢查完**（09-18 宇軒：最後一定要有人完整看過整支）；10-08 宇軒放寬：沒檢查完也可以輸出，
+但要先確認（`export_final(confirm=True)`），輸出紀錄記下當時還差什麼。
 
 存檔：`覆核/成品檢查.json`（格式見 `docs/工作區格式.md`）。純函式為主（看過比例、退回清單、能不能輸出），
 `bookclub/server.py` 只負責轉手。
@@ -1054,18 +1055,43 @@ def final_name(src_name: str, stamp: str) -> str:
     return f"最終成品_{p.stem.removeprefix('成品_')}_{stamp}{p.suffix}"
 
 
-def export_final(workdir: str | Path) -> dict:
-    """`POST /api/final/export`：全部通過、整片看過 100% 才能輸出——把檢查過的成品複製成 `輸出/最終成品_<檔名>_<時間>.mp4`。
+def export_gaps(st: dict) -> dict:
+    """輸出時「還差什麼」（純函式，10-08 宇軒放寬輸出）：{看過比例, 看過百分比, 沒通過, 退回, 沒確認的變動, 說明[]}。
+    說明是給確認視窗的白話句子；都達標時說明是空的。`沒通過` 含退回重做的（退回的另外也數）。"""
+    pct = int(st["看過比例"] * 100)
+    left = st["逐筆"]["總數"] - st["逐筆"]["通過"]
+    un = st["未登記"]["總數"] - st["未登記"]["沒問題"]
+    why = []
+    if st["看過比例"] < 1.0:
+        why.append(f"整片還沒看完（看過 {pct}%）")
+    if left:
+        why.append(f"還有 {left} 筆沒通過" + (f"（其中 {st['逐筆']['退回']} 筆是退回重做、還沒重做）" if st["逐筆"]["退回"] else ""))
+    if un:
+        why.append(f"還有 {un} 處沒登記的變動沒確認")
+    if st.get("退回數") and not st["逐筆"]["退回"]:
+        why.append(f"有 {st['退回數']} 處退回重做還沒重做")
+    return {"看過比例": st["看過比例"], "看過百分比": pct, "沒通過": left, "退回": st["逐筆"]["退回"],
+            "沒確認的變動": un, "說明": why}
+
+
+def export_final(workdir: str | Path, confirm: bool = False) -> dict:
+    """`POST /api/final/export`：把檢查用的那一支成品複製成 `輸出/最終成品_<檔名>_<時間>.mp4`。
     10-08 宇軒：輸出可以做很多次（片頭片尾、前面的步驟可能選錯，要重新設定再輸出）。每次產生一支新的、檔名帶時間，
-    不蓋掉舊的；`輸出成品` 記最新一次，`輸出紀錄` 記每一次（含當時選的片頭片尾，這一版只記錄、還沒接上）。"""
+    不蓋掉舊的；`輸出成品` 記最新一次，`輸出紀錄` 記每一次（含當時選的片頭片尾，這一版只記錄、還沒接上）。
+    10-08 宇軒放寬：沒全部通過、沒看完也可以輸出，但要確認——還沒達標又沒帶 `confirm` 時不輸出，回傳
+    {要確認: True, 還差: export_gaps}；帶 `confirm` 就照目前的狀態輸出，輸出紀錄記下當時看過幾 %、幾筆沒通過、幾處變動沒確認。
+    還沒有處理紀錄或成品影片照樣不能輸出。組裝時名字、重疊沒處理不輸出的防線在第 4 步，這裡不動。"""
     from datetime import datetime
 
     workdir = Path(workdir)
     with _lock:
         log, check = _current(workdir)
         st = status(log, check)
-        if not st["可以輸出"]:
-            raise ValueError("還不能輸出：" + "；".join(st["還不能輸出的原因"]))
+        if not log or not check.get("成品影片"):
+            raise ValueError("還不能輸出：" + ("還沒有處理紀錄（第 4 步還沒組裝）" if not log else "找不到成品影片"))
+        gaps = export_gaps(st)
+        if not st["可以輸出"] and not confirm:
+            return {"ok": False, "要確認": True, "還差": gaps}
         src = workdir / check["成品影片"]
         dst = src.with_name(final_name(src.name, datetime.now().strftime("%Y%m%d-%H%M%S")))
         n = 2
@@ -1082,7 +1108,10 @@ def export_final(workdir: str | Path) -> dict:
         extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
         rec = {"時間": _now(), "來源": check["成品影片"], "檔案": str(dst.relative_to(workdir)),
                "片頭": (extras.get("片頭") or {}).get("檔名"), "片尾": (extras.get("片尾") or {}).get("檔名"),
-               "接上片頭片尾": False}
+               "接上片頭片尾": False,
+               # 10-08：輸出當時的檢查狀態（沒看完、沒全部通過也能輸出，第 5 步會提示「這次輸出時還沒看完」）
+               "看過百分比": gaps["看過百分比"], "沒通過筆數": gaps["沒通過"], "沒確認變動筆數": gaps["沒確認的變動"],
+               "檢查完才輸出": st["可以輸出"]}
         check["輸出成品"] = rec
         check.setdefault("輸出紀錄", []).append(rec)
         _save(workdir, check)
