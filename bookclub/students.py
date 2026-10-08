@@ -444,7 +444,8 @@ OVERLAP_MISSING_REASON = "重疊：學員那句沒資料，整句消音"
 def missing_overlap_mutes(workdir: Path, lo: float = 0.0, hi: float = 1e12, kept: set | None = None) -> list[dict]:
     """10-08 宇軒（流程簡化）：重疊選了要生成學員聲音、但缺「學員是誰」或「學員說的」（`overlap_gen_problem`），
     開始執行不再擋——組裝時把學員那一整句（`overlap_student_range`）墊底噪，不留學員原聲（跟局部消音同一套做法）。
-    保留原聲的學員不消。回傳局部消音的格式（帶 `重疊`、`重疊缺資料`），處理紀錄寫「重疊：學員那句沒資料，整句消音」。"""
+    人在卡片上選過學員（`學員已選`）、而且那位是保留原聲的才不消；程式猜的學員一律消（猜錯會把別人的原聲留下來）。
+    回傳局部消音的格式（帶 `重疊`、`重疊缺資料`），處理紀錄寫「重疊：學員那句沒資料，整句消音」。"""
     from bookclub import review
 
     workdir = Path(workdir)
@@ -459,7 +460,7 @@ def missing_overlap_mutes(workdir: Path, lo: float = 0.0, hi: float = 1e12, kept
         if not review.overlap_student_gen(o, slots):
             continue
         why = review.overlap_gen_problem(o, slots)
-        if not why or (o.get("學員") and o["學員"] in kept):
+        if not why or (o.get("學員已選") and o.get("學員") and o["學員"] in kept):   # 審查：猜的學員不算保留原聲
             continue
         a, b = overlap_student_range(o)
         a, b = max(a, lo), min(b, hi)

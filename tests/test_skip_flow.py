@@ -420,7 +420,10 @@ def test_missing_overlap_whole_sentence_muted():
     whole = students.overlap_student_range(o)
     miss = students.missing_overlap_mutes(w)
     assert [(m["重疊"], [m["start"], m["end"]]) for m in miss] == [(oid, whole)] and miss[0]["重疊缺資料"]
-    assert not students.missing_overlap_mutes(w, kept={o["學員"]}) or not o["學員"]   # 保留原聲的不消
+    # 猜的學員就算是保留原聲的那位也照樣整句消音（猜錯會留下別人的原聲）
+    assert not o["學員已選"]
+    if o["學員"]:
+        assert [m["重疊"] for m in students.missing_overlap_mutes(w, kept={o["學員"]})] == [oid]
     d = render.build_decisions(w, 0.0, 180.0)
     mine = [e for e in d["動作"] if e.get("重疊") == oid]
     assert len(mine) == 1 and mine[0]["重疊缺資料"] and [mine[0]["start"], mine[0]["end"]] == whole   # 不重複列重疊那一小段
@@ -435,6 +438,23 @@ def test_missing_overlap_whole_sentence_muted():
     log = {"片段": None, "紀錄": proclog.build_records(d, None), "範圍": [0.0, 180.0]}
     assert not [r for r in finalcheck.place_attention([row], log)]
     assert "學員那一整句改成消音" in execute.BACK3[execute.KIND_OVERLAP]
+
+
+def test_missing_overlap_kept_only_when_person_picked():
+    # 審查：缺資料的重疊整句消音時，只有人在卡片上選過學員、而且那位保留原聲才不消；程式猜的一律消
+    from bookclub import students
+
+    w = TE._fresh()
+    oid = _missing_overlap(w)
+    o = next(x for x in review.overlap_choices(w) if x["id"] == oid)
+    who = o["學員"] or "學員1"
+    assert not o["學員已選"]
+    assert [m["重疊"] for m in students.missing_overlap_mutes(w, kept={who})] == [oid], "猜的＋保留原聲：仍整句消音"
+    review.save_overlap(w, oid, {"做法": "只留學員", "學員說話者": who, "學員文字": ""})   # 人選了學員，但還缺「學員說的」
+    o = next(x for x in review.overlap_choices(w) if x["id"] == oid)
+    assert o["學員已選"] and o["學員"] == who
+    assert [m["重疊"] for m in students.missing_overlap_mutes(w)] == [oid], "人選了、沒保留原聲：照樣消"
+    assert students.missing_overlap_mutes(w, kept={who}) == [], "人選了、那位保留原聲：不消"
 
 
 def test_guessed_kept_rows_and_unsearched_flag():
