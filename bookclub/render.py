@@ -242,9 +242,15 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     mutes = [{**m, "start": max(m["start"], a), "end": min(m["end"], b)} for m in mutes]
     # 校對稿刪光、不生成的學員時間格也要消音（09-29），不然會留學員原聲
     mutes += [m for m in students.empty_chunks(workdir, a, b) if m["學員"] not in kept_now]
+    # 10-08（流程簡化）：重疊缺學員是誰或文字、開始時沒擋 → 學員那一整句墊底噪（不留學員原聲）
+    missing = students.missing_overlap_mutes(workdir, a, b, kept_now)
+    mutes += missing
     mutes += stale_mutes
     ov_marks = [m for m in marks if m["類型"] == "重疊"]
-    mutes += assemble.overlap_mutes(ov_marks)   # 09-30：重疊處的學員原聲不能留在成品
+    whole = {m["重疊"]: m for m in missing}   # 整句消音已經包住重疊那一小段的，不再另外列一筆
+    mutes += [m for m in assemble.overlap_mutes(ov_marks)   # 09-30：重疊處的學員原聲不能留在成品
+              if not (m["重疊"] in whole and whole[m["重疊"]]["start"] <= m["start"] + 0.01
+                      and m["end"] <= whole[m["重疊"]]["end"] + 0.01)]
     kept, w = assemble.add_local_mutes(kept, mutes, cuts, details=details)
     warnings += w
     # 保留原聲的學員自己講到名字（09-29）：直接消音、或用他自己的聲音生成代號短句

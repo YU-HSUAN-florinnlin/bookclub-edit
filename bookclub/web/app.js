@@ -338,9 +338,9 @@ function fcKeepHtml(r, i) {
     return `<button class="${on ? "" : "secondary "}small fc-keep" data-fckeep="${esc(r.key)}" data-on="${on ? "0" : "1"}" aria-pressed="${on}">${on ? "✓ 照目前設定做・再按取消" : "照目前設定做"}</button>
     ${r["照目前設定做的後果"] ? `<div class="muted fc-keepwhy">${esc(r["照目前設定做的後果"])}</div>` : ""}`;
   }
-  if (r["回第3步補"]) {
+  if (r["回第3步補"]) {   // 10-08：不再擋開始執行，紅字寫略過的後果
     return `<button class="small fc-back3" data-fcback="${i}">回第 3 步補</button>
-    <div class="muted fc-keepwhy">${esc(r["照目前設定做不開放原因"] || "")}</div>`;
+    <div class="rv-warnline fc-keepwhy">${esc(r["照目前設定做不開放原因"] || "")}</div>`;
   }
   return `<div class="muted fc-keepwhy">${esc(r["照目前設定做不開放原因"] || "")}</div>`;
 }
@@ -359,6 +359,18 @@ function fcLookBtnHtml(r) {
   const on = !!r["已看過"];
   return `<button class="${on ? "" : "secondary "}small fc-lookbtn" data-fclook="${esc(r.key)}" data-on="${on ? "0" : "1"}" aria-pressed="${on}">${on ? "✓ 看過了・再按取消" : "我看過了"}</button>`;
 }
+
+// 10-08 宇軒（流程簡化）：兩區預設收合成一行摘要、預設先略過（純函式）
+function fcFoldHeads(fc) {
+  const must = fc["一定要處理"] || [], look = fc["請看一眼"] || [];
+  const mustLeft = must.filter((r) => !r["處理好"]).length, lookLeft = look.filter((r) => !r["已看過"]).length;
+  return {
+    must: must.length ? `⚠️ 一定要處理 ${mustLeft} 列${mustLeft ? "（預設先略過）" : "（都處理好了）"}${mustLeft < must.length ? `，已處理 ${must.length - mustLeft} 列` : ""}` : "⚠️ 一定要處理：沒有",
+    look: look.length ? `👀 請看一眼 ${lookLeft} 處${lookLeft ? "（預設先略過）" : "（都看過了）"}${lookLeft < look.length ? `，已看過 ${look.length - lookLeft} 處` : ""}` : "👀 請看一眼：沒有",
+    mustLeft, lookLeft,
+  };
+}
+let execOpen = {};   // 展開了哪一區（同一個分頁裡重畫時記得；重新整理網頁就回到收合）
 
 function finalCheckHtml(fc) {
   fcRowsCache = [];
@@ -397,19 +409,25 @@ function finalCheckHtml(fc) {
   const fold = fcFoldDone() && doneN > 0;
   const shown = fold ? must.filter((r) => !isDone(r)) : must;
   const seenN = look.filter((r) => r["已看過"]).length;
+  const hd = fcFoldHeads(fc);
+  const openMust = !!execOpen["一定要處理"] || !!execGoCheck || !!execBackRow, openLook = !!execOpen["請看一眼"] || !!execBackRow;
   return `<h2 id="fcCheckTitle">開始前總檢查</h2>${execGoCheck ? `<p class="hint" id="fcGoNote">${esc(execGoCheck)}</p>` : ""}
     <div class="card">
-      <p><b>一定要處理</b>（有任何一列還沒處理就不能開始）：${must.length ? `${fc["還要處理"]} 列還沒處理` : "沒有"}${doneN ? `，已確認 ${doneN} 列` : ""}</p>
+      <p class="muted">兩區預設都先略過：不用按任何東西就能「開始執行」，沒處理的照目前的設定做。做完到第 5 步，「需留意」那一頁列出成品裡還留著原聲、要聽一下的地方。想現在處理的話，展開來逐列處理。</p>
+      <details class="fc-fold" data-fcfold="一定要處理" ${openMust ? "open" : ""}><summary><b>${esc(hd.must)}</b> <span class="fc-foldbtn">展開查看</span></summary>
       ${doneN ? `<label class="nowrap muted"><input type="checkbox" id="fcFold" ${fold ? "checked" : ""}> 把確認好的收合起來</label>` : ""}
       ${must.length ? `${shown.length ? `<table class="kv fc-check">${shown.map((r) => row(r)).join("")}</table>` : ""}
         ${fold ? `<p><button class="ghost small" id="fcUnfold">已確認 ${doneN} 列（點了展開）</button></p>` : ""}
-        <p class="muted">要改的按「去第 3 步改這一筆」；改完回這一頁會重算。第 3 步已經決定好、照那樣做就可以的，按「照目前設定做」。確認過的列顯示成灰色，再按一次「照目前設定做」或改答案就會回到還要處理。</p>` : ""}
+        <p class="muted">要改的按「去第 3 步改這一筆」；改完回這一頁會重算。第 3 步已經決定好、照那樣做就可以的，按「照目前設定做」。確認過的列顯示成灰色，再按一次「照目前設定做」或改答案就會回到還要處理。紅字的兩類（名字換不了代號、重疊缺東西）不處理也能開始，紅字寫了略過的後果。</p>` : "<p class=\"muted\">沒有要處理的列。</p>"}
+      </details>
+      <details class="fc-fold" data-fcfold="請看一眼" ${openLook ? "open" : ""}><summary><b>${esc(hd.look)}</b> <span class="fc-foldbtn">展開查看</span></summary>
       <div class="fc-lookhead" id="fcLookHead">
-        <p><b>請看一眼</b>（不擋，但每一列都要按「我看過了」）：${look.length ? `已看過 <b id="fcSeenCount">${seenN}</b>／${look.length} 列` : "沒有要看的列"}</p>
-        <button class="${fc["看過"] ? "" : "primary "}small" id="fcSeenAll" data-on="${fc["看過"] ? "0" : "1"}" aria-pressed="${!!fc["看過"]}">${fc["看過"] ? "✓ 全部看過了・再按取消" : look.length ? "全部看過了" : "我看過了（沒有要看的）"}</button>
+        <p>已看過 <b id="fcSeenCount">${seenN}</b>／${look.length} 處</p>
+        ${look.length ? `<button class="${fc["看過"] ? "" : "secondary "}small" id="fcSeenAll" data-on="${fc["看過"] ? "0" : "1"}" aria-pressed="${!!fc["看過"]}">${fc["看過"] ? "✓ 全部看過了・再按取消" : "全部看過了"}</button>` : ""}
       </div>
       ${newN && !fc["看過"] ? `<p class="hint" id="fcSeenReset">全部看過之後，「請看一眼」多了 ${newN} 列（標「新的」），看過之後在那一列按「我看過了」。</p>` : ""}
       ${look.length ? `<table class="kv fc-check fc-look">${look.map((r) => row(r, true)).join("")}</table>` : "<p class=\"muted\">沒有剪掉、消音、超過 10 秒的老師重念。</p>"}
+      </details>
       <p class="muted">自動算處理好的（被別筆涵蓋）：${(m["自動算處理好"] || []).length} 筆
         ${(m["自動算處理好"] || []).length ? `<details><summary>展開</summary>${m["自動算處理好"].map((x) => `${esc(x["名稱"] || fcTime(x.start))} 由〈${esc(x["涵蓋"])}〉涵蓋`).join("<br>")}</details>` : ""}</p>
       <p class="muted">要生成約 ${Math.round((m["要生成秒數"] || 0) / 60)} 分鐘的聲音${SHOW_EXEC_ETA ? `，預估 ${((m["預估秒數"] || 0) / 3600).toFixed(1)} 小時（含組裝約 21 分鐘）` : ""}；硬碟可用 ${m["硬碟可用GB"]} GB。${esc(m["提醒"] || "")}</p>
@@ -419,6 +437,7 @@ function finalCheckHtml(fc) {
 }
 
 function bindFinalCheck(reload) {
+  document.querySelectorAll("details[data-fcfold]").forEach((d) => d.addEventListener("toggle", () => { execOpen[d.dataset.fcfold] = d.open; }));
   document.querySelectorAll("[data-fcplay]").forEach((b) => b.addEventListener("click", () => {
     const [a, e] = b.dataset.fcplay.split("|").map(Number);
     const au = document.getElementById("fcAudio");
@@ -488,17 +507,18 @@ async function renderExecuteBody() {
   const rows = execStepRows(d);
   const running = d.running;
   const redo = d["退回清單"] || [];
-  const execBlocked = running || !pre["可以開始"] || (fc && (!fc["可以開始"] || !fc["看過"]));
+  const execBlocked = running || !pre["可以開始"];   // 10-08 宇軒（流程簡化）：總檢查預設先略過，不擋
   const ra = d["只重新組裝"];   // 10-05 #97：沒有退回時也能只重新組裝（伺服器算好能不能按）
   contentEl.innerHTML = `
     <h1>4　AI 執行</h1>
     <p class="muted">依序跑四步：老師提到名字 → 學員重念 → 保留原聲學員講到名字 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
     <div class="hint">從第 4 步直接開始（例如老師已經自己看完全片、挑好參考聲音）：<b>第 1 步轉文字還是要跑</b>（學員的話要照逐字稿重念，電腦自動）；
       <b>第 2 步的老師參考音也要選好</b>，會出現的名字都要有代號（沒有的按下面「幫還沒代號的自動配」）。
-      能省掉的是第 3 步逐筆覆核的人工：沒覆核的話，照第 1 步的建議做（名字的那一句老師重念、學員段落全部學員重念、建議剪掉的段落不剪）。</div>
-    ${pre["缺"].length ? `<div class="card"><b>還不能開始：</b><ul>${pre["缺"].map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
-      ${pre["缺代號"] ? `<button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">從代號名單配（外國人名的中文寫法），之後在第 3 步 ②③ 可以改</span>` : ""}</div>` : ""}
+      能省掉的是第 3 步逐筆覆核的人工：沒覆核的話，照第 1 步的建議做（名字的那一句老師重念、學員段落全部學員重念、建議剪掉的段落不剪）。
+      第 3 步「開始前 4 件事」只有 ② 學員是誰一定要做（沒配代號的學員，AI 重念會念出本名）。</div>
+    ${pre["缺"].length ? `<div class="card"><b>還不能開始：</b><ul>${pre["缺"].map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
     ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
+    ${pre["缺代號"] && !running ? `<p><button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">從代號名單配（外國人名的中文寫法），之後在第 3 步 ②③ 可以改</span></p>` : ""}
     <h2>要修改的項目</h2>
     <div class="card" id="execStats">${execStatsHtml(d)}</div>
     ${fc ? finalCheckHtml(fc) : ""}
@@ -518,8 +538,8 @@ async function renderExecuteBody() {
         <label>輸出方式 <select id="exMethod">${(d["輸出做法選項"] || [["sw", "標準輸出"]]).map(([m, label]) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
         <p class="muted">一般用標準輸出就好。其他方式只有這台電腦支援時才會列出來。</p>
       </details>
-      <button id="btnExec" ${running || !pre["可以開始"] || (fc && (!fc["可以開始"] || !fc["看過"])) ? "disabled" : ""}>${running ? "執行中…" : "開始執行"}</button>
-      ${fc && !running && (!fc["可以開始"] || !fc["看過"]) ? `<span class="muted">先處理上面「開始前總檢查」${[fc["可以開始"] ? "" : "一定要處理的列", fc["看過"] ? "" : "「請看一眼」按「我看過了」"].filter(Boolean).join("，")}</span>` : ""}
+      <button id="btnExec" ${execBlocked ? "disabled" : ""}>${running ? "執行中…" : "開始執行"}</button>
+      ${fc && !running && pre["可以開始"] ? `<span class="muted" id="execSkipNote">${esc(execSkipNote(fc))}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
       <span class="muted" id="execEta">${execEtaText(d)}</span>
       ${ra && !redo.length && !running ? `<p class="exec-reasm"><button id="btnReassembleAll" class="secondary" ${execBlocked || !ra["可以"] ? "disabled" : ""}>只重新組裝（不重新生成）</button>
@@ -612,6 +632,13 @@ async function renderExecuteBody() {
     try { await apiPost("/api/execute/stop", {}, { quiet: true }); } catch (e) { alert(`停不了：${e.message}`); }
   });
   if (running) startExecPoll();
+}
+
+// 「開始執行」旁邊一行（純函式）：總檢查預設略過幾列
+function execSkipNote(fc) {
+  const h = fcFoldHeads(fc);
+  if (!h.mustLeft && !h.lookLeft) return "開始前總檢查都處理好了";
+  return `開始前總檢查預設略過：一定要處理 ${h.mustLeft} 列、請看一眼 ${h.lookLeft} 處（照目前設定做；第 5 步「需留意」看得到）`;
 }
 
 const EXEC_STEP_NAMES = [["老師名字", "老師提到名字：老師重念（名字換成代號）"], ["學員重念", "學員段落：學員重念（用替代聲音）"],

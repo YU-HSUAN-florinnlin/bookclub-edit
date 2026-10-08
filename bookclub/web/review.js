@@ -134,6 +134,11 @@ function rvPrepDone() {
   return RV_PREP.every(([k]) => p[k]);
 }
 
+// 10-08 宇軒（流程簡化）：「開始前 4 件事」只有 ② 學員是誰真的要做（沒配代號的學員 AI 重念會念出本名）；
+// ①③④ 沒做照預設（① 建議剪掉的不剪、③ 名冊上的人已自動換代號、不認得的名字留原聲、④ 全部重新生成）
+function rvWhoLeft() { return (rv.data && rv.data["②還沒做"]) || []; }
+function rvWhoDone() { return !rvWhoLeft().length; }
+
 // ---------------------------------------------------------------------------
 // 進入點
 // ---------------------------------------------------------------------------
@@ -162,7 +167,7 @@ function rvApplyGoto(go) {
 function rvGoNoteHtml() {
   const n = rv.goNote;
   if (!n) return "";
-  const back = n.back === "step5" ? ["#step5", "回第 5 步成品檢查"] : ["#step4", "回第 4 步總檢查"];
+  const back = n.back === "step5" ? ["#step5", "回第 5 步成品檢查"] : ["#step4", "回第 4 步"];
   return `<p class="rv-gonote">${esc(n.text)}　<a href="${back[0]}" id="rv-goback">${back[1]}</a> <button class="ghost small" id="rv-gonote-x" aria-label="關掉這一行">×</button></p>`;
 }
 
@@ -176,7 +181,7 @@ async function renderReview() {
       if (r["③"]) rv.data = await apiGet("/api/review");
     } catch (e) { /* 配不成不擋第 3 步，「幫還沒代號的自動配」照樣能按 */ }
   }
-  rv.prepOpen = !rvPrepDone();
+  rv.prepOpen = !rvWhoDone();   // 10-08：② 還沒做才先打開「開始前 4 件事」
   const go = rvGoto;
   rvGoto = null;
   rv.goNote = null;
@@ -194,7 +199,7 @@ async function renderReview() {
           <button class="ghost" id="rv-key-btn" aria-expanded="false">快捷鍵</button>
           <button class="ghost" id="rv-code-btn" aria-expanded="false" title="本名和代號的對照（截圖或分享螢幕時會露出本名）">代號對照</button>
           <button class="ghost" id="rv-export" title="只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交接整個專案請複製整個工作區資料夾">匯出覆核結果</button>
-          <button class="primary" id="rv-go4" disabled>全部通過，開始 AI 修改</button>
+          <button class="primary" id="rv-go4" disabled>開始 AI 修改</button>
         </div>
       </header>
       <div class="rv-busy" id="rv-busy" role="status" hidden></div>
@@ -519,35 +524,50 @@ function rvRenderProgress() {
 }
 
 // ---------------------------------------------------------------------------
-// 全部通過 → 確認 → 跳第 4 步開始 AI 修改（09-29 宇軒）
+// 開始 AI 修改 → 確認 → 跳第 4 步（09-29 宇軒；10-08 流程簡化：卡片不用全部通過，只看 ② 學員是誰）
 // ---------------------------------------------------------------------------
 
 function rvLeft() { return rvItems().filter((x) => !rvDone(x)).length; }
 
+// 「開始 AI 修改」按鈕的狀態（純函式）：只有 ② 還沒做、或 AI 正在跑（唯讀）時不能按；沒看完的卡片照目前的設定做
+function rvGo4State(whoLeft, left, readonly) {
+  if (readonly) return { disabled: true, title: "AI 正在執行第 4 步" };
+  if (whoLeft.length) return { disabled: true, title: `先做完「開始前 4 件事」② 學員是誰：${whoLeft.join("；")}` };
+  return { disabled: false, title: left ? `還有 ${left} 張卡片沒看，會照目前的設定做（不擋）` : "卡片都看過了，可以開始 AI 修改" };
+}
+
 function rvUpdateGo4() {
   const btn = document.getElementById("rv-go4");
   if (!btn) return;
-  const left = rvLeft();
-  btn.disabled = left > 0;
-  btn.title = left ? `還有 ${left} 筆沒通過，全部通過後才能開始` : "全部通過了，可以開始 AI 修改";
+  const st = rvGo4State(rvWhoLeft(), rvLeft(), !!rv.data["AI執行中"]);
+  if (btn.dataset.ro && !st.disabled) return;   // 唯讀時由 rvApplyReadonly 管
+  btn.disabled = st.disabled;
+  btn.title = st.title;
+}
+
+// 開始對話框裡的說明（純函式）：沒看完的卡片幾張、開始前 4 件事 ①③④ 沒做的照預設
+const RV_PREP_DEFAULT = { "刪除": "① 建議剪掉的段落不剪", "名字": "③ 名冊上的人已自動換代號，不認得的名字留原聲", "保留原聲": "④ 學員全部重新生成" };
+function rvGo4Notes(left, prep) {
+  const out = [];
+  if (left) out.push(`還有 ${left} 張卡片沒看：照目前的設定做（卡片上的建議）。`);
+  const skip = Object.keys(RV_PREP_DEFAULT).filter((k) => !(prep || {})[k]).map((k) => RV_PREP_DEFAULT[k]);
+  if (skip.length) out.push(`開始前 4 件事沒做的照預設：${skip.join("；")}。`);
+  return out;
 }
 
 async function rvConfirmGo4() {
-  if (rvLeft()) return;
+  if (!rvWhoDone()) { rv.prepOpen = true; rv.prepTab = "學員"; rvRenderMain(); return; }
   if (rv.video && !rv.video.paused) rv.video.pause();
-  // 10-01 第三批 9：第 4 步的開始前總檢查還沒處理完 → 直接帶去那裡（以前只跳對話框寫「還不能開始」）
-  try {
-    const fc = await apiGet("/api/execute/finalcheck");
-    if (!fc["可以開始"] || !fc["看過"]) { execGoCheck = "從第 3 步過來：開始 AI 修改之前，先把下面的開始前總檢查處理完。"; location.hash = "#step4"; return; }
-  } catch (e) { /* 讀不到總檢查：照舊跳對話框，開始時後端會擋 */ }
+  const notes = rvGo4Notes(rvLeft(), rv.data["開始前確認"]);
   const dlg = document.createElement("dialog");
   dlg.className = "rv-confirm";
   dlg.setAttribute("aria-labelledby", "rv-confirm-title");
   dlg.innerHTML = `
-    <h2 id="rv-confirm-title">全部都檢查好了嗎？</h2>
+    <h2 id="rv-confirm-title">開始 AI 修改？</h2>
+    ${notes.map((x) => `<p>${esc(x)}</p>`).join("")}
     <p>開始之後，AI 會依序生成老師的名字句子、學員重念，最後組裝成品影片。<b>整支影片會花比較多時間</b>，
       跑的時候電腦不要睡眠；第 4 步看得到每一類做到幾筆。</p>
-    <p class="muted">跑完之後到第 5 步「成品檢查」看結果；中途有問題可以停下來，已經做好的不會重做。</p>
+    <p class="muted">第 4 步的總檢查預設先略過；跑完之後到第 5 步「成品檢查」看結果，「需留意」那一頁列出成品裡還留著原聲、要聽一下的地方。中途有問題可以停下來，已經做好的不會重做。</p>
     <p class="rv-confirm-err" id="rv-confirm-err" role="alert"></p>
     <div class="rv-confirm-btns">
       <button class="ghost" id="rv-confirm-back">回去檢查</button>
@@ -563,7 +583,6 @@ async function rvConfirmGo4() {
     try {
       await apiPost("/api/execute/start", { start: null, end: null, methods: null }, { quiet: true });
     } catch (err) {
-      if (/總檢查/.test(err.message)) { close(); execGoCheck = `從第 3 步過來：${err.message}`; location.hash = "#step4"; return; }
       if (!/已經有.*在跑/.test(err.message)) {       // 已經在跑就直接去第 4 步看進度
         dlg.querySelector("#rv-confirm-err").textContent = `還不能開始：${err.message}`;
         go.disabled = false; go.textContent = "開始修改";
@@ -575,6 +594,51 @@ async function rvConfirmGo4() {
   });
   dlg.showModal();
   dlg.querySelector("#rv-confirm-back").focus();   // 預設焦點放在「回去檢查」，按 Enter 不會誤觸開始
+}
+
+// ---------------------------------------------------------------------------
+// 10-08 宇軒（流程簡化）：「全部照建議通過」（後端 review.pass_all）
+// ---------------------------------------------------------------------------
+
+function rvPassAllHtml() {
+  const left = rvLeft();
+  return `<button class="secondary" id="rv-passall" ${left ? "" : "disabled"} title="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>`;
+}
+
+function rvBindPassAll(box) {
+  const b = box && box.querySelector("#rv-passall");
+  if (b) b.addEventListener("click", rvPassAll);
+}
+
+// 一鍵通過之後的摘要對話框內容（純函式）
+function rvPassAllMsg(r) {
+  const kinds = (r && r["依類型"]) || [];
+  return { title: `通過了 ${(r && r["通過"]) || 0} 張`, left: (r && r["還要看"]) || 0,
+    lines: kinds.map((k) => `${k["說明"]}：${k["筆數"]} 張`),
+    note: (r && r["還要看"]) ? "剩下的不擋「開始 AI 修改」，沒看的照目前的設定做。清單上方的篩選選「還沒確認」看得到是哪幾張。" : "卡片都處理好了。" };
+}
+
+async function rvPassAll() {
+  if (rvReadonly()) return;
+  const b = document.getElementById("rv-passall");
+  if (b) { b.disabled = true; b.textContent = "通過中…"; }
+  let r;
+  try { r = await apiPost("/api/review/passall", {}); }
+  catch (err) { alert(err.message); if (b) { b.disabled = false; b.textContent = "全部照建議通過"; } return; }
+  await rvReload();
+  const m = rvPassAllMsg(r);
+  const dlg = document.createElement("dialog");
+  dlg.className = "rv-confirm";
+  dlg.setAttribute("aria-labelledby", "rv-passall-title");
+  dlg.innerHTML = `<h2 id="rv-passall-title">${esc(m.title)}${m.left ? `，還有 ${m.left} 張要看` : ""}</h2>
+    ${m.lines.length ? `<ul>${m.lines.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    <p class="muted">${esc(m.note)}</p>
+    <div class="rv-confirm-btns"><button class="primary" id="rv-passall-ok">知道了</button></div>`;
+  document.body.appendChild(dlg);
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
+  dlg.querySelector("#rv-passall-ok").addEventListener("click", close);
+  dlg.showModal();
 }
 
 function rvRecount() {
@@ -1492,11 +1556,16 @@ function rvRenderList() {
       ${st}</li>`;
   }).join("");
   lower.innerHTML = `
+    <div class="rv-row rv-passbar"><button class="ghost small" id="rv-tostart" title="開始前 4 件事">開始前 4 件事${rvWhoDone() ? "" : "（② 還沒做）"}</button>${rvPassAllHtml()}
+      <span class="rv-meta">還沒確認 ${rvLeft()} 張；不用全部看完也能「開始 AI 修改」，沒看的照建議做</span></div>
     <nav class="rv-filters" aria-label="篩選">${RV_FILTERS.map(([f, label]) =>
       `<button class="${rv.filter === f ? "on" : ""}" data-f="${esc(f)}">${esc(label)} <span>${count(f)}</span></button>`).join("")}</nav>
     <ol class="rv-list" id="rv-list">${rows || `<li class="empty">這個篩選沒有項目。</li>`}</ol>
     ${(rv.data["已自動跳過的重疊"] || []).length ? `<p class="rv-foot">另外有 ${rv.data["已自動跳過的重疊"].length} 處重疊自動跳過（兩位學員之間、短附和、邊界誤差、學員段落裡沒有老師的），在「設定」裡可以救回。</p>` : ""}`;
   lower.querySelectorAll(".rv-filters button").forEach((b) => b.addEventListener("click", () => { rv.filter = b.dataset.f; rvRenderList(); }));
+  rvBindPassAll(lower);
+  const toStart = document.getElementById("rv-tostart");
+  if (toStart) toStart.addEventListener("click", () => { rv.prepOpen = true; rvRenderMain(); });
   lower.querySelectorAll(".rv-list li[data-key]").forEach((li) => li.addEventListener("click", () => rvSelect(li.dataset.key)));
   rvMarkListRow(true);
 }
@@ -1534,12 +1603,14 @@ function rvRenderPrepSide() {
       <p class="rv-meta">先把整體定下來，逐筆看的時候就不用再想：哪些段落整段刪掉、學員換成誰、其他人名怎麼處理、誰不用重念。</p>
       ${rvRevertedHtml()}
       <ol class="rv-prepsteps">${RV_PREP.map(([k, label]) => `<li class="${p[k] ? "ok" : ""} ${rv.prepTab === k ? "on" : ""}">
-        <button class="linkish" data-tab="${esc(k)}">${esc(label)}</button><span>${p[k] ? "✓ 做完了" : "還沒做"}</span>
+        <button class="linkish" data-tab="${esc(k)}">${esc(label)}</button><span>${p[k] ? "✓ 做完了" : k === "學員" ? "還沒做（要做）" : "還沒做（照預設，不擋）"}</span>
         ${!p[k] && rvPrepLeft(k).length ? `<span class="rv-meta">${esc(rvPrepLeft(k).join("；"))}</span>` : ""}</li>`).join("")}</ol>
-      <div class="rv-actions"><button class="primary" id="rv-start" ${rvPrepDone() ? "" : "disabled"}>開始逐筆看</button>
-        ${rvPrepDone() ? "" : `<span class="rv-meta">4 件都做完才能開始</span>`}</div>
+      <div class="rv-actions"><button class="primary" id="rv-start" ${rvWhoDone() ? "" : "disabled"}>開始逐筆看</button>
+        ${rvPassAllHtml()}
+        ${rvWhoDone() ? `<span class="rv-meta">${rvPrepDone() ? "" : "①③④ 沒做的照預設（不擋）"}</span>` : `<span class="rv-meta">② 學員是誰做完才能開始；①③④ 沒做的照預設</span>`}</div>
     </article>`;
   box.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { rv.prepTab = b.dataset.tab; rvRenderPrepSide(); rvRenderPrep(); }));
+  rvBindPassAll(box);
   document.getElementById("rv-start").addEventListener("click", () => {
     rv.prepOpen = false;
     if (!rv.cur || rvDone(rvItem(rv.cur) || {})) rv.cur = rvFirstPending();

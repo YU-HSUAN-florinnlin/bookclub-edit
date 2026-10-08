@@ -133,7 +133,13 @@ def tag_for(a: float, b: float) -> str:
 # ---------- 前置檢查（不載入模型） ----------
 
 def precheck(workdir: str | Path) -> dict:
-    """開始之前先看缺什麼，免得跑到一半才失敗。回傳 {可以開始, 缺[], 提醒[]}。"""
+    """開始之前先看缺什麼，免得跑到一半才失敗。回傳 {可以開始, 缺[], 提醒[], 缺代號, 硬碟}。
+
+    10-08 宇軒（流程簡化）：會擋的只剩「沒有就跑不出來」的資料（逐字稿、段落分析、老師參考音、學員替代聲音、影片）、
+    第 3 步「開始前 4 件事」② 學員是誰（沒配代號的學員 AI 重念會念出本名），和硬碟空間（以前要到第一支子程式才擋）。
+    Groq 金鑰由網頁伺服器／命令列各自擋（execute_key_problem），記憶體只提醒。
+    名字還沒代號（② 以外的）、名字換不了代號、人名清單沒跑成功改成只提醒（以前擋）：開始後照目前的設定做，
+    第 5 步「需留意」列出成品裡還留著原聲的地方。"""
     from bookclub import students
 
     workdir = Path(workdir)
@@ -154,13 +160,28 @@ def precheck(workdir: str | Path) -> dict:
 
     if not review.video_path(workdir):
         missing.append(wd.video_missing_message(workdir))   # 10-02 第五批：寫清楚記的是哪裡、怎麼處理
+    try:   # 10-08：② 學員是誰（每位出現的學員都選了本名或「本名未知」，選了本名的有代號）
+        who = review.students_pending(workdir)
+    except Exception:  # noqa: BLE001 — 讀不到段落（上面已經列「還沒有段落分析」）
+        who = []
+    if who:
+        missing.append(f"第 3 步「開始前 4 件事」② 學員是誰還沒做好（{'；'.join(who)}）：每位學員都要選本名或「本名未知」、"
+                       "選了本名的要有代號（不然 AI 重念會念出本名）。不是學員的段落改成老師")
+    disk = None
+    try:   # 10-08：硬碟不夠，開始前就擋（以前要到第一支子程式才擋）
+        disk = shutil.disk_usage(str(workdir)).free / GB
+        need = default_limits()["開始前硬碟GB"]
+    except Exception:  # noqa: BLE001 — 讀不到就不擋（跑的過程中照樣會看）
+        need = None
+    if disk is not None and need is not None and disk < need:
+        missing.append(f"硬碟可用空間剩 {disk:.1f} GB，開始前至少要 {need:g} GB：清掉用不到的檔案（例如舊的測試工作區、"
+                       "輸出資料夾裡用不到的中間檔），或重開機讓系統收回暫存空間")
     from bookclub import epcodes
 
     lack_codes = epcodes.missing(workdir)
     if lack_codes:
-        missing.append(f"有 {len(lack_codes)} 個名字這一集還沒選代號：第 3 步開始前 ②（學員）或 ③（其他名稱）選好，"
-                       "或按「幫還沒代號的自動配」")
-    # 09-30：老師提到名字裡有「換不了代號」的（句子裡找不到名字），不處理的話成品會照原聲念出名字 → 不能開始
+        notes.append(f"有 {len(lack_codes)} 個名字這一集還沒有代號（不擋）：沒代號的名字換不了、成品裡照原聲留著。"
+                     "要換的話到第 3 步 ③ 選，或按「幫還沒代號的自動配」")
     if wd.read_json(wd.names_path(workdir), default=None):
         from bookclub import nameplan
 
@@ -168,20 +189,17 @@ def precheck(workdir: str | Path) -> dict:
             stuck = nameplan.compute_plan(workdir)["要人處理"]
         except Exception:  # noqa: BLE001 — 排不出計畫的話，生成那一步會講清楚
             stuck = []
-        if stuck:
-            names = wd.read_json(wd.names_path(workdir), default={}) or {}
-            decisions = wd.read_json(review.name_decisions_path(workdir), default={}) or {}
-            cands = review.effective_name_candidates(workdir, names.get("candidates", []), decisions)
-            when = {str(c.get("id") or i): c["start"] for i, c in enumerate(cands, start=1)}
-            where = "、".join(wd.fmt_time(when[str(m["候選"])]) for m in stuck if str(m["候選"]) in when)
-            missing.append(f"老師提到名字有 {len(stuck)} 筆還處理不了（{where}）：句子裡找不到名字、換不了代號，成品會照原聲念出來。"
-                           "在第 3 步那一筆的卡片上改好要重念的句子，或改成直接消音")
-    if review.people_list_missing(workdir):   # 10-02 第七批（A3）：名冊上沒有的名字沒人看過，成品可能照原聲念出來
-        missing.append(review.PEOPLE_MISSING.replace("跑成功之後才能標完成", "跑成功、在第 3 步 ③ 決定完再開始"))
+        if stuck:   # 10-08 宇軒：名字那道關卡不擋，第 5 步「需留意」紅字列出來
+            notes.append(f"老師提到名字有 {len(stuck)} 筆換不了代號（不擋）：句子裡找不到名字，成品會照原聲念出來；"
+                         "做完到第 5 步「需留意」看得到是哪幾處")
+    if review.people_list_missing(workdir):   # 10-02 第七批（A3）：名冊上沒有的名字沒人看過
+        notes.append("人名清單沒跑成功（不擋）：名冊上沒有的名字沒有找，成品裡可能照原聲留著。"
+                     "到第 1 步按「重新分析（做完的會跳過）」，或命令列 bookclub run people <工作區>")
     dec = review.load_decisions(workdir)
     if not any(dec["開始前確認"].values()):
         notes.append("第 3 步還沒覆核：照第 1 步的建議做（名字整句換掉、學員全部重念、建議刪除的段落不刪）")
-    return {"可以開始": not missing, "缺": missing, "提醒": notes, "缺代號": len(lack_codes)}
+    return {"可以開始": not missing, "缺": missing, "提醒": notes, "缺代號": len(lack_codes),
+            "硬碟": {"可用GB": round(disk, 1) if disk is not None else None, "需要GB": need}}
 
 
 # ---------- 開始前總檢查（10-01 宇軒 7-5，只讀） ----------
@@ -459,10 +477,11 @@ def answer_outside(workdir: str | Path, key: str, start: float, end: float, answ
 
 def final_check(workdir: str | Path) -> dict:
     """第 3 步全部通過之後、開始第 4 步之前的總檢查（只讀）。回傳：
-    {一定要處理: [列], 請看一眼: [列], 可以開始: bool}；每一列 {key, start, end, 說明, 可以按聽過?, 已按聽過?,
+    {一定要處理: [列], 請看一眼: [列], 可以開始: bool, 預設略過: {一定要處理, 請看一眼}}；每一列 {key, start, end, 說明, 可以按聽過?, 已按聽過?,
     名稱（畫面上看得到的名稱）, 第3步（第 3 步那一張卡片的鍵，沒有卡片是 None）, 去改（去第 3 步要改什麼）,
     有學員聲音（聽了有學員聲音時可以走的路，見 `_fix_paths`）}。
-    「一定要處理」有還沒按聽過的列就不能開始；「請看一眼」不擋（網頁上要按一次「我看過了」）。
+    10-08 宇軒（流程簡化）：兩區都不擋開始執行，沒處理＝預設略過（照目前設定做）；開始時記下沒處理的列
+    （skipped_snapshot），第 5 步「需留意」列出成品裡還留著原聲的地方。
     10-01：說明一律用畫面上看得到的名稱（不寫 T062、O5602.14 這類內部編號）；學員的話落在段落外面的，
     已經被別筆處理蓋到的那一部分不再列（只列沒蓋到的那幾秒，說明寫哪一筆蓋了多少）。"""
     import shutil
@@ -580,6 +599,10 @@ def final_check(workdir: str | Path) -> dict:
             todo += f"，在「學員說的」旁邊選學員是誰{guess}" if "學員是誰" in why else "，把空的那一欄填好"
             row(must, k, o["start"], o["end"], f"〈{nm}〉（{review.OVERLAP_LABEL.get(o['做法'], o['做法'])}）：{why}",
                 name=nm, card=k, todo=todo, kind=KIND_OVERLAP)
+            try:   # 10-08：略過的話組裝時整句消音的範圍（第 5 步需留意照這個範圍算）
+                must[-1]["學員整句"] = [round(x, 3) for x in students.overlap_student_range(o)]
+            except (KeyError, TypeError, ValueError):
+                pass
     # 5. 聲紋判成「不是老師」的句子，整句都不在任何處理的範圍、也不在學員段落裡（可能是漏抓的學員發言）
     #    段落的聲音判斷也不是老師的才放「一定要處理」；段落判成老師的（第一堂 92 句，多半是誤判）在「請看一眼」彙總一列
     #    10-01：句子只有一部分被處理蓋到的，沒蓋到的部分（至少 0.3 秒）照樣列（以前整句跳過，例如重疊只蓋到 0.7 秒、
@@ -761,7 +784,9 @@ def final_check(workdir: str | Path) -> dict:
         if r["key"] in new_keys:
             r["新的"] = True   # 10-02 第五批：按「我看過了」之後才多出來、或時間範圍變了的那幾列
     return {"一定要處理": sorted(must, key=lambda r: r["start"]), "請看一眼": sorted(look, key=lambda r: r["start"]),
+            # 10-08 宇軒（流程簡化）：「可以開始」只表示一定要處理的都處理好了，不再擋開始執行（沒處理＝預設略過）
             "摘要": summary, "可以開始": not left, "還要處理": len(left), "已確認": len(must) - len(left),
+            "預設略過": {"一定要處理": len(left), "請看一眼": sum(1 for r in look if not r["已看過"])},
             "已按照目前設定做": sum(1 for r in must if r["已按照目前設定做"]),
             "看過": seen, "看過後新增": len(new_keys), "已看過列數": sum(1 for r in look if r["已看過"])}
 
@@ -784,10 +809,11 @@ KEEP_OK = {
     KIND_CODE: "按了：照現在的文字生成，會念出英文代號（代號不是真名）",
     KIND_SHORT: "按了：照現在要念的文字生成，逐字稿裡其他的話不會念到",
 }
-# 不開放、要回第 3 步補的類別 → 原因（開始執行照舊擋）
+# 不開放「照目前設定做」、要回第 3 步補的類別 → 原因。10-08 宇軒（流程簡化）：不再擋開始執行（預設略過），
+# 第 4 步列上紅字寫略過的後果，第 5 步「需留意」再列一次（名字那一類紅字置頂）
 BACK3 = {
-    KIND_NAME: "這一類要回第 3 步補：照現在的設定，成品會照原聲念出這個名字",
-    KIND_OVERLAP: "這一類要回第 3 步補：缺的沒填好，學員那一句沒辦法重新生成",
+    KIND_NAME: "不處理的話（預設略過）：成品會照原聲念出這個名字。要換掉就回第 3 步補",
+    KIND_OVERLAP: "不處理的話（預設略過）：缺的沒填好，學員那一句沒辦法重新生成，組裝時學員那一整句改成消音（墊底噪）。要補齊就回第 3 步補",
 }
 KEEP_UNKNOWN = "這一類還不能「照目前設定做」，請照「怎麼改」處理"
 
@@ -1613,6 +1639,59 @@ def keep_awake(log: Callable[[str], None] = print, on_status: Callable[[str], No
     return keepawake.keep_awake(log, prefix="[AI 執行]", on_status=on_status)
 
 
+# 10-08 宇軒（流程簡化）：第 4 步「一定要處理」「請看一眼」預設略過（沒按任何東西也能開始）。
+# 開始執行當下沒處理的列先記在 `總檢查略過（這次）`，組裝那一步做完（成品換新）才搬進 `總檢查略過`，
+# 第 5 步「需留意」照 `總檢查略過` 列（finalcheck.attention_rows）。組裝失敗、停下來時沿用上一次的，不會拿新清單配舊成品。
+SKIPPED_FIELD = "總檢查略過"
+SKIPPED_PENDING = "總檢查略過（這次）"
+GUESS_KIND = "學員是猜的"   # 第 4 步開始時：保留原聲的學員、段落是猜的（猜錯就是別人的原聲留在成品）
+SKIPPED_ROW_KEYS = ("key", "類別", "start", "end", "第3步")   # 只記鍵、類別、時間、卡片（不記說明、名稱：可能有本名）
+
+
+def skipped_rows(fc: dict) -> dict:
+    """總檢查 → 這次執行時沒處理（預設略過）的列（純函式）：
+    {一定要處理: 筆數, 請看一眼: 筆數, 沒處理: 合計, 列: [一定要處理裡沒處理的每一列（SKIPPED_ROW_KEYS）]}。
+    「照目前設定做」按過、段落外答了「老師的話，不用處理」＝處理好，不算；請看一眼按過「我看過了」的不算。"""
+    must = [r for r in fc.get("一定要處理") or [] if not r.get("處理好")]
+    look = [r for r in fc.get("請看一眼") or [] if not r.get("已看過")]
+    rows = [{k: r.get(k) for k in SKIPPED_ROW_KEYS} for r in must]
+    for row, r in zip(rows, must):   # 重疊缺東西：記學員那一整句（組裝時整句消音的範圍），不是重疊那一小段
+        if r.get("學員整句"):
+            row["start"], row["end"] = r["學員整句"]
+    return {"一定要處理": len(must), "請看一眼": len(look), "沒處理": len(must) + len(look), "列": rows}
+
+
+def guessed_kept_rows(turns: list[dict], voices: dict) -> list[dict]:
+    """（純函式）學員是猜的、又是保留原聲的那幾段（不會重念，猜錯的話別的學員的原聲留在成品）→ 需留意的列。"""
+    kept = {k for k, v in (voices or {}).items() if v == "保留原聲"}
+    return [{"key": f"{GUESS_KIND}:{t['id']}", "類別": GUESS_KIND, "start": t["start"], "end": t["end"],
+             "第3步": f"學員段落:{t['id']}"}
+            for t in turns if t.get("學員是猜的") and t.get("說話者") in kept]
+
+
+def skipped_snapshot(workdir: str | Path) -> dict | None:
+    """開始執行當下的總檢查沒處理的列（skipped_rows），加上記下的時間、保留原聲又是猜的學員段落（列在需留意）、
+    人名清單有沒有跑成功（沒有＝名冊外的名字這次沒有找）；算不出來回 None（不擋執行）。"""
+    try:
+        from bookclub import review
+        from bookclub import turns as turns_mod
+
+        snap = {**skipped_rows(final_check(workdir)), "時間": _now()}
+        try:
+            tdata = turns_mod.page_data(workdir)
+            guess = guessed_kept_rows(tdata.get("段落", []) if not tdata.get("尚未準備") else [],
+                                      review.load_decisions(Path(workdir))["學員聲音"])
+        except Exception:  # noqa: BLE001
+            guess = []
+        snap["列"] += guess
+        snap["猜的學員"] = len(guess)
+        snap["人名清單沒跑成功"] = bool(review.people_list_missing(Path(workdir)))
+        return snap
+    except Exception as e:  # noqa: BLE001 — 算不出來不擋執行，第 5 步「需留意」會寫沒有紀錄
+        print(f"[AI 執行] ⚠️ 開始前總檢查算不出來（第 5 步「需留意」這次不會列）：{type(e).__name__}")
+        return None
+
+
 def execute_key_problem(*, reassemble_only: bool = False, only_steps: list[str] | None = None,
                         allow: bool = False, env: dict | None = None, system: str | None = None) -> str | None:
     """10-04 #110：第 4 步要生成、卻讀不到 Groq 金鑰時回傳要給人看的說明（可以開始就回傳 None）。
@@ -1666,12 +1745,7 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
         log(f"[AI 執行] {mem['說明']}")
         if mem["偏滿"]:
             log(f"[AI 執行] ⚠️ {mem['怎麼處理']}")
-        if not only_steps or "組裝" in only_steps:   # 10-01：要組成品才看總檢查（只生成聲音不影響成品，不擋）
-            fc = final_check(workdir)
-            if not fc["可以開始"]:
-                rows = [r for r in fc["一定要處理"] if not r.get("處理好")]   # 10-05 #177：按了「不改」也算處理好
-                raise FileNotFoundError("開始前總檢查還有一定要處理的：\n- " + "\n- ".join(
-                    f"{wd.fmt_time(r['start'])} {r['說明']}" for r in rows[:20]) + ("\n（還有更多）" if len(rows) > 20 else ""))
+        # 10-08 宇軒（流程簡化）：開始前總檢查不再擋（沒處理的列＝預設略過，照目前設定做）；只記下來給第 5 步「需留意」
     from bookclub import epcodes
 
     n = epcodes.sync(workdir)   # 09-29：名字候選的代號跟這一集的代號表對齊
@@ -1680,6 +1754,15 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     from bookclub import nameplan
 
     nameplan.refresh_plan(workdir)   # 10-02 第七批（A1）：每次都重排名字處理計畫，組裝才拿得到最新的做法
+    # 10-08：這次要組裝成品 → 記下開始當下總檢查沒處理（預設略過）的列；不組裝（只生成聲音）就沿用上一次的紀錄
+    if reassemble_only or not only_steps or "組裝" in only_steps:
+        skipped = skipped_snapshot(workdir)
+        if skipped and skipped["沒處理"]:
+            log(f"[AI 執行] 開始前總檢查有 {skipped['沒處理']} 列沒處理（一定要處理 {skipped['一定要處理']}、"
+                f"請看一眼 {skipped['請看一眼']}）：預設略過、照目前設定做；做完到第 5 步「需留意」看成品裡還留著原聲的地方")
+    else:
+        skipped = None
+    old_skipped = (wd.read_json(progress_path(workdir), default=None) or {}).get(SKIPPED_FIELD)
     a = 0.0 if start is None else float(start)
     b = float(end) if end is not None else float(video_duration(workdir) or 0.0)
     if b <= a:
@@ -1701,6 +1784,10 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     checks = {**_default_checks(), **(checks or {})}
     prog = {"開始時間": _now(), "結束時間": None, "範圍": ctx["範圍"], "輸出做法": ctx["輸出做法"],
             "步驟": {k: {"說明": desc, "狀態": "等待"} for k, desc in STEPS}, "錯誤": None}
+    if old_skipped is not None:   # 上一支成品的（組裝做完才換成這一次的）
+        prog[SKIPPED_FIELD] = old_skipped
+    if skipped is not None:
+        prog[SKIPPED_PENDING] = skipped
 
     def save() -> None:
         wd.write_json(progress_path(workdir), prog)
@@ -1763,6 +1850,8 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
                 log(f"[AI 執行] ⚠️ {key}：跑完了，但還沒做好（{why_after}）")
                 raise RuntimeError(f"{key}：跑完了，但還沒做好：{why_after}")
             st.update({"狀態": "做完", "結束": _now(), "訊息": why if "子程式" not in st else f"{why}｜{len(st['子程式'])} 支程式做完"})
+            if key == "組裝" and prog.get(SKIPPED_PENDING) is not None:   # 成品換新了：略過紀錄跟著換成這一次的
+                prog[SKIPPED_FIELD] = prog.pop(SKIPPED_PENDING)
             save()
             log(f"[AI 執行] {key}：做完")
             if key == "組裝" and redoing:

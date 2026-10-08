@@ -160,6 +160,13 @@ def test_precheck_lists_what_is_missing():
     for sex in ("男", "女"):
         (voices / f"{sex}聲_暫定.wav").write_bytes(b"RIFF")
         (voices / f"{sex}聲_暫定.txt").write_text("假的", encoding="utf-8")
+    # 10-08 宇軒（流程簡化）：人工確認只剩 ② 學員是誰會擋（沒配代號的學員 AI 重念會念出本名）
+    pre = execute.precheck(w)
+    assert not pre["可以開始"] and len(pre["缺"]) == 1 and "② 學員是誰" in pre["缺"][0], pre["缺"]
+    from bookclub import turns as turns_mod
+
+    for person in turns_mod.page_data(w)["學員"]:
+        turns_mod.set_real_name(w, person, turns_mod.UNKNOWN_REAL)
     assert execute.precheck(w)["可以開始"]
     (w / "transcript" / "merged.json").unlink()
     pre = execute.precheck(w)
@@ -1344,12 +1351,17 @@ def test_server_reassemble_without_returns():
                 break
             time.sleep(0.02)
         assert len(started) == 2 and started[1]["reassemble_only"] is True
-        # 總檢查沒過：照「開始執行」的訊息擋下
+        # 10-08 宇軒（流程簡化）：總檢查還有沒處理的也不擋（預設略過）
         finalcheck.redo_list = lambda wk: {"項目": [], "重做中": False}
         steps["now"] = _ALL_DONE
-        execute.final_check = lambda wk: {"可以開始": False, "看過": True, "還要處理": 2}
+        execute.final_check = lambda wk: {"可以開始": False, "看過": False, "還要處理": 2}
         r = httpd.start_execute(body)
-        assert not r["started"] and "開始前總檢查還有 2 列" in r["error"] and len(started) == 2
+        assert r["started"], r
+        for _ in range(100):
+            if not httpd.exec_running():
+                break
+            time.sleep(0.02)
+        assert len(started) == 3
     finally:
         gate.set()
         (execute.precheck, execute.final_check, execute.run_execute, execute.current_steps, finalcheck.redo_list) = olds

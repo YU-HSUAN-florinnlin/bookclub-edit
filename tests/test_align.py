@@ -233,13 +233,13 @@ def test_name_that_cannot_be_replaced_blocks_pass_and_start():
     except ValueError as e:
         assert "還不能通過" in str(e)
     assert not _items(w)[f"名字:{nid}"]["已確認"]
-    pre = execute.precheck(w)
-    assert any("還處理不了" in m and "1:24" in m for m in pre["缺"]), pre["缺"]
+    pre = execute.precheck(w)   # 10-08 宇軒（流程簡化）：名字換不了代號不擋開始，只提醒（第 5 步「需留意」紅字列出）
+    assert not any("代號" in m and "名字" in m for m in pre["缺"]) and any("1 筆換不了代號" in m for m in pre["提醒"]), pre
     # 人把要念的句子改好：照人改的念，可以通過、可以開始
     review.save_name(w, nid, {"改稿": "Tom說的第21句，", "已確認": True})
     plan = nameplan.compute_plan(w)
     assert not plan["要人處理"] and next(g for g in plan["生成"] if nid in g["候選"])["text"] == "Tom說的第21句，"
-    assert _items(w)[f"名字:{nid}"]["已確認"] and not any("還處理不了" in m for m in execute.precheck(w)["缺"])
+    assert _items(w)[f"名字:{nid}"]["已確認"] and not any("換不了代號" in m for m in execute.precheck(w)["提醒"])
     # 改成直接消音也可以
     review.save_name(w, nid, {"改稿": "", "做法": "直接消音", "已確認": True})
     assert not nameplan.compute_plan(w)["要人處理"]

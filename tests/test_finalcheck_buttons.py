@@ -117,9 +117,9 @@ def _row(kind, **kw):
 def test_keep_policy_uses_kind_field():
     for k in (execute.KIND_CODE, execute.KIND_SHORT, execute.KIND_OUTSIDE, execute.KIND_VOICE, execute.KIND_NO_TEXT):
         assert execute.keep_policy(k) == (True, ""), k
-    for k in (execute.KIND_NAME, execute.KIND_OVERLAP):
+    for k in (execute.KIND_NAME, execute.KIND_OVERLAP):   # 10-08：不開放「照目前設定做」，但不擋開始（說明寫略過的後果）
         ok, why = execute.keep_policy(k)
-        assert not ok and "回第 3 步補" in why, k
+        assert not ok and "回第 3 步補" in why and "預設略過" in why, k
     for k in (None, "", "以後新的類別", "段落外:T1:1.0"):              # 不認得的（包括鍵的樣子）一律不開放
         ok, why = execute.keep_policy(k)
         assert not ok and why, k
@@ -252,7 +252,8 @@ def test_no_text_kind_open():
 
 
 def test_run_execute_check_matches_buttons():
-    """命令列 run execute 的總檢查擋法跟網頁一致：還要處理就擋；按了「照目前設定做」就過（過了之後用假的 sync 停下，不跑模型）。"""
+    """10-08 宇軒（流程簡化）：命令列 run execute 跟網頁一致——總檢查還有沒處理的也不擋（預設略過），
+    過了之後用假的 sync 停下，不跑模型；按了「照目前設定做」照樣算處理好。"""
     from bookclub import epcodes
 
     w = _fresh()
@@ -269,11 +270,12 @@ def test_run_execute_check_matches_buttons():
     try:
         with _FakeCodes(["Emma"]):
             key = _must(w, "英文代號:")[0]["key"]
+            assert not execute.final_check(w)["可以開始"]                  # 還有沒處理的列……
             try:
                 execute.run_execute(w, log=lambda m: None)
-                raise AssertionError("還有一定要處理的，應該擋")
-            except FileNotFoundError as e:
-                assert "總檢查" in str(e)
+                raise AssertionError("總檢查不該擋")
+            except Passed:                                                  # ……照樣開始（預設略過）
+                pass
             execute.keep_final(w, key)
             fc = execute.final_check(w)
             assert fc["可以開始"], [r["key"] for r in fc["一定要處理"] if not r["處理好"]]
@@ -413,7 +415,8 @@ def test_look_html_buttons_near_title_and_no_bottom_checkbox():
     fn = _fn(APPJS, "finalCheckHtml")
     assert 'id="fcSeen"' not in fn and "fcSeen\"" not in fn                 # 最下面的勾選拿掉了，不留兩套
     head = fn.index('id="fcLookHead"')
-    assert fn.index("<b>請看一眼</b>") > head and fn.index('id="fcSeenAll"') > head
+    # 10-08 宇軒（流程簡化）：請看一眼收合成一行摘要（預設先略過），展開後「全部看過了」在清單上面
+    assert fn.index('data-fcfold="請看一眼"') < head and fn.index('id="fcSeenAll"') > head
     assert fn.index('id="fcSeenAll"') < fn.index("look.map((r) => row(r, true))")   # 「全部看過了」在標題旁、清單上面
     if not NODE:
         print("（沒有 node，略過網頁）")

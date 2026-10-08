@@ -293,6 +293,35 @@ def prep_pending(dec: dict, people: dict, suggestions: list[dict], mentioned: li
     return {k: v for k, v in out.items() if v}
 
 
+def _mark_all_cut(people: dict, turns: list[dict], dec: dict, suggestions: list[dict]) -> list[tuple[float, float]]:
+    """每位學員標 `都會刪掉`（段落全部落在確認剪掉的範圍裡）；回傳會剪掉的範圍（含 ① 選了刪除的建議）。就地改 people。"""
+    will_cut = [(c["start"], c["end"]) for c in dec["刪除段落"] if c.get("狀態") != "還原"] + \
+        [(sg["start"], sg["end"]) for sg in suggestions if dec["刪除建議"].get(sg["id"], {}).get("決定") == "刪除"]
+    for name, p in people.items():
+        segs = [t for t in turns if t["說話者"] == name]
+        p["都會刪掉"] = bool(segs) and all(_in_ranges(t["start"], t["end"], will_cut) for t in segs)
+    return will_cut
+
+
+def students_pending(workdir: str | Path) -> list[str]:
+    """10-08 宇軒（流程簡化）：開始 AI 修改前唯一要擋的人工確認——「開始前 4 件事」② 學員是誰。
+    每位出現的學員（不是全部在剪掉的段落裡）都選了本名或「本名未知」、選了本名的有代號；
+    「不是學員」的改成老師就不在學員裡。回傳還沒做好的（白話，跟 prep_pending 的 ② 一樣），空的＝可以開始。
+    沒有段落分析就回空的（那時 precheck 另外會擋）。理由：沒配代號的學員，AI 重念會念出本名。"""
+    from bookclub import epcodes
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    tdata = turns_mod.page_data(workdir)
+    if tdata.get("尚未準備"):
+        return []
+    turns = tdata.get("段落", [])
+    people = {k: dict(p) for k, p in tdata.get("學員", {}).items() if p.get("段數")}
+    dec = load_decisions(workdir)
+    _mark_all_cut(people, turns, dec, load_cut_suggestions(workdir))
+    return prep_pending(dec, people, [], [], epcodes.episode_codes(workdir)).get("學員", [])
+
+
 def _auto_unprep(workdir: Path, pending: dict[str, list[str]]) -> list[str]:
     """讀資料時：已經標完成、底下又冒出沒處理的項目 → 那一件自動改回還沒做。回傳改回的項目。"""
     with _lock:
@@ -1161,11 +1190,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         return "落在剪掉的片段裡（聲音和畫面都拿掉）" if _in_ranges(a, b, cut_ranges) else None
 
     # 09-29 宇軒：只在確認刪除的段落（結尾道別等）裡講話的學員，不用判斷是誰（① 建議刪除段落選了「刪除」才算）
-    will_cut = cut_ranges + [(sg["start"], sg["end"]) for sg in suggestions
-                             if dec["刪除建議"].get(sg["id"], {}).get("決定") == "刪除"]
-    for name, p in people.items():
-        segs = [t for t in turns if t["說話者"] == name]
-        p["都會刪掉"] = bool(segs) and all(_in_ranges(t["start"], t["end"], will_cut) for t in segs)
+    will_cut = _mark_all_cut(people, turns, dec, suggestions)
 
     words = roster_words()
     table = replace_table(workdir)
@@ -1394,6 +1419,8 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         "刪除建議": [{**sg, "決定": dec["刪除建議"].get(sg["id"], {}).get("決定")} for sg in suggestions],
         "開始前確認": dec["開始前確認"],
         "開始前待處理": pending,          # 09-30：每一件底下還沒處理的（有的話不能標完成）
+        # 10-08 宇軒（流程簡化）：開始 AI 修改只看 ② 學員是誰（①③④ 沒做照預設）；卡片沒看完不擋
+        "②還沒做": pending.get("學員") or [],
         "人名清單沒跑成功": missing_people,   # 10-02 第七批（A3）
         "開始前自動改回": reverted,       # 09-30：這次讀資料時因為冒出新項目、自動改回還沒做的
         "選項": {"重疊": OVERLAP_SHOWN, "重疊排法": OVERLAP_ARRANGE, "名字": NAME_HOWS, "名字標記": NAME_TAGS,
@@ -1482,6 +1509,212 @@ def progress(items: list[dict], dec: dict, duration: float) -> dict:
         c[0] += bool((x.get("已確認") or x.get("不用處理") or x.get("涵蓋")) and not x.get("還缺"))   # 10-01 走查：跟總數同一個算法
     return {"已確認": done, "總數": total, "已花秒數": round(spent), "推算全部秒數": round(est) if est else None,
             "各類": {k: {"已確認": v[0], "總數": v[1]} for k, v in by_type.items()}}
+
+
+# ---------------------------------------------------------------------------
+# 10-08 宇軒（流程簡化）：第 3 步「全部照建議通過」
+# ---------------------------------------------------------------------------
+
+# 一鍵通過不幫忙按、要人自己看的原因（鍵 → 摘要裡的白話）。順序＝摘要裡列的順序
+BULK_SKIP = (
+    ("名字換不了代號", "名字換不了代號（不處理的話成品會照原聲念出本名）"),
+    ("還有本名", "要念的文字裡還有本名"),
+    ("代號改過", "代號改過，請再看一次"),
+    ("重疊缺資料", "重疊還缺東西（學員是誰或文字）"),
+    ("字太少", "要念的字太少（這一段其他的話會不見）"),
+    ("學員是猜的", "學員是程式猜的（這段太短，聽一下是誰）"),
+    ("建議剪掉", "建議剪掉這段（會連畫面一起剪掉）"),
+    ("沒有建議", "沒有建議的做法"),
+    ("分開決定過", "同一句的名字以前分開決定過"),
+    ("人工新增", "人工新增的"),
+    ("第5步退回", "第 5 步退回的"),
+)
+BULK_SKIP_TEXT = dict(BULK_SKIP)
+
+
+def item_done(it: dict) -> bool:
+    """跟網頁 rvDone 同一個判斷：已確認、不用處理、被別筆涵蓋，而且沒有還缺東西。"""
+    return bool(it.get("已確認") or it.get("不用處理") or it.get("涵蓋")) and not it.get("還缺")
+
+
+def bulk_skip_reason(it: dict, stuck: set[str], words: list[str]) -> str | None:
+    """這一張卡片能不能一鍵照建議通過（純函式）。回傳不能的原因鍵（BULK_SKIP），可以就回傳 None。
+    stuck＝名字換不了代號的候選編號（nameplan.compute_plan 的 要人處理）；words＝名冊上的本名寫法。"""
+    t = it.get("類型")
+    if it.get("第5步退回"):
+        return "第5步退回"
+    if it.get("人工新增") or it.get("手動標記") or it.get("老師整段"):
+        return "人工新增"
+    if it.get("代號改過"):
+        return "代號改過"
+    if it.get("還缺"):
+        return "重疊缺資料"
+    sug = (it.get("建議") or {}).get("做法")
+    if t == "學員段落":
+        if sug == "刪除這段" and not it.get("短句保留"):
+            return "建議剪掉"
+        if it.get("含本名") or has_real_name(it.get("建議稿") or "", words):
+            return "還有本名"
+        if it.get("學員是猜的"):   # 10-08 審查：猜錯的話用錯的人的聲線、代號
+            return "學員是猜的"
+        return None
+    if t == "名字":
+        ids = {str(it.get("id"))} | {str(k) for k in it.get("同一張卡候選") or []}
+        if ids & stuck:
+            return "名字換不了代號"
+        if it.get("分開決定過"):
+            return "分開決定過"
+        whole = it.get("整句")
+        if it.get("做法") != "直接消音":
+            if not whole:
+                return "名字換不了代號"
+            if whole.get("字太少"):
+                return "字太少"
+            said = whole.get("實際會念") or whole.get("改稿") or whole.get("換成代號") or ""
+            if has_real_name(said, words):
+                return "還有本名"
+        return None
+    if t == "學員名字":
+        return None if it.get("做法") else "沒有建議"
+    if t == "重疊":
+        return None if (it.get("做法") or sug) else "沒有建議"
+    if t == "刪除段落":
+        return "建議剪掉"
+    return "沒有建議"
+
+
+def bulk_pass_split(items: list[dict], stuck: set[str], words: list[str]) -> tuple[list[dict], list[tuple[dict, str]]]:
+    """（純函式）還沒處理好的卡片分成：一鍵可以通過的、要人自己看的（附原因鍵）。處理好的不列。"""
+    ok, left = [], []
+    for it in items:
+        if item_done(it):
+            continue
+        why = bulk_skip_reason(it, stuck, words)
+        (left.append((it, why)) if why else ok.append(it))
+    return ok, left
+
+
+def bulk_summary(passed: int, left: list[tuple[dict, str]]) -> dict:
+    """一鍵通過之後跳出來的摘要（純函式）：{通過, 還要看, 依類型: [{原因, 說明, 筆數}], 說明}。"""
+    count: dict[str, int] = {}
+    for _it, why in left:
+        count[why] = count.get(why, 0) + 1
+    kinds = [{"原因": k, "說明": text, "筆數": count[k]} for k, text in BULK_SKIP if count.get(k)]
+    text = f"通過了 {passed} 張"
+    if left:
+        text += f"，還有 {len(left)} 張要看：" + "；".join(f"{x['說明']} {x['筆數']} 張" for x in kinds)
+        text += "。這些不擋「開始 AI 修改」，沒看的照目前的設定做"
+    return {"通過": passed, "還要看": len(left), "依類型": kinds, "說明": text}
+
+
+def pass_all(workdir: str | Path) -> dict:
+    """`POST /api/review/passall`：把有建議、還沒確認的卡片一次照建議通過（不幫忙按的見 bulk_skip_reason）。
+    每一類各寫一次檔；通過之後再檢查一次（名字換不了代號、重疊還缺東西），有的話改回沒通過、算進要人看。"""
+    from bookclub import nameplan
+    from bookclub import studentnames
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    data = page_data(workdir)
+    words = roster_words()
+    try:
+        stuck = {str(m["候選"]) for m in nameplan.compute_plan(workdir)["要人處理"]}
+    except Exception:  # noqa: BLE001 — 排不出計畫：名字卡都不幫忙按
+        stuck = {str(it["id"]) for it in data["項目"] if it["類型"] == "名字"}
+    ok, left = bulk_pass_split(data["項目"], stuck, words)
+    by_type: dict[str, list[dict]] = {}
+    for it in ok:
+        by_type.setdefault(it["類型"], []).append(it)
+
+    if by_type.get("學員段落"):
+        with turns_mod._lock:
+            tdata = wd.read_json(turns_mod.turns_path(workdir))
+            want = {it["id"]: it for it in by_type["學員段落"]}
+            for t in tdata["段落"]:
+                it = want.get(t["id"])
+                if it is not None:
+                    t["校對稿"] = str(it.get("建議稿") or t.get("校對稿") or "").strip()
+                    t["已確認"] = True
+                    t.pop("代號改過", None)
+            wd.write_json(turns_mod.turns_path(workdir), tdata)
+
+    name_ids: list[str] = []
+    if by_type.get("名字"):
+        cands = (wd.read_json(wd.names_path(workdir), default=None) or {}).get("candidates", [])
+        with _lock:
+            decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
+            eff = {str(c.get("id") or i): c for i, c in enumerate(
+                effective_name_candidates(workdir, cands, decisions), start=1)} if cands else {}
+            for it in by_type["名字"]:
+                cid = str(it["id"])
+                me = eff.get(cid) or {}
+                mates = [str(k) for k in me.get("同一張卡候選") or [] if str(k) != cid] if me.get("同一張卡") == cid else []
+                src = decisions.get(str(me.get("決定帶頭") or cid)) or {}
+                base = {k: json.loads(json.dumps(src[k], ensure_ascii=False)) for k in CARD_SYNC_KEYS if k in src}
+                base.update({"做法": it.get("做法") or nameplan.WHOLE, "已確認": True})
+                for k in [cid] + mates:
+                    dk = decisions.setdefault(k, {"tags": [], "note": ""})
+                    for key in CARD_SYNC_KEYS:
+                        if key in base:
+                            dk[key] = json.loads(json.dumps(base[key], ensure_ascii=False))
+                    if k.isdigit() and 1 <= int(k) <= len(cands):
+                        dk["候選指紋"] = name_fingerprint(cands[int(k) - 1])
+                    dk["更新時間"] = _now()
+                    name_ids.append(k)
+            wd.write_json(name_decisions_path(workdir), decisions)
+
+    if by_type.get("學員名字"):
+        with _lock:
+            sdec = wd.read_json(studentnames.decisions_path(workdir), default={}) or {}
+            for it in by_type["學員名字"]:
+                d = sdec.setdefault(str(it["id"]), {"tags": [], "note": ""})
+                d["做法"] = it.get("做法") or studentnames.MUTE
+                d["已確認"] = True
+                d["更新時間"] = _now()
+            wd.write_json(studentnames.decisions_path(workdir), sdec)
+
+    if by_type.get("重疊"):
+        with _lock:
+            dec = load_decisions(workdir)
+            for it in by_type["重疊"]:
+                how = it.get("做法") or (it.get("建議") or {}).get("做法")
+                d = dec["重疊"].setdefault(str(it["id"]), {})
+                d["做法"] = how
+                d["排法"] = "照原位置疊著" if how == "兩邊都重生成" else (it.get("排法") or (it.get("建議") or {}).get("排法") or OVERLAP_ARRANGE[0])
+                d["已確認"] = True
+                d["更新時間"] = _now()
+            _save_decisions(workdir, dec)
+
+    # 通過之後再檢查一次：名字換不了代號、重疊還缺東西 → 改回沒通過（跟逐筆按通過時擋下來的一樣）
+    back: list[tuple[dict, str]] = []
+    if name_ids:
+        try:
+            now_stuck = {str(m["候選"]) for m in nameplan.compute_plan(workdir)["要人處理"]}
+        except Exception:  # noqa: BLE001
+            now_stuck = set()
+        bad = [it for it in by_type["名字"] if ({str(it["id"])} | {str(k) for k in it.get("同一張卡候選") or []}) & now_stuck]
+        if bad:
+            ids = set()
+            for it in bad:
+                ids |= {str(it["id"])} | {str(k) for k in it.get("同一張卡候選") or []}
+            with _lock:
+                decisions = wd.read_json(name_decisions_path(workdir), default={}) or {}
+                for k in ids & set(name_ids):
+                    decisions.setdefault(k, {"tags": [], "note": ""})["已確認"] = False
+                wd.write_json(name_decisions_path(workdir), decisions)
+            back += [(it, "名字換不了代號") for it in bad]
+    if by_type.get("重疊"):
+        slots = student_slots(workdir)
+        choices = {c["id"]: c for c in overlap_choices(workdir)}
+        bad = [it for it in by_type["重疊"] if choices.get(str(it["id"])) and overlap_gen_problem(choices[str(it["id"])], slots)]
+        if bad:
+            with _lock:
+                dec = load_decisions(workdir)
+                for it in bad:
+                    dec["重疊"].setdefault(str(it["id"]), {})["已確認"] = False
+                _save_decisions(workdir, dec)
+            back += [(it, "重疊缺資料") for it in bad]
+    return {"ok": True, **bulk_summary(len(ok) - len(back), left + back)}
 
 
 # ---------------------------------------------------------------------------
