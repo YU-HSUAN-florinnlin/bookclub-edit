@@ -429,17 +429,28 @@ def _write(workdir: Path, data: dict) -> dict:
     return data
 
 
-def write_render_log(workdir: str | Path, d: dict, plist: list[dict], orig_path: Path, new_path: Path,
+def build_render_log(workdir: str | Path, d: dict, plist: list[dict], orig_path: Path, new_path: Path,
                      tag: str) -> dict:
-    """`render video` 組完聲音之後呼叫（一行）：寫 `生成/處理紀錄.json`。"""
+    """`render video` 組完聲音之後：算出 `生成/處理紀錄.json` 的內容（不寫檔）。"""
     workdir = Path(workdir)
     recs = stamp_contents(workdir, build_records(d, plist, collect_links(workdir, d)))
     a = d["範圍"][0]
     chk = check_render_files(orig_path, new_path, plist, a, recs)   # 09-30：分段讀、分段比，不整條讀進來
-    return _write(workdir, {"版本": 1, "來源": f"render video {tag}", "範圍": d["範圍"],
-                            "產生時間": datetime.now().isoformat(timespec="seconds"),
-                            "原聲": str(Path(orig_path).relative_to(workdir)), "新聲音": str(Path(new_path).relative_to(workdir)),
-                            "片段": plist, "紀錄": recs, **chk})
+    return {"版本": 1, "來源": f"render video {tag}", "範圍": d["範圍"],
+            "產生時間": datetime.now().isoformat(timespec="seconds"),
+            "原聲": str(Path(orig_path).relative_to(workdir)), "新聲音": str(Path(new_path).relative_to(workdir)),
+            "片段": plist, "紀錄": recs, **chk}
+
+
+def write_render_log(workdir: str | Path, d: dict, plist: list[dict], orig_path: Path, new_path: Path,
+                     tag: str) -> dict:
+    """算出並寫 `生成/處理紀錄.json`（一行）。`render video` 改成先 build、成品換上之後才 write_log（10-08）。"""
+    return _write(Path(workdir), build_render_log(workdir, d, plist, orig_path, new_path, tag))
+
+
+def write_log(workdir: str | Path, data: dict) -> dict:
+    """寫好算出來的處理紀錄（10-08：成品換上之後才寫，停止、失敗時上一支成品的紀錄不會被換掉）。"""
+    return _write(Path(workdir), data)
 
 
 def write_audio_log(workdir: str | Path, edits: list[dict], orig_path: Path, new_path: Path) -> dict:

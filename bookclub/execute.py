@@ -1784,6 +1784,22 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     checks = {**_default_checks(), **(checks or {})}
     prog = {"開始時間": _now(), "結束時間": None, "範圍": ctx["範圍"], "輸出做法": ctx["輸出做法"],
             "步驟": {k: {"說明": desc, "狀態": "等待"} for k, desc in STEPS}, "錯誤": None}
+    from bookclub import proclog as _proclog
+
+    log_stamp0 = (_proclog.load(workdir) or {}).get("產生時間")
+
+    def settle_skipped() -> None:
+        """10-08 審查：處理紀錄換新了（組裝至少換上一支成品，就算別的輸出方式失敗）→ 略過紀錄跟著換成這一次的。"""
+        if prog.get(SKIPPED_PENDING) is None:
+            return
+        try:
+            now = (_proclog.load(workdir) or {}).get("產生時間")
+        except Exception:  # noqa: BLE001
+            return
+        if now and now != log_stamp0:
+            prog[SKIPPED_FIELD] = prog.pop(SKIPPED_PENDING)
+            save()
+
     if old_skipped is not None:   # 上一支成品的（組裝做完才換成這一次的）
         prog[SKIPPED_FIELD] = old_skipped
     if skipped is not None:
@@ -1866,6 +1882,7 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
         log("[AI 執行] 全部做完。下一步：網頁第 5 步「成品檢查」")
         return prog
     finally:
+        settle_skipped()   # 做完、停止、失敗都看一次：處理紀錄換新了，略過紀錄跟著換
         awake_off()
 
 
@@ -1949,4 +1966,15 @@ def status(workdir: str | Path) -> dict:
     return {"前置檢查": precheck(workdir), "進度": wd.read_json(progress_path(workdir), default=None),
             "影片長度": video_duration(workdir), "預設輸出做法": default_methods(), "輸出做法選項": method_options(),
             "退回清單": redo,
-            "重做中": doing}
+            "重做中": doing,
+            # 10-08（宇軒：跑完之後按鈕還寫「開始執行」看起來像出錯）：有沒有成品，第 4 步按鈕文字與狀態列用
+            "有成品": bool(_safe_products(workdir))}
+
+
+def _safe_products(workdir: Path) -> list[str]:
+    from bookclub import finalcheck
+
+    try:
+        return finalcheck.products(workdir)
+    except Exception:  # noqa: BLE001 — 讀不到就當作沒有
+        return []

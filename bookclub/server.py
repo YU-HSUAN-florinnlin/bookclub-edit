@@ -301,11 +301,25 @@ def project_dir_for(video: Path) -> Path:
     return video.parent / f"{name}{PROJECT_SUFFIX}"
 
 
+TEST_WORDS = ("測試", "驗證")   # 工作區資料夾本身、上一層、上上層的名稱有這兩個詞＝測試用的工作區（不看整條路徑）
+
+
+def project_label(d: str | Path) -> dict:
+    """10-08（宇軒：兩個專案名稱一樣，切錯了看不出來）：工作區在哪一層、是正式還是測試（純函式）。
+    所在＝往上第一個不是「工作區」的資料夾名稱；標示＝工作區資料夾本身、上一層、上上層（跳過叫「工作區」的那層）的名稱有「測試」「驗證」的是測試，其他算正式；
+    顯示名稱＝「名稱（所在）」。"""
+    d = Path(d)
+    ups = [p.name for p in d.parents if p.name and p.name != "工作區"]   # 往上的資料夾（跳過叫「工作區」的那層）
+    where = ups[0] if ups else ""
+    test = any(w in part for part in [d.name] + ups[:2] for w in TEST_WORDS)
+    return {"所在": where, "標示": "測試" if test else "正式", "顯示名稱": f"{d.name}（{where}）" if where else d.name}
+
+
 def _project_row(d: Path, current: Path | None) -> dict:
     analysis = read_json(analysis_result_path(d), default={}) or {}
     video = analysis.get("video")
     return {
-        "名稱": d.name, "路徑": str(d), "位置": str(d.parent),
+        "名稱": d.name, "路徑": str(d), "位置": str(d.parent), **project_label(d),
         "影片": Path(video).name if video else None,
         "長度": fmt_time(analysis["影片長度"]) if analysis.get("影片長度") else None,
         "分析完成": bool(analysis.get("elapsed", {}).get("總耗時")) or bool(analysis.get("句數")),
@@ -327,7 +341,29 @@ def list_projects(current: Path | None = None) -> dict:
             continue
         seen.add(str(d))
         rows.append(_project_row(d, current))
+    unique_labels(rows)
     return {"目前": str(current) if current else None, "工作區根目錄": str(root), "專案": rows}
+
+
+def _ancestors(path: str) -> list[str]:
+    return [p.name for p in Path(path).parents if p.name and p.name != "工作區"]
+
+
+def unique_labels(rows: list[dict], max_depth: int = 4) -> None:
+    """（純函式，就地改）顯示名稱還是一樣的幾列（上一層資料夾也同名），往上多帶幾層資料夾名，直到分得出來。"""
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(r.get("顯示名稱") or r["名稱"], []).append(r)
+    for same in groups.values():
+        if len(same) < 2:
+            continue
+        for depth in range(2, max_depth + 1):
+            labels = ["／".join(reversed(_ancestors(r["路徑"])[:depth])) for r in same]
+            if len(set(labels)) == len(labels) or depth == max_depth:
+                for r, lab in zip(same, labels):
+                    r["所在"] = lab
+                    r["顯示名稱"] = f"{r['名稱']}（{lab}）"
+                break
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +562,7 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
     return {
         "proofread": proofread_state,
         "workdir": str(workdir),
+        "專案標示": project_label(workdir),   # 10-08：頂端常駐「現在在：名稱（上一層）」
         "video": {
             "path": str(video_path) if video_path else None,
             "name": video_path.name if video_path else None,

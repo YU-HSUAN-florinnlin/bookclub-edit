@@ -144,6 +144,12 @@ function currentRouteId() {
 
 let lastState = null;
 
+// 10-08（宇軒：兩個專案名稱一樣，切錯了看不出來）：頂端常駐「現在在：名稱（上一層）」＋正式／測試（純函式）
+function pjNowHtml(lab) {
+  if (!lab || !lab["顯示名稱"]) return "";
+  return `<div class="pj-now"><b>現在在：${esc(lab["顯示名稱"])}</b> <span class="badge ${lab["標示"] === "測試" ? "" : "done"}">${esc(lab["標示"])}</span></div>`;
+}
+
 async function renderSidebar() {
   let state = null;
   try {
@@ -159,7 +165,7 @@ async function renderSidebar() {
     const v = state.video || {};
     const name = v.name || "（還不知道影片路徑）";
     const dur = v.duration_hms ? `　長度 ${v.duration_hms}` : "";
-    videoInfoEl.innerHTML = `${esc(name)}${esc(dur)}<br>${esc(state.workdir || "")}`;
+    videoInfoEl.innerHTML = `${pjNowHtml(state["專案標示"])}${esc(name)}${esc(dur)}<br>${esc(state.workdir || "")}`;
   }
 
   const active = currentRouteId();
@@ -508,9 +514,11 @@ async function renderExecuteBody() {
   const running = d.running;
   const redo = d["退回清單"] || [];
   const execBlocked = running || !pre["可以開始"];   // 10-08 宇軒（流程簡化）：總檢查預設先略過，不擋
-  const ra = d["只重新組裝"];   // 10-05 #97：沒有退回時也能只重新組裝（伺服器算好能不能按）
+  const ra = d["只重新組裝"];
+  const btn = execBtnState(running, prog, !!d["有成品"]);   // 10-08：按鈕文字照狀態   // 10-05 #97：沒有退回時也能只重新組裝（伺服器算好能不能按）
   contentEl.innerHTML = `
     <h1>4　AI 執行</h1>
+    <p class="exec-now" id="execNow"><b>${esc(btn.status)}</b></p>
     <p class="muted">依序跑四步：老師提到名字 → 學員重念 → 保留原聲學員講到名字 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
     <div class="hint">從第 4 步直接開始（例如老師已經自己看完全片、挑好參考聲音）：<b>第 1 步轉文字還是要跑</b>（學員的話要照逐字稿重念，電腦自動）；
       <b>第 2 步的老師參考音也要選好</b>，會出現的名字都要有代號（沒有的按下面「幫還沒代號的自動配」）。
@@ -537,14 +545,14 @@ async function renderExecuteBody() {
       <details class="adv"><summary>進階設定</summary>
         <label>輸出方式 <select id="exMethod">${(d["輸出做法選項"] || [["sw", "標準輸出"]]).map(([m, label]) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
         <p class="muted">一般用標準輸出就好。其他方式只有這台電腦支援時才會列出來。</p>
+        ${ra && !redo.length && !running ? `<p class="exec-reasm"><button id="btnReassembleAll" class="secondary" ${execBlocked || !ra["可以"] ? "disabled" : ""}>只重新組裝（不重新生成）</button>
+          ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
+          <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音${SHOW_EXEC_ETA ? `，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘` : ""}。</span></p>` : ""}
       </details>
-      <button id="btnExec" ${execBlocked ? "disabled" : ""}>${running ? "執行中…" : "開始執行"}</button>
+      <button id="btnExec" ${execBlocked ? "disabled" : ""}>${esc(btn.label)}</button>${btn.note ? ` <span class="muted small" id="execDoneNote">${esc(btn.note)}</span>` : ""}
       ${fc && !running && pre["可以開始"] ? `<span class="muted" id="execSkipNote">${esc(execSkipNote(fc))}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
       <span class="muted" id="execEta">${execEtaText(d)}</span>
-      ${ra && !redo.length && !running ? `<p class="exec-reasm"><button id="btnReassembleAll" class="secondary" ${execBlocked || !ra["可以"] ? "disabled" : ""}>只重新組裝（不重新生成）</button>
-        ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
-        <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音${SHOW_EXEC_ETA ? `，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘` : ""}。</span></p>` : ""}
       ${!running && fc && ((fc["摘要"] || {})["記憶體"] || {})["偏滿"] ? `<p class="hint fc-mem-warn" id="execMemWarn"><b>記憶體偏滿，按下去可能跑到一半就被停下來。</b>${esc(fc["摘要"]["記憶體"]["怎麼處理"])}</p>` : ""}
       ${!running ? `<p class="muted">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}
       ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「開始執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
@@ -639,6 +647,25 @@ function execSkipNote(fc) {
   const h = fcFoldHeads(fc);
   if (!h.mustLeft && !h.lookLeft) return "開始前總檢查都處理好了";
   return `開始前總檢查預設略過：一定要處理 ${h.mustLeft} 列、請看一眼 ${h.lookLeft} 處（照目前設定做；第 5 步「需留意」看得到）`;
+}
+
+// 10-08 宇軒（跑完之後按鈕還寫「開始執行」，老師以為哪裡出錯）：第 4 步按鈕文字與頂端一行狀態（純函式）
+// 10-09 宇軒定：開始執行 →（中斷／停止／失敗後）繼續執行 →（跑完有成品）更新成品
+const EXEC_UPDATE_NOTE = "只補做第 3 步改過的部分，做過的不重做";
+function execBtnState(running, prog, hasProduct) {
+  prog = prog || {};
+  const when = prog["開始時間"] ? fmtStamp(prog["開始時間"]) : "";
+  const end = prog["結束時間"] ? fmtStamp(prog["結束時間"]) : when;
+  const assembled = ((prog["步驟"] || {})["組裝"] || {})["狀態"] === "做完";
+  const old = hasProduct ? "第 5 步看的是上一支完整的成品（沒有被動到）" : "第 5 步還沒有成品";
+  if (running) return { label: "執行中…", note: "", status: `現在：第 4 步執行中（${when} 開始）。${hasProduct ? "做完之前，第 5 步看的還是上一支成品" : "做完才會有成品"}` };
+  if (prog["中斷"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半網頁伺服器被關掉。${old}` };
+  if (prog["停止"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半被停止。${old}` };
+  if (prog["錯誤"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）沒有跑完（失敗）。${old}` };
+  if (prog["開始時間"] && prog["結束時間"] && (assembled || hasProduct))
+    return { label: "更新成品", note: EXEC_UPDATE_NOTE, status: `現在：已完成（${end}），到第 5 步檢查成品；改了第 3 步按「更新成品」` };
+  if (hasProduct) return { label: "更新成品", note: EXEC_UPDATE_NOTE, status: "現在：有成品，到第 5 步檢查；改了第 3 步按「更新成品」" };
+  return { label: "開始執行", note: "", status: "現在：還沒執行過，第 5 步還沒有成品" };
 }
 
 const EXEC_STEP_NAMES = [["老師名字", "老師提到名字：老師重念（名字換成代號）"], ["學員重念", "學員段落：學員重念（用替代聲音）"],
@@ -816,7 +843,7 @@ async function renderOverview() {
         <table class="kv">
           <tr><td>影片</td><td>${esc(state.video.name || "（不知道）")}</td></tr>
           <tr><td>影片長度</td><td>${esc(state.video.duration_hms || "—")}</td></tr>
-          <tr><td>工作區</td><td>${esc(state.workdir)}</td></tr>
+          <tr><td>工作區</td><td>${pjNowHtml(state["專案標示"])}${esc(state.workdir)}</td></tr>
           <tr><td>影片分析</td><td>${done}／${order.length} 個子步驟完成${state["總耗時_s"] ? `，花了 ${esc(fmtElapsed(state["總耗時_s"]))}` : ""}（<a href="#step1">看進度</a>）</td></tr>
         </table>
       </div>`;
@@ -824,7 +851,7 @@ async function renderOverview() {
   const list = projects["專案"] || [];
   // 10-04 #129：每一列小字印完整路徑（以前只印上一層），資料夾名稱一樣的專案分得出來
   const rows = list.map((p) => `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
-      <td><b>${esc(p["名稱"])}</b>${p["路徑"] === projects["目前"] ? "　（目前）" : ""}<div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）：" : ""}${esc(p["路徑"])}</div></td>
+      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${p["路徑"] === projects["目前"] ? "　（目前）" : ""}<div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）：" : ""}${esc(p["路徑"])}</div></td>
       <td>${esc(p["長度"] || "—")}</td>
       <td>${p["分析完成"] ? "分析完成" : "還沒分析完"}${p["有覆核"] ? "、覆核中" : ""}</td>
       <td>${esc(p["修改時間"])}</td>
@@ -837,6 +864,9 @@ async function renderOverview() {
     <h2>已有的專案（${list.length}）</h2>
     <div class="card">${list.length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">還沒有專案。</p>`}</div>`;
   contentEl.querySelectorAll(".pj-switch").forEach((b) => b.addEventListener("click", async () => {
+    const p = list.find((x) => x["路徑"] === b.dataset.path) || {};
+    // 10-08：切換前說清楚要切去哪一個（名稱一樣的專案分得出來）
+    if (!confirm(`切換到「${p["顯示名稱"] || p["名稱"] || ""}」（${p["標示"] || ""}）？\n${b.dataset.path}\n\n之後第 3、4、5 步看的、改的都是這個工作區。`)) return;
     try { await apiPost("/api/projects/switch", { "路徑": b.dataset.path }); } catch (e) { alert(e.message); return; }
     await render();
   }));

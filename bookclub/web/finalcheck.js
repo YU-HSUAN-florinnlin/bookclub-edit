@@ -71,7 +71,8 @@ async function renderFinal() {
   contentEl.classList.add("wide");
   const d = fc.data;
   if (!d["有處理紀錄"] || !d["成品影片"]) {
-    contentEl.innerHTML = fcPreviewHtml(d["有處理紀錄"] ? "有處理紀錄，但找不到成品影片（工作區 輸出/成品_*）。" : "還沒有成品。");
+    contentEl.innerHTML = fcPreviewHtml(d["有處理紀錄"] ? "有處理紀錄，但找不到成品影片（工作區 輸出/成品_*）。" : FC_NO_PRODUCT,
+      fcRunNoteHtml(d["上次執行"], false) + fcWhereHtml(d["專案標示"]));
     return;
   }
   const prodSel = d["成品影片清單"].length > 1 ? `<label class="fc-prod">檢查哪一支 <select id="fc-prod">${d["成品影片清單"].map((p) =>
@@ -79,6 +80,7 @@ async function renderFinal() {
   contentEl.innerHTML = `
     <div class="rv2 fc">
       <div class="fc-pin" role="note">沒列在時間軸上的地方＝原片沒動</div>
+      ${fcRunNoteHtml(d["上次執行"], true)}
       <header class="rv-bar">
         <h1>5　成品檢查</h1>
         <div class="rv-progress" id="fc-progress"></div>
@@ -149,7 +151,21 @@ async function renderFinal() {
 }
 
 // 還沒有成品時：照正式版面擺一份霧化的樣子（假資料、按不下去），讓人先知道之後要做什麼（09-29 宇軒）
-function fcPreviewHtml(why) {
+const FC_NO_PRODUCT = "這個工作區還沒組裝過成品，請先在第 4 步執行";
+
+// 10-08（宇軒：停止後以為第 5 步的舊檔不見了）：第 4 步上次被停止、失敗、中斷時，頂端一行（純函式）。
+// 有成品：寫「現在看的是上一支成品」；沒有成品：寫「這個工作區還沒有完整的成品」
+function fcRunNoteHtml(run, hasProduct) {
+  if (!run || !run["說明"]) return "";
+  return `<p class="rv-warnline fc-runnote" id="fc-runnote">${esc(run["說明"])}，${hasProduct ? "現在看的是上一支完整的成品（沒有被動到）" : "這個工作區還沒有完整的成品"}。到 <a href="#step4">第 4 步</a> 可以繼續執行。</p>`;
+}
+
+// 現在在哪個工作區（純函式；名稱一樣的專案分得出來）
+function fcWhereHtml(lab) {
+  return lab && lab["顯示名稱"] ? `<p class="rv-meta fc-where">現在在：<b>${esc(lab["顯示名稱"])}</b>（${esc(lab["標示"] || "")}）。要看別的專案，到 <a href="#overview">總覽</a> 切換。</p>` : "";
+}
+
+function fcPreviewHtml(why, extra = "") {
   const rows = [["0:42", "學員重念", "學員 A 的段落"], ["3:15", "名字", "老師提到名字，整句重念"], ["7:08", "剪掉的地方", "開頭空白"],
     ["12:30", "停格", "重念比原本長，補長"], ["18:02", "名字", "直接消音"], ["25:47", "學員重念", "學員 B 的段落"]];
   const blocks = [[3, 5, "stu"], [9, 1, "name"], [16, 0.6, "cut"], [27, 3, "frz"], [38, 1, "name"], [51, 6, "stu"], [70, 1, "name"], [83, 4, "stu"]];
@@ -179,7 +195,7 @@ function fcPreviewHtml(why) {
         <section class="rv-lower"><table class="kv">${rows.map(([t, k, x]) => `<tr><td>${t}</td><td>${k}</td><td>${x}</td><td>—</td></tr>`).join("")}</table></section>
       </div>
       <div class="fc-preview-note" role="status">
-        <h2>${esc(why)}</h2>
+        <h2>${esc(why)}</h2>${extra}
         <p>第 4 步 AI 修改跑完之後，這一頁會變成<b>成品檢查</b>：逐筆聽處理前後、按通過或退回重做，再把整片看完（看過 100%）再輸出成品（沒看完也能輸出，會先問一次）。</p>
         <p class="muted">後面霧霧的是之後的樣子，現在還不能按。</p>
         <p><a class="btn" href="#step4">到第 4 步 AI 執行</a></p>

@@ -1001,7 +1001,10 @@ def page_data(workdir: str | Path) -> dict:
         # 10-08 宇軒（流程簡化）：第 4 步總檢查預設略過的、成品裡還留著原聲的地方（不擋輸出）
         "需留意類型": [{"類別": k, "名稱": n, "說明": x} for k, n, x in ATTENTION_KINDS],
         "需留意": _attention_with_names(workdir, log, index),
-        "學員顯示名": _student_labels(workdir),   # 10-07：畫面上「學員3」換成「本名（代號）」（只在畫面換，紀錄檔不寫本名）
+        "學員顯示名": _student_labels(workdir),
+        # 10-08（宇軒：停止後以為第 5 步的舊檔不見了）：上一次第 4 步的狀態、現在在哪個工作區
+        "上次執行": _last_run(workdir),
+        "專案標示": _project_label(workdir),   # 10-07：畫面上「學員3」換成「本名（代號）」（只在畫面換，紀錄檔不寫本名）
     }
 
 
@@ -1011,6 +1014,38 @@ def _attention_with_names(workdir: Path, log: dict | None, index: dict) -> dict:
     for r in att["列"]:
         r["卡片名稱"] = review_name(index, r["第3步"]) if r.get("第3步") else ""
     return att
+
+
+RUN_WORD = {"停止": "被停止", "失敗": "失敗", "中斷": "被中斷（網頁伺服器被關掉）"}
+
+
+def _project_label(workdir: Path) -> dict:
+    from bookclub.server import project_label
+
+    return project_label(workdir)
+
+
+def last_run(prog: dict | None) -> dict | None:
+    """（純函式）第 4 步上一次執行的狀態：{狀態: 做完／停止／失敗／中斷／執行中, 時間: 開始時間, 組裝做完, 說明}。
+    沒跑過回 None。停止、失敗、中斷時說明寫「第 4 步上次執行到一半被停止（時間）」；第 5 步照樣看上一支完整的成品
+    （成品與處理紀錄只在組裝做完、原子換名後才換新，見 render 的 `_輸出中_` 暫存檔）。"""
+    if not prog or not prog.get("開始時間"):
+        return None
+    steps = prog.get("步驟") or {}
+    st = "中斷" if prog.get("中斷") else "停止" if prog.get("停止") else "失敗" if prog.get("錯誤") \
+        else "執行中" if not prog.get("結束時間") else "做完"
+    when = str(prog["開始時間"]).replace("T", " ")[5:16]
+    text = f"第 4 步上次執行到一半{RUN_WORD[st]}（{when} 開始）" if st in RUN_WORD else ""
+    return {"狀態": st, "時間": prog["開始時間"], "組裝做完": (steps.get("組裝") or {}).get("狀態") == "做完", "說明": text}
+
+
+def _last_run(workdir: Path) -> dict | None:
+    from bookclub import execute
+
+    try:
+        return last_run(wd.read_json(execute.progress_path(workdir), default=None))
+    except Exception:  # noqa: BLE001 — 讀不到不擋第 5 步
+        return None
 
 
 def _student_labels(workdir: Path) -> dict[str, str]:

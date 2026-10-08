@@ -555,6 +555,9 @@ function rvGo4Notes(left, prep) {
   return out;
 }
 
+// 10-08 宇軒：確認視窗字太多 → 只留一句，其他收進「詳細」
+const RV_GO4_MAIN = "略過或照建議通過的項目，第 5 步都可以再檢查。要開始 AI 修改嗎？";
+
 async function rvConfirmGo4() {
   if (!rvWhoDone()) { rv.prepOpen = true; rv.prepTab = "學員"; rvRenderMain(); return; }
   if (rv.video && !rv.video.paused) rv.video.pause();
@@ -564,10 +567,13 @@ async function rvConfirmGo4() {
   dlg.setAttribute("aria-labelledby", "rv-confirm-title");
   dlg.innerHTML = `
     <h2 id="rv-confirm-title">開始 AI 修改？</h2>
-    ${notes.map((x) => `<p>${esc(x)}</p>`).join("")}
-    <p>開始之後，AI 會依序生成老師的名字句子、學員重念，最後組裝成品影片。<b>整支影片會花比較多時間</b>，
-      跑的時候電腦不要睡眠；第 4 步看得到每一類做到幾筆。</p>
-    <p class="muted">第 4 步的總檢查預設先略過；跑完之後到第 5 步「成品檢查」看結果，「需留意」那一頁列出成品裡還留著原聲、要聽一下的地方。中途有問題可以停下來，已經做好的不會重做。</p>
+    <p id="rv-confirm-main">${esc(RV_GO4_MAIN)}</p>
+    <details class="rv-confirm-more"><summary>詳細</summary>
+      ${notes.map((x) => `<p>${esc(x)}</p>`).join("")}
+      <p>開始之後，AI 會依序生成老師的名字句子、學員重念，最後組裝成品影片。<b>整支影片會花比較多時間</b>，
+        跑的時候電腦不要睡眠；第 4 步看得到每一類做到幾筆。</p>
+      <p class="muted">第 4 步的總檢查預設先略過；跑完之後到第 5 步「成品檢查」看結果，「需留意」那一頁列出成品裡還留著原聲、要聽一下的地方。中途有問題可以停下來，已經做好的不會重做；上一支成品在新的組裝做完之前都照樣留著。</p>
+    </details>
     <p class="rv-confirm-err" id="rv-confirm-err" role="alert"></p>
     <div class="rv-confirm-btns">
       <button class="ghost" id="rv-confirm-back">回去檢查</button>
