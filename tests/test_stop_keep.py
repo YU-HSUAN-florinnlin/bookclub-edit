@@ -65,8 +65,8 @@ class _FakeRender:
     NAMES = ("build_decisions", "build_audio", "measure", "join_jumps", "build_marks", "marks_md", "marks_html",
              "_placed_track", "render_full", "verify")
 
-    def __init__(self, w: Path, fail: bool):
-        self.w, self.fail = w, fail
+    def __init__(self, w: Path, fail: bool, bad: tuple = ()):
+        self.w, self.fail, self.bad = w, fail, bad   # bad＝驗證沒過的輸出方式
 
     def __enter__(self):
         self.old = {n: getattr(render, n) for n in self.NAMES}
@@ -80,8 +80,8 @@ class _FakeRender:
         render.measure = lambda *a, **k: {}
         render.join_jumps = lambda *a, **k: []
         render.build_marks = lambda *a, **k: []
-        render.marks_md = lambda *a, **k: ""
-        render.marks_html = lambda *a, **k: ""
+        render.marks_md = lambda *a, **k: "新的標記"
+        render.marks_html = lambda *a, **k: "新的標記"
         render._placed_track = lambda *a, **k: np.zeros(1, dtype="float32")
         proclog.build_render_log = lambda *a, **k: {"版本": 1, "來源": "render video 0-3", "產生時間": "新的",
                                                     "範圍": [0.0, 180.0], "片段": None, "紀錄": [], "未登記的變動": []}
@@ -93,7 +93,8 @@ class _FakeRender:
             Path(dst).write_bytes(b"new product")
             return 1.0
         render.render_full = full
-        render.verify = lambda *a, **k: {"通過": True}
+        bad = self.bad
+        render.verify = lambda path, *a, **k: {"通過": not any(f"_{m}.mp4" in Path(path).name for m in bad)}
         return self
 
     def __exit__(self, *exc):
@@ -161,8 +162,12 @@ def test_project_label():
     a = server.project_label("/Users/x/Downloads/課程/自動化剪輯流程-開發專案/2025-04-09 第一堂_剪輯工作區")
     b = server.project_label("/Users/x/讀書會剪輯資料/舊測試工作區/第一步從零_1004b/工作區/2025-04-09 第一堂_剪輯工作區")
     assert a == {"所在": "自動化剪輯流程-開發專案", "標示": "正式", "顯示名稱": "2025-04-09 第一堂_剪輯工作區（自動化剪輯流程-開發專案）"}
-    assert b["所在"] == "第一步從零_1004b" and b["標示"] == "測試" and b["顯示名稱"] != a["顯示名稱"]
+    assert b["所在"] == "第一步從零_1004b" and b["標示"] == "正式" and b["顯示名稱"] != a["顯示名稱"]
     assert server.project_label("/tmp/驗證_0926d")["標示"] == "測試"
+    # 10-08 審查：只看工作區資料夾本身與上一層（所在）的名稱；test 這類英文不算
+    assert server.project_label("/Users/x/latest/tester/第一堂_剪輯工作區")["標示"] == "正式"
+    assert server.project_label("/Users/x/讀書會剪輯資料/舊測試工作區/第一步從零_1004b/工作區/第一堂")["標示"] == "正式"   # 上上層有「測試」不算
+    assert server.project_label("/Users/x/舊測試工作區/第一堂")["標示"] == "測試"
     # 上一層資料夾也同名：往上多帶幾層，直到分得出來
     rows = [{"名稱": "工作區", "路徑": "/s/甲_ui/base/工作區", **server.project_label("/s/甲_ui/base/工作區")},
             {"名稱": "工作區", "路徑": "/s/乙_ui/base/工作區", **server.project_label("/s/乙_ui/base/工作區")},
@@ -210,6 +215,63 @@ def test_web_pure_functions():
     assert "現在看的是上一支完整的成品" in got[0] and "還沒有完整的成品" in got[1] and got[2] == ""
     assert "現在在：<b>第一堂（1004b）</b>（測試）" in got[3]
     assert '這個工作區還沒組裝過成品，請先在第 4 步執行' in fcj
+
+
+def test_render_multi_method_one_fails_and_none_pass():
+    """10-08 審查：多種輸出方式其中一支驗證沒過——處理紀錄、處理標記照樣換新（有一支成品換上了），
+    輸出摘要、剪輯決策的摘要含全部做法；一支都沒換上——輸出摘要、處理標記都不動。"""
+    w = TE._fresh()
+    _with_product(w)
+    out = w / "輸出"
+    (out / "處理標記_0-3.md").write_text("舊的標記", encoding="utf-8")
+    (out / "輸出摘要_0-3.json").write_text('{"舊的": true}', encoding="utf-8")
+    with _FakeRender(w, fail=False, bad=("sw",)):                        # 一支都沒過
+        try:
+            render.render_video(w, 0.0, 180.0, tag="0-3", methods=["sw"], min_free_gb=0)
+            raise AssertionError("應該丟例外")
+        except RuntimeError as e:
+            assert "驗證沒過" in str(e)
+    assert proclog.load(w)["產生時間"] == "舊的" and (out / "處理標記_0-3.md").read_text(encoding="utf-8") == "舊的標記"
+    assert json.loads((out / "輸出摘要_0-3.json").read_text(encoding="utf-8")) == {"舊的": True}
+    with _FakeRender(w, fail=False, bad=("hw",)):                        # sw 過、hw 沒過
+        try:
+            render.render_video(w, 0.0, 180.0, tag="0-3", methods=["sw", "hw"], min_free_gb=0)
+            raise AssertionError("應該丟例外")
+        except RuntimeError as e:
+            assert "hw" in str(e)
+    assert proclog.load(w)["產生時間"] == "新的" and (out / "處理標記_0-3.md").read_text(encoding="utf-8") == "新的標記"
+    summ = json.loads((out / "輸出摘要_0-3.json").read_text(encoding="utf-8"))
+    assert set(summ["輸出"]) == {"sw", "hw"} and summ["輸出"]["hw"]["檔案"].endswith("驗證沒過.mp4")
+    dec = json.loads((out / "剪輯決策_0-3.json").read_text(encoding="utf-8"))
+    assert set(dec["摘要"]["輸出"]) == {"sw", "hw"}
+
+
+def test_skipped_moves_when_log_changes_even_if_assembly_fails():
+    """跟 1008-7 的略過紀錄對齊：組裝那一步失敗，但處理紀錄已經換新（有一支成品換上了）→ 略過紀錄跟著換成這一次的；
+    處理紀錄沒換 → 沿用上一次的。"""
+    for wrote in (True, False):
+        w = TE._fresh()
+        _with_product(w)
+        wd.write_json(execute.progress_path(w), {execute.SKIPPED_FIELD: {"沒處理": 99, "列": [], "時間": "舊的"}})
+        calls = []
+        runners, checks = TE._fake(calls)
+
+        def half(_w, _ctx, wrote=wrote):
+            if wrote:
+                proclog.write_log(_w, {"版本": 1, "產生時間": "新的", "範圍": [0.0, 180.0], "片段": None, "紀錄": [],
+                                        "未登記的變動": []})
+            raise RuntimeError("hw：成品驗證沒過（假的）")
+        runners["組裝"] = half
+        try:
+            execute.run_execute(w, only_steps=["組裝"], runners=runners, checks=checks, skip_precheck=True, log=lambda m: None)
+            raise AssertionError("應該失敗")
+        except RuntimeError:
+            pass
+        prog = wd.read_json(execute.progress_path(w))
+        if wrote:
+            assert prog[execute.SKIPPED_FIELD]["時間"] != "舊的" and execute.SKIPPED_PENDING not in prog
+        else:
+            assert prog[execute.SKIPPED_FIELD]["時間"] == "舊的" and execute.SKIPPED_PENDING in prog
 
 
 if __name__ == "__main__":

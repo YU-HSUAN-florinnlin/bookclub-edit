@@ -301,16 +301,16 @@ def project_dir_for(video: Path) -> Path:
     return video.parent / f"{name}{PROJECT_SUFFIX}"
 
 
-TEST_WORDS = ("測試", "驗證", "test")   # 路徑上有這幾個字的資料夾＝測試用的工作區
+TEST_WORDS = ("測試", "驗證")   # 工作區資料夾本身或上一層的名稱有這兩個詞＝測試用的工作區（10-08 審查：不看整條路徑）
 
 
 def project_label(d: str | Path) -> dict:
     """10-08（宇軒：兩個專案名稱一樣，切錯了看不出來）：工作區在哪一層、是正式還是測試（純函式）。
-    所在＝往上第一個不是「工作區」的資料夾名稱；標示＝路徑上有「測試」「驗證」的是測試，其他算正式；
+    所在＝往上第一個不是「工作區」的資料夾名稱；標示＝工作區資料夾本身或所在的名稱有「測試」「驗證」的是測試，其他算正式；
     顯示名稱＝「名稱（所在）」。"""
     d = Path(d)
     where = next((p.name for p in d.parents if p.name and p.name != "工作區"), "")
-    test = any(w in part.lower() for part in d.parts for w in TEST_WORDS)
+    test = any(w in part for part in (d.name, where) for w in TEST_WORDS)
     return {"所在": where, "標示": "測試" if test else "正式", "顯示名稱": f"{d.name}（{where}）" if where else d.name}
 
 
