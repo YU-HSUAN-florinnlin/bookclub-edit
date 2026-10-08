@@ -599,6 +599,10 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .rv2 .fc-tabs button span { margin-left: 4px; }
 .rv2 .fc-tabs button .fc-tab-look { color: var(--danger); opacity: 1; }
 .rv2 .fc-tabs button.on .fc-tab-look { color: inherit; }
+.rv2 .fc-tabs button.fc-dot::after { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--danger); margin-left: 5px; vertical-align: middle; }
+.fc-curhint:empty { display: none; }
+.fc-curhint, .fc-tabdone { margin: 0 0 6px; font-size: 14px; }
 .fc-ugroups { max-height: 55vh; overflow-y: auto; background: var(--rv-card); border-radius: 12px; margin-bottom: 14px; }
 .fc-sub { font-size: 15px; margin: 0; padding: 10px 14px 4px; }
 .fc-sub .rv-meta { display: block; font-weight: normal; font-size: 13px; margin-top: 2px; }

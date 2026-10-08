@@ -573,9 +573,48 @@ function fcSelect(key, seek = true) {
 
 function fcStep(dir) {
   const all = fcShown().length ? fcShown() : fcRecs();   // 10-02 第六批：開了「只看要人聽的」就只在那幾筆之間換
-  const i = all.findIndex((x) => x["鍵"] === fc.cur);
-  const n = all[Math.max(0, Math.min(all.length - 1, (i < 0 ? 0 : i) + dir))];
-  if (n) fcSelect(n["鍵"]);
+  const k = fcStepPick(all, fc.cur, fc.video ? fc.video.currentTime : 0, dir);
+  if (k) fcSelect(k);
+}
+
+// 10-08（純函式）：上一筆／下一筆要選哪一筆。目前這一筆在清單裡：照順序前後一筆（到頭就停在頭）；
+// 不在清單裡（影片跟著播到別頁的那一筆）：「下一筆」選成品時間在 t 之後的第一筆、「上一筆」選 t 之前的最後一筆；
+// 找不到（後面、前面都沒有了）就選最後一筆／第一筆。沒有成品時間的（成品裡剪掉、名字沒處理）照清單位置不參加時間比較
+function fcStepPick(list, curKey, t, dir) {
+  if (!list.length) return null;
+  const i = list.findIndex((x) => x["鍵"] === curKey);
+  if (i >= 0) return list[Math.max(0, Math.min(list.length - 1, i + dir))]["鍵"];
+  const at = (x) => (x["成品"] && x["成品"][0] != null ? x["成品"][0] : null);
+  if (dir > 0) {
+    const n = list.find((x) => at(x) != null && at(x) > t + 0.05);
+    return (n || list[list.length - 1])["鍵"];
+  }
+  const p = list.filter((x) => at(x) != null && at(x) < t - 0.05).pop();
+  return (p || list[0])["鍵"];
+}
+
+// 10-08（純函式）：這一頁都通過了、別頁還有沒通過的 → 回傳還沒通過的筆數（顯示「到『還沒通過』」）；不用顯示回傳 0。
+// 「全部」「還沒通過」兩頁不顯示（前者都通過＝全部都通過；後者本來就是那一頁）
+function fcTabDoneLeft(tabId, tabRecs, allRecs) {
+  if (tabId === FC_TAB_ALL || tabId === FC_TAB_TODO || tabId === FC_TAB_KEEP || !tabRecs.length) return 0;
+  if (tabRecs.some((r) => r["結果"] !== "通過")) return 0;
+  return allRecs.filter((r) => r["結果"] !== "通過").length;
+}
+
+// 10-08：影片跟著播到別頁的那一筆時不自動切頁；分頁列下面寫一行「目前這一筆在『某某』頁」（可以點），那一頁的按鈕亮一個小點
+function fcRenderCurHint() {
+  const box = document.getElementById("fc-curhint");
+  if (!box || !fc.data) return;
+  document.querySelectorAll(".fc-tabs button.fc-dot").forEach((b) => b.classList.remove("fc-dot"));
+  const tabs = fcTabs(), tab = fcPickTab(tabs, fcTabGet());
+  const here = tabs.find((x) => x.id === tab);
+  const has = here && here.recs.some((r) => r["鍵"] === fc.cur);
+  const other = fc.cur && fcRec(fc.cur) && !has ? tabs.find((x) => x.id.startsWith("組:") && x.recs.some((r) => r["鍵"] === fc.cur)) : null;
+  if (!other) { box.innerHTML = ""; return; }
+  const btn = document.querySelector(`.fc-tabs button[data-tab="${CSS.escape(other.id)}"]`);
+  if (btn) btn.classList.add("fc-dot");
+  box.innerHTML = `<button class="linkish" id="fc-curhint-go">目前這一筆在「${esc(other["名稱"])}」頁</button>`;
+  document.getElementById("fc-curhint-go").addEventListener("click", () => { fcTabSet(other.id); fcRenderLower(); });
 }
 
 // 10-03 第八批 #65（純函式）：目前這一筆之後第一筆還沒看的；後面都看了才繞回前面找；全部看了回傳 null。
@@ -754,7 +793,11 @@ function fcRenderLower() {
       <span class="rv-meta">${t["說明"] ? `${esc(t["說明"])}。` : ""}要人聽＝生成檢查沒過、放不進時間格（標紅）、名字沒有自動處理的。${only ? `現在列 ${shown.length}／${t.recs.length} 筆。` : ""}</span></div>
       <ol class="rv-list" id="fc-list">${shown.map(fcRecRow).join("") || `<li class="empty">${only ? "這一頁沒有要人聽的。" : "這一頁沒有處理紀錄。"}</li>`}</ol>`;
   }
-  lower.innerHTML = `${unHtml}${nav}${body}`;
+  const left = t["不修改"] ? 0 : fcTabDoneLeft(tab, t.recs, fcRecs());
+  const done = left ? `<p class="fc-tabdone"><button class="linkish" id="fc-go-todo">這一頁都通過了，還有 ${left} 筆沒通過（到「還沒通過」）</button></p>` : "";
+  lower.innerHTML = `${unHtml}${nav}<div class="fc-curhint rv-meta" id="fc-curhint" role="status"></div>${done}${body}`;
+  const goTodo = document.getElementById("fc-go-todo");
+  if (goTodo) goTodo.addEventListener("click", () => { fcTabSet(FC_TAB_TODO); fcRenderLower(); });
   lower.querySelectorAll(".fc-tabs button").forEach((b) => b.addEventListener("click", () => { fcTabSet(b.dataset.tab); fcRenderLower(); }));
   const onlyBox = document.getElementById("fc-only");
   if (onlyBox) onlyBox.addEventListener("change", () => { fcSetOnlyLook(onlyBox.checked); fcRenderLower(); });
@@ -778,6 +821,7 @@ function fcRenderLower() {
 }
 
 function fcMarkRow() {
+  fcRenderCurHint();
   const list = document.getElementById("fc-list");
   if (!list) return;
   list.querySelectorAll("li.cur").forEach((li) => li.classList.remove("cur"));
