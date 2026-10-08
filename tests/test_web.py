@@ -191,6 +191,19 @@ def test_pick_button_always_released():
     assert "clearTimeout(later)" in err and "btn.disabled = false" in err
 
 
+def test_overview_no_horizontal_scroll():
+    # 1008-5：按取消／Esc 退回網頁瀏覽時頁面不往右滑：只縱向捲、主內容區可以比內容窄、長路徑可以換行（不是硬藏橫向捲軸）
+    fio = (WEB / "fileio.js").read_text(encoding="utf-8")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    for line in fio.splitlines():
+        if "scrollIntoView(" in line:
+            assert 'inline: "nearest"' in line, line
+    content = css[css.index(".content {"):]
+    content = content[:content.index("}")]
+    assert "min-width: 0" in content
+    assert "overflow-wrap: anywhere" in css and "overflow-x: hidden" not in css.split("body")[1].split("}")[0]
+
+
 def test_keep_all_voices_needs_confirm():
     # 09-30：「全部保留原聲」先跳確認視窗（會讓 N 位學員保留原聲、不換聲音），取消不變
     js = (WEB / "review.js").read_text(encoding="utf-8")
