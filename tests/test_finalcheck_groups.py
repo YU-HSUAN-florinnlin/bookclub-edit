@@ -269,13 +269,26 @@ def test_web_group_recs_and_unchanged():
 def test_web_play_span_stops_at_end():
     if not NODE:
         return
-    got = _node(_fn("fcSpanStep") + """
+    got = _node("const FC_SPAN_WAIT_MS = 10000;\n" + _fn("fcSpanStep") + """
       const s = { a: 10, b: 12, armed: false };
       const out = [fcSpanStep(s, 3)];            // 還沒跳到：等
       out.push(fcSpanStep(s, 10.0)); s.armed = true;
       out.push(fcSpanStep(s, 11.5), fcSpanStep(s, 12.0), fcSpanStep(s, 30), fcSpanStep(s, 2), fcSpanStep(null, 1));
       console.log(JSON.stringify(out));""")
     assert got == ["wait", "play", "play", "stop", "drop", "drop", "drop"]
+
+
+def test_web_play_span_gives_up_after_10s():
+    # 10-08：按了「跳過去聽」之後影片一直沒跳到那一段，等超過 10 秒就放掉（不再卡在等著）
+    if not NODE:
+        return
+    got = _node("const FC_SPAN_WAIT_MS = 10000;\n" + _fn("fcSpanStep") + """
+      const s = { a: 10, b: 12, armed: false, since: 1000 };
+      console.log(JSON.stringify([fcSpanStep(s, 3, 1000 + 9000), fcSpanStep(s, 3, 1000 + 10001),
+                                  fcSpanStep(s, 10.5, 1000 + 20000)]));""")
+    assert got == ["wait", "drop", "play"]
+    js = (REPO_ROOT / "bookclub" / "web" / "finalcheck.js").read_text(encoding="utf-8")
+    assert "fcSpanStep(fc.span, t, Date.now())" in js and "FC_SPAN_WAIT_MS + 50" in js
 
 
 def test_web_lower_wiring():

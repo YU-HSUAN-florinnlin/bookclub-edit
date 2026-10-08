@@ -716,6 +716,7 @@ function fcRenderLower() {
     <div class="fc-groups" id="fc-list">${grpHtml || `<p class="empty rv-meta">${only ? "沒有要人聽的。" : "沒有處理紀錄。"}</p>`}</div>
     <h2 class="fc-h2">第 3 步有卡片、選定不修改的（${unRows.length} 筆）</h2>
     <p class="rv-meta">這幾處照原聲留著。不用按通過、不擋輸出；想確認就按「跳過去聽」（只播那一段），要改就「回第 3 步改」，改完要重新組裝。</p>
+    <p class="rv-warnline">這一區會顯示學員本名，截圖或分享螢幕時請注意。</p>
     <div class="fc-groups" id="fc-ulist">${uHtml || `<p class="empty rv-meta">沒有。</p>`}</div>`;
   const onlyBox = document.getElementById("fc-only");
   if (onlyBox) onlyBox.addEventListener("change", () => { fcSetOnlyLook(onlyBox.checked); fcRenderLower(); });
@@ -753,22 +754,28 @@ function fcMarkRow() {
 }
 
 // 10-08：「跳過去聽」只播那一段（成品時間 a～b），播到 b 自動停；中途自己跳走就不管
+const FC_SPAN_WAIT_MS = 10000;   // 10-08：按了之後影片一直沒跳到那一段（載入太慢等），等超過 10 秒就放掉
 function fcPlaySpan(a, b) {
   if (fc.ab) fcStopAB(false);
-  fc.span = { a: Number(a), b: Math.max(Number(a) + 0.3, Number(b)), armed: false };
-  fcSeek(fc.span.a, true);
+  const span = { a: Number(a), b: Math.max(Number(a) + 0.3, Number(b)), armed: false, since: Date.now() };
+  fc.span = span;
+  fcSeek(span.a, true);
+  setTimeout(() => { if (fc.span === span && !span.armed) fc.span = null; }, FC_SPAN_WAIT_MS + 50);
 }
 // 純函式：目前時間 t 對「只播那一段」的處理 → "wait"（還沒跳到）、"play"、"stop"（播到結尾，暫停）、"drop"（人跳走了）
-function fcSpanStep(span, t) {
+function fcSpanStep(span, t, now) {
   if (!span) return "drop";
-  if (!span.armed) return t >= span.a - 0.3 && t <= span.b ? "play" : "wait";
+  if (!span.armed) {
+    if (t >= span.a - 0.3 && t <= span.b) return "play";
+    return now != null && span.since != null && now - span.since > FC_SPAN_WAIT_MS ? "drop" : "wait";   // 等太久：放掉
+  }
   if (t < span.a - 0.5 || t > span.b + 1) return "drop";
   if (t >= span.b) return "stop";
   return "play";
 }
 function fcSpanTick(t) {
   if (!fc.span) return;
-  const s = fcSpanStep(fc.span, t);
+  const s = fcSpanStep(fc.span, t, Date.now());
   if (s === "play") fc.span.armed = true;
   else if (s === "stop") { fc.span = null; fc.video.pause(); }
   else if (s === "drop") fc.span = null;
