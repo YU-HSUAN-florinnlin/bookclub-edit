@@ -1751,7 +1751,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/final/sendback":
                 self._send_json(200, fc.send_back(w))
             elif path == "/api/final/export":
-                self._send_json(200, fc.export_final(w))
+                self._send_json(200, fc.export_final(w, confirm=body.get("確定") is True))   # 10-08：還沒看完要先確認
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
         elif path == "/api/roomtone":   # 10-02 第六批第五件：第 2 步「這段可以」「換一段」
