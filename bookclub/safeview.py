@@ -528,6 +528,27 @@ def topic_final_check(w: Path, f: Filter, out: list[str]) -> None:
         f"{x['id']} {timemap.t1(x['start'])}–{timemap.t1(x['end'])}" for x in auto if safe_id(x["id"])) if auto else ""))
 
 
+def topic_run_times(w: Path, out: list[str]) -> None:
+    """10-08：第 4 步的執行時間（只印時間與秒數）。"""
+    from bookclub import execute
+
+    prog = wd.read_json(execute.progress_path(w), default=None)
+    t = execute.run_times(prog, execute._now()) if prog else None
+    if not t:
+        out.append("沒有執行進度（第 4 步還沒跑過）")
+        return
+    out.append(f"這一輪：第一次開始 {t['開始']}，最後結束 {t['結束'] or '—'}；總經過 {val('', t['總經過秒'])} 秒、"
+               f"實際執行 {val('', t['實際執行秒'])} 秒（{t['執行次數']} 次執行，算不出的 {t['算不出的次數']} 次）；"
+               f"最後結果 {t['最後結果']}；執行中={val('', t['執行中'])}" + (f"，已執行 {t['已執行秒']} 秒" if t["執行中"] else ""))
+    out.append(f"中斷 {len(t['中斷'])} 次" + ("：" + "、".join(f"{x['時間']}（{x['結果']}）" for x in t["中斷"]) if t["中斷"] else ""))
+    out.append("各步秒 " + ("、".join(f"{k} {v}" for k, v in t["各步秒"].items()) or "（沒有）"))
+    if not t["有歷史"]:
+        out.append("舊版沒有記錄更早的執行（只算得到最後這一次）")
+    for e in execute.run_history({execute.HISTORY_FIELD: (prog or {}).get(execute.HISTORY_FIELD) or []}) + [execute.run_entry(prog)]:
+        out.append(f"  執行 開始={e['開始']}  結束={e['結束'] or '—'}  結果={e['結果']}  步驟秒="
+                   + ("、".join(f"{k} {v}" for k, v in (e.get("步驟秒") or {}).items()) or "—"))
+
+
 def _gen_logs(w: Path) -> dict[str, Path]:
     from bookclub import studentgen, students, tts
 
@@ -913,6 +934,7 @@ TOPICS = {
     "生成": "生成紀錄（老師／學員／保留原聲）：每一句的時間格、選定、放回做法、要人聽原因、切在講話中、聲音檔在不在、"
             "跟現在的時間格差多少；每次嘗試的長度、語速、分數、種子、第幾版",
     "子程式": "第 4 步每一支子程式：秒數、結束碼、記憶體高峰",
+    "執行進度": "第 4 步的執行時間：這一輪總經過、實際執行、中斷幾次與時間、各步秒數、每一次執行的起訖與結果",
     "成品檢查": "第 5 步：各類型筆數、選定不修改的筆數、需留意（第 4 步略過、成品裡還留著原聲的）每一處的鍵與時間、"
                 "處理紀錄每一筆的通過／退回狀態（不印原因文字）、沒登記的變動、整片退回",
     "剪輯決策": "組裝排出的動作、剪掉、停格、標記、每一筆警告（類型、涉及的 id、起訖到毫秒）；--重算 用現在的程式重新排一次",
@@ -922,7 +944,7 @@ TOPICS = {
     "代號": "這一集用到的代號（每個幾個人用，不印本名）、還在用的英文代號與建議的中文、要念的文字裡還有舊英文代號的地方",
 }
 ALIASES = {"files": "檔案", "turns": "段落", "sentences": "句子", "words": "字", "overlaps": "重疊", "names": "名字",
-           "mutes": "消音", "cuts": "消音", "剪掉": "消音", "finalcheck": "總檢查", "gen": "生成", "parts": "子程式",
+           "mutes": "消音", "cuts": "消音", "剪掉": "消音", "finalcheck": "總檢查", "gen": "生成", "parts": "子程式", "progress": "執行進度", "執行時間": "執行進度",
            "final": "成品檢查", "第5步": "成品檢查", "decisions": "剪輯決策", "convert": "換算", "time": "換算",
            "edges": "前後沒聲音", "room": "底噪", "codes": "代號"}
 
@@ -984,6 +1006,8 @@ def run(argv: list[str]) -> list[str]:
             topic_parts(w, f, out)
         elif topic == "成品檢查":
             topic_finalcheck(w, f, out, args.flagged)
+        elif topic == "執行進度":
+            topic_run_times(w, out)
         elif topic == "剪輯決策":
             topic_decisions(w, f, out, args.tag, args.recompute)
         elif topic == "換算":

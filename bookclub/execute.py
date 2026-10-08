@@ -119,9 +119,14 @@ def mark_interrupted(workdir: str | Path) -> bool:
     hit = [k for k, st in (prog.get("步驟") or {}).items() if st.get("狀態") == "進行中"]
     if not hit:
         return False
+    last = prog.get("最後存檔")   # 10-08：伺服器被關掉前最後一次存進度的時間＝這一次執行大約停在什麼時候
     for k in hit:
-        prog["步驟"][k].update({"狀態": "中斷", "訊息": "上次跑到一半網頁伺服器被關掉了；按「開始執行」會接著做（做好的不重做）"})
+        prog["步驟"][k].update({"狀態": "中斷", "訊息": "上次跑到一半網頁伺服器被關掉了；按「繼續執行」會接著做（做好的不重做）"})
+        if last and not prog["步驟"][k].get("結束"):
+            prog["步驟"][k]["結束"] = last
     prog["中斷"] = True
+    if last and not prog.get("結束時間"):
+        prog["結束時間"] = last
     wd.write_json(path, prog)
     return True
 
@@ -1692,6 +1697,87 @@ def skipped_snapshot(workdir: str | Path) -> dict | None:
         return None
 
 
+# ---------- 10-08 宇軒：第 4 步的執行時間（總經過、實際執行、中斷幾次、各步） ----------
+HISTORY_FIELD = "執行歷史"   # 執行進度.json：之前每一次執行的 [{開始, 結束, 結果, 步驟秒}]（這一次的不在裡面）
+RUN_STEPS = ("老師名字", "學員重念", "保留原聲學員名字", "組裝")
+
+
+def _ts(s: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(s)) if s else None
+    except ValueError:
+        return None
+
+
+def _secs(a: str | None, b: str | None) -> float | None:
+    x, y = _ts(a), _ts(b)
+    return max(0.0, (y - x).total_seconds()) if x and y else None
+
+
+def run_entry(prog: dict) -> dict | None:
+    """（純函式）一次執行（一份執行進度）→ {開始, 結束, 結果: 做完／停止／失敗／中斷／執行中, 步驟秒: {步: 秒}}。
+    中斷（伺服器被關掉）的結束時間用最後一次存進度的時間；舊版沒有那個時間就是 None（算不出這一次花多久）。"""
+    if not prog or not prog.get("開始時間"):
+        return None
+    res = "中斷" if prog.get("中斷") else "停止" if prog.get("停止") else "失敗" if prog.get("錯誤") \
+        else "執行中" if not prog.get("結束時間") else "做完"
+    end = prog.get("結束時間") or (prog.get("最後存檔") if res == "中斷" else None)
+    steps = {}
+    for k, st in (prog.get("步驟") or {}).items():
+        s = _secs(st.get("開始"), st.get("結束") or (prog.get("最後存檔") if st.get("狀態") in ("中斷", "進行中") else None))
+        if s is not None:
+            steps[k] = round(s, 1)
+    return {"開始": prog["開始時間"], "結束": end, "結果": res, "步驟秒": steps}
+
+
+def run_history(prog: dict | None) -> list[dict]:
+    """（純函式）開始新的一次執行時：上一份執行進度的歷史＋上一次本身（這一次的歷史）。"""
+    if not prog:
+        return []
+    hist = [h for h in (prog.get(HISTORY_FIELD) or []) if isinstance(h, dict)]
+    last = run_entry(prog)
+    if last and last["結果"] == "執行中":   # 上一次沒收尾（例如舊版、被強制關掉沒標中斷）：當作中斷
+        last["結果"] = "中斷"
+    return hist + ([last] if last else [])
+
+
+def run_times(prog: dict | None, now: str | None = None) -> dict | None:
+    """（純函式）第 4 步「執行時間」：這一輪（上一次全部做完之後到現在）的
+    {總經過秒, 實際執行秒, 執行次數, 中斷[{時間, 結果}], 各步秒, 執行中, 已執行秒, 有歷史, 算不出的次數, 最後結果}。
+    - 總經過：這一輪第一次按開始 → 最後一次結束（執行中就到現在）
+    - 實際執行：每一次執行（開始→做完／停止／失敗／中斷）的時間加總；結束時間不知道的那幾次不算，記在「算不出的次數」
+    - 中斷：這一輪裡停止、失敗、伺服器被關掉的每一次（時間＝那一次停下來的時間）
+    - 各步：每一次執行裡各步的秒數加總
+    有歷史＝False：執行進度是舊版工具寫的，只記得最後一次，更早的執行沒有記錄。"""
+    cur = run_entry(prog or {})
+    if not cur:
+        return None
+    entries = run_history({k: v for k, v in (prog or {}).items() if k == HISTORY_FIELD}) + [cur]
+    prev = [i for i, e in enumerate(entries[:-1]) if e["結果"] == "做完"]
+    cycle = entries[(prev[-1] + 1) if prev else 0:]
+    running = cur["結果"] == "執行中"
+    if running and now:   # 執行中：這一次算到現在
+        cur = {**cur, "結束": now}
+        cycle = cycle[:-1] + [cur]
+    real, unknown, steps = 0.0, 0, {}
+    for e in cycle:
+        s = _secs(e["開始"], e["結束"])
+        if s is None:
+            unknown += 1
+        else:
+            real += s
+        for k, v in (e.get("步驟秒") or {}).items():
+            steps[k] = round(steps.get(k, 0.0) + v, 1)
+    first, last_end = cycle[0]["開始"], cycle[-1]["結束"]
+    total = _secs(first, last_end)
+    stops = [{"時間": e["結束"] or e["開始"], "結果": e["結果"]} for e in cycle if e["結果"] in ("停止", "失敗", "中斷")]
+    return {"總經過秒": round(total, 1) if total is not None else None, "實際執行秒": round(real, 1),
+            "執行次數": len(cycle), "中斷": stops, "各步秒": {k: steps[k] for k in RUN_STEPS if k in steps},
+            "執行中": running, "已執行秒": round(_secs(cur["開始"], now) or 0.0, 1) if running and now else None,
+            "有歷史": HISTORY_FIELD in (prog or {}), "算不出的次數": unknown, "最後結果": cycle[-1]["結果"],
+            "開始": first, "結束": last_end}
+
+
 def execute_key_problem(*, reassemble_only: bool = False, only_steps: list[str] | None = None,
                         allow: bool = False, env: dict | None = None, system: str | None = None) -> str | None:
     """10-04 #110：第 4 步要生成、卻讀不到 Groq 金鑰時回傳要給人看的說明（可以開始就回傳 None）。
@@ -1762,7 +1848,8 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
                 f"請看一眼 {skipped['請看一眼']}）：預設略過、照目前設定做；做完到第 5 步「需留意」看成品裡還留著原聲的地方")
     else:
         skipped = None
-    old_skipped = (wd.read_json(progress_path(workdir), default=None) or {}).get(SKIPPED_FIELD)
+    old_prog = wd.read_json(progress_path(workdir), default=None) or {}
+    old_skipped = old_prog.get(SKIPPED_FIELD)
     a = 0.0 if start is None else float(start)
     b = float(end) if end is not None else float(video_duration(workdir) or 0.0)
     if b <= a:
@@ -1800,12 +1887,14 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
             prog[SKIPPED_FIELD] = prog.pop(SKIPPED_PENDING)
             save()
 
+    prog[HISTORY_FIELD] = run_history(old_prog)   # 10-08：之前每一次執行的起訖、結果、各步秒數（第 4 步「執行時間」用）
     if old_skipped is not None:   # 上一支成品的（組裝做完才換成這一次的）
         prog[SKIPPED_FIELD] = old_skipped
     if skipped is not None:
         prog[SKIPPED_PENDING] = skipped
 
     def save() -> None:
+        prog["最後存檔"] = _now()   # 10-08：伺服器被關掉時，用這個當作這一次執行停在什麼時候
         wd.write_json(progress_path(workdir), prog)
 
     from bookclub.tts import StopRequested, check_stop

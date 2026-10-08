@@ -550,6 +550,7 @@ async function renderExecuteBody() {
       <tbody id="execSteps">${rows}</tbody></table>
       ${prog["開始時間"] ? `<p class="muted small">上次執行：${esc(fmtStamp(prog["開始時間"]))} 開始${prog["結束時間"] ? `，${esc(fmtStamp(prog["結束時間"]))} 結束` : ""}；範圍 ${esc(fmtRange(prog["範圍"]))}</p>` : ""}
     </div>
+    <div id="execTimeBox">${execTimeHtml(d["執行時間"])}</div>
     <div class="card">
       <div class="exec-opts">
         <label>從 <input type="text" id="exStart" class="short" placeholder="0:00"></label>
@@ -665,6 +666,30 @@ function execSkipNote(fc) {
 }
 
 // 10-08 宇軒（跑完之後按鈕還寫「開始執行」，老師以為哪裡出錯）：第 4 步按鈕文字與頂端一行狀態（純函式）
+// 10-08 宇軒：第 4 步「執行時間」一塊（純函式）。t＝GET /api/execute 的「執行時間」（execute.run_times）
+function execDur(s) {
+  if (s == null) return "—";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h} 小時 ${m} 分` : m ? `${m} 分 ${x} 秒` : `${x} 秒`;
+}
+const EXEC_STOP_WORD = { "停止": "按了停止", "失敗": "失敗", "中斷": "伺服器被關掉" };
+function execTimeHtml(t) {
+  if (!t) return "";
+  const steps = Object.entries(t["各步秒"] || {});
+  const stops = t["中斷"] || [];
+  return `<h2>執行時間</h2><div class="card" id="execTime">
+    ${t["執行中"] ? `<p><b>已執行 ${esc(execDur(t["已執行秒"]))}</b>（這一次 ${esc(fmtStamp(t["開始"]))} 起算的這一輪還在跑）</p>` : ""}
+    <table class="kv">
+      <tr><td>總經過時間</td><td>${esc(execDur(t["總經過秒"]))}<span class="muted">（第一次按開始 ${esc(fmtStamp(t["開始"]))} → ${t["執行中"] ? "現在" : `最後一次結束 ${esc(fmtStamp(t["結束"]))}`}）</span></td></tr>
+      <tr><td>實際執行時間</td><td>${esc(execDur(t["實際執行秒"]))}<span class="muted">（${t["執行次數"]} 次執行加起來，不含中間停下來的時間${t["算不出的次數"] ? `；有 ${t["算不出的次數"]} 次沒有記到結束時間，沒算進去` : ""}）</span></td></tr>
+      <tr><td>中斷</td><td>${stops.length ? `${stops.length} 次：${stops.map((x) => `${esc(fmtStamp(x["時間"]))}（${esc(EXEC_STOP_WORD[x["結果"]] || x["結果"])}）`).join("、")}` : "沒有"}</td></tr>
+      ${steps.length ? `<tr><td>各步</td><td>${steps.map(([k, v]) => `${esc(k)} ${esc(execDur(v))}`).join("；")}</td></tr>` : ""}
+    </table>
+    ${t["有歷史"] ? "" : `<p class="muted">舊版沒有記錄更早的執行：只算得到最後這一次。</p>`}
+  </div>`;
+}
+
 // 10-09 宇軒定：開始執行 →（中斷／停止／失敗後）繼續執行 →（跑完有成品）更新成品
 const EXEC_UPDATE_NOTE = "只補做第 3 步改過的部分，做過的不重做";
 function execBtnState(running, prog, hasProduct) {
@@ -770,6 +795,8 @@ function startExecPoll() {
       if (eta) eta.textContent = execEtaText(d);
       const aw = document.getElementById("execAwake");
       if (aw) aw.innerHTML = awakeLine(d);
+      const tb = document.getElementById("execTimeBox");   // 10-08：執行中「已執行 x 分」跟著更新
+      if (tb) tb.innerHTML = execTimeHtml(d["執行時間"]);
       if (!d.running) { clearInterval(execPollTimer); execPollTimer = null; await renderExecuteBody(); }
     } catch (e) { pollFailed(e); /* 輪詢失敗，下一次再試；連續幾次連不上就出橫幅 */ }
   }, 2000);
