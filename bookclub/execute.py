@@ -1949,4 +1949,15 @@ def status(workdir: str | Path) -> dict:
     return {"前置檢查": precheck(workdir), "進度": wd.read_json(progress_path(workdir), default=None),
             "影片長度": video_duration(workdir), "預設輸出做法": default_methods(), "輸出做法選項": method_options(),
             "退回清單": redo,
-            "重做中": doing}
+            "重做中": doing,
+            # 10-08（宇軒：跑完之後按鈕還寫「開始執行」看起來像出錯）：有沒有成品，第 4 步按鈕文字與狀態列用
+            "有成品": bool(_safe_products(workdir))}
+
+
+def _safe_products(workdir: Path) -> list[str]:
+    from bookclub import finalcheck
+
+    try:
+        return finalcheck.products(workdir)
+    except Exception:  # noqa: BLE001 — 讀不到就當作沒有
+        return []

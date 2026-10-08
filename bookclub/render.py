@@ -1228,9 +1228,18 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
         extra.append("測試：含停格／模糊示範，不是正式成品。")
     (out / f"處理標記_{tag}.md").write_text(marks_md(rows, rng, extra), encoding="utf-8")
     (out / f"處理標記_{tag}.html").write_text(marks_html(rows, rng, extra), encoding="utf-8")
-    wd.write_json(out / f"剪輯決策_{tag}.json", {**d, "片段": plist, "精準度": prec, "摘要": summary})
     from bookclub import proclog   # 09-29：AI 處理紀錄＋沒登記的變動檢查（生成/處理紀錄.json，第 5 步讀）
-    proclog.write_render_log(workdir, d, plist, au["原聲"], au["新聲音"], tag)
+    # 10-08（宇軒：停止後第 5 步看不到舊檔）：處理紀錄、剪輯決策先算好，等至少一支成品驗證通過、換上正式檔名之後才寫；
+    # 中途停止、失敗、驗證沒過時，第 5 步照樣是上一支成品配上一份處理紀錄
+    log_data = proclog.build_render_log(workdir, d, plist, au["原聲"], au["新聲音"], tag)
+    written = False
+
+    def commit_logs() -> None:
+        nonlocal written
+        if not written:
+            wd.write_json(out / f"剪輯決策_{tag}.json", {**d, "片段": plist, "精準度": prec, "摘要": summary})
+            proclog.write_log(workdir, log_data)
+            written = True
 
     problems = []
     for m in methods:
@@ -1250,6 +1259,7 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
         if ver["通過"]:
             tmp.replace(dst)
             final = dst
+            commit_logs()
         else:
             final = out / f"成品_{tag}_{m}_驗證沒過.mp4"
             tmp.replace(final)
@@ -1272,6 +1282,8 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
                                   "標字時段數": len(wins), "驗證": verify(dst, expected, joins, full_decode=True),
                                   "檔案": dst.name}
     wd.write_json(out / f"輸出摘要_{tag}.json", summary)
+    if not problems:   # 沒有要輸出的做法（例如只做標字版）也照樣寫處理紀錄
+        commit_logs()
     if problems:   # 10-02 第七批（C1）：沒產出成品不能當作做完
         raise RuntimeError("組裝沒有產出成品：" + "；".join(problems))
     return summary

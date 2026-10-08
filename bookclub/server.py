@@ -301,11 +301,24 @@ def project_dir_for(video: Path) -> Path:
     return video.parent / f"{name}{PROJECT_SUFFIX}"
 
 
+TEST_WORDS = ("測試", "驗證", "test")   # 路徑上有這幾個字的資料夾＝測試用的工作區
+
+
+def project_label(d: str | Path) -> dict:
+    """10-08（宇軒：兩個專案名稱一樣，切錯了看不出來）：工作區在哪一層、是正式還是測試（純函式）。
+    所在＝往上第一個不是「工作區」的資料夾名稱；標示＝路徑上有「測試」「驗證」的是測試，其他算正式；
+    顯示名稱＝「名稱（所在）」。"""
+    d = Path(d)
+    where = next((p.name for p in d.parents if p.name and p.name != "工作區"), "")
+    test = any(w in part.lower() for part in d.parts for w in TEST_WORDS)
+    return {"所在": where, "標示": "測試" if test else "正式", "顯示名稱": f"{d.name}（{where}）" if where else d.name}
+
+
 def _project_row(d: Path, current: Path | None) -> dict:
     analysis = read_json(analysis_result_path(d), default={}) or {}
     video = analysis.get("video")
     return {
-        "名稱": d.name, "路徑": str(d), "位置": str(d.parent),
+        "名稱": d.name, "路徑": str(d), "位置": str(d.parent), **project_label(d),
         "影片": Path(video).name if video else None,
         "長度": fmt_time(analysis["影片長度"]) if analysis.get("影片長度") else None,
         "分析完成": bool(analysis.get("elapsed", {}).get("總耗時")) or bool(analysis.get("句數")),
@@ -526,6 +539,7 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
     return {
         "proofread": proofread_state,
         "workdir": str(workdir),
+        "專案標示": project_label(workdir),   # 10-08：頂端常駐「現在在：名稱（上一層）」
         "video": {
             "path": str(video_path) if video_path else None,
             "name": video_path.name if video_path else None,
