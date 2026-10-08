@@ -41,11 +41,13 @@ BATTERY_NOTE = "偵測到現在用電池：用電池時最多撐約 5 分鐘就�
 def powershell_script(heartbeat_exit_s: int = NO_HEARTBEAT_EXIT_S, max_hours: int = MAX_HOURS) -> str:
     """Windows 端要跑的 PowerShell（Windows PowerShell 5.1 也能跑）。
 
+    輸出設成 UTF-8：FAIL 的原因（例外訊息）可能有中文，WSL 這邊用 UTF-8 解。
     旗標用十進位：5.1 會把 0x80000001 讀成負的 Int32，轉 uint32 會出錯。
     成功先印一行 `OK <插電狀態>`（Online／Offline／Unknown）；失敗印 `FAIL <原因>` 並以非 0 結束。
     讀 stdin 用自己開的 StreamReader：.NET Framework 的 [Console]::In.ReadLineAsync 其實是同步的，
     會卡住等下一行，「5 分鐘沒心跳就退出」就不會生效。"""
     return f"""$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
 function Say($s) {{ [Console]::Out.WriteLine($s); [Console]::Out.Flush() }}
 try {{
   $k = Add-Type -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);' -Name K -Namespace BookclubAwake -PassThru

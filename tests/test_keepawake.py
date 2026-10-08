@@ -91,6 +91,7 @@ def test_encoded_command_roundtrip():
     assert ka.decode_command(ka.encode_command(s)) == s
     assert ka.decode_command(ka.encode_command("中文 '引號' \"雙引號\"")) == "中文 '引號' \"雙引號\""
     assert "[uint32]2147483649" in s and "[uint32]2147483648" in s and "0x8000" not in s
+    assert s.splitlines()[1] == "[Console]::OutputEncoding = [Text.Encoding]::UTF8"
     assert "StreamReader" in s and ".TotalSeconds -gt 300" in s and "AddHours(24)" in s
 
 
