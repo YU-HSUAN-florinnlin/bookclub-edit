@@ -494,6 +494,43 @@ def test_swift_build_checks_dev_tools_hash_and_timeout():
             _os.environ["HOME"] = old_home
 
 
+def test_mac_picker_kill_switch():
+    # 1008-5：BOOKCLUB_MAC_PICKER=0 完全不用常駐小程式（不編譯、不開），退回 osascript
+    import os as _os
+
+    fake = Path(tempfile.mkdtemp()) / "fake_picker"
+    fake.write_text(FAKE_PICKER.format(py=sys.executable), encoding="utf-8")
+    fake.chmod(0o755)
+    mp = fileio.MacPicker()
+    built = []
+    mp.build = lambda which=None: built.append(1) or fake
+    old = _os.environ.get("BOOKCLUB_MAC_PICKER")
+    try:
+        for off in ("0", "false", "off"):
+            _os.environ["BOOKCLUB_MAC_PICKER"] = off
+            assert not fileio.mac_picker_enabled() and not mp.start() and not built and not mp.usable()
+        _os.environ["BOOKCLUB_MAC_PICKER"] = "1"
+        assert mp.start() and mp.usable()
+        _os.environ["BOOKCLUB_MAC_PICKER"] = "0"      # 開著的也立刻不用
+        assert not mp.usable()
+        saved = fileio.MAC_PICKER
+        fileio.MAC_PICKER = mp
+        try:
+            calls = []
+            def osa(cmd, **kw):
+                calls.append(cmd[0])
+                return R(0, b"/a/b.mp4\n", b"")
+            assert fileio.pick_file("第一堂", method="mac", run=osa) == Path("/a/b.mp4") and calls == ["osascript"]
+        finally:
+            fileio.MAC_PICKER = saved
+    finally:
+        mp._kill()
+        if old is None:
+            _os.environ.pop("BOOKCLUB_MAC_PICKER", None)
+        else:
+            _os.environ["BOOKCLUB_MAC_PICKER"] = old
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

@@ -38,8 +38,9 @@ _ = warm.directoryURL
 warm.layoutIfNeeded()
 emit(["ready": true])
 
-// 10-08 修正：以前主執行緒在兩次之間卡在 readLine() 等下一個要求，但選檔視窗關掉後這支小程式還是「最前面的程式」，
-// macOS 看到最前面的程式不處理事件，就整個畫面轉彩色圈圈、網頁點不動（宇軒按取消後遇到）。
+// 10-08 修正：以前主執行緒在兩次之間卡在 readLine() 等下一個要求（sample 看得到主執行緒停在 __read_nocancel，CPU 0%，
+// 不是忙迴圈），但選檔視窗關掉後這支小程式還是「最前面的程式」，macOS 看到最前面的程式不處理事件，
+// 就整個畫面轉彩色圈圈，Edge、其他程式都點不動（宇軒按取消後遇到，重開機才好）。
 // 現在：主執行緒一直跑事件迴圈（app.run()），另一條執行緒讀 stdin、把要求交給主執行緒；視窗關掉後馬上 hide，
 // 把「最前面」還給原本的程式（瀏覽器）。
 func handle(_ line: String) {
@@ -54,7 +55,7 @@ func handle(_ line: String) {
     p.canChooseDirectories = false
     p.canChooseFiles = true
     p.allowsMultipleSelection = false
-    p.level = .floating   // 浮在瀏覽器上面，不會躲在後面
+    // 1008-5：不設成浮在所有程式之上（.floating）；靠 activate 把視窗帶到前面，關掉後立刻 orderOut＋hide
     app.activate(ignoringOtherApps: true)
     // 量測用：設了環境變數 BOOKCLUB_PICKER_AUTOCANCEL=秒數，視窗開了那麼久自動取消（平常不設）
     if let s = ProcessInfo.processInfo.environment["BOOKCLUB_PICKER_AUTOCANCEL"], let sec = Double(s) {

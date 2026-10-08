@@ -336,6 +336,11 @@ def swift_build(src: Path, name: str, which=None, run=None) -> Path | None:
     return exe
 
 
+def mac_picker_enabled() -> bool:
+    """總開關（1008-5）：環境變數 BOOKCLUB_MAC_PICKER=0 完全不用常駐選檔小程式，每次改叫 osascript（慢約 1 秒）。"""
+    return os.environ.get("BOOKCLUB_MAC_PICKER", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 class MacPicker:
     """常駐選檔小程式的管理：編譯、背景啟動預熱、送一次要求、逾時或掛掉就關掉（下一次再重開）。"""
 
@@ -354,6 +359,10 @@ class MacPicker:
         """（背景執行緒呼叫）編譯＋啟動＋等預熱好。成功回 True。"""
         import queue
 
+        if not mac_picker_enabled():
+            self.failed = "BOOKCLUB_MAC_PICKER=0：不用常駐選檔小程式"
+            timing_log("BOOKCLUB_MAC_PICKER=0：不開常駐選檔小程式，每次改叫 osascript")
+            return False
         with self.lock:
             if self.proc is not None and self.proc.poll() is None and self.ready:
                 return True
@@ -397,7 +406,7 @@ class MacPicker:
         threading.Thread(target=self.start, daemon=True).start()
 
     def usable(self) -> bool:
-        return self.ready and self.proc is not None and self.proc.poll() is None and not self.lock.locked()
+        return mac_picker_enabled() and self.ready and self.proc is not None and self.proc.poll() is None and not self.lock.locked()
 
     def pick(self, title: str, exts: tuple[str, ...], timeout: float = PICK_TIMEOUT_S) -> tuple[str | None, float]:
         """開一次選檔視窗。回傳 (路徑或 None＝取消, 送出要求到視窗要開的秒數)。
