@@ -852,6 +852,10 @@ def export_final(workdir: str | Path) -> dict:
         while dst.exists() or dst.is_symlink():   # 同一秒按兩次：加編號，一樣不蓋掉
             dst = src.with_name(f"{Path(final_name(src.name, datetime.now().strftime('%Y%m%d-%H%M%S'))).stem} ({n}){src.suffix}")
             n += 1
+        from bookclub.fileio import cleanup_partials
+
+        # 10-08：上次輸出到一半斷掉（伺服器被關掉）留下、超過 1 小時沒動的 `.最終成品_….輸出中` 先清掉
+        cleanup_partials(dst.parent, suffix=".輸出中")
         tmp = dst.with_name(f".{dst.name}.輸出中")
         shutil.copy2(src, tmp)   # 先複製到暫存檔、完整了才換上（複製到一半中斷不會留下半個最終成品）
         os.replace(tmp, dst)
