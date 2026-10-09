@@ -1289,6 +1289,12 @@ class BookclubServer(ThreadingHTTPServer):
         from bookclub.execute import stop_requested
 
         st["停止中"] = bool(state.get("running")) and stop_requested(self.workdir)
+        from bookclub.execute import _now, run_times   # 10-08 宇軒：第 4 步「執行時間」
+
+        try:
+            st["執行時間"] = run_times(prog, _now())
+        except Exception:  # noqa: BLE001 — 算不出來不擋第 4 步
+            st["執行時間"] = None
         return {**state, **st}
 
     def start_analyze(self, opts: dict) -> dict:

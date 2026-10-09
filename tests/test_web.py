@@ -336,6 +336,36 @@ console.log(JSON.stringify(out), document.getElementById("connLost").innerHTML.i
     assert r.stdout.strip() == "[false,false,false,true,true,false,false] true", r.stdout
 
 
+def test_step4_whole_check_folded_by_default():
+    """10-08 宇軒：第 4 步「開始前總檢查」整區預設收成一行，展開狀態記在瀏覽器；硬擋的訊息放在開始執行按鈕旁邊、不收合。"""
+    import json
+    import shutil
+    import subprocess
+
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    fn = re.search(r"^function finalCheckHtml\(.*?^\}\n", app, re.S | re.M).group(0)
+    assert fn.lstrip().count('<details class="fc-whole" id="fcWhole"') == 1 and fn.rstrip().endswith("</div></details>`;\n}")
+    assert "fcCheckOpen() || !!execGoCheck || !!execBackRow" in fn
+    body = re.search(r"^async function renderExecuteBody\(.*?^\}\n", app, re.S | re.M).group(0)
+    assert body.index('id="execBlockNear"') < body.index('<button id="btnExec"')
+    assert body.count("還不能開始") == 1   # 10-09：只留按鈕上方那一塊，頁面最上面不再重複一張卡
+    assert 'whole.addEventListener("toggle", () => fcSetCheckOpen(whole.open))' in app
+    node = shutil.which("node")
+    if not node:
+        return
+    pick = lambda name: re.search(rf"^function {name}\(.*?^\}}\n", app, re.S | re.M).group(0)
+    fc = {"一定要處理": [{"處理好": False}] * 8, "請看一眼": [{"已看過": False}] * 24}
+    script = (pick("fcFoldHeads") + pick("fcWholeHead") + pick("fcCheckOpen") + 'const FC_CHECK_OPEN_KEY = "fc-check-open";\n'
+              + f"const fc = {json.dumps(fc, ensure_ascii=False)};"
+              + 'console.log(JSON.stringify([fcWholeHead(fc), fcWholeHead({"一定要處理": [{"處理好": true}], "請看一眼": [{"已看過": true}]}),'
+              + ' fcWholeHead({"一定要處理": [], "請看一眼": []}), fcCheckOpen()]));')
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == ["開始前總檢查：一定要處理 8 列、請看一眼 24 處（預設先略過）",
+                                    "開始前總檢查：一定要處理 0 列、請看一眼 0 處（都處理好了）",
+                                    "開始前總檢查：沒有要處理、要看的", False]   # 沒有 localStorage（讀不到）＝收合
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
