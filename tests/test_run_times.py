@@ -134,6 +134,53 @@ def test_web_exec_time_html():
     assert "已執行 10 分 0 秒" in running and "舊版沒有記錄更早的執行" in running and none == ""
 
 
+def test_unfinished_running_uses_last_save_as_end():
+    """10-09：上一次還寫著執行中、沒被標成中斷的：用最後存檔當結束，不算進「算不出的次數」。"""
+    prev = _p("2026-10-08T20:00:00", None, 最後存檔="2026-10-08T20:45:00",
+              步驟={"學員重念": {"開始": "2026-10-08T20:00:00", "狀態": "進行中"}})
+    hist = execute.run_history(prev)
+    assert hist == [{"開始": "2026-10-08T20:00:00", "結束": "2026-10-08T20:45:00", "結果": "中斷", "步驟秒": {"學員重念": 2700.0}}]
+    t = execute.run_times(_p("2026-10-08T21:00:00", "2026-10-08T21:10:00", 執行歷史=hist))
+    assert t["算不出的次數"] == 0 and t["實際執行秒"] == 45 * 60 + 10 * 60 and t["執行次數"] == 2
+    assert t["中斷"] == [{"時間": "2026-10-08T20:45:00", "結果": "中斷"}]
+
+
+def test_heartbeat_updates_last_save_while_step_runs():
+    """10-09：長的步驟跑到一半，「最後存檔」也會定時更新（伺服器被關掉時少算的時間不超過一個間隔）；結束後不再寫。"""
+    import time
+
+    w = TE._fresh()
+    calls = []
+    runners, checks = TE._fake(calls)
+    orig = runners["學員重念"]
+    seen = []
+
+    def slow(wk, ctx):
+        first = wd.read_json(execute.progress_path(wk))["最後存檔"]
+        deadline = time.time() + 5
+        while time.time() < deadline:   # 等定時存檔把時間往後推（不靠這一步自己存）
+            time.sleep(0.1)
+            now = wd.read_json(execute.progress_path(wk))["最後存檔"]
+            if now != first:
+                seen.append((first, now))
+                break
+        return orig(wk, ctx)
+    runners["學員重念"] = slow
+    old = execute.HEARTBEAT_SECS
+    execute.HEARTBEAT_SECS = 0.3
+    try:
+        prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, log=lambda m: None)
+    finally:
+        execute.HEARTBEAT_SECS = old
+    assert seen and seen[0][1] > seen[0][0], seen
+    assert prog["結束時間"]
+    path = execute.progress_path(w)
+    before = path.stat().st_mtime_ns
+    time.sleep(1.0)
+    assert path.stat().st_mtime_ns == before   # 結束後定時存檔停了
+    assert not [t for t in __import__("threading").enumerate() if t.name == "執行進度定時存檔"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

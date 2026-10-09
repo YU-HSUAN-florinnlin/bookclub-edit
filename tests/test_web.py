@@ -348,6 +348,7 @@ def test_step4_whole_check_folded_by_default():
     assert "fcCheckOpen() || !!execGoCheck || !!execBackRow" in fn
     body = re.search(r"^async function renderExecuteBody\(.*?^\}\n", app, re.S | re.M).group(0)
     assert body.index('id="execBlockNear"') < body.index('<button id="btnExec"')
+    assert body.count("還不能開始") == 1   # 10-09：只留按鈕上方那一塊，頁面最上面不再重複一張卡
     assert 'whole.addEventListener("toggle", () => fcSetCheckOpen(whole.open))' in app
     node = shutil.which("node")
     if not node:

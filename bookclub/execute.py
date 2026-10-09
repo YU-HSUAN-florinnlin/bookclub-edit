@@ -1700,6 +1700,7 @@ def skipped_snapshot(workdir: str | Path) -> dict | None:
 # ---------- 10-08 宇軒：第 4 步的執行時間（總經過、實際執行、中斷幾次、各步） ----------
 HISTORY_FIELD = "執行歷史"   # 執行進度.json：之前每一次執行的 [{開始, 結束, 結果, 步驟秒}]（這一次的不在裡面）
 RUN_STEPS = ("老師名字", "學員重念", "保留原聲學員名字", "組裝")
+HEARTBEAT_SECS = 60.0   # 10-09：執行中每隔多久更新一次「最後存檔」（長的子程式中途伺服器被關掉，也只少算這麼久）
 
 
 def _ts(s: str | None) -> datetime | None:
@@ -1738,6 +1739,8 @@ def run_history(prog: dict | None) -> list[dict]:
     last = run_entry(prog)
     if last and last["結果"] == "執行中":   # 上一次沒收尾（例如舊版、被強制關掉沒標中斷）：當作中斷
         last["結果"] = "中斷"
+        if not last["結束"]:   # 10-09：跟 run_entry 處理中斷一樣，用最後一次存進度的時間當結束（舊版沒有就還是算不出）
+            last["結束"] = prog.get("最後存檔")
     return hist + ([last] if last else [])
 
 
@@ -1893,14 +1896,30 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     if skipped is not None:
         prog[SKIPPED_PENDING] = skipped
 
+    save_lock = threading.RLock()
+
     def save() -> None:
-        prog["最後存檔"] = _now()   # 10-08：伺服器被關掉時，用這個當作這一次執行停在什麼時候
-        wd.write_json(progress_path(workdir), prog)
+        with save_lock:
+            prog["最後存檔"] = _now()   # 10-08：伺服器被關掉時，用這個當作這一次執行大約停在什麼時候
+            wd.write_json(progress_path(workdir), prog)
 
     from bookclub.tts import StopRequested, check_stop
 
     _clear_stop(workdir)   # 上次按的停止不算這一次
     save()
+    # 10-09：執行中另開一條執行緒定時更新「最後存檔」——不然只在每步／每支子程式起訖時存，
+    # 長的子程式跑到一半伺服器被關掉，這一次的結束時間會算得比實際早很多
+    hb_stop = threading.Event()
+
+    def heartbeat() -> None:
+        while not hb_stop.wait(HEARTBEAT_SECS):
+            try:
+                save()
+            except Exception:  # noqa: BLE001 — 只是更新時間，存不了就等下一次（主流程照樣存）
+                pass
+
+    hb = threading.Thread(target=heartbeat, name="執行進度定時存檔", daemon=True)
+    hb.start()
     awake_off = keep_awake(log, awake_status) if not runners_given and opts.keep_awake else (lambda: None)   # 測試用假步驟時不用
     try:
         for key, _desc in STEPS:
@@ -1971,6 +1990,8 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
         log("[AI 執行] 全部做完。下一步：網頁第 5 步「成品檢查」")
         return prog
     finally:
+        hb_stop.set()   # 先停定時存檔，免得結束後又寫一次
+        hb.join(timeout=5)
         settle_skipped()   # 做完、停止、失敗都看一次：處理紀錄換新了，略過紀錄跟著換
         awake_off()
 
