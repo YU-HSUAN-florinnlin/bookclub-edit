@@ -159,16 +159,16 @@ def test_last_run_pure():
 
 
 def test_project_label():
-    a = server.project_label("/Users/x/Downloads/課程/自動化剪輯流程-開發專案/2025-04-09 第一堂_剪輯工作區")
-    b = server.project_label("/Users/x/讀書會剪輯資料/舊測試工作區/第一步從零_1004b/工作區/2025-04-09 第一堂_剪輯工作區")
-    assert a == {"所在": "自動化剪輯流程-開發專案", "標示": "正式", "顯示名稱": "2025-04-09 第一堂_剪輯工作區（自動化剪輯流程-開發專案）"}
-    assert b["所在"] == "第一步從零_1004b" and b["標示"] == "測試" and b["顯示名稱"] != a["顯示名稱"]
+    a = server.project_label("/home/u/課程/開發專案X/2025-01-01 第一堂_剪輯工作區")
+    b = server.project_label("/home/u/剪輯資料/舊測試區/從零_b/工作區/2025-01-01 第一堂_剪輯工作區")
+    assert a == {"所在": "開發專案X", "標示": "正式", "顯示名稱": "2025-01-01 第一堂_剪輯工作區（開發專案X）"}
+    assert b["所在"] == "從零_b" and b["標示"] == "測試" and b["顯示名稱"] != a["顯示名稱"]
     assert server.project_label("/tmp/驗證_0926d")["標示"] == "測試"
     # 10-08 審查：只看工作區資料夾本身、上一層、上上層（跳過「工作區」）的名稱；test 這類英文不算
     assert server.project_label("/Users/x/latest/tester/第一堂_剪輯工作區")["標示"] == "正式"
-    assert server.project_label("/Users/x/讀書會剪輯資料/舊測試工作區/第一步從零_1004b/工作區/第一堂")["標示"] == "測試"   # 上上層
+    assert server.project_label("/home/u/剪輯資料/舊測試區/從零_b/工作區/第一堂")["標示"] == "測試"   # 上上層
     assert server.project_label("/Users/x/測試/a/b/第一堂")["標示"] == "正式"   # 再往上一層的不算
-    assert server.project_label("/Users/x/舊測試工作區/第一堂")["標示"] == "測試"
+    assert server.project_label("/home/u/舊測試區/第一堂")["標示"] == "測試"
     # 上一層資料夾也同名：往上多帶幾層，直到分得出來
     rows = [{"名稱": "工作區", "路徑": "/s/甲_ui/base/工作區", **server.project_label("/s/甲_ui/base/工作區")},
             {"名稱": "工作區", "路徑": "/s/乙_ui/base/工作區", **server.project_label("/s/乙_ui/base/工作區")},
@@ -217,9 +217,9 @@ def test_web_pure_functions():
     got = _node(_ESC + "const FC_NO_PRODUCT = 1;\n" + _fn(fcj, "fcRunNoteHtml") + _fn(fcj, "fcWhereHtml") + """
       const run = {"說明": "第 4 步上次執行到一半被停止（10-08 23:39 開始）"};
       console.log(JSON.stringify([fcRunNoteHtml(run, true), fcRunNoteHtml(run, false), fcRunNoteHtml({"說明": ""}, true),
-        fcWhereHtml({"顯示名稱": "第一堂（1004b）", "標示": "測試"})]));""")
+        fcWhereHtml({"顯示名稱": "第一堂（從零_b）", "標示": "測試"})]));""")
     assert "現在看的是上一支完整的成品" in got[0] and "還沒有完整的成品" in got[1] and got[2] == ""
-    assert "現在在：<b>第一堂（1004b）</b>（測試）" in got[3]
+    assert "現在在：<b>第一堂（從零_b）</b>（測試）" in got[3]
     assert '這個工作區還沒組裝過成品，請先在第 4 步執行' in fcj
 
 
