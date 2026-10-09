@@ -23,7 +23,7 @@ readlink ~/.claude/skills/bookclub-edit    # 印出 <工具資料夾>/skills/boo
 README 的例子用 `~/bookclub-edit`，夥伴放在別的位置時照查到的換掉。下面寫 `<工具資料夾>` 的地方都換成實際位置。
 `.venv/bin/...` 開頭的指令都要先 `cd <工具資料夾>` 再跑。
 
-## 平常怎麼操作（0.2.1b1）
+## 平常怎麼操作（0.2.1b2）
 
 1. **啟動**：macOS 雙擊工具資料夾裡的「啟動.command」，瀏覽器會自動開 <http://localhost:8766>。
    WSL2 在終端機跑 `cd <工具資料夾> && .venv/bin/bookclub serve`，再請夥伴用 Windows 的瀏覽器開
