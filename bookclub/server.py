@@ -1386,7 +1386,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _serve_file(self, path: Path, content_type: str | None = None) -> None:
+    def _serve_file(self, path: Path, content_type: str | None = None, no_store: bool = False) -> None:
+        """no_store（10-13 bug 一）：第 5 步成品影片不讓瀏覽器快取（同名覆寫後還播到舊的）。"""
         if not path.is_file():
             raise FileNotFoundError(str(path))
         content_type = content_type or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
@@ -1406,7 +1407,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
-        if content_type.split(";")[0] in ("text/html", "text/javascript", "application/javascript", "text/css"):
+        if no_store:
+            self.send_header("Cache-Control", "no-store")
+        elif content_type.split(";")[0] in ("text/html", "text/javascript", "application/javascript", "text/css"):
             self.send_header("Cache-Control", "no-cache")  # 更新工具後重新整理就拿到新版網頁，不會卡在舊快取
         if is_partial:
             self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
@@ -1529,7 +1532,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/final/video":
             from bookclub import finalcheck
 
-            self._serve_file(finalcheck.video_file(server.workdir))
+            self._serve_file(finalcheck.video_file(server.workdir), no_store=True)   # 10-13 bug 一：不快取
         elif path == "/api/final/clip":
             from bookclub import finalcheck
 
@@ -1788,6 +1791,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, fc.add_watched(w, body.get("區段", []), body.get("成品影片")))
             elif path == "/api/final/product":
                 self._send_json(200, fc.choose_product(w, str(body["成品影片"])))
+            elif path == "/api/final/switchnote":   # 10-13 bug 一：「已改成檢查新的成品」顯示過了就清掉
+                self._send_json(200, fc.clear_switch_note(w))
             elif path == "/api/final/sendback":
                 self._send_json(200, fc.send_back(w))
             elif path == "/api/final/export":

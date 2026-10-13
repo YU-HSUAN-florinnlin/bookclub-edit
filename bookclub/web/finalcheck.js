@@ -26,7 +26,7 @@ const fcSourceName = (src) => String(src || "").replace(/^render video\s*/, "成
 // 09-29 宇軒：2 倍速以下播過的才算「看過」（快轉看完不算有人完整看過）
 const FC_MAX_RATE = 2;
 
-const fc = { span: null, seen: [], seg: null, data: null, video: null, audio: null, cur: null, mode: "逐筆", sentRanges: "", timer: null, redoOpen: false, lastT: 0, ab: null };
+const fc = { span: null, seen: [], seg: null, data: null, video: null, audio: null, cur: null, mode: "逐筆", sentRanges: "", timer: null, redoOpen: false, lastT: 0, ab: null, switchNote: null };
 // 10-07 宇軒：畫面上的「學員3」換成「本名（代號）」（GET /api/final 的「學員顯示名」；只在畫面換，處理紀錄不寫本名）
 function fcWho(text) {
   const names = (fc.data && fc.data["學員顯示名"]) || {};
@@ -75,8 +75,14 @@ async function renderFinal() {
       fcRunNoteHtml(d["上次執行"], false) + fcWhereHtml(d["專案標示"]));
     return;
   }
+  // 10-13 bug 一：選單標「（最新）」「（舊的，時間軸對不上）」（只有一支時照舊不顯示選單）
+  const marks = d["成品標記"] || {};
   const prodSel = d["成品影片清單"].length > 1 ? `<label class="fc-prod">檢查哪一支 <select id="fc-prod">${d["成品影片清單"].map((p) =>
-    `<option value="${esc(p)}" ${p === d["成品影片"] ? "selected" : ""}>${esc(p.replace("輸出/", ""))}</option>`).join("")}</select></label>` : "";
+    `<option value="${esc(p)}" ${p === d["成品影片"] ? "selected" : ""}>${esc(p.replace("輸出/", "") + fcProdMark(marks[p]))}</option>`).join("")}</select></label>` : "";
+  if (d["成品切換提示"]) {   // 10-13 bug 一：自動換成品的提示顯示一次（這次打開頁面留著），後端那份清掉
+    fc.switchNote = d["成品切換提示"];
+    apiPost("/api/final/switchnote", {}).catch(() => {});
+  } else if (fc.switchNote && fc.switchNote["到"] !== d["成品影片"]) fc.switchNote = null;
   contentEl.innerHTML = `
     <div class="rv2 fc">
       <div class="fc-pin" role="note">沒列在時間軸上的地方＝原片沒動</div>
@@ -96,7 +102,7 @@ async function renderFinal() {
       <section class="rv-upper">
         <div class="rv-left">
           ${prodSel}
-          <video id="fc-video" controls preload="metadata" src="${esc(d["影片網址"])}?v=${encodeURIComponent(d["成品影片"])}"></video>
+          <video id="fc-video" controls preload="metadata" src="${esc(d["影片網址"])}?v=${encodeURIComponent(d["成品影片"] + "|" + (d["成品版本"] || ""))}"></video>
           <div class="rv-timebar"><span class="rv-clock"><b id="fc-clock">0:00</b> ／ ${esc(fcFmt(d["成品長度"], 0))}（成品時間）</span>
             <span class="nowrap"><input id="fc-goto" class="rv-goto" placeholder="跳到 38:26" aria-label="跳到時間（例如 38:26，按 Enter）">
               <select id="fc-goto-kind" aria-label="輸入的是成品時間還是原片時間"><option value="成品">成品時間</option><option value="原片">原片時間</option></select></span>
@@ -132,7 +138,12 @@ async function renderFinal() {
   fc.ab = null;
   fc.audio.addEventListener("ended", () => { if (fc.ab && fc.ab.which === "前") fcStopAB(); });
   const prod = document.getElementById("fc-prod");
-  if (prod) prod.addEventListener("change", async () => { await apiPost("/api/final/product", { "成品影片": prod.value }); fc.sentRanges = ""; renderFinal(); });
+  if (prod) prod.addEventListener("change", async () => {
+    // 10-13 bug 一：選到舊的成品先問（時間軸跟處理紀錄對不上、不能輸出）
+    if (marks[prod.value] === "舊的" && !confirm(FC_OLD_PRODUCT_ASK)) { prod.value = d["成品影片"]; return; }
+    fc.switchNote = null;
+    await apiPost("/api/final/product", { "成品影片": prod.value }); fc.sentRanges = ""; renderFinal();
+  });
   fcBindVideo();
   fcBindTimeline(document.getElementById("fc-tl"));
   window.addEventListener("resize", fcRenderTimeline);
@@ -234,14 +245,42 @@ function fcRenderTop() {
   const ex = document.getElementById("fc-export");
   ex.disabled = !fc.data["有處理紀錄"] || !fc.data["成品影片"];   // 10-08 宇軒放寬：沒檢查完也能按，按下去先確認
   ex.title = st["可以輸出"] ? "全部通過、整片看過 100%：可以輸出" : `還沒檢查完（${st["還不能輸出的原因"].join("；")}），按下去會先問一次`;
+  // 10-13 bug 一：頂端提示改成多行——每條符合就各一行（以前是 if／else if，有「已輸出」時其他提示都看不到）。
+  // 要加一行就在 fcTopLines 裡 push 一條（{html, cls}），順序＝顯示順序
   const msg = document.getElementById("fc-msg");
-  const early = fcExportedEarly(fc.data["輸出成品"]);
-  if (fc.data["輸出成品"]) msg.innerHTML = `<span class="badge done">已輸出</span> <code>${esc(fc.data["輸出成品"]["檔案"])}</code>（${esc(fmtStamp(fc.data["輸出成品"]["時間"]))}）${early ? `<span class="rv-warnline">　${esc(early)}</span>` : ""}<span class="muted">　要重新輸出可以再按一次，會產生新的一支、舊的不會被蓋掉；成品在下面的按鈕拿</span>`;
-  else if (fc.data["重做中"]) msg.innerHTML = `第 4 步正在重做退回的 ${fc.data["重做中"]["項目"].length} 筆（或上次沒做完）：做完會重新組裝，這幾筆回到「還沒看」。`;
-  else if (fc.data["送回AI重做"]) msg.innerHTML = `已送回 AI 重做 ${fc.data["送回AI重做"]["項目"].length} 筆（${esc(fmtStamp(fc.data["送回AI重做"]["時間"]))}）：到 <a href="#step4">第 4 步</a> 按「只重做退回的這幾筆」。`;
-  else if (fc.data["重做過"]) msg.innerHTML = `上一次重做了 ${fc.data["重做過"]["項目"].length} 筆（${esc(fmtStamp(fc.data["重做過"]["時間"]))}）：清單上標「重做過」的要重新看。`;
-  else if (!st["可以輸出"]) msg.innerHTML = `<span class="rv-meta">還沒檢查完：${esc(st["還不能輸出的原因"].join("；"))}（還是可以輸出，按下去會先問一次）</span>`;
-  else msg.innerHTML = "";
+  msg.innerHTML = fcTopLines(fc.data, st, fc.switchNote).map((x) => `<div class="fc-topline${x.cls ? " " + x.cls : ""}">${x.html}</div>`).join("");
+}
+
+const FC_OLD_PRODUCT_ASK = "這一支是舊的成品（範圍或輸出方式跟最新一次組裝不同），時間軸跟清單對不上，也不能輸出。\n" +
+  "換過去的話，整片看過的地方這一支要重看。確定要換？";
+
+// 成品選單後面的標記（純函式）
+function fcProdMark(m) {
+  return m === "最新" ? "（最新）" : m === "舊的" ? "（舊的，時間軸對不上）" : "";
+}
+
+// 頂端提示每一行（純函式，10-13 bug 一）：回傳 [{html, cls}]，每條符合就各一行
+function fcTopLines(data, st, sw) {
+  const lines = [];
+  if (data["檢查的是舊成品"]) {   // 紅字常駐：正在看舊的成品
+    lines.push({ cls: "fc-stale", html: `<b>現在檢查的是舊的成品（${esc(String(data["成品影片"] || "").replace("輸出/", ""))}），時間軸跟清單對不上、不能輸出</b>：在「檢查哪一支」換成標「最新」的那支` });
+  }
+  if (sw && sw["到"] === data["成品影片"]) {
+    const old = sw["原因"] === "之前播的是舊成品" ? "之前看過的地方、這次之後按的通過要重看。" : "";
+    const more = data["舊成品支數"] ? `<span class="muted">（輸出資料夾還有 ${data["舊成品支數"]} 支舊成品，沒有刪，要的話自己清）</span>` : "";
+    lines.push({ cls: "", html: `<span class="badge done">已換成品</span> 第 4 步做了新的成品，已改成檢查 <code>${esc(String(sw["到"]).replace("輸出/", ""))}</code>。${old}${more}` });
+  }
+  const out = data["輸出成品"];
+  if (out) {
+    const early = fcExportedEarly(out);
+    lines.push({ cls: "", html: `<span class="badge done">已輸出</span> <code>${esc(out["檔案"])}</code>（${esc(fmtStamp(out["時間"]))}）${early ? `<span class="rv-warnline">　${esc(early)}</span>` : ""}<span class="muted">　要重新輸出可以再按一次，會產生新的一支、舊的不會被蓋掉；成品在下面的按鈕拿</span>` });
+  }
+  // 重做的三個階段（正在重做 → 已送回 → 上一次重做過）同一時間只會是其中一個，算一行
+  if (data["重做中"]) lines.push({ cls: "", html: `第 4 步正在重做退回的 ${data["重做中"]["項目"].length} 筆（或上次沒做完）：做完會重新組裝，這幾筆回到「還沒看」。` });
+  else if (data["送回AI重做"]) lines.push({ cls: "", html: `已送回 AI 重做 ${data["送回AI重做"]["項目"].length} 筆（${esc(fmtStamp(data["送回AI重做"]["時間"]))}）：到 <a href="#step4">第 4 步</a> 按「只重做退回的這幾筆」。` });
+  else if (data["重做過"]) lines.push({ cls: "", html: `上一次重做了 ${data["重做過"]["項目"].length} 筆（${esc(fmtStamp(data["重做過"]["時間"]))}）：清單上標「重做過」的要重新看。` });
+  if (!out && !st["可以輸出"]) lines.push({ cls: "", html: `<span class="rv-meta">還沒檢查完：${esc(st["還不能輸出的原因"].join("；"))}（還是可以輸出，按下去會先問一次）</span>` });
+  return lines;
 }
 
 // ---------- 影片、時間軸 ----------

@@ -1368,6 +1368,42 @@ def test_server_reassemble_without_returns():
         httpd.server_close()
 
 
+def test_new_range_run_points_step5_to_new_product():
+    """10-13 bug 一：第 4 步改範圍再跑一次（假的組裝：照 ctx 的標記與輸出做法寫成品、寫處理紀錄），
+    跑完第 5 步自動改看這次做出的那一支，舊的標「舊的」。"""
+    from datetime import datetime
+
+    from bookclub import finalcheck, proclog
+
+    w = _fresh()
+    old = _fake_product(w, "成品_0-3_sw.mp4")
+    past = time.time() - 3600
+    os.utime(old, (past, past))
+    wd.write_json(proclog.log_path(w), {"版本": 1, "來源": "render video 0-3", "範圍": [0.0, 180.0],
+                                        "產生時間": datetime.fromtimestamp(past - 60).isoformat(timespec="seconds"),
+                                        "片段": None, "紀錄": [], "未登記的變動": []})
+    assert finalcheck.page_data(w)["成品影片"] == "輸出/成品_0-3_sw.mp4"
+    state = {"組好": False}
+
+    def render(wk, ctx):
+        wd.write_json(proclog.log_path(wk), {"版本": 1, "來源": f"render video {ctx['標記']}", "範圍": ctx["範圍"],
+                                             "產生時間": datetime.now().isoformat(timespec="seconds"),
+                                             "片段": None, "紀錄": [], "未登記的變動": []})
+        for m in ctx["輸出做法"]:
+            _fake_product(wk, f"成品_{ctx['標記']}_{m}.mp4")
+        state["組好"] = True
+
+    runners = {"老師名字": lambda wk, c: None, "學員重念": lambda wk, c: None, "保留原聲學員名字": lambda wk, c: None,
+               "組裝": render}
+    checks = {k: (lambda wk, c: (True, "假的")) for k in runners}
+    checks["組裝"] = lambda wk, c: (state["組好"], "假的")
+    execute.run_execute(w, end=120.0, runners=runners, checks=checks, skip_precheck=True, log=lambda s: None)
+    d = finalcheck.page_data(w)
+    assert d["成品影片"] == "輸出/成品_0-2_sw.mp4", d["成品影片"]
+    assert d["成品標記"] == {"輸出/成品_0-2_sw.mp4": "最新", "輸出/成品_0-3_sw.mp4": "舊的"}
+    assert d["成品切換提示"]["原因"] == finalcheck.SWITCH_NEW and not d["檢查的是舊成品"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
