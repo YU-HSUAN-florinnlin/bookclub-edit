@@ -78,7 +78,7 @@ async function renderFinal() {
   // 10-13 bug 一：選單標「（最新）」「（舊的，時間軸對不上）」（只有一支時照舊不顯示選單）
   const marks = d["成品標記"] || {};
   const prodSel = d["成品影片清單"].length > 1 ? `<label class="fc-prod">檢查哪一支 <select id="fc-prod">${d["成品影片清單"].map((p) =>
-    `<option value="${esc(p)}" ${p === d["成品影片"] ? "selected" : ""}>${esc(p.replace("輸出/", "") + fcProdMark(marks[p]))}</option>`).join("")}</select></label>` : "";
+    `<option value="${esc(p)}" ${p === d["成品影片"] ? "selected" : ""}>${esc(p.replace("輸出/", "") + fcProdMark(marks[p], p))}</option>`).join("")}</select></label>` : "";
   if (d["成品切換提示"]) {   // 10-13 bug 一：自動換成品的提示顯示一次（這次打開頁面留著），後端那份清掉
     fc.switchNote = d["成品切換提示"];
     apiPost("/api/final/switchnote", {}).catch(() => {});
@@ -264,8 +264,15 @@ function fcFlagNote(x) {
 }
 
 // 成品選單後面的標記（純函式）
-function fcProdMark(m) {
+// 10-13 審查修正二（必修 1）：範圍跟這份處理紀錄不同的標字版，後端標「舊的」——選單寫「舊的標字版」
+function fcProdMark(m, name) {
+  if (m === "舊的" && String(name || "").includes("標字版")) return "（舊的標字版，時間軸對不上）";
   return m === "最新" ? "（最新）" : m === "舊的" ? "（舊的，時間軸對不上）" : "";
+}
+
+// 「要重新輸出」那一行：上次輸出的是什麼之前的版本（純函式，10-13 審查修正二建議 5：依 export_stale 的原因分兩句）
+function fcStaleWhen(why) {
+  return why === "換了成品" ? "換成品之前的版本" : "第 4 步重新組裝之前的版本";
 }
 
 // 頂端提示每一行（純函式，10-13 bug 一）：回傳 [{html, cls}]，每條符合就各一行
@@ -282,7 +289,7 @@ function fcTopLines(data, st, sw) {
   const out = data["輸出成品"];
   const outStale = out ? data["輸出成品過期"] : null;   // 10-13 bug 二：上次輸出的比現在的成品舊
   if (out && outStale) {
-    lines.push({ cls: "fc-export-stale", html: `<span class="badge warn">要重新輸出</span> 上次輸出的 <code>${esc(out["檔案"])}</code>（${esc(fmtStamp(out["時間"]))}）是${esc(outStale["原因"])}之前的版本，${data["檢查的是舊成品"] ? "下面按鈕拿到的是最新組裝的那支（不是現在檢查的這支舊的）" : "下面按鈕拿到的是現在還在檢查的成品"}；檢查完再按一次「輸出成品」` });   // 10-13 審查修正（bug 二遺留）：看舊檔時按鈕拿的是最新那支
+    lines.push({ cls: "fc-export-stale", html: `<span class="badge warn">要重新輸出</span> 上次輸出的 <code>${esc(out["檔案"])}</code>（${esc(fmtStamp(out["時間"]))}）是${fcStaleWhen(outStale["原因"])}，${data["拿檔是最新那支"] ? "下面按鈕拿到的是最新組裝的那支（不是現在檢查的這支）" : "下面按鈕拿到的是現在還在檢查的成品"}；檢查完再按一次「輸出成品」` });   // 10-13 審查修正二（建議 4、5）：照後端 `拿檔是最新那支` 寫，看舊檔或標字版時按鈕拿的是最新那支
   } else if (out) {
     const early = fcExportedEarly(out);
     lines.push({ cls: "", html: `<span class="badge done">已輸出</span> <code>${esc(out["檔案"])}</code>（${esc(fmtStamp(out["時間"]))}）${early ? `<span class="rv-warnline">　${esc(early)}</span>` : ""}<span class="muted">　要重新輸出可以再按一次，會產生新的一支、舊的不會被蓋掉；成品在下面的按鈕拿</span>` });

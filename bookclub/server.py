@@ -415,6 +415,9 @@ def load_extras(workdir: Path) -> dict:
     return out
 
 
+TAKE_LATEST = "最新組裝的成品"   # 10-13 審查修正二（建議 4）：final_outputs 用開頭判斷 `拿檔是最新那支`
+
+
 def final_target(workdir: Path) -> tuple[Path | None, str | None, dict | None]:
     """第 5 步要拿出來的成品：按過「輸出成品」的最終成品優先，沒有就用正在檢查的那一支。
     路徑只從工作區自己的紀錄算，不收網頁傳來的路徑。回傳 (路徑, 是哪一種, 過期資訊)。
@@ -433,7 +436,7 @@ def final_target(workdir: Path) -> tuple[Path | None, str | None, dict | None]:
             return p, "最終成品", None
     if tg["現在"]:
         if tg["換成最新"]:
-            what = "最新組裝的成品（第 5 步正在檢查的是舊的那支" + ("；還沒重新輸出）" if stale else "）")
+            what = TAKE_LATEST + "（第 5 步正在檢查的不是這支" + ("；還沒重新輸出）" if stale else "）")
         else:
             what = "還在檢查的成品（還沒重新輸出）" if stale else "還在檢查的成品"
         return safe_join(workdir, tg["現在"]), what, stale
@@ -1132,7 +1135,9 @@ class BookclubServer(ThreadingHTTPServer):
         return {"系統": kind, "成品": target.name if target else None, "成品是": what,
                 "可以複製到Windows": kind == "wsl", "複製": jobs[-1:] if jobs else [],
                 # 10-13 bug 二：上次輸出的最終成品比現在的成品舊（null＝沒過期）——按鈕旁黃字、複製到 Windows 先問
-                "上次輸出過期": {"說明": stale["說明"], "舊檔": stale["舊檔"], "原因": stale["原因"]} if stale else None}
+                "上次輸出過期": {"說明": stale["說明"], "舊檔": stale["舊檔"], "原因": stale["原因"]} if stale else None,
+                # 10-13 審查修正二（建議 4）：拿的是最新那支（不是第 5 步正在檢查的這支）——網頁照這欄寫說明
+                "拿檔是最新那支": bool(what and what.startswith(TAKE_LATEST))}
 
     def final_reveal(self) -> dict:
         from bookclub import fileio
