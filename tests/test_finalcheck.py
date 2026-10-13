@@ -791,6 +791,105 @@ def test_export_blocks_old_product_pure():
     assert fc.export_blocks({"紀錄": []}, {"逐筆": {}}, "輸出/成品_0-3_sw.mp4")["擋下"] == []
 
 
+# ---------- 10-13 bug 二：上次輸出的最終成品比現在的成品舊 ----------
+
+def test_copy2_keeps_product_print():
+    """輸出用 shutil.copy2：最終成品跟來源的 [大小, 修改時間] 一樣（舊紀錄沒指紋時靠這個比兩個檔）。"""
+    w = _bw()
+    src = w / _prod(w, "成品_0-3_sw.mp4", T1)
+    dst = w / "輸出" / "最終成品_0-3_sw_20261013-100000.mp4"
+    shutil.copy2(src, dst)
+    assert fc.product_print(src) == fc.product_print(dst) and fc.product_print(src) is not None
+
+
+def test_export_stale_after_rerender_and_cleared_by_new_export():
+    w = _bw()
+    with _Len():
+        _blog(w, T1)
+        cur = _prod(w, "成品_0-3_sw.mp4", T1, 60, b"first")
+        assert fc.page_data(w)["輸出成品過期"] is None                      # 還沒輸出過
+        out = fc.export_final(w, confirm=True)
+        saved = wd.read_json(fc.check_path(w))["輸出成品"]
+        assert saved["成品檔指紋"] == fc.product_print(w / cur) and saved["處理紀錄產生時間"] == T1   # 輸出記欄位
+        assert wd.read_json(fc.check_path(w))["輸出紀錄"][-1]["成品檔指紋"] == saved["成品檔指紋"]
+        assert fc.page_data(w)["輸出成品過期"] is None
+        # 送回重做、第 4 步正在重做（成品檔還沒換）：不算過期
+        chk = wd.read_json(fc.check_path(w))
+        chk["重做中"] = {"項目": ["x"], "時間": T1}
+        wd.write_json(fc.check_path(w), chk)
+        assert fc.page_data(w)["輸出成品過期"] is None
+        # 第 4 步重新組裝（同名成品換新）：過期「成品換新了」
+        _blog(w, T2)
+        _prod(w, "成品_0-3_sw.mp4", T2, 60, b"second-version")
+        d = fc.page_data(w)
+        assert d["輸出成品過期"]["原因"] == "成品換新了" and d["輸出成品過期"]["舊檔"] == Path(out["檔案"]).name, d["輸出成品過期"]
+        assert d["輸出成品"]["檔案"] == out["檔案"]                           # 紀錄不動，只是讀的時候判斷
+        # 只重新組裝、內容沒變（同樣的位元組、修改時間不同）也算舊（調整 3 的代價）
+        _prod(w, "成品_0-3_sw.mp4", T2, 90, b"second-version")
+        assert fc.page_data(w)["輸出成品過期"]["原因"] == "成品換新了"
+        # 再輸出一次：過期清掉、舊的最終成品還在
+        out2 = fc.export_final(w, confirm=True)
+        assert fc.page_data(w)["輸出成品過期"] is None
+        assert (w / out["檔案"]).is_file() and (w / out2["檔案"]).is_file() and out["檔案"] != out2["檔案"]
+
+
+def test_export_stale_other_product_and_old_records():
+    w = _bw()
+    sw = _prod(w, "成品_0-3_sw.mp4", T1)
+    hw = _prod(w, "成品_0-3_hw.mp4", T1, 90, b"hw-version")
+    final = w / "輸出" / "最終成品_0-3_sw_20261013-100000.mp4"
+    shutil.copy2(w / sw, final)
+    rel = "輸出/" + final.name
+    rec = {"檔案": rel, "來源": sw, "成品檔指紋": fc.product_print(w / sw)}
+    assert fc.export_stale(w, {"輸出成品": rec, "成品影片": sw}) is None
+    other = fc.export_stale(w, {"輸出成品": rec, "成品影片": hw})                # 換檢查的那支
+    assert other["原因"] == "換了成品" and "成品_0-3_hw.mp4" in other["說明"]
+    assert fc.export_stale(w, {"輸出成品": rec}, hw)["原因"] == "換了成品"        # 指定現在那支
+    # 舊格式紀錄沒指紋：直接比最終成品與成品兩個檔（copy2 的相等＝同一份）
+    legacy = {"檔案": rel, "來源": sw}
+    assert fc.export_stale(w, {"輸出成品": legacy, "成品影片": sw}) is None
+    _prod(w, "成品_0-3_sw.mp4", T2, 60, b"rerendered")
+    assert fc.export_stale(w, {"輸出成品": legacy, "成品影片": sw})["原因"] == "成品換新了"
+    assert fc.export_stale(w, {"輸出成品": {"檔案": rel}, "成品影片": sw})["原因"] == "成品換新了"   # 連來源都沒記的更舊紀錄
+    assert fc.export_stale(w, {"成品影片": sw}) is None                          # 沒輸出過
+    assert fc.export_stale(w, {"輸出成品": rec, "成品影片": "輸出/不見了.mp4"}) is None   # 現在那支讀不到：不判斷
+
+
+def test_final_target_uses_current_and_never_hands_out_old_product():
+    """10-13 bug 二（審查補）：拿檔按鈕的「現在的成品」經過 _current——第 4 步換範圍做完、還沒打開第 5 步
+    （存檔裡還記著舊的那支）也拿新的；老師手動選舊成品來看時，拿檔按鈕仍然拿最新那支、標示說明。"""
+    from bookclub import server as srv
+
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        old = _prod(w, "成品_0-3_sw.mp4", T1)
+        out = fc.export_final(w, confirm=True)
+        p, what, stale = srv.final_target(w)
+        assert what == "最終成品" and p.name == Path(out["檔案"]).name and stale is None
+        _blog(w, T2, "render video 0-2")                       # 換範圍再組裝；第 5 步還沒打開（沒呼叫 page_data）
+        new = _prod(w, "成品_0-2_sw.mp4", T2)
+        assert fc.load_check(w)["成品影片"] == old             # 存檔裡還是舊的那支
+        p, what, stale = srv.final_target(w)
+        assert p.name == Path(new).name and "還沒重新輸出" in what and stale["原因"] == "換了成品", (p, what, stale)
+        assert fc.load_check(w)["成品影片"] == old             # 只讀不存檔
+        fc.page_data(w)
+        fc.choose_product(w, old)                              # 老師手動選舊的來看
+        assert fc.page_data(w)["檢查的是舊成品"]
+        p, what, stale = srv.final_target(w)
+        assert p.name == Path(new).name and "正在檢查的是舊的那支" in what and "還沒重新輸出" in what
+        assert stale["原因"] == "換了成品"                      # 跟最新那支比（輸出的是 0-3）
+        assert fc.page_data(w)["輸出成品過期"]["原因"] == "換了成品"   # 頂端提示也跟最新那支比
+        fc.choose_product(w, new)
+        fc.export_final(w, confirm=True)                       # 最新那支輸出後：拿最終成品
+        fc.choose_product(w, old)
+        p, what, stale = srv.final_target(w)
+        assert what == "最終成品" and p.name.startswith("最終成品_0-2_sw_") and stale is None
+        assert fc.page_data(w)["輸出成品過期"] is None            # 看舊的那支、最新那支已輸出：不算過期
+        assert fc.take_pick("a", ["a", "b"], {"a": "舊的", "b": "最新"}) == "b"
+        assert fc.take_pick("a", ["a"], {"a": "舊的"}) == "a" and fc.take_pick("a", ["a", "b"], {"a": None, "b": None}) == "a"
+
+
 def test_server_video_no_store_and_switchnote_route():
     """`/api/final/video` 送 `Cache-Control: no-store`（同名覆寫後瀏覽器不會播快取的舊檔）；其他檔案照舊；
     `POST /api/final/switchnote` 清掉切換提示（直接呼叫，不開網路埠）。"""

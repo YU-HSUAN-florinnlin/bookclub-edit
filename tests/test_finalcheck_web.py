@@ -152,6 +152,37 @@ def test_top_lines_multi_and_product_marks():
     assert got["marks"] == ["（最新）", "（舊的，時間軸對不上）", "", ""]
 
 
+def test_top_lines_stale_export_and_unchecked_together():
+    """10-13 bug 二：上次輸出的比現在的成品舊——「要重新輸出」一行（不顯示早輸出警語）、「還沒檢查完」也要出現；
+    沒過期照舊「已輸出」、不顯示「還沒檢查完」。"""
+    if not NODE:
+        print("（沒有 node，跳過）")
+        return
+    code = ("const esc = (s) => String(s); const fmtStamp = (s) => s;\n" + _fn(FCJS, "fcExportedEarly") + _fn(FCJS, "fcTopLines") + """
+    const st = {"可以輸出": false, "還不能輸出的原因": ["還有 1 筆沒通過"]};
+    const out = {"檔案": "輸出/最終成品_x.mp4", "時間": "t", "檢查完才輸出": false, "看過百分比": 40};
+    const base = {"成品影片": "輸出/成品_0-2_sw.mp4", "輸出成品": out, "重做過": {"項目": [1], "時間": "t"}};
+    const stale = fcTopLines({...base, "輸出成品過期": {"原因": "成品換新了", "說明": "x", "舊檔": "最終成品_x.mp4"}}, st, null);
+    const fresh = fcTopLines({...base, "輸出成品過期": null}, st, null);
+    console.log(JSON.stringify({stale: stale.map((x) => [x.cls, x.html]), fresh: fresh.map((x) => x.html)}));""")
+    got = _node(code)
+    s = got["stale"]
+    assert len(s) == 3, s                                                          # 要重新輸出、重做過、還沒檢查完
+    assert s[0][0] == "fc-export-stale" and "要重新輸出" in s[0][1] and "成品換新了之前的版本" in s[0][1]
+    assert "還在檢查的成品" in s[0][1] and "還沒看完" not in s[0][1] and "已輸出" not in s[0][1]
+    assert "重做了 1 筆" in s[1][1] and "還沒檢查完" in s[2][1]
+    f = got["fresh"]
+    assert len(f) == 2 and "已輸出" in f[0] and "還沒看完（看過 40%）" in f[0] and not any("還沒檢查完" in x for x in f)
+
+
+def test_export_button_and_fileio_stale_wiring():
+    rt = _fn(FCJS, "fcRenderTop")
+    assert 'ex.classList.toggle("fc-export-due"' in rt and "現在的成品還沒輸出過" in rt
+    fio = (WEB / "fileio.js").read_text(encoding="utf-8")
+    assert '"上次輸出過期"' in fio and "複製現在的成品到 Windows（還沒重新輸出）" in fio
+    assert 'r["要確認"]' in fio and "confirm(FO_STALE_ASK)" in fio and "{ confirm: true }" in fio
+
+
 def test_video_url_carries_version_and_old_choice_confirms():
     assert '"成品影片"] + "|" + (d["成品版本"] || "")' in FCJS
     rf = _fn(FCJS, "renderFinal")

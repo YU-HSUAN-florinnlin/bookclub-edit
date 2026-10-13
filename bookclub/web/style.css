@@ -749,6 +749,9 @@ details.fc-fold[open] > summary .fc-foldbtn::after { content: "（點了收合�
 /* 10-13 bug 一：第 5 步頂端提示多行（每條一行）；檢查的是舊成品時紅字常駐 */
 .fc-topline + .fc-topline { margin-top: 4px; }
 .fc-topline.fc-stale { color: var(--danger); background: var(--danger-bg); border: 1px solid var(--danger); border-radius: 6px; padding: 6px 10px; }
+/* 10-13 bug 二：上次輸出的比現在的成品舊——黃底一行、輸出按鈕加外框提醒 */
+.fc-topline.fc-export-stale { color: var(--warn); background: var(--warn-bg); border-radius: 6px; padding: 6px 10px; }
+#fc-export.fc-export-due { outline: 3px solid var(--warn); outline-offset: 2px; }
 /* 10-08 宇軒：第 4 步「開始前總檢查」整區預設收成一行 */
 details.fc-whole { margin: 12px 0; }
 details.fc-whole > summary { cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 17px; }

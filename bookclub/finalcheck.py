@@ -731,6 +731,66 @@ def product_print(path: Path) -> list | None:
     return [st.st_size, st.st_mtime_ns]
 
 
+# ---------- 10-13 bug 二：上次輸出的最終成品是不是比現在檢查的成品舊 ----------
+
+STALE_OTHER = "換了成品"
+STALE_NEWER = "成品換新了"
+
+
+def export_stale(workdir: str | Path, check: dict, cur: str | None = None) -> dict | None:
+    """10-13 bug 二（宇軒：輸出過一次後又重做，拿檔按鈕還是拿到重做前的最終成品）：
+    上次輸出的最終成品比現在檢查的成品舊就回 {原因, 說明, 舊檔}，沒輸出過、沒過期回 None。每次讀的時候算，不存旗標。
+    過期＝任一成立（10-13 複核調整 3：只看「是不是同一份檔」，不做內容指紋）：
+    1. `輸出成品.來源` 不是現在檢查的那支（cur，沒給就用 `check["成品影片"]`）——「換了成品」；
+    2. 輸出時記的 `成品檔指紋` 跟現在那支的 `product_print` 不同——「成品換新了」（重新組裝過，只重組內容沒變也算）；
+    3. 舊紀錄沒 `成品檔指紋`：直接比 `輸出成品.檔案`（最終成品）與現在那支兩個檔（輸出用 copy2，修改時間保留，相等＝同一份）。
+    `重做中` 期間成品檔還沒換，自然不算過期。現在那支讀不到（檔案不見）就不判斷。"""
+    out = check.get("輸出成品") or {}
+    cur = cur if cur is not None else check.get("成品影片")
+    if not out.get("檔案") or not cur:
+        return None
+    workdir = Path(workdir)
+    now = product_print(workdir / cur)
+    if now is None:
+        return None
+    old = Path(out["檔案"]).name
+    if out.get("來源") and out["來源"] != cur:
+        return {"原因": STALE_OTHER, "舊檔": old,
+                "說明": f"上次輸出的是 {Path(out['來源']).name}，現在檢查的是 {Path(cur).name}"}
+    fp = out.get("成品檔指紋")
+    if fp is not None:
+        same = list(fp) == now
+    else:
+        same = product_print(workdir / out["檔案"]) == now
+    if same:
+        return None
+    return {"原因": STALE_NEWER, "舊檔": old, "說明": "上次輸出之後，第 4 步又組裝了新的成品"}
+
+
+def take_pick(cur: str | None, prods: list[str], marks: dict) -> str | None:
+    """（純函式，10-13 bug 二）拿檔按鈕與過期判斷用哪一支：正在檢查的是「舊的」或標字版、又推得出最新那支，就用最新那支。"""
+    latest = [p for p in prods if marks.get(p) == MARK_LATEST]
+    if cur and marks.get(cur) in (MARK_OLD, MARK_LABEL) and latest:
+        return latest[0]
+    return cur
+
+
+def take_target(workdir: str | Path) -> dict:
+    """10-13 bug 二：第 5 步拿檔按鈕（打開資料夾、複製到 Windows）要拿哪一支——伺服器 `final_target` 用。
+    經過 `_current`（跟播放的 `video_file` 同一套判斷：新組裝完、還沒打開第 5 步也會換到新的那支），只讀不存檔。
+    正在檢查的是「舊的」或標字版（老師手動選來對照的）時，改拿這份處理紀錄做出的最新那支（推得出來才換），
+    過期判斷也跟這支比（審查：舊檔不能當「還在檢查的成品」拿出去）。
+    回傳 {現在: 相對路徑或 None, 換成最新: 正在檢查的不是這支, 輸出成品: 紀錄, 過期: export_stale 的結果}。"""
+    workdir = Path(workdir)
+    with _lock:
+        log, check = _current(workdir)
+    prods = products(workdir)
+    cur = check.get("成品影片")
+    pick = take_pick(cur, prods, product_marks(prods, log_products(workdir, log, prods)))
+    return {"現在": pick, "換成最新": bool(pick and pick != cur), "輸出成品": check.get("輸出成品"),
+            "過期": export_stale(workdir, check, pick) if pick else None}
+
+
 def clip_ranges(ranges: list, total: float) -> list:
     """看過的區段截到 [0, total]（純函式）：整段超出的拿掉、跨過的截掉。"""
     return [[a, min(b, total)] for a, b in ranges if a < total and total > 0]
@@ -1107,6 +1167,8 @@ def page_data(workdir: str | Path) -> dict:
         "成品切換提示": check.get("成品切換提示"),
         "紀錄": recs, "未登記的變動": un, "整片退回": flags, "看過區段": check["看過區段"], "片段": plist,
         "送回AI重做": check.get("送回AI重做"), "輸出成品": check.get("輸出成品"),
+        # 10-13 bug 二：上次輸出的比現在的成品舊（null＝沒過期或沒輸出過）；手動看舊成品時跟最新那支比（同拿檔按鈕）
+        "輸出成品過期": export_stale(workdir, check, take_pick(check["成品影片"], prods, marks)),
         "重做中": check.get("重做中"),   # 10-01 第三批：第 4 步正在（或上次沒做完）重做退回的
         "重做過": check.get("重做過") if (check.get("重做過") or {}).get("處理紀錄產生時間") == (log or {}).get("產生時間") else None,
         "狀態": status(log, check),
@@ -1448,7 +1510,9 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
                # 10-08：輸出當時的檢查狀態（沒看完、沒全部通過也能輸出，第 5 步會提示「這次輸出時還沒看完」）
                "看過百分比": gaps["看過百分比"], "沒通過筆數": gaps["沒通過"], "沒確認變動筆數": gaps["沒確認的變動"],
                "需留意": gaps["需留意"], "需留意名字": gaps["需留意名字"], "名字提醒": len(gaps["名字提醒"]),
-               "檢查完才輸出": st["可以輸出"]}
+               "檢查完才輸出": st["可以輸出"],
+               # 10-13 bug 二：輸出當時那支成品的指紋與處理紀錄，之後第 5 步用來判斷「上次輸出比現在的成品舊」（export_stale）
+               "成品檔指紋": product_print(src), "處理紀錄產生時間": log.get("產生時間")}
         check["輸出成品"] = rec
         check.setdefault("輸出紀錄", []).append(rec)
         _save(workdir, check)

@@ -245,6 +245,10 @@ function fcRenderTop() {
   const ex = document.getElementById("fc-export");
   ex.disabled = !fc.data["有處理紀錄"] || !fc.data["成品影片"];   // 10-08 宇軒放寬：沒檢查完也能按，按下去先確認
   ex.title = st["可以輸出"] ? "全部通過、整片看過 100%：可以輸出" : `還沒檢查完（${st["還不能輸出的原因"].join("；")}），按下去會先問一次`;
+  // 10-13 bug 二：上次輸出的比現在的成品舊——輸出按鈕加強調、提示改成「現在的成品還沒輸出過」
+  const outStale = fc.data["輸出成品"] && fc.data["輸出成品過期"];
+  ex.classList.toggle("fc-export-due", !!outStale);
+  if (outStale) ex.title = "現在的成品還沒輸出過" + (st["可以輸出"] ? "" : `（還沒檢查完：${st["還不能輸出的原因"].join("；")}，按下去會先問一次）`);
   // 10-13 bug 一：頂端提示改成多行——每條符合就各一行（以前是 if／else if，有「已輸出」時其他提示都看不到）。
   // 要加一行就在 fcTopLines 裡 push 一條（{html, cls}），順序＝顯示順序
   const msg = document.getElementById("fc-msg");
@@ -271,7 +275,10 @@ function fcTopLines(data, st, sw) {
     lines.push({ cls: "", html: `<span class="badge done">已換成品</span> 第 4 步做了新的成品，已改成檢查 <code>${esc(String(sw["到"]).replace("輸出/", ""))}</code>。${old}${more}` });
   }
   const out = data["輸出成品"];
-  if (out) {
+  const outStale = out ? data["輸出成品過期"] : null;   // 10-13 bug 二：上次輸出的比現在的成品舊
+  if (out && outStale) {
+    lines.push({ cls: "fc-export-stale", html: `<span class="badge warn">要重新輸出</span> 上次輸出的 <code>${esc(out["檔案"])}</code>（${esc(fmtStamp(out["時間"]))}）是${esc(outStale["原因"])}之前的版本，下面按鈕拿到的是現在還在檢查的成品；檢查完再按一次「輸出成品」` });
+  } else if (out) {
     const early = fcExportedEarly(out);
     lines.push({ cls: "", html: `<span class="badge done">已輸出</span> <code>${esc(out["檔案"])}</code>（${esc(fmtStamp(out["時間"]))}）${early ? `<span class="rv-warnline">　${esc(early)}</span>` : ""}<span class="muted">　要重新輸出可以再按一次，會產生新的一支、舊的不會被蓋掉；成品在下面的按鈕拿</span>` });
   }
@@ -279,7 +286,8 @@ function fcTopLines(data, st, sw) {
   if (data["重做中"]) lines.push({ cls: "", html: `第 4 步正在重做退回的 ${data["重做中"]["項目"].length} 筆（或上次沒做完）：做完會重新組裝，這幾筆回到「還沒看」。` });
   else if (data["送回AI重做"]) lines.push({ cls: "", html: `已送回 AI 重做 ${data["送回AI重做"]["項目"].length} 筆（${esc(fmtStamp(data["送回AI重做"]["時間"]))}）：到 <a href="#step4">第 4 步</a> 按「只重做退回的這幾筆」。` });
   else if (data["重做過"]) lines.push({ cls: "", html: `上一次重做了 ${data["重做過"]["項目"].length} 筆（${esc(fmtStamp(data["重做過"]["時間"]))}）：清單上標「重做過」的要重新看。` });
-  if (!out && !st["可以輸出"]) lines.push({ cls: "", html: `<span class="rv-meta">還沒檢查完：${esc(st["還不能輸出的原因"].join("；"))}（還是可以輸出，按下去會先問一次）</span>` });
+  // 10-13 bug 二：上次輸出過期時「還沒檢查完」也要顯示（現在這支還沒輸出過）
+  if ((!out || outStale) && !st["可以輸出"]) lines.push({ cls: "", html: `<span class="rv-meta">還沒檢查完：${esc(st["還不能輸出的原因"].join("；"))}（還是可以輸出，按下去會先問一次）</span>` });
   return lines;
 }
 
