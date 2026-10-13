@@ -85,6 +85,25 @@ def _serve_capture(**kwargs):
     return rc, out.getvalue(), marked
 
 
+def test_serve_does_not_touch_real_project_list():
+    """10-13：serve() 會把工作區記進專案清單（`adopt_project`）——測試裡要寫到 _testtmp 的暫存資料夾，
+    不能寫進真的 ~/讀書會剪輯資料/專案清單.json（以前每跑一次這支多兩筆暫存工作區、「目前」被指走）。"""
+    import tempfile
+
+    from bookclub import config
+    from bookclub import server as sv
+
+    real = Path.home() / "讀書會剪輯資料" / "專案清單.json"
+    before = real.stat().st_mtime_ns if real.exists() else None
+    assert str(config.data_dir()).startswith(_testtmp.ROOT), config.data_dir()
+    assert str(sv.registry_path()).startswith(_testtmp.ROOT)
+    w = Path(tempfile.mkdtemp()) / "工作區"
+    w.mkdir()
+    sv.adopt_project(w)
+    assert str(w) in [str(x) for x in sv.registered_projects()]
+    assert (real.stat().st_mtime_ns if real.exists() else None) == before
+
+
 @contextlib.contextmanager
 def _occupied_port(ours: bool):
     """開一個臨時埠（不是 8766）。ours=True：假裝是讀書會剪輯工具（/api/projects 回這個工具才有的欄位）。"""
