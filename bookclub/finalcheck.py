@@ -610,7 +610,13 @@ def _current(workdir: Path) -> tuple[dict | None, dict]:
     if manual and not manual_ok:   # 手動選的只在同一份處理紀錄期間算數，處理紀錄換新就作廢
         check.pop("手動選擇", None)
     cur = check.get("成品影片")
-    label = cur in prods and MARK_LABEL in Path(cur).stem   # 標字版是人自己選來對照的，照以前不自動換（輸出本來就擋）
+    tag = log_tag(log)
+    # 標字版是人自己選來對照的，照以前不自動換（輸出本來就擋）。
+    # 10-13 審查修正（建議 3）：只有跟這份處理紀錄同一個範圍標記的標字版才不換；別的範圍的標字版照一般規則換
+    label = (cur in prods and MARK_LABEL in Path(cur).stem and tag is not None
+             and Path(cur).stem.startswith(f"成品_{tag}_"))
+    # 10-13 審查修正（必修 1）：處理紀錄換新之前，看的是手動選的舊檔——在舊檔上看過的不能帶進新成品
+    was_old = old_stamp != stamp and _manual_old(raw, old_stamp)
     if latest and not manual_ok and not label and cur not in latest:
         if cur in prods and old_stamp == stamp:
             # 汙染：處理紀錄早就換新了，卻一直看舊成品（修好之前留下的工作區）——在舊檔上看過的、按的都不算
@@ -621,12 +627,18 @@ def _current(workdir: Path) -> tuple[dict | None, dict]:
             why = SWITCH_NEW
             if cur not in prods:   # 原本那支檔案不見了：照以前歸零
                 _set_watched(check, [], plist)
+            elif was_old:   # 10-13 審查修正（必修 1）：改用換到舊檔之前在最新那支看過的（暫存），對不上就歸零
+                _set_watched(check, _kept_watched(raw, old_stamp, log), plist)
         check["成品影片"] = latest[0]
         if cur:
             check["成品切換提示"] = {"時間": _now(), "從": cur, "到": latest[0], "原因": why}
     elif cur not in prods:
         check["成品影片"] = prods[0] if prods else None
         _set_watched(check, [], plist)
+    elif was_old:   # 10-13 審查修正（必修 1）：沒換成品（推不出最新那支）也不沿用舊檔上看過的
+        _set_watched(check, [], plist)
+    if was_old:
+        check.pop("最新成品看過暫存", None)   # 屬於上一份處理紀錄，用過（或對不上）就清掉
     if check["成品影片"]:
         # 10-02 第七批（C2）：重新組裝後檔名一樣、長度變了 → 成品檔換新（大小或修改時間不同）或處理紀錄換新就重新量；
         # 看過的區段超出新長度的截掉（以前只在沒量過時量一次，「整片看過幾 %」一直用舊長度算）
@@ -652,6 +664,28 @@ def log_tag(log: dict | None) -> str | None:
     if not src.startswith("render video "):
         return None
     return src[len("render video "):].strip() or None
+
+
+def _manual_old(raw: dict, old_stamp) -> bool:
+    """（10-13 審查修正，必修 1）存檔裡（refresh 之前）正在看的是不是「在上一份處理紀錄期間手動選的舊檔」。
+    `手動選擇.舊的` 是 choose_product 記的；沒記這個欄位的（這次修正之前選的）當作舊的（最多看過區段歸零，不會帶錯）。"""
+    m = raw.get("手動選擇") or {}
+    if not m or m.get("處理紀錄產生時間") != old_stamp or m.get("成品影片") != raw.get("成品影片"):
+        return False
+    return bool(m.get("舊的", True))
+
+
+def _kept_watched(raw: dict, old_stamp, log: dict) -> list[list[float]]:
+    """（10-13 審查修正，必修 1）處理紀錄換新時，換到舊檔之前在最新那支看過的（`最新成品看過暫存`）→ 新成品時間：
+    暫存的 `處理紀錄產生時間` 要等於 old_stamp 才用；用原片時間（`watched_from_source`）換算，扣掉內容變了的
+    （`changed_windows`，跟 refresh 一樣）。暫存對不上、沒有上一份處理紀錄快照就回 []（歸零）。"""
+    keep = raw.get("最新成品看過暫存") or {}
+    old = raw.get("處理紀錄快照")
+    if not log or old is None or keep.get("處理紀錄產生時間") != old_stamp:
+        return []
+    plist = log.get("片段")
+    ranges = watched_from_source(keep.get("看過區段原片") or [], keep.get("看過停格原片") or [], plist)
+    return subtract_ranges(ranges, changed_windows(log, old))
 
 
 def _stamp_seconds(stamp) -> float | None:
@@ -685,17 +719,36 @@ def log_products(workdir: Path, log: dict | None, prods: list[str] | None = None
     return out
 
 
-def product_marks(prods: list[str], latest: list[str] | None) -> dict[str, str | None]:
-    """每支成品的標記（純函式）：標字版／最新（跟這份處理紀錄同一次做出的）／舊的；推不出來（latest 是 None）的不標。"""
+def product_marks(prods: list[str], latest: list[str] | None, tag: str | None = None) -> dict[str, str | None]:
+    """每支成品的標記（純函式）：標字版／最新（跟這份處理紀錄同一次做出的）／舊的；推不出來（latest 是 None）的不標。
+    10-13 審查修正（建議 4）：推得出來但一支都沒找到（latest 是 []，例如這次只做了標字版）時，
+    範圍標記跟這份處理紀錄（tag，`log_tag`）不同的標「舊的」（時間軸一定對不上），同標記的不標（分不出新舊）。"""
     out: dict[str, str | None] = {}
     for rel in prods:
-        if MARK_LABEL in Path(rel).stem:
+        stem = Path(rel).stem
+        if MARK_LABEL in stem:
             out[rel] = MARK_LABEL
-        elif latest is None or not latest:
+        elif latest is None:
             out[rel] = None
+        elif not latest:
+            out[rel] = MARK_OLD if tag is not None and not stem.startswith(f"成品_{tag}_") else None
         else:
             out[rel] = MARK_LATEST if rel in latest else MARK_OLD
     return out
+
+
+def log_marks(workdir: Path, log: dict | None, prods: list[str] | None = None) -> dict[str, str | None]:
+    """這個工作區每支成品的標記（`product_marks` 加上這份處理紀錄的範圍標記）。"""
+    prods = products(Path(workdir)) if prods is None else prods
+    return product_marks(prods, log_products(workdir, log, prods), log_tag(log))
+
+
+OLD_PRODUCT_NO_DECIDE = "現在檢查的是舊的成品，先在『檢查哪一支』換成標『最新』的那支再判斷"
+
+
+def _checking_old(workdir: Path, log: dict | None, check: dict) -> bool:
+    """（10-13 審查修正）正在檢查的是不是「舊的」成品（不是最新一次組裝做出的，時間軸跟處理紀錄對不上）。"""
+    return log_marks(workdir, log).get(check.get("成品影片")) == MARK_OLD
 
 
 def product_version(path: Path) -> str | None:
@@ -786,7 +839,7 @@ def take_target(workdir: str | Path) -> dict:
         log, check = _current(workdir)
     prods = products(workdir)
     cur = check.get("成品影片")
-    pick = take_pick(cur, prods, product_marks(prods, log_products(workdir, log, prods)))
+    pick = take_pick(cur, prods, log_marks(workdir, log, prods))
     return {"現在": pick, "換成最新": bool(pick and pick != cur), "輸出成品": check.get("輸出成品"),
             "過期": export_stale(workdir, check, pick) if pick else None}
 
@@ -1122,7 +1175,7 @@ def page_data(workdir: str | Path) -> dict:
         _save(workdir, check)
     plist = (log or {}).get("片段")
     prods = products(workdir)
-    marks = product_marks(prods, log_products(workdir, log, prods))   # 10-13 bug 一：選單標「最新」「舊的」
+    marks = log_marks(workdir, log, prods)   # 10-13 bug 一：選單標「最新」「舊的」
     index = _index(workdir)
     try:   # 10-02 第六批：老師重念範圍前後沒有人講話的那幾筆，卡片上提醒＋「照建議縮小」
         from bookclub import silentedge
@@ -1268,7 +1321,9 @@ def choose_product(workdir: str | Path, rel: str) -> dict:
                 _set_watched(check, [], plist)
             if check["成品長度"]:
                 _set_watched(check, clip_ranges(check["看過區段"], check["成品長度"]), plist)
-        check["手動選擇"] = {"成品影片": rel, "處理紀錄產生時間": stamp}
+        # 10-13 審查修正（必修 1）：記下選的是不是舊的——處理紀錄換新時，舊檔上看過的不帶進新成品
+        check["手動選擇"] = {"成品影片": rel, "處理紀錄產生時間": stamp,
+                         "舊的": log_marks(workdir, log, prods).get(rel) == MARK_OLD}
         _save(workdir, check)
     return {"ok": True}
 
@@ -1300,6 +1355,8 @@ def decide_record(workdir: str | Path, key: str, result: str | None, reason: str
     workdir = Path(workdir)
     with _lock:
         log, check = _current(workdir)
+        if _checking_old(workdir, log, check):   # 10-13 審查修正（建議 5）：在舊檔上按的判斷，換回最新後會留著
+            raise ValueError(OLD_PRODUCT_NO_DECIDE)
         rec = next((r for r in (log or {}).get("紀錄", []) if record_key(r) == key), None)
         if rec is None:
             raise KeyError(f"處理紀錄裡沒有這一筆：{key}")
@@ -1327,6 +1384,8 @@ def decide_unlogged(workdir: str | Path, key: str, result: str | None, reason: s
     workdir = Path(workdir)
     with _lock:
         log, check = _current(workdir)
+        if _checking_old(workdir, log, check):   # 10-13 審查修正（建議 5）
+            raise ValueError(OLD_PRODUCT_NO_DECIDE)
         if not any(unlogged_key(u) == key for u in (log or {}).get("未登記的變動", [])):
             raise KeyError(f"沒有這一處：{key}")
         if result is None:
@@ -1344,6 +1403,8 @@ def add_whole_redo(workdir: str | Path, t_out: float, reason: str) -> dict:
     workdir = Path(workdir)
     with _lock:
         log, check = _current(workdir)
+        if _checking_old(workdir, log, check):   # 10-13 審查修正（建議 5）：舊檔的時間對不上這份處理紀錄
+            raise ValueError(OLD_PRODUCT_NO_DECIDE)
         plist = (log or {}).get("片段")
         n = 1 + max([int(x["id"][1:]) for x in check["整片退回"] if x["id"][1:].isdigit()] or [0])
         item = {"id": f"R{n:03d}", "成品秒": round(float(t_out), 3), "原片秒": round(from_output_time(float(t_out), plist), 3),
@@ -1363,17 +1424,23 @@ def remove_whole_redo(workdir: str | Path, rid: str) -> dict:
 
 
 def add_watched(workdir: str | Path, ranges: list, product: str | None = None) -> dict:
-    """`POST /api/final/watched`：播放器實際播過的區段（網頁只送 2 倍速以下連續播的，成品秒數），跟之前的取聯集。"""
+    """`POST /api/final/watched`：播放器實際播過的區段（網頁只送 2 倍速以下連續播的，成品秒數），跟之前的取聯集。
+    10-13 審查修正（必修 1）：檢查的是舊的成品時不記（舊檔的時間軸跟處理紀錄對不上，換算成原片時間會錯、
+    處理紀錄換新後會被帶進新成品），回傳 `記了: False` 與 `沒記原因`。"""
     workdir = Path(workdir)
     with _lock:
         log, check = _current(workdir)
         if product and product != check["成品影片"]:
             raise ValueError("播放中的影片不是目前要檢查的成品，重新整理再看")
+        if _checking_old(workdir, log, check):
+            st = status(log, check)
+            return {"ok": True, "記了": False, "沒記原因": "檢查的是舊的成品，看過的地方不記",
+                    "看過比例": st["看過比例"], "看過區段": check["看過區段"], "狀態": st}
         # 10-03 第八批 #23：同時存原片時間（用現在這份處理紀錄的片段表換），重新組裝後換得回新的成品時間
         _set_watched(check, check["看過區段"] + [[float(a), float(b)] for a, b in ranges], (log or {}).get("片段"))
         _save(workdir, check)
         st = status(log, check)
-        return {"ok": True, "看過比例": st["看過比例"], "看過區段": check["看過區段"], "狀態": st}
+        return {"ok": True, "記了": True, "看過比例": st["看過比例"], "看過區段": check["看過區段"], "狀態": st}
 
 
 def send_back(workdir: str | Path) -> dict:
@@ -1478,7 +1545,7 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
         if not log or not check.get("成品影片"):
             raise ValueError("還不能輸出：" + ("還沒有處理紀錄（第 4 步還沒組裝）" if not log else "找不到成品影片"))
         prods = products(workdir)   # 10-13 bug 一：檢查的是舊成品（不是最新一次組裝做出的）不能輸出
-        old = product_marks(prods, log_products(workdir, log, prods)).get(check.get("成品影片")) == MARK_OLD
+        old = log_marks(workdir, log, prods).get(check.get("成品影片")) == MARK_OLD
         gaps = {**export_gaps(st), **export_blocks(log, check, check.get("成品影片"), old)}
         try:   # 10-08 宇軒（流程簡化）：第 5 步「需留意」的數字（不擋，確認視窗多一句）
             gaps.update(attention_gaps(attention_rows(workdir, log)))

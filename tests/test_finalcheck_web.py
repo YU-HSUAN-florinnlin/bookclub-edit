@@ -148,7 +148,7 @@ def test_top_lines_multi_and_product_marks():
     assert "已輸出" in got["all"][1] and "重做了 1 筆" in got["all"][2]
     assert got["stale"][0][0] == "fc-stale" and "舊的成品" in got["stale"][0][1]   # 舊檔：紅字常駐；切換提示指的不是這支就不顯示
     assert len(got["stale"]) == 2 and "還沒檢查完" in got["stale"][1][1]
-    assert "之前看過的地方、這次之後按的通過要重看" in got["tainted"]
+    assert "處理紀錄換新之後按的判斷已拿掉、要重看" in got["tainted"]
     assert got["marks"] == ["（最新）", "（舊的，時間軸對不上）", "", ""]
 
 
@@ -187,6 +187,29 @@ def test_video_url_carries_version_and_old_choice_confirms():
     assert '"成品影片"] + "|" + (d["成品版本"] || "")' in FCJS
     rf = _fn(FCJS, "renderFinal")
     assert 'marks[prod.value] === "舊的" && !confirm(FC_OLD_PRODUCT_ASK)' in rf and "/api/final/switchnote" in rf
+
+
+def test_flag_note_and_old_product_wording():
+    """10-13 審查修正：整片退回有 `在舊成品上標的` 時畫面加附註（必修 2）；選舊檔的確認文字（建議 5）；
+    看舊檔又過期時頂端黃字說按鈕拿的是最新那支（bug 二遺留）。"""
+    assert "${fcFlagNote(x)}" in _fn(FCJS, "fcRenderWhole")
+    assert "在舊的上面不能按通過或退回" in FCJS
+    if not NODE:
+        print("（沒有 node，跳過）")
+        return
+    code = ("const esc = (s) => String(s); const fmtStamp = (s) => s;\n" + _fn(FCJS, "fcFlagNote") + _fn(FCJS, "fcExportedEarly")
+            + _fn(FCJS, "fcTopLines") + """
+    const st = {"可以輸出": true, "還不能輸出的原因": []};
+    const out = {"檔案": "輸出/最終成品_x.mp4", "時間": "t"};
+    const stale = {"原因": "換了成品", "說明": "x", "舊檔": "最終成品_x.mp4"};
+    const oldLines = fcTopLines({"成品影片": "輸出/成品_0-3_sw.mp4", "檢查的是舊成品": true, "輸出成品": out, "輸出成品過期": stale}, st, null);
+    const curLines = fcTopLines({"成品影片": "輸出/成品_0-2_sw.mp4", "輸出成品": out, "輸出成品過期": stale}, st, null);
+    console.log(JSON.stringify({a: fcFlagNote({"在舊成品上標的": true}), b: fcFlagNote({}),
+      old: oldLines.map((x) => x.html), cur: curLines.map((x) => x.html)}));""")
+    got = _node(code)
+    assert "（在舊成品上標的，時間可能對不上）" in got["a"] and got["b"] == ""
+    assert "下面按鈕拿到的是最新組裝的那支（不是現在檢查的這支舊的）" in got["old"][1] and "還在檢查的成品" not in got["old"][1]
+    assert "下面按鈕拿到的是現在還在檢查的成品" in got["cur"][0]
 
 
 if __name__ == "__main__":

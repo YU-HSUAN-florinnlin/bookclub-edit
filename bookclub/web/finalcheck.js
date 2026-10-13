@@ -256,7 +256,12 @@ function fcRenderTop() {
 }
 
 const FC_OLD_PRODUCT_ASK = "這一支是舊的成品（範圍或輸出方式跟最新一次組裝不同），時間軸跟清單對不上，也不能輸出。\n" +
-  "換過去的話，整片看過的地方這一支要重看。確定要換？";
+  "換過去的話，整片看過的地方這一支要重看；在舊的上面不能按通過或退回，看過的地方也不記。確定要換？";
+
+// 整片退回那一列的附註（純函式，10-13 審查修正必修 2）：修好之前在舊成品上標的（`在舊成品上標的`），時間可能對不上
+function fcFlagNote(x) {
+  return x && x["在舊成品上標的"] ? `<span class="rv-warnline">（在舊成品上標的，時間可能對不上）</span>` : "";
+}
 
 // 成品選單後面的標記（純函式）
 function fcProdMark(m) {
@@ -270,14 +275,14 @@ function fcTopLines(data, st, sw) {
     lines.push({ cls: "fc-stale", html: `<b>現在檢查的是舊的成品（${esc(String(data["成品影片"] || "").replace("輸出/", ""))}），時間軸跟清單對不上、不能輸出</b>：在「檢查哪一支」換成標「最新」的那支` });
   }
   if (sw && sw["到"] === data["成品影片"]) {
-    const old = sw["原因"] === "之前播的是舊成品" ? "之前看過的地方、這次之後按的通過要重看。" : "";
+    const old = sw["原因"] === "之前播的是舊成品" ? "處理紀錄換新之後按的判斷已拿掉、要重看。" : "";   // 10-13 審查修正（建議 6）
     const more = data["舊成品支數"] ? `<span class="muted">（輸出資料夾還有 ${data["舊成品支數"]} 支舊成品，沒有刪，要的話自己清）</span>` : "";
     lines.push({ cls: "", html: `<span class="badge done">已換成品</span> 第 4 步做了新的成品，已改成檢查 <code>${esc(String(sw["到"]).replace("輸出/", ""))}</code>。${old}${more}` });
   }
   const out = data["輸出成品"];
   const outStale = out ? data["輸出成品過期"] : null;   // 10-13 bug 二：上次輸出的比現在的成品舊
   if (out && outStale) {
-    lines.push({ cls: "fc-export-stale", html: `<span class="badge warn">要重新輸出</span> 上次輸出的 <code>${esc(out["檔案"])}</code>（${esc(fmtStamp(out["時間"]))}）是${esc(outStale["原因"])}之前的版本，下面按鈕拿到的是現在還在檢查的成品；檢查完再按一次「輸出成品」` });
+    lines.push({ cls: "fc-export-stale", html: `<span class="badge warn">要重新輸出</span> 上次輸出的 <code>${esc(out["檔案"])}</code>（${esc(fmtStamp(out["時間"]))}）是${esc(outStale["原因"])}之前的版本，${data["檢查的是舊成品"] ? "下面按鈕拿到的是最新組裝的那支（不是現在檢查的這支舊的）" : "下面按鈕拿到的是現在還在檢查的成品"}；檢查完再按一次「輸出成品」` });   // 10-13 審查修正（bug 二遺留）：看舊檔時按鈕拿的是最新那支
   } else if (out) {
     const early = fcExportedEarly(out);
     lines.push({ cls: "", html: `<span class="badge done">已輸出</span> <code>${esc(out["檔案"])}</code>（${esc(fmtStamp(out["時間"]))}）${early ? `<span class="rv-warnline">　${esc(early)}</span>` : ""}<span class="muted">　要重新輸出可以再按一次，會產生新的一支、舊的不會被蓋掉；成品在下面的按鈕拿</span>` });
@@ -722,7 +727,7 @@ function fcRenderWhole() {
         <input id="fc-flag-why" placeholder="例如：這裡聲音突然變小"></label></div>
       <div class="rv-actions"><button class="primary" id="fc-flag">這裡有問題（退回重做）</button></div>
       ${flags.length ? `<ul class="fc-flags">${flags.map((x) => `<li><button class="linkish" data-t="${x["成品秒"]}">${esc(fcFmt(x["成品秒"]))}</button>
-        ${esc(x["原因"])}${(x["覆核名稱"] || []).length ? `<span class="rv-meta">（${esc(fcWho(x["覆核名稱"].join("、")))}）</span>` : ""}
+        ${esc(x["原因"])}${(x["覆核名稱"] || []).length ? `<span class="rv-meta">（${esc(fcWho(x["覆核名稱"].join("、")))}）</span>` : ""}${fcFlagNote(x)}
         <button class="ghost small" data-rm="${esc(x.id)}">刪掉</button></li>`).join("")}</ul>` : ""}
     </article>`;
   document.getElementById("fc-flag").addEventListener("click", async () => {
