@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 REF_DIR_NAME = "參考音"          # 跟 bookclub/refpick.py 的 REF_DIR_NAME 保持一致
@@ -110,8 +112,32 @@ def read_json(path: Path, default=None):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+_quiet = threading.local()
+
+
+@contextmanager
+def no_writes():
+    """10-14 第5步2.0 第1段：這個執行緒在這段期間 `write_json` 不寫檔（只對呼叫的這個執行緒有效，伺服器別的請求照常寫）。
+    給「修改需求紀錄」升級、同步用：要借 `review.page_data` 算出第 3 步的卡片，但不能順手改到舊檔
+    （page_data 平常會整理代號、名字決定等再存檔）。"""
+    prev = getattr(_quiet, "on", False)
+    _quiet.on = True
+    try:
+        yield
+    finally:
+        _quiet.on = prev
+
+
+def writes_blocked() -> bool:
+    """現在這個執行緒是不是在 `no_writes()` 裡面。"""
+    return bool(getattr(_quiet, "on", False))
+
+
 def write_json(path: Path, data) -> None:
-    """統一存檔格式：不轉義中文、縮排 1 格，跟 refpick.py 的存檔方式一致。"""
+    """統一存檔格式：不轉義中文、縮排 1 格，跟 refpick.py 的存檔方式一致。
+    10-14 第5步2.0 第1段：在 `no_writes()` 裡面時不寫（見上）。"""
+    if getattr(_quiet, "on", False):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     # 先寫暫存檔再換上（09-29）：寫到一半被中斷時，原本的檔案還是完整的，不會留下半個 JSON
     tmp = path.with_name(f".{path.name}.寫入中")
