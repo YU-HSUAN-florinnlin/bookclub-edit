@@ -81,7 +81,9 @@ function cvBindTools(it) {
   const isT = document.getElementById("rv-isteacher");
   if (isT) isT.addEventListener("click", async () => {
     // 09-29 宇軒：聲音辨識把老師判成學員時，一鍵改回老師（只有一部分是老師：先用「改做法」裡的「從游標處切開」）
-    if (!confirm(`把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 這一段改成老師？\n改了之後這段不會重念，也會補找這段裡老師提到的名字。\n只有一部分是老師的話，先按「改做法」→「從游標處切開」。`)) return;
+    // 10-15：第 5 步的按鈕叫「改」（不是「改做法」）；整段改回老師原聲，選字（#226）之後做
+    const where = cv.ctx.mode === "第5步" ? "在下面按「從游標處切開」" : "先按「改做法」→「從游標處切開」";
+    if (!confirm(`把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 這一段改成老師？\n改了之後這段不會重念，也會補找這段裡老師提到的名字。\n只有一部分是老師的話，${where}。`)) return;
     await rvSaveTurnText(it);
     const res = await cvPost("/api/turns/save", { id: it.id, "說話者": "老師" });
     if (res["補找到的老師名字"]) alert(`這段裡補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
