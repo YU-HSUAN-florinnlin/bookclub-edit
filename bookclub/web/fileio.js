@@ -201,7 +201,9 @@ async function pickBrowsed(path) {
 
 let foPollTimer = null;
 // 10-13 審查修正二（建議 5）：確認視窗用伺服器回的 `說明`（換了成品／第 4 步又組裝了，兩種情況說法不同）
-function foStaleAsk(why) {
+function foStaleAsk(why, ver) {
+  // 10-15 第3段審查修正（建議）：拿的最終成品不是最新一版——問的是要不要複製這一版（不是「現在這一支還沒輸出」）
+  if (ver && ver["輸出版本"]) return `${why || `這是第 ${ver["輸出版本"]} 版的，最新是第 ${ver["最新版本"]} 版`}。要複製第 ${ver["輸出版本"]} 版嗎？（要最新的，先在第 5 步看最新一版、按輸出成品）`;
   return `${why || "上次輸出的不是現在這一支成品"}。現在這一支還沒按「輸出成品」，要先複製它嗎？（建議檢查完先按輸出成品）`;
 }
 
@@ -259,7 +261,7 @@ async function fileOutInit(el) {
     try {
       const r = await apiPost("/api/final/to_windows", {}, { quiet: true });
       if (r && r["要確認"]) {   // 10-13 bug 二：上次輸出的是重做前的版本，先問一次
-        if (!confirm(foStaleAsk(r["說明"]))) { win.disabled = false; return; }
+        if (!confirm(foStaleAsk(r["說明"], r["版本"]))) { win.disabled = false; return; }   // 10-15 第3段審查修正：拿的不是最新版也先問
         await apiPost("/api/final/to_windows", { confirm: true }, { quiet: true });
       }
     }

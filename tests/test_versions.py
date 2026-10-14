@@ -143,22 +143,59 @@ def test_old_version_page_and_decide_and_watch():
     cards = pg["卡片"]
     assert _by(cards, "名字:1")["狀態"] == needs.PASSED and _by(cards, "學員段落:T005")["狀態"] == needs.NOT_SEEN
     assert not any(c["這一版沒處理到"] for c in cards)   # 第 1 版是整支
-    # 舊版上退回：記在那一版、卡片等重做（帶版本號）；最新一版的成品檢查檔不動
+    # 10-15 第3段審查修正（必修 1）：舊版只能通過——退回被擋，那一版、卡片、成品檢查檔都不動
     t5 = _by(cards, "學員段落:T005")
-    finalcards.decide(w, t5["id"], needs.RETURNED, ["念錯字"], "x", version=1)
+    before = json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True)
+    try:
+        finalcards.decide(w, t5["id"], needs.RETURNED, ["念錯字"], "x", version=1)
+        raise AssertionError("舊版不能退回")
+    except ValueError as e:
+        assert str(e) == "要退回請回到最新一版"
     st = needs.load(w)
-    assert st.states[(t5["卡號"], 1)]["退回原因"] == {"選項": ["念錯字"], "補充": "x"}
-    assert st.cards[t5["卡號"]]["等重做"]["版本號"] == 1
-    tn._quiet(needs.mirror_final, w, force=True)   # 最新一版重算不會把它清掉（範圍外）
-    assert needs.load(w).cards[t5["卡號"]]["等重做"]
-    assert _by(finalcards.build(w)["跨版本卡片"], "學員段落:T005")["狀態"] == needs.RETURNED
+    assert st.states[(t5["卡號"], 1)]["狀態"] == needs.NOT_SEEN and not st.cards[t5["卡號"]].get("等重做")
+    assert json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True) == before
+    # 通過、取消照樣可以
+    assert finalcards.decide(w, t5["id"], needs.PASSED, version=1)["卡片"]["狀態"] == needs.PASSED
+    assert finalcards.decide(w, t5["id"], None, version=1)["卡片"]["狀態"] == needs.NOT_SEEN
     # 舊版上看過的：記在那一版自己的一份
     tn._quiet(finalcards.version_watched, w, 1, [[1.0, 2.0]])   # 假影片量不出長度：不截
     tn._quiet(finalcards.version_watched, w, 1, [[1.5, 3.0]])
     assert needs.watched(w, 1) == [[1.0, 3.0]] and needs.watched(w, 2) == []
-    # 第 3 版整支又做了 T005（退回之後才組）→ 等重做清掉
+
+
+def test_old_version_return_blocked_and_assembly_history():
+    """10-15 第3段審查修正（必修 1）：上一版還沒看的那一區（跨版本卡）退回也擋；之前留下的舊版退回（等重做帶版本號），
+    之後的組裝沒有真的重做它（指紋跟退回那一版一樣）→ 等重做留著、歷史不寫「重做進第 N 版」；真的換了聲音才清。"""
+    w = _three_versions()
+    t5 = _by(finalcards.build(w)["跨版本卡片"], "學員段落:T005")
+    try:
+        finalcards.decide(w, t5["id"], needs.RETURNED, version=1)
+        raise AssertionError("跨版本卡不能退回")
+    except ValueError as e:
+        assert "最新一版" in str(e)
+    try:
+        needs.decide_version(w, 1, t5["卡號"], needs.RETURNED)
+        raise AssertionError("needs 層也擋")
+    except ValueError:
+        pass
+    # 0.2.2b1 第 3 段原版留下的舊版退回（照當時的寫法造一筆）
+    with needs._locked(w):
+        st = needs.load(w)
+        st.cards[t5["卡號"]]["等重做"] = {"起因": needs.WHY_RETURNED, "時間": _t(2), "版本號": 1}
+        st.states[(t5["卡號"], 1)]["狀態"] = needs.RETURNED
+        needs.save(w, st)
+    # 第 3 版整支：T005 在上一版（0–75 秒）範圍外 → 在 `這一版做了哪幾張`，可是指紋跟第 1 版一樣（沒有重新生成）
     _assemble(w, _t(3), tn._records())
+    st = needs.load(w)
+    assert t5["卡號"] in st.versions[3]["這一版做了哪幾張"]
+    assert st.cards[t5["卡號"]]["等重做"]["版本號"] == 1
+    assert not any(h["卡號"] == t5["卡號"] and str(h["動作"]).startswith("重做進第") for h in needs.read_history(w))
+    # 第 4 版 T005 真的換了聲音 → 清掉、歷史寫「重做進第4版」
+    recs = tn._records()
+    recs[4] = {**recs[4], "檔案指紋": "fp-T005-重念"}
+    _assemble(w, _t(4), recs)
     assert not needs.load(w).cards[t5["卡號"]]["等重做"]
+    assert any(h["卡號"] == t5["卡號"] and h["動作"] == "重做進第4版" for h in needs.read_history(w))
 
 
 def test_carry_pass_from_older_version_across_range_version():
@@ -249,6 +286,72 @@ def test_export_any_version_and_take_rule():
         assert "清掉了" in str(e)
 
 
+def test_export_record_matches_no_version():
+    """10-15 第3段審查修正（必修 2）：在 0.2.1b3 輸出過→又更新成品→才升級，輸出紀錄對不到任何版本 → 拿檔不拿那支舊的最終成品、
+    不寫「這是第 None 版」，照 0.2.1b3 的過期判斷（take_target／export_stale）。"""
+    from bookclub import server
+
+    w = _three_versions()
+    chk = fc.load_check(w)
+    chk["輸出成品"] = {"檔案": "輸出/最終成品_0-3_sw_x.mp4", "來源": "輸出/成品_0-3_sw.mp4",
+                    "處理紀錄產生時間": "2020-01-01T00:00:00", "時間": "2020-01-01T00:00:00"}
+    (w / "輸出" / "最終成品_0-3_sw_x.mp4").write_bytes(b"old-final")
+    tn._quiet(fc._save, w, chk)
+    assert finalcards.take(w) is None
+    pp = finalcards.page_part(w, None)
+    assert "輸出成品過期" not in pp   # 不覆寫 finalcheck 算好的
+    full = tn._quiet(fc.page_data, w)
+    full.update(pp)
+    assert full["輸出成品過期"] and full["輸出成品過期"]["原因"] == fc.STALE_OTHER
+    path, what, stale = tn._quiet(server.final_target, w)
+    assert path.name != "最終成品_0-3_sw_x.mp4" and "還沒重新輸出" in what and stale
+    httpd = server.BookclubServer(("127.0.0.1", 0), server.Handler, workdir=w, video=None)
+    try:
+        assert httpd._export_versions() is None
+    finally:
+        httpd.server_close()
+
+
+def test_old_version_export_asks_when_not_fully_watched():
+    """10-15 第3段審查修正（建議）：舊版輸出——卡都看完了、整片沒看完（看過不到 100%）也先問一次。"""
+    w = _three_versions()
+    st = needs.load(w)
+    for (k, n) in list(st.states):
+        if n == 1:
+            tn._quiet(finalcards.decide, w, next(c["id"] for c in finalcards.version_page(w, 1, None)["卡片"]
+                                                  if c.get("卡號") == k), needs.PASSED, version=1)
+    pg = finalcards.version_page(w, 1, None)
+    assert pg["卡片統計"]["還沒看"] == 0 and pg["卡片統計"]["退回"] == 0 and pg["狀態"]["看過比例"] < 1
+    r = finalcards.export_version(w, 1)
+    assert r["要確認"] and r["還差"]["說明"] == [f"整片還沒看完（看過 {int(pg['狀態']['看過比例'] * 100)}%）"]
+    assert finalcards.export_version(w, 1, confirm=True)["ok"]
+
+
+def test_new_version_keeps_prev_watched():
+    """10-15 第3段審查修正（建議）：建新版時，上一版在成品檢查檔的看過區段補進看過.json（升級前看的也留得住）。"""
+    w = tn._fresh()
+    tn._quiet(needs.upgrade, w)
+    _assemble(w, _t(1), tn._records())
+    chk = fc.load_check(w)
+    chk["看過區段"] = [[0.0, 30.0]]   # 沒經過 add_watched 雙寫（例如升級前看的）
+    tn._quiet(fc._save, w, chk)
+    assert needs.watched(w, 1) == []
+    # 組裝寫處理紀錄、建版本的那一刻，成品檢查檔還是上一版那一份（打開第 5 步才換新）
+    log = tn._log(stamp=_t(2))
+    log["版本號"] = needs.next_version_no(w)
+    tn._setup(w, log, None)
+    tn._quiet(needs.add_version, w, log)
+    assert needs.watched(w, 1) == [[0.0, 30.0]] and needs.watched(w, 2) == []
+    # 成品檢查檔換成第 2 版那一份：再建第 3 版時補的是第 2 版（第 1 版不會被第 2 版的時間汙染）
+    chk = fc.refresh(fc.load_check(w), log)
+    chk["看過區段"] = [[50.0, 60.0]]
+    tn._quiet(fc._save, w, chk)
+    log3 = tn._log(stamp=_t(3))
+    tn._setup(w, log3, None)
+    tn._quiet(needs.add_version, w, log3)
+    assert needs.watched(w, 1) == [[0.0, 30.0]] and needs.watched(w, 2) == [[50.0, 60.0]], needs.watched(w, 2)   # 第 2 版那一份補進第 2 版，第 1 版不動
+
+
 def _serve(w: Path):
     from bookclub import server
 
@@ -285,6 +388,140 @@ def test_api_versions():
         s = tn._quiet(_get, base, "/api/state")
         assert s["開發者"] is False
     finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_windows_copy_asks_when_not_latest():
+    """10-15 第3段審查修正（建議，宇軒定前暫定）：複製到 Windows 拿的最終成品不是最新一版 → 先問一次；確定才複製。"""
+    from bookclub import fileio
+    from bookclub import server as srv
+
+    w = _three_versions()
+    tn._quiet(finalcards.export_version, w, 1, confirm=True)
+    httpd = srv.BookclubServer(("127.0.0.1", 0), srv.Handler, workdir=w, video=None)
+    olds = (fileio.platform_kind, fileio.windows_downloads)
+    started = []
+    try:
+        fileio.platform_kind = lambda: "wsl"
+        fileio.windows_downloads = lambda: (_ for _ in ()).throw(RuntimeError("測試：不真的複製"))
+        r = httpd.final_to_windows()
+        assert r["要確認"] and r["說明"] == "這是第 1 版的，最新是第 2 版" and r["版本"] == {"輸出版本": 1, "最新版本": 2}
+        try:
+            httpd.final_to_windows(confirm=True)   # 確定之後才走到複製（這裡假的下載資料夾丟錯，代表有往下走）
+        except ValueError as e:
+            started.append(str(e))
+        assert started == ["測試：不真的複製"]
+    finally:
+        fileio.platform_kind, fileio.windows_downloads = olds
+        httpd.server_close()
+
+
+def test_render_video_names_with_version_after_upgrade():
+    """10-15 第3段審查修正（建議）：升級過的工作區，render_video（假編碼器）產生 `成品_v<N>_…`、處理紀錄記同一個版本號，
+    升級前的舊檔名成品不動；失敗的那一次不佔號碼。"""
+    import test_execute as te
+    import test_stop_keep as sk
+
+    from bookclub import execute, proclog
+
+    w = te._fresh()
+    prod, _old = sk._with_product(w)
+    tn._quiet(needs.upgrade, w)
+    n = needs.next_version_no(w)
+    with sk._FakeRender(w, fail=True):
+        try:
+            tn._quiet(render.render_video, w, 0.0, 180.0, tag="0-3", min_free_gb=0)
+        except RuntimeError:
+            pass
+    assert needs.next_version_no(w) == n   # 失敗：號碼還在
+    with sk._FakeRender(w, fail=False):
+        tn._quiet(render.render_video, w, 0.0, 180.0, tag="0-3", min_free_gb=0)
+    assert (w / "輸出" / f"成品_v{n}_0-3_sw.mp4").is_file() and prod.read_bytes() == b"old product"
+    assert proclog.load(w)["版本號"] == n
+    assert needs.load(w).versions[n]["成品檔"] == [f"輸出/成品_v{n}_0-3_sw.mp4"]
+    assert execute.render_done(w, "0-3", ["sw"])[0]
+    assert render.product_path(w, "0-3", "sw").name == f"成品_v{n}_0-3_sw.mp4"
+
+
+def test_api_vclip():
+    """10-15 第3段審查修正（建議）：`/api/final/vclip?版本=N&start&end`——第 N 版成品那一段的聲音（ffmpeg 換成假的）。"""
+    import subprocess
+    import urllib.error
+
+    w = _three_versions()
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"RIFF-fake-wav")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    old = subprocess.run
+    subprocess.run = fake_run
+    httpd, base = _serve(w)
+    try:
+        with urllib.request.urlopen(base + urllib.parse.quote("/api/final/vclip?版本=1&start=10&end=12.5", safe="/?=&"),
+                                    timeout=30) as r:
+            assert r.status == 200 and r.headers.get("Content-Type", "").startswith("audio/wav") and r.read() == b"RIFF-fake-wav"
+        assert len(calls) == 1 and calls[0][calls[0].index("-i") + 1].endswith("成品_v1_0-3_sw.mp4")
+        assert (w / "web快取" / "成品檢查" / "版本1_10.00_12.50.wav").is_file()
+        with urllib.request.urlopen(base + urllib.parse.quote("/api/final/vclip?版本=1&start=10&end=12.5", safe="/?=&"),
+                                    timeout=30) as r:
+            r.read()
+        assert len(calls) == 1   # 快取：同一段不再切
+        (w / "輸出" / "成品_v1_0-3_sw.mp4").unlink()
+        try:
+            tn._quiet(urllib.request.urlopen, base + urllib.parse.quote("/api/final/vclip?版本=1&start=1&end=2", safe="/?=&"),
+                      timeout=30)
+            raise AssertionError("影片清掉了要回錯誤")
+        except urllib.error.HTTPError as e:
+            assert e.code >= 400
+    finally:
+        subprocess.run = old
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_api_execute_start_base_version_developer_only():
+    """10-15 第3段審查修正（建議）：開發者設定開著時 `/api/execute/start` 帶 `基礎版本` → 記下次組裝的基礎版本；
+    沒有那一版回錯誤；沒開開發者設定收到也不理（清掉）。"""
+    import urllib.error
+
+    from bookclub import config, execute
+    from bookclub import server as srv
+
+    w = _three_versions()
+    olds = (config.developer, execute.precheck, execute.run_execute, srv.groq_key_ready)
+    httpd, base = _serve(w)
+
+    def wait_idle():
+        for _ in range(200):
+            if not httpd.exec_running():
+                return
+            threading.Event().wait(0.02)
+
+    try:
+        config.developer = lambda: True
+        execute.precheck = lambda wk: {"可以開始": True, "缺": [], "提醒": [], "缺代號": 0}
+        execute.run_execute = lambda wk, **kw: {}
+        srv.groq_key_ready = lambda: True
+        r = tn._quiet(_post, base, "/api/execute/start", {"methods": ["sw"], "基礎版本": 1})
+        assert r["started"], r
+        wait_idle()
+        assert needs.load(w).fmt.get("下次組裝的基礎版本") == 1
+        try:
+            tn._quiet(_post, base, "/api/execute/start", {"methods": ["sw"], "基礎版本": 9})
+            raise AssertionError("沒有的版本不收")
+        except urllib.error.HTTPError as e:
+            assert e.code == 409 and "9" in json.loads(e.read().decode("utf-8"))["error"]
+        config.developer = lambda: False
+        r = tn._quiet(_post, base, "/api/execute/start", {"methods": ["sw"], "基礎版本": 1})
+        assert r["started"], r
+        wait_idle()
+        assert "下次組裝的基礎版本" not in needs.load(w).fmt
+    finally:
+        (config.developer, execute.precheck, execute.run_execute, srv.groq_key_ready) = olds
         httpd.shutdown()
         httpd.server_close()
 

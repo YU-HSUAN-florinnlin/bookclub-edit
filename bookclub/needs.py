@@ -836,7 +836,14 @@ def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *,
         c = st.cards[k]
         pend = c.get("等重做") or {}
         later = made is None or (_ts(pend.get("時間")) or 0) <= made
-        if (pend.get("起因") == WHY_EDITED and later) or (pend.get("版本號") and k in prints and later):
+        # 10-15 第3段審查修正（必修 1）：舊版退回的要「這一版真的重新做了它」才清——在 `done`（指紋跟上一版不同），
+        # 而且指紋也跟退回的那一版不同（上一版範圍外沒有它時，`done` 也會有它）。只是範圍又包到它、指紋沒變不算重做
+        # （以前用 `prints`，等重做被清、歷史寫「重做進第 N 版」，其實沒重新生成）
+        redone = False
+        if pend.get("版本號") and k in done and later:
+            at = (st.versions.get(int(pend["版本號"])) or {}).get("卡片指紋") or {}
+            redone = at.get(k) != prints[k]
+        if (pend.get("起因") == WHY_EDITED and later) or redone:
             c["等重做"] = None
             c["更新時間"] = now
             st.log(now, k, step, f"重做進第{n}版", {"起因": pend.get("起因")}, None)
@@ -874,12 +881,34 @@ def add_version(workdir: str | Path, log: dict, *, note: str | None = None) -> d
         have = st.version_at(log.get("產生時間"))
         if have is not None:
             return have
+        prev = st.latest_version()
         row = build_version(st, w, log, index, _now(), note=note)
         _write_version_copy(w, row["版本號"], log)
         st.fmt.setdefault("同步", {})["處理紀錄"] = log.get("產生時間")
         _update_gen_rounds(st, w, _now())
         save(w, st)
+        _keep_prev_watched(w, prev)
     return row
+
+
+def _keep_prev_watched(w: Path, prev: dict | None) -> None:
+    """10-15 第3段審查修正（建議）：建新版時，上一版在成品檢查檔裡的看過區段（還是上一版那份處理紀錄的）補進 `看過.json`
+    ——升級前看的、沒經過 `add_watched` 雙寫的也留得住，之後切回上一版看過比例不會是 0%。成品檢查檔換新後就沒有這一份了。"""
+    if not prev:
+        return
+    try:
+        from bookclub import finalcheck as fc
+
+        check = fc.load_check(w)
+        if check.get("處理紀錄產生時間") != prev.get("時間") or not check.get("看過區段"):
+            return
+        n = int(prev["版本號"])
+        have = watched(w, n)
+        merged = fc.merge_ranges(have + [[float(a), float(b)] for a, b in check["看過區段"]])
+        if merged != have:
+            set_watched(w, n, merged)
+    except Exception as e:  # noqa: BLE001 — 補不到不擋建版本（只是看過比例，不記同步錯誤、不讓第 5 步退回讀舊檔）
+        print(f"[修改需求紀錄] ⚠️ 上一版的看過區段沒補進看過.json：{type(e).__name__}")
 
 
 def add_product(workdir: str | Path, stamp: str | None, rel: str) -> None:
@@ -985,11 +1014,16 @@ def add_export(workdir: str | Path, n: int, rec: dict) -> None:
 def decide_version(workdir: str | Path, n: int, card: str, result: str | None, options: list[str] | None = None,
                    extra: str = "") -> dict:
     """10-15 第5步2.0 第3段（31 號設計 §6.5）：在舊版（不是最新處理紀錄那一版）上按通過／退回／取消——記在那一版的成品狀態，
-    不寫成品檢查檔（舊檔只認得最新那一份處理紀錄）。退回：那張卡等重做（起因退回、帶 `版本號`；之後組裝有它的新版本就清掉）。
+    不寫成品檢查檔（舊檔只認得最新那一份處理紀錄）。10-15 第3段審查修正：舊版只能通過／取消，退回回 ValueError
+    （下面留著的退回分支給第 4 段開放用：那張卡等重做，起因退回、帶 `版本號`；之後組裝真的重做了它才清掉）。
     這一版沒處理到這張卡（沒有狀態列）不能判斷。回傳那一列。"""
     w = Path(workdir)
     if result not in (PASSED, RETURNED, None):
         raise ValueError("只能選：通過、退回")
+    if result == RETURNED:
+        # 10-15 第3段審查修正（必修 1，宇軒定前暫定）：舊版只能通過——舊版上退回，第 4 步看不到（舊檔只認最新那一份處理紀錄），
+        # 組裝後等重做被清、歷史寫「重做進第 N 版」卻沒有重新生成。31 號設計 §5.1 按卡片重做做完（第 4 段）再開放
+        raise ValueError("要退回請回到最新一版")
     with _locked(w):
         st = load(w)
         row = st.states.get((card, int(n)))

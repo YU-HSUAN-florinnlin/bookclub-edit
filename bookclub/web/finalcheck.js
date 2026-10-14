@@ -9,7 +9,7 @@
  * 卡片的內容、「改」裡面的東西是第 3 步的卡片元件（cards.js），走第 3 步原本的 API；改完那張卡「已改，等重做」。
  * 「重做這幾張」：第 4 步開始執行、跳到第 4 步；跑完自動跳回第 5 步（31 號設計 §9 問題 2 定案）。
  * 10-15 第5步2.0 第3段（版本，31 號設計 §6.5–6.7）：有兩版以上，頂端多「看哪一版」選單（fc.ver＝看哪一版，null＝最新）；
- *   舊版：卡片照那一版的判斷、沒處理到的變淡；可以按通過／退回（記在那一版）、可以輸出那一版；不能改、不能新增、不能重做。
+ *   舊版：卡片照那一版的判斷、沒處理到的變淡；可以按通過（記在那一版）、可以輸出那一版；不能退回（10-15 第3段審查修正）、不能改、不能新增、不能重做。
  *   最新版下面多「上一版還沒看的（第 N 版）」那一區（範圍組裝時那一版範圍外、舊版還沒看完的卡）；重做過的卡多「上一版 ▶」。
  * 資料：GET /api/final（?版本=N 看舊版；卡片、狀態、第 3 步資料）；存檔：/api/final/card（通過／退回，回寫舊檔每一筆）、/api/final/edited、
  * /api/final/watched、/api/final/export（bookclub/finalcards.py、finalcheck.py）。依賴 app.js 的 apiGet／apiPost／esc／contentEl。 */
@@ -303,6 +303,14 @@ function fcRecountLocal() {
 
 function fcUrl() { return fc.ver ? `/api/final?版本=${encodeURIComponent(fc.ver)}` : "/api/final"; }
 function fcOld() { return !!(fc.data && fc.data["看的是舊版"]); }
+// 10-15 第3段審查修正（必修 1，宇軒定前暫定）：舊版、上一版還沒看的那一區只能通過——退回在那裡第 4 步看不到、會無聲失效
+// （31 號設計 §5.1 按卡片重做做完再開放）。純函式：卡片、是不是在看舊版
+function fcCanJudge(c) {
+  return !!c && ![FC_ST.NOT_MADE, FC_ST.EDITED].includes(c["狀態"]) && !c["這一版沒處理到"];
+}
+function fcCanReturn(c, old) {
+  return fcCanJudge(c) && !c["跨版本"] && !old;
+}
 // 選單每一項的字（純函式，§6.8）：「第 N 版　10/14 14:20（最新）」；開發者設定開著才多寫範圍標記
 function fcVersionText(v, dev) {
   return `第 ${v["版本號"]} 版　${fcShortStamp(v["時間"])}${v["最新"] ? "（最新）" : ""}${dev && v["標記"] ? `　${v["標記"]}` : ""}`;
@@ -543,7 +551,8 @@ function fcRenderRight() {
   const list = c["跨版本"] ? fcCross() : fcShown().length ? fcShown() : fcCards();
   const idx = list.findIndex((x) => x.id === c.id);
   const busy = !!fc.data["AI執行中"];
-  const canJudge = ![FC_ST.NOT_MADE, FC_ST.EDITED].includes(c["狀態"]) && !c["這一版沒處理到"];
+  const canJudge = fcCanJudge(c);
+  const canReturn = fcCanReturn(c, fcOld());   // 10-15 第3段審查修正：舊版、跨版本卡退回按鈕灰的
   const canEdit = it && !fcOld();   // 10-15 第5步2.0 第3段：舊版上不能改（改的是第 3 步現在的檔，回最新一版改）
   const abPrev = fcCardAbPlan(c, "上一版");
   const back = c["狀態"] === FC_ST.BACK;
@@ -561,12 +570,13 @@ function fcRenderRight() {
         <button class="ghost small" data-ab="上一版">上一版 ▶</button>` : ""}</div>
       <div class="rv-actions">
         <button class="${c["狀態"] === FC_ST.OK ? "primary on" : "primary"}" id="fc-pass" aria-pressed="${c["狀態"] === FC_ST.OK}" ${canJudge ? "" : "disabled"}>通過<kbd>Enter</kbd></button>
-        <button class="ghost${back ? " on" : ""}" id="fc-redo" aria-pressed="${back}" aria-expanded="${fc.redoOpen}" ${canJudge ? "" : "disabled"}>退回</button>
+        <button class="ghost${back ? " on" : ""}" id="fc-redo" aria-pressed="${back}" aria-expanded="${fc.redoOpen}" ${canReturn ? "" : `disabled title="要退回請回到最新一版"`}>退回</button>${back && !canReturn ? `
+        <button class="ghost small" id="fc-back-undo">取消退回</button>` : ""}
         ${canEdit ? `<button class="ghost${fc.editOpen ? " on" : ""}" id="fc-edit" aria-expanded="${fc.editOpen}" ${busy ? "disabled title=\"正在重做，做完才能改\"" : ""}>改<kbd>E</kbd></button>` : ""}
         <span class="spacer"></span>
         <button class="ghost" id="fc-prev">上一張</button><button class="ghost" id="fc-next">下一張</button>
       </div>
-      <div class="rv-more" id="fc-redobox" ${fc.redoOpen ? "" : "hidden"}>
+      <div class="rv-more" id="fc-redobox" ${fc.redoOpen && canReturn ? "" : "hidden"}>
         ${c["可重新生成"] ? "" : `<p class="rv-warnline">這一張重做只會重新放一次，聲音不會變；要改內容請按『改』</p>`}
         <p><b>為什麼退回？</b></p>
         <div class="rv-field rv-choices">${opts.map((o) => `<label class="rv-check"><input type="checkbox" class="fc-why-opt" value="${esc(o)}" ${picked.includes(o) ? "checked" : ""}> ${esc(o)}</label>`).join("")}</div>
@@ -592,6 +602,8 @@ function fcRenderRight() {
   });
   const undo = document.getElementById("fc-redo-undo");
   if (undo) undo.addEventListener("click", () => fcDecide(c, null));
+  const undo2 = document.getElementById("fc-back-undo");   // 10-15 第3段審查修正：舊版上以前退回過的，退回框打不開，取消放外面
+  if (undo2) undo2.addEventListener("click", () => fcDecide(c, null));
   document.getElementById("fc-prev").addEventListener("click", () => fcStep(-1));
   document.getElementById("fc-next").addEventListener("click", () => fcStep(1));
   if (canEdit && fc.editOpen) {   // 「改」裡面是第 3 步的卡片元件（第 3 步原本的 API）
@@ -604,6 +616,8 @@ function fcRenderRight() {
 }
 
 function fcToggleRedo() {
+  const c = fc.cur && fcCard(fc.cur);
+  if (!fc.redoOpen && !fcCanReturn(c, fcOld())) return;   // 10-15 第3段審查修正：舊版、跨版本卡不開退回
   fc.redoOpen = !fc.redoOpen;
   if (fc.redoOpen) fc.editOpen = false;
   fcRenderRight();
@@ -620,6 +634,7 @@ function fcToggleEdit() {
 }
 
 async function fcDecide(c, result, picks = [], extra = "") {
+  if (result === FC_ST.BACK && !fcCanReturn(c, fcOld())) return;   // 10-15 第3段審查修正：任何路徑（按鈕、Enter）都不送舊版退回
   fc.nextData = null;   // 10-15 第2段審查二修正：判斷之後不能再用之前留的整頁資料
   let res;
   // 10-15 第5步2.0 第3段：在哪一版上按的（舊版、上一版還沒看的那一區記在那一版；整頁重新整理）
@@ -1134,7 +1149,7 @@ document.addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   const c = fc.cur && fcCard(fc.cur);
   if (e.key === " ") { e.preventDefault(); fc.video.paused ? fc.video.play().catch(() => {}) : fc.video.pause(); }
-  else if (e.key === "Enter" && e.target.tagName !== "BUTTON" && c && ![FC_ST.NOT_MADE, FC_ST.EDITED].includes(c["狀態"]) && !c["這一版沒處理到"]) {
+  else if (e.key === "Enter" && e.target.tagName !== "BUTTON" && fcCanJudge(c)) {   // Enter＝通過（舊版也可以）；退回一律走按鈕
     e.preventDefault(); fcDecide(c, c["狀態"] === FC_ST.OK ? null : FC_ST.OK);
   }
   else if (k === "e") { e.preventDefault(); fcToggleEdit(); }

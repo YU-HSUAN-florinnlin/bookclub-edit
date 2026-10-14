@@ -58,7 +58,7 @@ _PURE = (_ESC + _const(FCJS, "FC_AB_CONTEXT") + _const(FCJS, "FC_ST") + _const(F
          + _const(FCJS, "FC_NOTE_FIELDS") + _fn(FCJS, "fcNoteOnly")
          + _fn(FCJS, "fcTabList") + _fn(FCJS, "fcPickTab") + _fn(FCJS, "fcStepPick") + _fn(FCJS, "fcNextUnseen")
          + _fn(FCJS, "fcSrcTime") + _fn(FCJS, "fcOutTime") + _fn(FCJS, "fcVclip") + _fn(FCJS, "fcCardAbPlan")
-         + _fn(FCJS, "fcVersionText") + _fn(FCJS, "fcVersionMenuHtml"))
+         + _fn(FCJS, "fcVersionText") + _fn(FCJS, "fcVersionMenuHtml") + _fn(FCJS, "fcCanJudge") + _fn(FCJS, "fcCanReturn"))
 
 
 def test_status_line_one_sentence_in_priority():
@@ -189,6 +189,10 @@ def test_fileio_which_line_and_redo_return():
     assert "第 4 步又組裝了新的成品" in got["w"][1]
     assert "要拿檔案，按『複製到 Windows』" in got["w"][2] and got["w"][3] == "" and got["w"][4] == ""
     assert got["r"] == [None, "回第5步", "留下", "留下", None, None]   # 第 5 個：更早的那一次（started_at 比按的那一次早）
+    # 10-15 第3段審查修正（建議）：Windows 複製拿的不是最新一版時問的那一句
+    ask = _node(_fn(FIOJS, "foStaleAsk") + """console.log(JSON.stringify([
+        foStaleAsk("這是第 1 版的，最新是第 2 版", {"輸出版本": 1, "最新版本": 2}), foStaleAsk("上次輸出之後又組裝了", null)]));""")
+    assert "要複製第 1 版嗎" in ask[0] and "這是第 1 版的，最新是第 2 版" in ask[0] and "現在這一支還沒按" in ask[1]
     poll = _fn(APPJS, "startExecPoll")
     assert "execRedoGoBack(d)" in poll and "execRedoGoBack(d)" in _fn(APPJS, "renderExecuteBody")
 
@@ -373,7 +377,11 @@ def test_versions_pure():
         noPrev: fcCardAbPlan({"原片": [100, 104], "成品": [80, 85], "上一版": null}, "上一版"),
         crossNow: fcCardAbPlan({"原片": [100, 104], "成品": [80, 85], "跨版本": true, "版本號": 1}, "現在"),
         crossOrig: fcCardAbPlan({"原片": [100, 104], "成品": [80, 85], "跨版本": true, "版本號": 1}, "原本"),
-        todo: fcTabList([{"id": "a", "類型": "名字", "狀態": "還沒生成", "這一版沒處理到": true}, {"id": "b", "類型": "名字", "狀態": "還沒看"}], 0, null)[1].cards.map((c) => c.id) }));""")
+        todo: fcTabList([{"id": "a", "類型": "名字", "狀態": "還沒生成", "這一版沒處理到": true}, {"id": "b", "類型": "名字", "狀態": "還沒看"}], 0, null)[1].cards.map((c) => c.id),
+        // 10-15 第3段審查修正（必修 1）：舊版、跨版本卡只能通過
+        ret: [fcCanReturn({"狀態": "還沒看"}, false), fcCanReturn({"狀態": "還沒看"}, true), fcCanReturn({"狀態": "還沒看", "跨版本": true}, false),
+              fcCanReturn({"狀態": "還沒生成"}, false)],
+        judge: [fcCanJudge({"狀態": "還沒看"}), fcCanJudge({"狀態": "還沒看", "跨版本": true}), fcCanJudge({"狀態": "通過", "這一版沒處理到": true}), fcCanJudge(null)] }));""")
     assert got["text"] == ["第 3 版　10/15 14:20（最新）", "第 2 版　10/15 10:05", "第 2 版　10/15 10:05　0-3"]
     assert got["one"] == ""                                    # 只有一版：不出現選單
     assert "看哪一版" in got["menu"] and 'value="2" selected' in got["menu"] and "以這一版為基礎再組裝" not in got["menu"]
@@ -384,6 +392,7 @@ def test_versions_pure():
     assert got["crossNow"]["audio"].startswith("/api/final/vclip?版本=1&") and got["crossNow"]["video"] is None
     assert got["crossOrig"]["video"] is None and got["crossOrig"]["audio"].startswith("/api/audio?")
     assert got["todo"] == ["b"]                                # 沒處理到的不算「還沒看完」
+    assert got["ret"] == [True, False, False, False] and got["judge"] == [True, True, False, False]
     # 第 4 步：範圍「從／到」、「只重新組裝」只有開發者設定才畫（31 號設計 §5.3）
     body = _fn(APPJS, "renderExecuteBody")
     assert "const ra = dev ?" in body and '${dev ? `<div class="exec-opts">' in body and '${dev ? `<button id="btnReassemble"' in body
@@ -415,8 +424,10 @@ def test_version_page_renders():
           const t5 = DATA["跨版本卡片"].find((c) => c["第3步鍵"] === "學員段落:T005");
           H.listeners.length = 0; H.log.length = 0; fcSelect(t5.id, false);
           const right = document.getElementById("fc-right").innerHTML;
+          await click("fc-redo");   // 10-15 第3段審查修正：跨版本卡退回打不開、不送出
+          const opened = !document.getElementById("fc-redobox").hidden;
           await click("fc-pass");
-          return {top: contentEl.innerHTML, lower: document.getElementById("fc-lower").innerHTML, right, log: H.log};"""},
+          return {top: contentEl.innerHTML, lower: document.getElementById("fc-lower").innerHTML, right, opened, log: H.log};"""},
         {"名稱": "換版", "程式": """
           await renderFinal(); H.log.length = 0;
           const sel = document.getElementById("fc-ver"); sel.value = "1";
@@ -428,6 +439,7 @@ def test_version_page_renders():
     assert "看哪一版" in v["top"] and "第 2 版" in v["top"] and "（最新）" in v["top"]
     assert "上一版還沒看的（第 1 版）" in v["lower"] and "這一版沒處理到" in v["lower"] and "fc-faded" in v["lower"]
     assert "現在 ▶" in v["right"]
+    assert re.search(r'id="fc-redo"[^>]*disabled title="要退回請回到最新一版"', v["right"]) and not v["opened"]
     posts = [x for x in v["log"] if x[0] == "POST"]
     assert posts[0][1] == "/api/final/card" and posts[0][2]["版本"] == 1   # 上一版那一區按的：記在第 1 版
     assert got["換版"]["ver"] == 1 and any(x[0] == "GET" and x[1] == "/api/final?版本=1" for x in got["換版"]["log"])
@@ -445,6 +457,8 @@ def test_version_page_renders():
     o = got["舊版"]
     assert "錯誤" not in o, o
     assert 'id="fc-edit"' not in o["right"] and "＋在這裡新增修改" not in o["lower"] and "重做這幾張" not in o["lower"]
+    assert re.search(r'id="fc-redo"[^>]*disabled', o["right"])   # 10-15 第3段審查修正：舊版只能通過
+    assert not any(x[0] == "POST" and x[2].get("結果") == "退回" for x in o["log"])
     assert o["video"].startswith("/api/final/video?版本=1&v=")
     assert [x for x in o["log"] if x[0] == "POST"][0][2]["版本"] == 1
     assert [x for x in o["exp"] if x[0] == "POST"][0][2] == {"版本": 1}

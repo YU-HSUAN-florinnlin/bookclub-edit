@@ -1186,6 +1186,11 @@ class BookclubServer(ThreadingHTTPServer):
             raise FileNotFoundError("還沒有成品影片，先在第 4 步組裝")
         if stale and not confirm:   # 10-13 bug 二：上次輸出的是重做前的版本，現在這支還沒輸出過——先問一次再複製
             return {"ok": False, "要確認": True, "成品是": what, "說明": stale["說明"], "舊檔": stale["舊檔"]}
+        ver = self._export_versions()
+        if ver and ver["輸出版本"] != ver["最新版本"] and not confirm:
+            # 10-15 第3段審查修正（建議，宇軒定前暫定）：拿的最終成品不是最新一版（例如在舊版按了輸出）——先問一次再複製
+            return {"ok": False, "要確認": True, "成品是": what, "版本": ver,
+                    "說明": f"這是第 {ver['輸出版本']} 版的，最新是第 {ver['最新版本']} 版", "舊檔": None}
         with self.pick_lock:   # 「有沒有在跑」與「佔位子」同一段鎖：連按兩下也只會有一個
             if self.exporting or any(j.purpose == "成品" and j.running for j in self.copy_jobs.values()):
                 raise ValueError("上一次的複製還沒做完")

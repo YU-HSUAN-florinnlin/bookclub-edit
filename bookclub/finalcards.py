@@ -446,7 +446,9 @@ def page_part(workdir: str | Path, page: dict | None, *, running: bool = False, 
         out.update({"版本清單": version_list(workdir, st), "目前版本": cur["版本號"] if cur else None,
                     "最新版本": max(st.versions) if st.versions else None})
         ex = _export_info(workdir, fc.load_check(workdir), st)
-        if ex:   # §6.7：上次輸出的版本號 ≠ 最新版本號 → 要重新輸出（不再比檔案大小與修改時間）
+        # 10-15 第3段審查修正（必修 2）：輸出紀錄對不到任何版本（在 0.2.1b3 輸出過、又更新成品、才升級）→ 不覆寫，
+        # 照 0.2.1b3 的過期判斷（finalcheck 算好的 `輸出成品過期`）
+        if ex and ex["輸出版本"] is not None:   # §6.7：上次輸出的版本號 ≠ 最新版本號 → 要重新輸出（不再比檔案大小與修改時間）
             stale = ex["輸出版本"] != ex["最新版本"]
             out["輸出成品過期"] = ({"原因": "版本", "說明": f"這是第 {ex['輸出版本']} 版的，最新是第 {ex['最新版本']} 版"}
                              if stale else None)
@@ -570,7 +572,8 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
     """`POST /api/final/card`：一張卡通過／退回／改回還沒看（result：通過、退回、None）。
     回寫舊檔這張卡對到的每一筆（`finalcheck.decide_many`），新紀錄由舊檔存檔後重算（雙寫照第 1 段），退回再補上選項。
     10-15 第5步2.0 第3段：version＝在第幾版上按的（舊版、或「上一版還沒看的」那一區）。不是最新處理紀錄那一版 → 記在那一版
-    （`needs.decide_version`，不寫舊檔）；回傳 {ok, 卡片: 那一版的這張卡}，畫面整頁重新整理。"""
+    （`needs.decide_version`，不寫舊檔）；回傳 {ok, 卡片: 那一版的這張卡}，畫面整頁重新整理。
+    10-15 第3段審查修正（必修 1）：舊版、上一版還沒看的那一區只能通過／取消，退回回 ValueError「要退回請回到最新一版」。"""
     if result not in (needs.PASSED, needs.RETURNED, None):
         raise ValueError("只能選：通過、退回")
     workdir = Path(workdir)
@@ -647,6 +650,10 @@ def take(workdir: str | Path) -> dict | None:
     if not st.versions:
         return None
     ex = _export_info(workdir, fc.load_check(workdir), st)
+    if ex and ex["輸出版本"] is None:
+        # 10-15 第3段審查修正（必修 2）：輸出紀錄對不到任何版本 → 不知道它跟現在差幾版，回 None 走 0.2.1b3 的
+        # `take_target`／`export_stale`（比來源檔指紋，舊了改拿現在的成品、標還沒重新輸出）
+        return None
     if ex and (workdir / ex["紀錄"]["檔案"]).is_file():
         return {"路徑": ex["紀錄"]["檔案"], "是": "最終成品", "輸出版本": ex["輸出版本"], "最新版本": ex["最新版本"]}
     rel = needs.version_video(workdir, st.latest_version())
@@ -676,8 +683,8 @@ def export_version(workdir: str | Path, n: int, confirm: bool = False) -> dict:
     stat = page["卡片統計"]
     left = stat["還沒看"] + stat["退回"]
     pct = int(page["狀態"]["看過比例"] * 100)
-    if left and not confirm:
-        why = [f"還有 {left} 張沒看完"] + ([f"整片還沒看完（看過 {pct}%）"] if pct < 100 else [])
+    if (left or pct < 100) and not confirm:   # 10-15 第3段審查修正（建議）：卡都看完、整片沒看完也先問一次（照 0.2.1b3）
+        why = ([f"還有 {left} 張沒看完"] if left else []) + ([f"整片還沒看完（看過 {pct}%）"] if pct < 100 else [])
         return {"ok": False, "要確認": True, "還差": {"說明": why, "擋下": [], "名字提醒": [], "退回清單": [], "提醒": [],
                                                   "需留意說明": "", "看過百分比": pct}}
     src = workdir / rel
