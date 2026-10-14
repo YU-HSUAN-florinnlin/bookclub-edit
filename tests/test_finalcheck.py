@@ -929,7 +929,9 @@ def test_server_video_no_store_and_switchnote_route():
         heads.clear()
         srv.Handler._serve_file(H(), fc.video_file(w))
         assert not any(k == "Cache-Control" for k, _v in heads)
-        assert "no_store=True" in (REPO_ROOT / "bookclub" / "server.py").read_text(encoding="utf-8").split('"/api/final/video"')[1][:200]
+        # 10-15 第5步2.0 第3段：最新一版、舊版的成品兩條路都不快取
+        part = (REPO_ROOT / "bookclub" / "server.py").read_text(encoding="utf-8").split('"/api/final/video"')[1].split("elif path")[0]
+        assert part.count("no_store=True") == 2, part
         chk = fc.load_check(w)
         chk["成品切換提示"] = {"時間": T1, "從": "a", "到": "b", "原因": fc.SWITCH_NEW}
         fc._save(w, chk)

@@ -1311,8 +1311,12 @@ def test_server_reassemble_without_returns():
         return {}
 
     steps = {"now": _ALL_DONE}
+    from bookclub import config
+
     olds = (execute.precheck, execute.final_check, execute.run_execute, execute.current_steps, finalcheck.redo_list)
+    old_dev = config.developer
     try:
+        config.developer = lambda: True   # 10-15 第5步2.0 第3段：「只重新組裝」只有開發者設定開著才收
         execute.precheck = lambda wk: {"可以開始": True, "缺": [], "提醒": [], "缺代號": 0}
         execute.final_check = lambda wk: {"可以開始": True, "看過": True, "還要處理": 0}
         execute.run_execute = fake_run
@@ -1362,8 +1366,25 @@ def test_server_reassemble_without_returns():
                 break
             time.sleep(0.02)
         assert len(started) == 3
+        # 10-15 第5步2.0 第3段（31 號設計 §5.3）：沒開開發者設定（老師）——範圍、只重新組裝收到也不理：整支、照卡片重做
+        config.developer = lambda: False
+        old_key = srv.groq_key_ready
+        srv.groq_key_ready = lambda: True   # 不是只重新組裝：要有轉文字金鑰（這裡假裝有）
+        try:
+            r = httpd.start_execute({"start": "1:00", "end": "3:00", "methods": ["sw"], "只重新組裝": True, "基礎版本": 1})
+        finally:
+            srv.groq_key_ready = old_key
+        assert r["started"], r
+        for _ in range(100):
+            if not httpd.exec_running():
+                break
+            time.sleep(0.02)
+        assert len(started) == 4 and started[3]["start"] is None and started[3]["end"] is None
+        assert started[3]["reassemble_only"] is False
+        assert httpd.exec_status()["開發者"] is False
     finally:
         gate.set()
+        config.developer = old_dev
         (execute.precheck, execute.final_check, execute.run_execute, execute.current_steps, finalcheck.redo_list) = olds
         httpd.server_close()
 

@@ -425,9 +425,15 @@ def final_target(workdir: Path) -> tuple[Path | None, str | None, dict | None]:
     （`finalcheck.export_stale`）就跳過最終成品，改拿現在的成品、標「還沒重新輸出」；第三個值是
     export_stale 的結果（{原因, 說明, 舊檔}），沒過期是 None。「現在的成品」經過 `_current`（新組裝完還沒打開
     第 5 步也算新的），正在檢查的是舊的那支時改拿最新那支（`finalcheck.take_target`），不會把舊檔拿出去。"""
-    from bookclub import finalcheck
+    from bookclub import finalcards, finalcheck
 
     workdir = Path(workdir)
+    try:   # 10-15 第5步2.0 第3段（31 號設計 §6.7）：新紀錄能用時，拿「最新一次輸出」（沒輸出過拿最新一版的成品），不再判斷過期
+        new = finalcards.take(workdir)
+    except Exception:  # noqa: BLE001 — 讀不到就照 0.2.1b3 的做法
+        new = None
+    if new is not None:
+        return safe_join(workdir, new["路徑"]), new["是"], None
     tg = finalcheck.take_target(workdir)
     out, stale = tg["輸出成品"] or {}, tg["過期"]
     if out.get("檔案") and not stale:
@@ -585,7 +591,14 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
         "要注意": analysis.get("要注意") or [],
         "Claude沒跑成功": analysis.get("Claude沒跑成功") or [],
         "找得到claude": bool(find_claude()),
+        "開發者": _developer(),   # 10-15 第5步2.0 第3段（31 號設計 §5.3）：開發者設定（settings.toml `developer = true`）
     }
+
+
+def _developer() -> bool:
+    from bookclub import config
+
+    return config.developer()
 
 
 # ---------------------------------------------------------------------------
@@ -1142,10 +1155,12 @@ class BookclubServer(ThreadingHTTPServer):
                 "版本": self._export_versions()}
 
     def _export_versions(self) -> dict | None:
+        """10-15 第5步2.0 第3段：拿檔按鈕拿的是第幾版、最新是第幾版（只有拿的是最終成品、新紀錄能用時才有）。"""
         from bookclub import finalcards
 
         try:
-            return finalcards.export_versions(self.workdir)
+            t = finalcards.take(self.workdir)
+            return {"輸出版本": t["輸出版本"], "最新版本": t["最新版本"]} if t and t["輸出版本"] else None
         except Exception:  # noqa: BLE001 — 讀不到就照舊的說法
             return None
 
@@ -1211,8 +1226,16 @@ class BookclubServer(ThreadingHTTPServer):
 
     def start_execute(self, opts: dict) -> dict:
         """第 4 步「開始執行」：背景跑 `execute.run_execute`（老師名字 → 學員重念 → 組裝）。"""
+        from bookclub import config
         from bookclub.execute import precheck
 
+        # 10-15 第5步2.0 第3段（31 號設計 §5.3）：範圍「從／到」、「只重新組裝」、「以這一版為基礎再組裝」只有開發者設定開著才收；
+        # 老師的設定檔一律整支、照卡片重做（網頁上看不到這幾樣，API 收到也不理）
+        opts = dict(opts or {})
+        base = opts.pop("基礎版本", None)
+        if not config.developer():
+            opts.update({"start": None, "end": None, "只重新組裝": False})
+            base = None
         with self.run_lock:
             if self.run_state["running"] or self.exec_state["running"]:
                 return {"started": False, "error": "已經有分析或 AI 執行在跑，等它結束再按一次"}
@@ -1231,6 +1254,14 @@ class BookclubServer(ThreadingHTTPServer):
                                          parse_time(opts["end"]) if opts.get("end") else None)
                 if why:
                     return {"started": False, "error": why}
+            try:   # 10-15 第5步2.0 第3段：這一次組裝以哪一版為基礎（開發者；沒指定＝照上一版，清掉上次留的）
+                from bookclub import needs
+
+                needs.set_next_base(self.workdir, int(base) if base else None)
+            except ValueError as e:
+                return {"started": False, "error": str(e)}
+            except Exception as e:  # noqa: BLE001 — 新紀錄寫不了不擋第 4 步
+                print(f"[修改需求紀錄] ⚠️ 沒記到基礎版本：{type(e).__name__}")
             self.exec_state = self._fresh_run_state()
             self.exec_state.update(running=True, started_at=time.time(), 防睡眠=AWAKE_STARTING)
             started = self.exec_state["started_at"]
@@ -1322,6 +1353,9 @@ class BookclubServer(ThreadingHTTPServer):
             st["執行時間"] = run_times(prog, _now())
         except Exception:  # noqa: BLE001 — 算不出來不擋第 4 步
             st["執行時間"] = None
+        from bookclub import config
+
+        st["開發者"] = config.developer()   # 10-15 第5步2.0 第3段：開發者設定開著才顯示範圍欄位與「只重新組裝」
         return {**state, **st}
 
     def start_analyze(self, opts: dict) -> dict:
@@ -1559,11 +1593,28 @@ class Handler(BaseHTTPRequestHandler):
             # 同一份給修改需求紀錄同步用，不另外算
             page, snap = _final_step3(server)
             _needs_ensure(server, page, snap)   # 10-14 第5步2.0 第1段
+            ver = _version_q(query)
+            if ver is not None and ver != _current_version(server):   # 10-15 第5步2.0 第3段：看舊版
+                from bookclub import finalcards
+
+                self._send_json(200, finalcards.version_page(server.workdir, ver, page, running=server.exec_running()))
+                return
             self._send_json(200, _final_data(server, page))
         elif path == "/api/final/video":
             from bookclub import finalcheck
 
+            ver = _version_q(query)
+            if ver is not None and ver != _current_version(server):   # 10-15 第5步2.0 第3段：舊版的成品
+                from bookclub import finalcards
+
+                self._serve_file(finalcards.version_video(server.workdir, ver), no_store=True)
+                return
             self._serve_file(finalcheck.video_file(server.workdir), no_store=True)   # 10-13 bug 一：不快取
+        elif path == "/api/final/vclip":   # 10-15 第5步2.0 第3段：第 N 版成品一段的聲音（上一版 ▶、上一版還沒看的卡）
+            from bookclub import finalcards
+
+            self._serve_file(finalcards.version_clip(server.workdir, int(query["版本"][0]), float(query["start"][0]),
+                                                     float(query["end"][0])), content_type="audio/wav")
         elif path == "/api/final/clip":
             from bookclub import finalcheck
 
@@ -1820,7 +1871,13 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/final/unflag":
                 self._send_json(200, fc.remove_whole_redo(w, str(body["id"])))
             elif path == "/api/final/watched":
-                self._send_json(200, fc.add_watched(w, body.get("區段", []), body.get("成品影片")))
+                ver = body.get("版本")
+                if isinstance(ver, int) and ver != _current_version(server):   # 10-15 第5步2.0 第3段：舊版看過的記在那一版
+                    from bookclub import finalcards
+
+                    self._send_json(200, finalcards.version_watched(w, ver, body.get("區段", [])))
+                else:
+                    self._send_json(200, fc.add_watched(w, body.get("區段", []), body.get("成品影片")))
             elif path == "/api/final/product":
                 self._send_json(200, fc.choose_product(w, str(body["成品影片"])))
             elif path == "/api/final/switchnote":   # 10-13 bug 一：「已改成檢查新的成品」顯示過了就清掉
@@ -1828,8 +1885,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/final/card":   # 10-15 第5步2.0 第2段：一張卡通過／退回（回寫舊檔這張卡的每一筆）
                 from bookclub import finalcards
 
+                ver = body.get("版本")   # 10-15 第5步2.0 第3段：在第幾版上按的（舊版、上一版還沒看的那一區）
                 self._send_json(200, finalcards.decide(w, str(body["id"]), body.get("結果"), body.get("選項") or [],
-                                                       str(body.get("補充", ""))))
+                                                       str(body.get("補充", "")),
+                                                       version=ver if isinstance(ver, int) and not isinstance(ver, bool) else None))
             elif path == "/api/final/edited":   # 10-15：第 5 步按「改」改過 → 那張卡「已改，等重做」
                 from bookclub import finalcards
 
@@ -1842,7 +1901,13 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/final/sendback":
                 self._send_json(200, fc.send_back(w))
             elif path == "/api/final/export":
-                self._send_json(200, fc.export_final(w, confirm=body.get("確定") is True))   # 10-08：還沒看完要先確認
+                ver = body.get("版本")
+                if isinstance(ver, int) and not isinstance(ver, bool) and ver != _current_version(server):
+                    from bookclub import finalcards   # 10-15 第5步2.0 第3段（§6.7）：輸出選中的那一版
+
+                    self._send_json(200, finalcards.export_version(w, ver, confirm=body.get("確定") is True))
+                else:
+                    self._send_json(200, fc.export_final(w, confirm=body.get("確定") is True))   # 10-08：還沒看完要先確認
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
         elif path == "/api/roomtone":   # 10-02 第六批第五件：第 2 步「這段可以」「換一段」
@@ -1926,6 +1991,24 @@ def _final_step3(server) -> tuple[dict | None, dict | None]:
     except Exception as e:  # noqa: BLE001
         print(f"[成品檢查] ⚠️ 第 3 步的卡片讀不到（第 5 步的「改」先不能用）：{type(e).__name__}")
         return None, None
+
+
+def _version_q(query: dict) -> int | None:
+    """`?版本=N`（10-15 第5步2.0 第3段）：沒帶、讀不懂＝None（最新一版）。"""
+    try:
+        return int((query.get("版本") or [None])[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _current_version(server) -> int | None:
+    """最新處理紀錄是第幾版（10-15 第5步2.0 第3段；新紀錄不能用＝None）。"""
+    from bookclub import finalcards
+
+    try:
+        return finalcards.current_version(server.workdir)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _final_data(server, page: dict | None) -> dict:

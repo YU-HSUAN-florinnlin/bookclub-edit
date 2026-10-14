@@ -762,7 +762,8 @@ def test_card_print_ignores_non_sound_fields():
 
 
 def test_catch_up_unchanged_writes_format_only():
-    """建議：第 5 步只記看過區段（判斷沒變）→ 下次打開只寫 格式.json，表不重寫。"""
+    """建議：第 5 步只記看過區段（判斷沒變）→ 下次打開只寫 格式.json，表不重寫。
+    （10-15 第5步2.0 第3段：看過區段每版一份記在 `看過.json`，那一份是看片當下寫的，不算表）"""
     w = _fresh()
     log = _log()
     prod = _prod(w, "成品_0-3_sw.mp4", T1)
@@ -770,11 +771,11 @@ def test_catch_up_unchanged_writes_format_only():
     _quiet(needs.upgrade, w)
     _quiet(needs.ensure, w)
     d = w / needs.DIR_NAME
-    tables = {p.name: p.stat().st_mtime_ns for p in d.glob("*.json") if p.name != needs.FORMAT_FILE}
+    tables = {p.name: p.stat().st_mtime_ns for p in d.glob("*.json") if p.name not in (needs.FORMAT_FILE, needs.WATCHED_FILE)}
     fm_before = (d / needs.FORMAT_FILE).read_text(encoding="utf-8")
     _quiet(fc.add_watched, w, [[0, 5.0]], prod)
     _quiet(needs.ensure, w)
-    assert {p.name: p.stat().st_mtime_ns for p in d.glob("*.json") if p.name != needs.FORMAT_FILE} == tables
+    assert {p.name: p.stat().st_mtime_ns for p in d.glob("*.json") if p.name not in (needs.FORMAT_FILE, needs.WATCHED_FILE)} == tables
     assert (d / needs.FORMAT_FILE).read_text(encoding="utf-8") != fm_before   # 檔案指紋有記
 
 

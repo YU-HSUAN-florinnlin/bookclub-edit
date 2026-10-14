@@ -1132,7 +1132,9 @@ def render_inputs(workdir: Path) -> list[Path]:
 
 
 def render_done(workdir: Path, tag: str, methods: list[str]) -> tuple[bool, str]:
-    outs = [workdir / "輸出" / f"成品_{tag}_{m}.mp4" for m in methods]
+    from bookclub.render import product_path
+
+    outs = [product_path(workdir, tag, m) for m in methods]   # 10-15 第5步2.0 第3段：檔名帶版本號，看最新那一支
     if not all(p.exists() for p in outs):
         return False, "還沒組裝"
     newest_in = max((p.stat().st_mtime for p in render_inputs(workdir)), default=0.0)
@@ -2048,8 +2050,10 @@ def reassemble_problem(workdir: str | Path, a: float | None = None, b: float | N
     b = float(b) if b is not None else float(video_duration(workdir) or 0.0)
     out = workdir / "輸出"
     tag = tag_for(a, b)
-    made = [p for p in (out.iterdir() if out.is_dir() else [])
-            if p.name.startswith(f"成品_{tag}_") and p.suffix.lower() == ".mp4" and "_驗證沒過" not in p.stem]
+    from bookclub.render import product_parts
+
+    made = [p for p in (out.iterdir() if out.is_dir() else [])   # 10-15 第5步2.0 第3段：檔名可能帶版本號 `成品_v<N>_…`
+            if product_parts(p.name)[1].startswith(f"成品_{tag}_") and p.suffix.lower() == ".mp4" and "_驗證沒過" not in p.stem]
     if not made:
         return "還沒有組裝好的成品，請按「開始執行」"
     steps = current_steps(workdir, a, b) if steps is None else steps

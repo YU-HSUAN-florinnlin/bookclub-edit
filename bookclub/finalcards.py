@@ -70,6 +70,7 @@ def legacy_state(results: list[str | None]) -> str:
 
 def summary(cards: list[dict]) -> dict:
     """（純函式）頂端那一句要的數字：還沒看幾張、要重做幾張（退回＋已改＋還沒生成）、全部幾張。"""
+    cards = [c for c in cards if not c.get("這一版沒處理到")]   # 10-15 第5步2.0 第3段：範圍外的不算
     return {"全部": len(cards), "還沒看": sum(1 for c in cards if c["狀態"] == needs.NOT_SEEN),
             "要重做": sum(1 for c in cards if c["狀態"] in REDO_STATES),
             "退回": sum(1 for c in cards if c["狀態"] == needs.RETURNED),
@@ -79,8 +80,55 @@ def summary(cards: list[dict]) -> dict:
 
 # ---------- 新紀錄 ----------
 
-def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, index: dict) -> list[dict] | None:
-    """新紀錄 → 卡片。對不到這一版處理紀錄（版本表裡沒有這一份）＝None（呼叫的地方改讀舊檔）。"""
+def _older_row(st: needs.Store, k: str, n: int) -> tuple[int, dict] | None:
+    """10-15 第5步2.0 第3段：第 n 版之前、最近一個有這張卡狀態列的版本（版本號, 狀態列）。"""
+    for m in sorted((x for x in st.versions if x < n), reverse=True):
+        row = st.states.get((k, m))
+        if row:
+            return m, row
+    return None
+
+
+def _prev_take(workdir: Path, st: needs.Store, k: str, n: int, videos: dict) -> dict | None:
+    """10-15 第5步2.0 第3段（31 號設計 §6.3）：「上一版 ▶」——這張卡在第 n 版重做過（`這一版做了哪幾張`），播上一個有它的版本的
+    成品同一張卡。上一版的影片清掉了、上一版沒有它在成品裡的時間 → None（不出現）。"""
+    if k not in ((st.versions.get(n) or {}).get("這一版做了哪幾張") or []):
+        return None
+    old = _older_row(st, k, n)
+    if not old:
+        return None
+    m, row = old
+    o = row.get("成品") or [None]
+    if o[0] is None:
+        return None
+    if m not in videos:
+        videos[m] = needs.version_video(workdir, st.versions.get(m))
+    return {"版本號": m, "成品": row["成品"]} if videos[m] else None
+
+
+def _step3_turned_on(st: needs.Store, k: str, c: dict, v: dict, hist: list | None) -> bool:
+    """10-15 第5步2.0 第3段（第 2 段報告第 7 條）：第 3 步選定不修改（這一版沒有它的處理紀錄）、之後在第 3 步改成要處理的卡。
+    這一版記了 `其他卡指紋`（這一段起組裝的版本）→ 現在的聲音指紋跟當時不同；沒記（舊的版本）→ 看歷史：這一版之後
+    「改了第3步決定」、改的欄位有會影響聲音的。"""
+    others = v.get("其他卡指紋")
+    if others is not None:
+        return k in others and others[k] != needs._sound_print(c)
+    since = str(v.get("建立時間") or "")
+    for h in hist or []:
+        if h.get("卡號") == k and h.get("動作") == "改了第3步決定" and str(h.get("時間") or "") > since:
+            if any(f not in needs.NOT_SOUND_KEYS for f in ((h.get("後") or {}).get("欄位") or [])):
+                return True
+    return False
+
+
+def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, index: dict,
+                cross: list | None = None) -> list[dict] | None:
+    """新紀錄 → 卡片。對不到這一版處理紀錄（版本表裡沒有這一份）＝None（呼叫的地方改讀舊檔）。
+    10-15 第5步2.0 第3段：
+    - 這一版範圍外（開發者用範圍組裝）、之前的版本處理過的卡：舊版還沒看／退回的 → 放進 cross（畫面「上一版還沒看的（第 N 版）」，
+      狀態、成品時間照那一版）；其他 → 「這一版沒處理到」（變淡、不能按通過、不算進要重做）
+    - 第 3 步選定不修改、之後在第 3 步改成要處理的 → 已改，等重做（小字「在第 3 步改過」）
+    - 重做過的卡帶「上一版」（上一版 ▶ 試聽）"""
     st = needs.load(workdir)
     by_key = st.alive_by_key()
     flag_of: dict[str, list[str]] = {}   # 整片退回對到的卡（只對到一張的；待釐清卡另外用 舊檔鍵 對）
@@ -112,14 +160,33 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
     vprints = (v or {}).get("卡片指紋") or {}
     now_prints: dict | None = None
     out = []
+    videos: dict = {}
+    hist: list | None = None
+    if v is not None and v.get("其他卡指紋") is None:
+        hist = needs.read_history(workdir)   # 舊的版本沒記其他卡指紋：看歷史（只有這種版本才讀）
     for k in sorted(st.cards, key=needs._card_num):
         c = st.cards[k]
         row = st.states.get((k, vn)) if vn else None
         pend = c.get("等重做") or {}
         if c["狀態"] != needs.ALIVE and not pend:
             continue   # 刪掉、併入、拆成、消失的：沒有等重做就不列（刪掉的待釐清卡＝整片退回取消了）
+        outside = False
+        turned_on = False
         if pend.get("起因") == needs.WHY_EDITED:
             state = EDITED
+        elif not row and v is not None and str(c.get("建立時間") or "") <= vtime and not needs._in_range(c, v):
+            # 10-15 第5步2.0 第3段：這一版範圍外
+            old = _older_row(st, k, vn)
+            if old is None:
+                continue
+            m, orow = old
+            if orow.get("狀態") in (needs.NOT_SEEN, needs.RETURNED) and c["狀態"] == needs.ALIVE and cross is not None:
+                cross.append(_version_card(workdir, st, k, m, orow, videos))
+                continue
+            state, outside = needs.NOT_MADE, True
+        elif not row and v is not None and str(c.get("建立時間") or "") <= vtime and c["狀態"] == needs.ALIVE \
+                and _step3_turned_on(st, k, c, v, hist):
+            state, turned_on = EDITED, True
         elif row:
             state = row.get("狀態") or needs.NOT_SEEN
         elif v is None or str(c.get("建立時間") or "") > vtime:
@@ -159,9 +226,48 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
             "紀錄鍵": rks, "未登記鍵": [uk] if uk else [], "整片退回": flag_ids,
             "第幾版": gen_round.get(k) if gen_round.get(k, 1) > 1 else None,
             "舊紀錄": c.get("來源") in (needs.SRC_UPGRADE, needs.SRC_ASSEMBLE), "說明": note, **info,
-            "刪掉了": c["狀態"] != needs.ALIVE, "第3步改過": step3_changed,
+            "刪掉了": c["狀態"] != needs.ALIVE, "第3步改過": step3_changed or turned_on,
+            "這一版沒處理到": outside, "版本號": vn, "上一版": _prev_take(workdir, st, k, vn, videos) if vn and row else None,
         })
     return out
+
+
+def _version_log(workdir: Path, v: dict | None) -> dict:
+    """那一版的處理紀錄副本（讀不到＝空的）。"""
+    if not v or not v.get("處理紀錄"):
+        return {}
+    try:
+        from bookclub import workdir as wd
+
+        return wd.read_json(Path(workdir) / v["處理紀錄"], default=None) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _version_card(workdir: Path, st: needs.Store, k: str, n: int, row: dict | None, videos: dict,
+                  vlog: dict | None = None, outside: bool = False) -> dict:
+    """10-15 第5步2.0 第3段：一張卡在第 n 版的樣子（舊版畫面、「上一版還沒看的」那一區用）。"""
+    c = st.cards[k]
+    v = st.versions.get(n) or {}
+    if vlog is None:
+        vlog = _version_log(workdir, v)
+    rks = sorted((row or {}).get("紀錄鍵") or [])
+    by = {fc.record_key(r): r for r in vlog.get("紀錄") or []}
+    recs = [by[x] for x in rks if x in by]
+    state = (row or {}).get("狀態") or needs.NOT_MADE
+    note = ""
+    if c["類型"] == needs.UNLOGGED:
+        note = "聲音變了但沒有紀錄：聽一下，正常就按通過"
+    elif c["類型"] == needs.UNCLEAR:
+        note = "；".join(str(r.get("做了什麼") or r.get("類型") or "") for r in recs) or "不確定是哪一種"
+    return {"id": k, "卡號": k, "編號": needs._card_num(k), "類型": c["類型"], "第3步鍵": c.get("第3步鍵"),
+            "狀態": state, "退回原因": (row or {}).get("退回原因") if state == needs.RETURNED else None,
+            "沿用自": (row or {}).get("沿用自") if state == needs.PASSED else None,
+            "原片": c.get("原片") or _span(recs, "原片"), "成品": (row or {}).get("成品") or _span(recs, "成品"),
+            "紀錄鍵": rks, "未登記鍵": [], "整片退回": [], "第幾版": None,
+            "舊紀錄": c.get("來源") in (needs.SRC_UPGRADE, needs.SRC_ASSEMBLE), "說明": note, **_rec_info(recs),
+            "刪掉了": c["狀態"] != needs.ALIVE, "第3步改過": False, "這一版沒處理到": outside, "版本號": n,
+            "上一版": _prev_take(workdir, st, k, n, videos) if row else None}
 
 
 # ---------- 退回讀舊檔 ----------
@@ -263,36 +369,184 @@ def build(workdir: str | Path, *, log: dict | None = None, check: dict | None = 
     check = fc.refresh(fc.load_check(workdir), log) if check is None else check
     flags_text = {x["id"]: x.get("原因", "") for x in check.get("整片退回") or []}
     index = fc._index(workdir) if index is None else index
-    cards = _from_needs(workdir, log, check, flags_text, index) if needs.healthy(workdir) else None
+    cross: list[dict] = []
+    cards = _from_needs(workdir, log, check, flags_text, index, cross) if needs.healthy(workdir) else None
     src = SRC_NEW
     if cards is None:
-        src, cards = SRC_OLD, _from_old(workdir, log, check, index, flags_text)
+        src, cards, cross = SRC_OLD, _from_old(workdir, log, check, index, flags_text), []
     cards.sort(key=_sort_key)
     _mark_shared(cards, check)
-    return {"來源": src, "卡片": cards, "統計": summary(cards)}
+    cross.sort(key=lambda c: (-int(c["版本號"]), _sort_key(c)))
+    for c in cross:
+        c["共用"], c["連帶自"], c["跨版本"] = [], [], True   # 跨版本：狀態、成品時間是那一版的（畫面試聽播那一版的成品）
+    return {"來源": src, "卡片": cards, "統計": summary(cards), "跨版本卡片": cross}
 
 
 # 第 5 步卡片要用到的第 3 步資料（卡片元件 cards.js 的 data()）
 STEP3_FIELDS = ("學員", "這一集代號", "選項", "代號選項", "代號分組", "代號對照", "影片")
 
 
-def page_part(workdir: str | Path, page: dict | None, *, running: bool = False, index: dict | None = None) -> dict:
-    """`GET /api/final` 多給的：卡片清單、卡片要的第 3 步資料、退回原因選項、第 4 步是不是正在跑。page＝第 3 步的
-    `review.page_data`（呼叫的地方算好的，算的時候不寫舊檔）；None＝算不出來（卡片照樣列，只是不能按「改」）。"""
-    from bookclub import config
-
-    part = build(workdir, index=index)
+def _step3_part(page: dict | None, cards: list[dict]) -> dict:
+    """卡片元件要的第 3 步資料（項目＝第 3 步卡片＋清單上有、已經還原的那幾張）；每張卡記 `有第3步卡片`（改 cards）。"""
     step3 = {k: (page or {}).get(k) for k in STEP3_FIELDS}
-    keys = {c["第3步鍵"] for c in part["卡片"] if c.get("第3步鍵")}
+    keys = {c["第3步鍵"] for c in cards if c.get("第3步鍵")}
     items = list((page or {}).get("項目") or [])
     have = {_key(it) for it in items}
     items += [it for it in (page or {}).get("已還原") or [] if _key(it) in keys and _key(it) not in have]
     step3["項目"] = items
-    for c in part["卡片"]:
-        c["有第3步卡片"] = bool(c.get("第3步鍵") and c["第3步鍵"] in {_key(it) for it in items})
-    return {"卡片來源": part["來源"], "卡片": part["卡片"], "卡片統計": part["統計"], "第3步": step3,
-            "退回原因選項": list(needs.REASON_OPTIONS), "AI執行中": bool(running),
-            "開發者": config.developer()}   # 10-15 第2段審查修正：開發者設定開著才顯示「先照舊的紀錄顯示」這類小字
+    now = {_key(it) for it in items}
+    for c in cards:
+        c["有第3步卡片"] = bool(c.get("第3步鍵") and c["第3步鍵"] in now)
+    return step3
+
+
+def version_list(workdir: str | Path, st: needs.Store | None = None) -> list[dict]:
+    """10-15 第5步2.0 第3段（31 號設計 §6.5）：「看哪一版」選單的每一項（新的在前）：版本號、時間、範圍標記、有沒有影片、是不是最新。
+    新紀錄不能用時是空的（不出現選單）。"""
+    workdir = Path(workdir)
+    if st is None:
+        if not needs.healthy(workdir):
+            return []
+        st = needs.load(workdir)
+    top = max(st.versions) if st.versions else None
+    return [{"版本號": n, "時間": v.get("時間"), "標記": v.get("標記"), "範圍": v.get("範圍"), "最新": n == top,
+             "有影片": bool(needs.version_video(workdir, v))} for n, v in sorted(st.versions.items(), reverse=True)]
+
+
+def _export_info(workdir: Path, check: dict, st: needs.Store) -> dict | None:
+    """最新一次輸出是第幾版（記了 `版本號` 用它；舊紀錄照處理紀錄產生時間對）。沒輸出過＝None。"""
+    out = check.get("輸出成品") or {}
+    if not out.get("檔案"):
+        return None
+    no = out.get("版本號")
+    if no is None:
+        v = st.version_at(out.get("處理紀錄產生時間"))
+        no = v["版本號"] if v else None
+    return {"輸出版本": no, "最新版本": max(st.versions) if st.versions else None, "紀錄": out}
+
+
+def page_part(workdir: str | Path, page: dict | None, *, running: bool = False, index: dict | None = None) -> dict:
+    """`GET /api/final` 多給的：卡片清單、卡片要的第 3 步資料、退回原因選項、第 4 步是不是正在跑。page＝第 3 步的
+    `review.page_data`（呼叫的地方算好的，算的時候不寫舊檔）；None＝算不出來（卡片照樣列，只是不能按「改」）。
+    10-15 第5步2.0 第3段：多給版本選單（`版本清單`、`目前版本`、`最新版本`）、`跨版本卡片`（上一版還沒看的）；
+    新紀錄模式下「要重新輸出」改成看輸出的版本號跟最新版本號（31 號設計 §6.7），`輸出成品過期` 照這個算。"""
+    from bookclub import config
+
+    workdir = Path(workdir)
+    part = build(workdir, index=index)
+    step3 = _step3_part(page, part["卡片"] + part["跨版本卡片"])
+    out = {"卡片來源": part["來源"], "卡片": part["卡片"], "卡片統計": part["統計"], "第3步": step3,
+           "跨版本卡片": part["跨版本卡片"], "退回原因選項": list(needs.REASON_OPTIONS), "AI執行中": bool(running),
+           "開發者": config.developer(),   # 10-15 第2段審查修正：開發者設定開著才顯示「先照舊的紀錄顯示」這類小字
+           "版本清單": [], "目前版本": None, "最新版本": None, "看的是舊版": False}
+    if part["來源"] == SRC_NEW:
+        st = needs.load(workdir)
+        log = proclog.load(workdir)
+        cur = st.version_at((log or {}).get("產生時間")) if log else None
+        out.update({"版本清單": version_list(workdir, st), "目前版本": cur["版本號"] if cur else None,
+                    "最新版本": max(st.versions) if st.versions else None})
+        ex = _export_info(workdir, fc.load_check(workdir), st)
+        if ex:   # §6.7：上次輸出的版本號 ≠ 最新版本號 → 要重新輸出（不再比檔案大小與修改時間）
+            stale = ex["輸出版本"] != ex["最新版本"]
+            out["輸出成品過期"] = ({"原因": "版本", "說明": f"這是第 {ex['輸出版本']} 版的，最新是第 {ex['最新版本']} 版"}
+                             if stale else None)
+    return out
+
+
+def version_page(workdir: str | Path, n: int, page: dict | None, *, running: bool = False) -> dict:
+    """10-15 第5步2.0 第3段（31 號設計 §6.5）：`GET /api/final?版本=N` 看舊版（不是最新處理紀錄那一版）的整頁資料。
+    卡片清單照舊全部顯示：那一版有處理的照當時的判斷；沒處理到的（別的範圍、之後才有的）變淡、標「這一版沒處理到」。
+    影片是那一版的成品（`/api/final/video?版本=N`），看過區段是那一版自己的一份（`修改需求/看過.json`）。只讀。"""
+    from bookclub import config
+
+    workdir = Path(workdir)
+    if not needs.healthy(workdir):
+        raise ValueError("新紀錄現在不能用，只能看最新一版")
+    st = needs.load(workdir)
+    v = st.versions.get(int(n))
+    if v is None:
+        raise KeyError(f"沒有第 {n} 版")
+    n = int(n)
+    vlog = _version_log(workdir, v)
+    videos: dict = {}
+    cards = []
+    for k in sorted(st.cards, key=needs._card_num):
+        c = st.cards[k]
+        row = st.states.get((k, n))
+        if row:
+            cards.append(_version_card(workdir, st, k, n, row, videos, vlog))
+        elif c["狀態"] == needs.ALIVE and any(kk == k for (kk, _m) in st.states):
+            cards.append(_version_card(workdir, st, k, n, None, videos, vlog, outside=True))
+    cards.sort(key=_sort_key)
+    for c in cards:
+        c["共用"], c["連帶自"] = [], []
+    rel = needs.version_video(workdir, v)
+    length = 0.0
+    if rel:
+        length = round(fc.probe_duration(workdir / rel), 3)
+    seen = fc.clip_ranges(needs.watched(workdir, n), length) if length else []
+    ratio = fc.watched_ratio(seen, length) if length else 0.0
+    outs = v.get("輸出紀錄") or []
+    try:
+        from bookclub import epcodes
+
+        labels = epcodes.student_labels(workdir)
+    except Exception:  # noqa: BLE001
+        labels = {}
+    top = max(st.versions)
+    return {
+        "有處理紀錄": True, "來源": v.get("來源"), "範圍": v.get("範圍"), "處理紀錄產生時間": v.get("時間"),
+        "成品影片": rel, "成品長度": length, "影片網址": f"/api/final/video?版本={n}" if rel else None,
+        "成品版本": fc.product_version(workdir / rel) if rel else None, "片段": vlog.get("片段"),
+        "看過區段": seen, "狀態": {"看過比例": round(ratio, 4)}, "輸出成品": outs[-1] if outs else None, "輸出成品過期": None,
+        "不修改": [], "不修改類型": [], "需留意": None, "需留意類型": [], "學員顯示名": labels, "上次執行": None,
+        "卡片來源": SRC_NEW, "卡片": cards, "卡片統計": summary(cards), "第3步": _step3_part(page, cards), "跨版本卡片": [],
+        "退回原因選項": list(needs.REASON_OPTIONS), "AI執行中": bool(running), "開發者": config.developer(),
+        "版本清單": version_list(workdir, st), "目前版本": n, "最新版本": top, "看的是舊版": True,
+        "影片清掉了": not rel,
+    }
+
+
+def version_watched(workdir: str | Path, n: int, ranges: list) -> dict:
+    """10-15 第5步2.0 第3段：舊版上播過的區段（那一版的成品時間）→ 記在那一版自己的看過區段（不寫成品檢查檔）。"""
+    workdir = Path(workdir)
+    st = needs.load(workdir)
+    v = st.versions.get(int(n))
+    rel = needs.version_video(workdir, v)
+    if not rel:
+        raise ValueError("這一版的影片清掉了")
+    length = round(fc.probe_duration(workdir / rel), 3)
+    seen = fc.merge_ranges(needs.watched(workdir, n) + [[float(a), float(b)] for a, b in ranges])
+    seen = fc.clip_ranges(seen, length) if length else seen
+    needs.set_watched(workdir, n, seen)
+    ratio = fc.watched_ratio(seen, length) if length else 0.0
+    return {"ok": True, "記了": True, "看過區段": seen, "看過比例": round(ratio, 4), "狀態": {"看過比例": round(ratio, 4)}}
+
+
+def version_video(workdir: str | Path, n: int) -> Path:
+    workdir = Path(workdir)
+    rel = needs.version_video(workdir, needs.load(workdir).versions.get(int(n)))
+    if not rel:
+        raise FileNotFoundError("這一版的影片清掉了")
+    return workdir / rel
+
+
+def version_clip(workdir: str | Path, n: int, a: float, b: float) -> Path:
+    """10-15 第5步2.0 第3段：第 n 版成品 a～b 秒（成品時間）的聲音——「上一版 ▶」、上一版還沒看的卡的「現在 ▶」播這個
+    （不用換掉畫面上的影片）。存在 `web快取/成品檢查/`。"""
+    import subprocess
+
+    src = version_video(workdir, n)
+    a, b = max(0.0, float(a)), float(b)
+    if not b > a:
+        raise ValueError("時間不對")
+    cache = Path(workdir) / "web快取" / "成品檢查"
+    cache.mkdir(parents=True, exist_ok=True)
+    dst = cache / f"版本{int(n)}_{a:.2f}_{b:.2f}.wav"
+    if not dst.exists():
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{a:.3f}", "-to", f"{b:.3f}", "-i", str(src), "-vn",
+                        str(dst)], check=True)
+    return dst
 
 
 def find(workdir: str | Path, card_id: str, *, index: dict | None = None) -> dict:
@@ -303,17 +557,36 @@ def find(workdir: str | Path, card_id: str, *, index: dict | None = None) -> dic
     return c
 
 
-def decide(workdir: str | Path, card_id: str, result: str | None, options: list[str] | None = None, extra: str = "") -> dict:
+def current_version(workdir: str | Path) -> int | None:
+    """最新處理紀錄是第幾版（新紀錄不能用、版本表裡沒有＝None）。"""
+    workdir = Path(workdir)
+    if not needs.healthy(workdir):
+        return None
+    return fc.version_of(workdir, proclog.load(workdir))
+
+
+def decide(workdir: str | Path, card_id: str, result: str | None, options: list[str] | None = None, extra: str = "",
+           version: int | None = None) -> dict:
     """`POST /api/final/card`：一張卡通過／退回／改回還沒看（result：通過、退回、None）。
-    回寫舊檔這張卡對到的每一筆（`finalcheck.decide_many`），新紀錄由舊檔存檔後重算（雙寫照第 1 段），退回再補上選項。"""
+    回寫舊檔這張卡對到的每一筆（`finalcheck.decide_many`），新紀錄由舊檔存檔後重算（雙寫照第 1 段），退回再補上選項。
+    10-15 第5步2.0 第3段：version＝在第幾版上按的（舊版、或「上一版還沒看的」那一區）。不是最新處理紀錄那一版 → 記在那一版
+    （`needs.decide_version`，不寫舊檔）；回傳 {ok, 卡片: 那一版的這張卡}，畫面整頁重新整理。"""
     if result not in (needs.PASSED, needs.RETURNED, None):
         raise ValueError("只能選：通過、退回")
     workdir = Path(workdir)
+    if version is not None and int(version) != current_version(workdir):
+        if not needs.healthy(workdir):
+            raise ValueError("新紀錄現在不能用，只能在最新一版判斷")
+        row = needs.decide_version(workdir, int(version), str(card_id), result, options, extra)
+        st = needs.load(workdir)
+        return {"ok": True, "卡片": _version_card(workdir, st, str(card_id), int(version), row, {}), "版本號": int(version)}
     index = fc._index(workdir)   # 10-15 第2段審查修正（建議，效能）：前後兩次 build 共用同一份
     cards = build(workdir, index=index)["卡片"]
     c = next((x for x in cards if str(x["id"]) == str(card_id)), None)
     if c is None:
         raise KeyError(f"沒有這張卡：{card_id}")
+    if c.get("這一版沒處理到"):
+        raise ValueError("這一版沒處理到這張卡，不能判斷")
     if c["狀態"] in (needs.NOT_MADE, EDITED):
         raise ValueError("這張卡還沒做進成品（改過或新增的）：按「重做這幾張」做好之後再看")
     text = needs.reason_text(options, extra) if result == needs.RETURNED else ""
@@ -331,6 +604,11 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
         try:
             needs.set_reason(workdir, c["卡號"], options, extra)
         except Exception as e:  # noqa: BLE001 — 新紀錄出錯不擋第 5 步（舊檔已經寫好）
+            needs.note_error(workdir, "第5步存檔", e)
+    if result is None and c.get("卡號") and c.get("版本號"):
+        try:   # 10-15 第5步2.0 第3段：取消的是從更早一版沿用來的通過（舊檔沒有這一筆）→ 新紀錄也改回還沒看
+            needs.uncarry(workdir, c["卡號"], int(c["版本號"]))
+        except Exception as e:  # noqa: BLE001
             needs.note_error(workdir, "第5步存檔", e)
     part = build(workdir, index=index)
     after = next((x for x in part["卡片"] if str(x["id"]) == str(card_id)), None)   # 整片退回的待釐清卡通過後就不在了
@@ -358,15 +636,69 @@ def edited(workdir: str | Path, key: str, new: bool = False, *, page: dict | Non
     return {"ok": True, "記了": bool(no), "卡號": no}
 
 
-def export_versions(workdir: str | Path) -> dict | None:
-    """拿檔按鈕旁那一行要的：上次輸出的是第幾版、最新是第幾版（新紀錄不能用、沒輸出過、對不到版本＝None）。"""
+def take(workdir: str | Path) -> dict | None:
+    """10-15 第5步2.0 第3段（31 號設計 §6.7）：拿檔按鈕拿哪一支——「最新一次輸出」；沒輸出過拿最新一版的成品。
+    回傳 {路徑（相對工作區）, 是: 最終成品／還在檢查的成品, 輸出版本, 最新版本}；新紀錄不能用＝None（照 0.2.1b3 的過期判斷）。
+    不再比檔案大小、修改時間：那一版之後有新版本，拿檔按鈕旁寫「這是第 N 版的，最新是第 M 版」。"""
     workdir = Path(workdir)
     if not needs.healthy(workdir):
         return None
-    out = fc.load_check(workdir).get("輸出成品") or {}
     st = needs.load(workdir)
-    v = st.version_at(out.get("處理紀錄產生時間")) if out.get("處理紀錄產生時間") else None
-    last = st.latest_version()
-    if v is None or last is None:
+    if not st.versions:
         return None
-    return {"輸出版本": v["版本號"], "最新版本": last["版本號"]}
+    ex = _export_info(workdir, fc.load_check(workdir), st)
+    if ex and (workdir / ex["紀錄"]["檔案"]).is_file():
+        return {"路徑": ex["紀錄"]["檔案"], "是": "最終成品", "輸出版本": ex["輸出版本"], "最新版本": ex["最新版本"]}
+    rel = needs.version_video(workdir, st.latest_version())
+    if rel is None:
+        return None
+    return {"路徑": rel, "是": "還在檢查的成品", "輸出版本": None, "最新版本": max(st.versions)}
+
+
+def export_version(workdir: str | Path, n: int, confirm: bool = False) -> dict:
+    """10-15 第5步2.0 第3段（31 號設計 §6.5、§6.7）：輸出舊的那一版（選單選到哪一版就輸出哪一版）。規則照 0.2.1b3：沒看完也能輸出，
+    先問一次（還有幾張沒看完）。那一版的影片清掉了不能輸出。輸出紀錄記到那一版（版本表），成品檢查檔照舊記最新一次輸出（雙寫）。"""
+    import os
+    import shutil
+    from datetime import datetime
+
+    from bookclub import workdir as wd
+
+    workdir = Path(workdir)
+    st = needs.load(workdir)
+    v = st.versions.get(int(n))
+    if v is None:
+        raise KeyError(f"沒有第 {n} 版")
+    rel = needs.version_video(workdir, v)
+    if not rel:
+        raise ValueError("這一版的影片清掉了")
+    page = version_page(workdir, int(n), None)
+    stat = page["卡片統計"]
+    left = stat["還沒看"] + stat["退回"]
+    pct = int(page["狀態"]["看過比例"] * 100)
+    if left and not confirm:
+        why = [f"還有 {left} 張沒看完"] + ([f"整片還沒看完（看過 {pct}%）"] if pct < 100 else [])
+        return {"ok": False, "要確認": True, "還差": {"說明": why, "擋下": [], "名字提醒": [], "退回清單": [], "提醒": [],
+                                                  "需留意說明": "", "看過百分比": pct}}
+    src = workdir / rel
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dst = src.with_name(fc.final_name(src.name, stamp))
+    k = 2
+    while dst.exists() or dst.is_symlink():
+        dst = src.with_name(f"{Path(fc.final_name(src.name, stamp)).stem} ({k}){src.suffix}")
+        k += 1
+    tmp = dst.with_name(f".{dst.name}.輸出中")
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
+    extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
+    rec = {"時間": fc._now(), "來源": rel, "檔案": str(dst.relative_to(workdir)),
+           "片頭": (extras.get("片頭") or {}).get("檔名"), "片尾": (extras.get("片尾") or {}).get("檔名"), "接上片頭片尾": False,
+           "看過百分比": pct, "沒通過筆數": left, "沒確認變動筆數": 0, "檢查完才輸出": not left,
+           "成品檔指紋": fc.product_print(src), "處理紀錄產生時間": v.get("時間"), "版本號": int(n)}
+    with fc._lock:
+        check = fc.load_check(workdir)
+        check["輸出成品"] = rec
+        check.setdefault("輸出紀錄", []).append(rec)
+        fc._save(workdir, check)
+    needs.add_export(workdir, int(n), rec)
+    return {"ok": True, **rec, "第幾次": len(check["輸出紀錄"])}

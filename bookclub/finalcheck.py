@@ -629,7 +629,7 @@ def _current(workdir: Path) -> tuple[dict | None, dict]:
     # 標字版是人自己選來對照的，照以前不自動換（輸出本來就擋）。
     # 10-13 審查修正（建議 3）：只有跟這份處理紀錄同一個範圍標記的標字版才不換；別的範圍的標字版照一般規則換
     label = (cur in prods and MARK_LABEL in Path(cur).stem and tag is not None
-             and Path(cur).stem.startswith(f"成品_{tag}_"))
+             and _plain_stem(cur).startswith(f"成品_{tag}_"))
     # 10-13 審查修正（必修 1）：處理紀錄換新之前，看的是手動選的舊檔——在舊檔上看過的不能帶進新成品
     was_old = old_stamp != stamp and _manual_old(raw, old_stamp)
     if latest and not manual_ok and not label and cur not in latest:
@@ -671,6 +671,13 @@ PRODUCT_MTIME_SLACK_S = 2.0   # 成品檔修改時間不早於處理紀錄產生
 SWITCH_NEW = "第 4 步做了新的成品"
 SWITCH_OLD = "之前播的是舊成品"
 MARK_LATEST, MARK_OLD, MARK_LABEL = "最新", "舊的", "標字版"
+
+
+def _plain_stem(rel: str) -> str:
+    """10-15 第5步2.0 第3段：成品檔名去掉版本號（`成品_v3_0-97_sw.mp4` → `成品_0-97_sw`），範圍標記照舊的比法比。"""
+    from bookclub.render import product_parts
+
+    return Path(product_parts(Path(rel).name)[1]).stem
 
 
 def log_tag(log: dict | None) -> str | None:
@@ -721,9 +728,15 @@ def log_products(workdir: Path, log: dict | None, prods: list[str] | None = None
         return None
     workdir = Path(workdir)
     out = []
+    from bookclub.render import product_parts
+
+    want_no = (log or {}).get("版本號")   # 10-15 第5步2.0 第3段：處理紀錄記了版本號 → 只算那一版的檔名 `成品_v<N>_…`
     for rel in products(workdir) if prods is None else prods:
-        stem = Path(rel).stem
+        no = product_parts(Path(rel).name)[0]
+        stem = _plain_stem(rel)
         if not stem.startswith(f"成品_{tag}_") or MARK_LABEL in stem or "_" in stem[len(f"成品_{tag}_"):]:
+            continue
+        if want_no is not None and no != want_no:
             continue
         try:
             mtime = (workdir / rel).stat().st_mtime
@@ -742,7 +755,7 @@ def product_marks(prods: list[str], latest: list[str] | None, tag: str | None = 
     （時間軸對不上：不能記看過、不能按通過退回、不能輸出），同範圍的才標「標字版」。"""
     out: dict[str, str | None] = {}
     for rel in prods:
-        stem = Path(rel).stem
+        stem = _plain_stem(rel)   # 10-15 第5步2.0 第3段：檔名帶版本號時去掉再比範圍標記
         if MARK_LABEL in stem:
             out[rel] = MARK_OLD if tag is not None and not stem.startswith(f"成品_{tag}_") else MARK_LABEL
         elif latest is None:
@@ -1547,8 +1560,31 @@ def add_watched(workdir: str | Path, ranges: list, product: str | None = None) -
         # 10-03 第八批 #23：同時存原片時間（用現在這份處理紀錄的片段表換），重新組裝後換得回新的成品時間
         _set_watched(check, check["看過區段"] + [[float(a), float(b)] for a, b in ranges], (log or {}).get("片段"))
         _save(workdir, check)
+        n = version_of(workdir, log)
+        if n is not None:   # 10-15 第5步2.0 第3段：看過區段每版一份（修改需求/看過.json），最新一版照舊也寫成品檢查檔
+            try:
+                from bookclub import needs
+
+                needs.set_watched(workdir, n, check["看過區段"])
+            except Exception as e:  # noqa: BLE001 — 新紀錄寫不了不擋看片
+                print(f"[修改需求紀錄] ⚠️ 看過區段沒記到這一版：{type(e).__name__}")
         st = status(log, check)
         return {"ok": True, "記了": True, "看過比例": st["看過比例"], "看過區段": check["看過區段"], "狀態": st}
+
+
+def version_of(workdir: str | Path, log: dict | None) -> int | None:
+    """10-15 第5步2.0 第3段：這份處理紀錄是修改需求紀錄的第幾版（沒升級過、版本表裡沒有回 None）。"""
+    if not log:
+        return None
+    try:
+        from bookclub import needs
+
+        if not needs.exists(workdir):
+            return None
+        v = needs.load(workdir).version_at(log.get("產生時間"))
+        return int(v["版本號"]) if v else None
+    except Exception:  # noqa: BLE001 — 讀不到就當作沒有
+        return None
 
 
 def send_back(workdir: str | Path) -> dict:
@@ -1688,7 +1724,9 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
                "需留意": gaps["需留意"], "需留意名字": gaps["需留意名字"], "名字提醒": len(gaps["名字提醒"]),
                "檢查完才輸出": st["可以輸出"],
                # 10-13 bug 二：輸出當時那支成品的指紋與處理紀錄，之後第 5 步用來判斷「上次輸出比現在的成品舊」（export_stale）
-               "成品檔指紋": src_print, "處理紀錄產生時間": log.get("產生時間")}
+               "成品檔指紋": src_print, "處理紀錄產生時間": log.get("產生時間"),
+               # 10-15 第5步2.0 第3段（31 號設計 §6.7）：輸出的是第幾版（拿檔按鈕旁「這是第 N 版的，最新是第 M 版」）
+               "版本號": version_of(workdir, log)}
         check["輸出成品"] = rec
         check.setdefault("輸出紀錄", []).append(rec)
         _save(workdir, check)

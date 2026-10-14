@@ -774,45 +774,82 @@ def _ts(x) -> float | None:
     return d.timestamp()
 
 
+def _in_range(card: dict, v: dict | None) -> bool:
+    """10-15 第5步2.0 第3段：卡片的原片時間跟這一版的範圍有沒有重疊（範圍、原片不知道的當作有，寧可多算）。"""
+    rng = (v or {}).get("範圍")
+    o = card.get("原片") or [None, None]
+    if not rng or rng[0] is None or rng[1] is None or o[0] is None:
+        return True
+    b = o[1] if o[1] is not None else o[0]
+    return float(b) >= float(rng[0]) - 0.05 and float(o[0]) <= float(rng[1]) + 0.05
+
+
+def carry_source(st: Store, card: str, n: int, base: int | None = None) -> tuple[int, dict] | None:
+    """10-15 第5步2.0 第3段：新的一版（n）這張卡的狀態要跟哪一版比（#23、#221）：有指定基礎版本（開發者「以這一版為基礎
+    再組裝」）先看那一版；其他照版本號往回找，第一個有這張卡狀態列、也記了這張卡指紋的那一版。
+    以前只看上一版：範圍版本（先 0-97、再 0-3、又 0-97）中間那一版沒有這張卡，第 1 版的通過就帶不過來。回傳 (版本號, 狀態列)。"""
+    order = ([base] if base and base < n else []) + sorted((k for k in st.versions if k < n and k != base), reverse=True)
+    for m in order:
+        row = st.states.get((card, m))
+        if row and card in ((st.versions.get(m) or {}).get("卡片指紋") or {}):
+            return m, row
+    return None
+
+
 def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *, note: str | None = None,
                   products: list[str] | None = None, src: str = SRC_ASSEMBLE, step: int = 4) -> dict:
-    """處理紀錄 → 版本表一列（改 st，不寫檔；處理紀錄副本由呼叫的地方寫）。同一份處理紀錄（產生時間一樣）只建一次。"""
+    """處理紀錄 → 版本表一列（改 st，不寫檔；處理紀錄副本由呼叫的地方寫）。同一份處理紀錄（產生時間一樣）只建一次。
+    10-15 第5步2.0 第3段：
+    - 版本號：處理紀錄帶了 `版本號`（組裝時先預留的，成品檔名用同一個號碼，`next_version_no`）就用它，不然照順序加一
+    - 以哪一版為基礎：開發者「以這一版為基礎再組裝」記的那一版（`set_next_base`，用一次就清掉），沒有就是上一版
+    - 每張卡的起始狀態照 `carry_source`（不只看上一版）：指紋沒變、那一版通過 → 通過（沿用）
+    - `其他卡指紋`：這一版沒有處理紀錄的卡（第 3 步選定不修改、範圍外）當時的聲音指紋——第 3 步把它改成要處理，第 5 步看得出來"""
     have = st.version_at(log.get("產生時間"))
     if have is not None:
         return have
+    top = max(st.versions) if st.versions else 0
+    want = log.get("版本號")
+    n = int(want) if isinstance(want, int) and not isinstance(want, bool) and want > top else top + 1
+    base = st.fmt.pop("下次組裝的基礎版本", None)
+    base = int(base) if isinstance(base, int) and base in st.versions else None
     prev = st.latest_version()
-    n = (max(st.versions) + 1) if st.versions else 1
     m = map_records(st, log, index, now, src=src, step=step)
     prints = _card_prints(st, log, m["紀錄卡號"])
     old = (prev or {}).get("卡片指紋") or {}
     done = sorted((c for c in prints if old.get(c) != prints[c]), key=_card_num)
     methods = sorted({Path(p).stem.rsplit("_", 1)[-1] for p in products or []})
+    others = {k: _sound_print(c) for k, c in st.cards.items()
+              if k not in prints and c["狀態"] == ALIVE and c["類型"] in STEP3_TYPES}
     row = {"版本號": n, "時間": log.get("產生時間"), "處理紀錄產生時間": log.get("產生時間"), "來源": log.get("來源"),
            "範圍": log.get("範圍"), "標記": _log_tag(log), "輸出做法": methods,
-           "以哪一版為基礎": prev["版本號"] if prev else None,
+           "以哪一版為基礎": base or (prev["版本號"] if prev else None),
            "處理紀錄": f"{DIR_NAME}/{_version_dir(n)}/處理紀錄.json", "成品檔": list(products or []),
            "卡片指紋": prints, "這一版做了哪幾張": done, "影片還在": True, "輸出紀錄": [], "備註": note,
            "紀錄卡號": m["紀錄卡號"], "未登記卡號": m["未登記卡號"], "沒對到卡片的紀錄": m["沒對到卡片的紀錄"],
-           "成品時間": _card_spans(log, m["紀錄卡號"]), "建立時間": now}
+           "成品時間": _card_spans(log, m["紀錄卡號"]), "其他卡指紋": others, "建立時間": now}
     st.versions[n] = row
     # 10-15 第5步2.0 第2段：第 5 步按「改」改過的卡（等重做，起因：改了）——組裝會照第 3 步現在的檔做，改過的都做進這一版了。
     # 10-15 第2段審查修正（建議）：只清「改」的時間早於這份處理紀錄產生時間的（處理紀錄產生之後才改的，這一版沒有做進去）
+    # 10-15 第5步2.0 第3段：在舊版上退回的（等重做帶 `版本號`）——這一版有它、而且是退回之後才組的，就是重做進來了
     made = _ts(log.get("產生時間"))
     for k in sorted(st.cards, key=_card_num):
         c = st.cards[k]
         pend = c.get("等重做") or {}
-        if pend.get("起因") == WHY_EDITED and (made is None or (_ts(pend.get("時間")) or 0) <= made):
+        later = made is None or (_ts(pend.get("時間")) or 0) <= made
+        if (pend.get("起因") == WHY_EDITED and later) or (pend.get("版本號") and k in prints and later):
             c["等重做"] = None
             c["更新時間"] = now
-            st.log(now, k, step, f"重做進第{n}版", {"起因": WHY_EDITED}, None)
+            st.log(now, k, step, f"重做進第{n}版", {"起因": pend.get("起因")}, None)
     for c in done:
         st.log(now, c, step, f"組裝進第{n}版", None, {"版本號": n, "指紋": prints[c]})
-    # 新版每張卡的起始狀態：指紋沒變、上一版通過 → 通過（沿用）；其他 → 還沒看（第 5 步的判斷由 mirror_final 接著算）
+    # 新版每張卡的起始狀態：指紋沒變、比的那一版通過 → 通過（沿用）；其他 → 還沒看（第 5 步的判斷由 mirror_final 接著算）
     for c in prints:
-        ps = st.states.get((c, prev["版本號"])) if prev else None
-        carry = bool(ps and ps.get("狀態") == PASSED and old.get(c) == prints[c])
+        src_v = carry_source(st, c, n, base)
+        ps = src_v[1] if src_v else None
+        carry = bool(ps and ps.get("狀態") == PASSED and (st.versions[src_v[0]].get("卡片指紋") or {}).get(c) == prints[c])
         st.states[(c, n)] = {"卡號": c, "版本號": n, "成品": row["成品時間"].get(c), "狀態": PASSED if carry else NOT_SEEN,
-                             "退回原因": None, "沿用自": (ps.get("沿用自") or prev["版本號"]) if carry else None,
+                             "退回原因": None, "沿用自": (ps.get("沿用自") or src_v[0]) if carry else None,
+                             "沿用來源": src_v[0] if carry else None,
                              "紀錄鍵": sorted(k for k, cs in m["紀錄卡號"].items() if c in cs), "更新時間": now}
     for uk, c in m["未登記卡號"].items():
         st.states.setdefault((c, n), {"卡號": c, "版本號": n, "成品": None, "狀態": NOT_SEEN, "退回原因": None,
@@ -860,6 +897,144 @@ def add_product(workdir: str | Path, stamp: str | None, rel: str) -> None:
         if m not in (v.get("輸出做法") or []):
             v["輸出做法"] = sorted({*(v.get("輸出做法") or []), m})
         save(w, st)
+
+
+def next_version_no(workdir: str | Path) -> int | None:
+    """10-15 第5步2.0 第3段：下一次組裝會是第幾版（成品檔名 `成品_v<N>_…` 先用這個號碼；處理紀錄帶著它，建版本時用同一個）。
+    沒升級過的工作區回 None（成品照舊的檔名，之後升級時記現有檔名當版本 1）。"""
+    w = Path(workdir)
+    if not exists(w):
+        return None
+    st = load(w)
+    return (max(st.versions) if st.versions else 0) + 1
+
+
+def set_next_base(workdir: str | Path, n: int | None) -> None:
+    """10-15 第5步2.0 第3段（開發者）：下一次組裝「以第 n 版為基礎」（None＝清掉，照上一版）。每次第 4 步開始都會設一次。"""
+    w = Path(workdir)
+    if not exists(w):
+        return
+    with _locked(w):
+        st = load(w)
+        if n is not None and int(n) not in st.versions:
+            raise ValueError(f"沒有第 {n} 版")
+        if st.fmt.get("下次組裝的基礎版本") == (int(n) if n is not None else None):
+            return
+        if n is None:
+            st.fmt.pop("下次組裝的基礎版本", None)
+        else:
+            st.fmt["下次組裝的基礎版本"] = int(n)
+        _save_fmt(w, st)
+
+
+def version_video(workdir: str | Path, v: dict | None) -> str | None:
+    """10-15 第5步2.0 第3段：這一版的成品影片（相對工作區；第一支還在的、不是標字版）。影片清掉了、這一版沒記成品回 None。"""
+    if not v or v.get("影片還在") is False:
+        return None
+    for rel in v.get("成品檔") or []:
+        if "標字版" not in Path(rel).stem and (Path(workdir) / rel).is_file():
+            return rel
+    return None
+
+
+WATCHED_FILE = "看過.json"
+
+
+def watched(workdir: str | Path, n: int) -> list:
+    """10-15 第5步2.0 第3段（31 號設計 §3.7）：第 n 版看過的區段（那一版的成品時間）。"""
+    data = wd.read_json(_p(workdir, WATCHED_FILE), default=None) or {}
+    row = next((r for r in data.get("列") or [] if int(r.get("版本號") or 0) == int(n)), None)
+    return list((row or {}).get("看過區段") or [])
+
+
+def set_watched(workdir: str | Path, n: int, ranges: list) -> None:
+    """10-15 第5步2.0 第3段：看過區段每版一份（`修改需求/看過.json`，放成品狀態旁）。最新一版照舊也寫成品檢查檔（雙寫）。"""
+    w = Path(workdir)
+    if not exists(w):
+        return
+    with _locked(w):
+        data = wd.read_json(_p(w, WATCHED_FILE), default=None) or {"表": "看過", "主鍵": ["版本號"], "列": []}
+        rows = [r for r in data.get("列") or [] if int(r.get("版本號") or 0) != int(n)]
+        rows.append({"版本號": int(n), "看過區段": [[round(float(a), 3), round(float(b), 3)] for a, b in ranges],
+                     "更新時間": _now()})
+        data["列"] = sorted(rows, key=lambda r: int(r["版本號"]))
+        _write(_p(w, WATCHED_FILE), data)
+
+
+EXPORT_KEYS = ("時間", "來源", "檔案", "檢查完才輸出", "看過百分比", "沒通過筆數", "版本號")
+
+
+def add_export(workdir: str | Path, n: int, rec: dict) -> None:
+    """10-15 第5步2.0 第3段（31 號設計 §6.7）：從第 n 版輸出了一支最終成品——記到那一版的輸出紀錄。
+    最新一版的輸出另外由 `apply_check` 從成品檢查檔同步（這裡也記，重複的不會再加）。"""
+    w = Path(workdir)
+    if not exists(w):
+        return
+    with _locked(w):
+        st = load(w)
+        v = st.versions.get(int(n))
+        if v is None:
+            return
+        item = {k: rec.get(k) for k in EXPORT_KEYS}
+        if any(x.get("檔案") == item["檔案"] for x in v.get("輸出紀錄") or []):
+            return
+        v.setdefault("輸出紀錄", []).append(item)
+        save(w, st)
+
+
+def decide_version(workdir: str | Path, n: int, card: str, result: str | None, options: list[str] | None = None,
+                   extra: str = "") -> dict:
+    """10-15 第5步2.0 第3段（31 號設計 §6.5）：在舊版（不是最新處理紀錄那一版）上按通過／退回／取消——記在那一版的成品狀態，
+    不寫成品檢查檔（舊檔只認得最新那一份處理紀錄）。退回：那張卡等重做（起因退回、帶 `版本號`；之後組裝有它的新版本就清掉）。
+    這一版沒處理到這張卡（沒有狀態列）不能判斷。回傳那一列。"""
+    w = Path(workdir)
+    if result not in (PASSED, RETURNED, None):
+        raise ValueError("只能選：通過、退回")
+    with _locked(w):
+        st = load(w)
+        row = st.states.get((card, int(n)))
+        if row is None:
+            raise ValueError("這一版沒處理到這張卡，不能判斷")
+        now = _now()
+        c = st.cards.get(card) or {}
+        new = NOT_SEEN if result is None else result
+        why = None
+        if new == RETURNED:
+            why = {"選項": [o for o in REASON_OPTIONS if o in (options or [])], "補充": str(extra or "").strip()}
+        if row.get("狀態") != new or row.get("退回原因") != why:
+            st.log(now, card, 5, {PASSED: "通過", RETURNED: "退回", NOT_SEEN: "改回還沒看"}[new], row.get("狀態"),
+                   {"版本號": int(n), **({"原因字數": len(why["補充"])} if why else {})})
+        row.update({"狀態": new, "退回原因": why, "沿用自": None, "沿用來源": None, "更新時間": now,
+                    **({"取消沿用": True} if new != PASSED and row.get("沿用自") else {})})
+        pend = c.get("等重做") or {}
+        if new == RETURNED and c and not pend:
+            c["等重做"] = {"起因": WHY_RETURNED, "時間": now, "版本號": int(n)}
+            c["更新時間"] = now
+            st.log(now, card, 5, "等重做", None, {"起因": WHY_RETURNED, "版本號": int(n)})
+        elif new != RETURNED and pend.get("版本號") == int(n):
+            c["等重做"] = None
+            c["更新時間"] = now
+            st.log(now, card, 5, "取消等重做", pend, None)
+        save(w, st)
+        return dict(row)
+
+
+def uncarry(workdir: str | Path, card: str, n: int) -> bool:
+    """10-15 第5步2.0 第3段：最新一版按「取消通過」的卡，通過是沿用別版來的（`沿用來源` 不是上一版：成品檢查檔沒有這一筆）
+    → 記 `取消沿用`、改回還沒看（`apply_check` 之後不再把它當沿用的通過留著）。回傳有沒有改。"""
+    w = Path(workdir)
+    if not exists(w):
+        return False
+    with _locked(w):
+        st = load(w)
+        row = st.states.get((card, int(n)))
+        if not row or row.get("狀態") != PASSED or not row.get("沿用自"):
+            return False
+        now = _now()
+        st.log(now, card, 5, "改回還沒看", PASSED, {"版本號": int(n), "取消沿用": True})
+        row.update({"狀態": NOT_SEEN, "沿用自": None, "沿用來源": None, "取消沿用": True, "更新時間": now})
+        save(w, st)
+        return True
 
 
 # ---------- 生成句表 ----------
@@ -1087,7 +1262,7 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
         elif rks and all(d.get("結果") == PASS for d in res):
             new[c] = {"狀態": PASSED, "原因": []}
         else:
-            new[c] = {"狀態": NOT_SEEN, "原因": []}
+            new[c] = {"狀態": NOT_SEEN, "原因": [], "沒判斷": not any(d.get("結果") for d in res)}
     for uk, c in (v.get("未登記卡號") or {}).items():
         d = (check.get("未登記確認") or {}).get(uk) or {}
         new[c] = {"狀態": PASSED if d.get("結果") == UNLOGGED_OK else RETURNED if d.get("結果") == REDO else NOT_SEEN,
@@ -1115,6 +1290,12 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
     prev_v = max([k for k in st.versions if k < n], default=None)
     changed = 0
     for c, s in new.items():
+        old_row = st.states.get((c, n)) or {}
+        if (s["狀態"] == NOT_SEEN and s.get("沒判斷") and old_row.get("狀態") == PASSED and old_row.get("沿用自")
+                and old_row.get("沿用來源") not in (None, prev_v_of(st, n)) and not old_row.get("取消沿用")):
+            # 10-15 第5步2.0 第3段：通過是從更早的一版沿用來的（範圍版本：中間那一版沒有這張卡），成品檢查檔早就沒有這一筆
+            # （換處理紀錄時 refresh 拿掉了）——不是老師取消了，留著沿用的通過
+            continue
         row = st.states.get((c, n)) or {"卡號": c, "版本號": n, "成品": (v.get("成品時間") or {}).get(c), "狀態": NOT_SEEN,
                                         "退回原因": None, "沿用自": None, "紀錄鍵": sorted(per.get(c) or []), "更新時間": now}
         why = _reason(s["原因"], row.get("退回原因")) if s["狀態"] == RETURNED else None
@@ -1165,7 +1346,10 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
             c["等重做"] = {"起因": want[k]["起因"], "時間": doing.get("時間") or now}
             c["更新時間"] = now
             st.log(now, k, step, "等重做", None, {"起因": want[k]["起因"]})
-        elif k not in want and cur and cur.get("起因") == WHY_RETURNED:
+        elif (k not in want and cur and cur.get("起因") == WHY_RETURNED and not cur.get("版本號")
+              and ((k, n) in st.states or _in_range(c, v))):
+            # 10-15 第5步2.0 第3段：這一版沒處理到（範圍外）的卡不清——退回的是別的範圍那一版，這一版的成品檢查檔看不到它；
+            # 在舊版上退回的（帶 `版本號`）由那一版的判斷或之後組裝的新版本清（`decide_version`、`build_version`）
             c["等重做"] = None
             c["更新時間"] = now
             redone = str(v.get("時間") or "") > str(cur.get("時間") or "")   # 這一版比退回的時候新＝重做進這一版
@@ -1174,10 +1358,17 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
     outs = []
     for rec in check.get("輸出紀錄") or []:
         if rec.get("處理紀錄產生時間") == v.get("時間") or (not rec.get("處理紀錄產生時間") and rec.get("來源") in (v.get("成品檔") or [])):
-            outs.append({k: rec.get(k) for k in ("時間", "來源", "檔案", "檢查完才輸出", "看過百分比", "沒通過筆數")})
-    if outs != (v.get("輸出紀錄") or []):
-        v["輸出紀錄"] = outs
+            outs.append({k: rec.get(k) for k in EXPORT_KEYS})
+    # 10-15 第5步2.0 第3段：從這一版輸出、卻不在成品檢查檔裡的（`add_export` 直接記的）留著
+    keep = [x for x in v.get("輸出紀錄") or [] if not any(o.get("檔案") == x.get("檔案") for o in outs)]
+    if keep + outs != (v.get("輸出紀錄") or []):
+        v["輸出紀錄"] = keep + outs
     return {"狀態有變": changed, "等重做": sorted(want, key=_card_num)}
+
+
+def prev_v_of(st: Store, n: int) -> int | None:
+    """第 n 版的上一版（版本號比它小、最大的那一個）。"""
+    return max([k for k in st.versions if k < n], default=None)
 
 
 def set_reason(workdir: str | Path, card: str, options: list[str] | None, extra: str = "") -> bool:
