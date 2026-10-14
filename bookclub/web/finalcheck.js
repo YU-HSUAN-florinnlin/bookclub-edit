@@ -8,7 +8,10 @@
  *     ＋「＋在這裡新增修改」「重做這幾張（N 張）」（有退回或改過才出現）。
  * 卡片的內容、「改」裡面的東西是第 3 步的卡片元件（cards.js），走第 3 步原本的 API；改完那張卡「已改，等重做」。
  * 「重做這幾張」：第 4 步開始執行、跳到第 4 步；跑完自動跳回第 5 步（31 號設計 §9 問題 2 定案）。
- * 資料：GET /api/final（卡片、狀態、第 3 步資料）；存檔：/api/final/card（通過／退回，回寫舊檔每一筆）、/api/final/edited、
+ * 10-15 第5步2.0 第3段（版本，31 號設計 §6.5–6.7）：有兩版以上，頂端多「看哪一版」選單（fc.ver＝看哪一版，null＝最新）；
+ *   舊版：卡片照那一版的判斷、沒處理到的變淡；可以按通過／退回（記在那一版）、可以輸出那一版；不能改、不能新增、不能重做。
+ *   最新版下面多「上一版還沒看的（第 N 版）」那一區（範圍組裝時那一版範圍外、舊版還沒看完的卡）；重做過的卡多「上一版 ▶」。
+ * 資料：GET /api/final（?版本=N 看舊版；卡片、狀態、第 3 步資料）；存檔：/api/final/card（通過／退回，回寫舊檔每一筆）、/api/final/edited、
  * /api/final/watched、/api/final/export（bookclub/finalcards.py、finalcheck.py）。依賴 app.js 的 apiGet／apiPost／esc／contentEl。 */
 
 // 09-29 宇軒：2 倍速以下播過的才算「看過」（快轉看完不算有人完整看過）
@@ -16,7 +19,7 @@ const FC_MAX_RATE = 2;
 const FC_AB_CONTEXT = 2;   // 試聽前後各多 2 秒（跟後端一樣）
 
 let fcBackKey = null;   // 從第 3 步按「回第 5 步成品檢查」回來時，回到出發的那張卡（或「第 3 步選定不修改」那一列）
-const fc = { data: null, video: null, audio: null, cur: null, seen: [], seg: null, sentRanges: "", timer: null, lastT: 0,
+const fc = { ver: null, data: null, video: null, audio: null, cur: null, seen: [], seg: null, sentRanges: "", timer: null, lastT: 0,
   ab: null, span: null, redoOpen: false, editOpen: false, picks: [], ed: { open: false } };
 
 function fcFmt(t, d = 1) { return typeof rvFmt === "function" ? rvFmt(t, d) : String(t); }
@@ -42,6 +45,8 @@ const FC_REDO = [FC_ST.BACK, FC_ST.EDITED, FC_ST.NOT_MADE];               // 「
 
 // 卡片標籤：{text, cls, small: [小字]}（31 號設計 §6.3）
 function fcCardLabel(c) {
+  // 10-15 第5步2.0 第3段（§6.6）：這一版沒處理到（開發者用範圍組裝時範圍外的卡）——變淡、不能按通過
+  if (c["這一版沒處理到"]) return { text: "這一版沒處理到", cls: "made", small: [] };
   const small = [];
   if (c["狀態"] === FC_ST.OK && c["沿用自"]) small.push(`沿用第 ${c["沿用自"]} 版`);
   if (c["要人聽"] && c["狀態"] !== FC_ST.OK) small.push("請仔細聽");
@@ -120,7 +125,7 @@ function fcPreview(c, it) { return it ? rvPreview(it) : c["說明"] || ""; }
 const FC_TAB_ALL = "全部", FC_TAB_TODO = "還沒看完", FC_TAB_KEEP = "不修改", FC_TAB_ATT = "需留意", FC_TAB_OTHER = "其他";
 const FC_TYPE_TABS = [["學員段落", "學員段落"], ["名字", "名字"], ["學員名字", "學員提到名字"], ["重疊", "重疊"], ["刪除段落", "剪掉"], ["局部消音", "消音"], ["改成老師", "改成老師"]];
 function fcTabList(cards, keepN, att) {
-  const tabs = [{ id: FC_TAB_ALL, "名稱": "全部", cards }, { id: FC_TAB_TODO, "名稱": "還沒看完", cards: cards.filter((c) => FC_TODO.includes(c["狀態"])) }];
+  const tabs = [{ id: FC_TAB_ALL, "名稱": "全部", cards }, { id: FC_TAB_TODO, "名稱": "還沒看完", cards: cards.filter((c) => FC_TODO.includes(c["狀態"]) && !c["這一版沒處理到"]) }];
   for (const [t, name] of FC_TYPE_TABS) {
     const list = cards.filter((c) => c["類型"] === t);
     if (list.length) tabs.push({ id: t, "名稱": name, cards: list });
@@ -141,7 +146,8 @@ function fcOnlyLook() { try { return localStorage.getItem(FC_ONLY_KEY) === "1"; 
 function fcSetOnlyLook(on) { try { localStorage.setItem(FC_ONLY_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係 */ } }
 
 function fcCards() { return (fc.data && fc.data["卡片"]) || []; }
-function fcCard(id) { return fcCards().find((c) => c.id === id); }
+function fcCross() { return (fc.data && fc.data["跨版本卡片"]) || []; }   // 上一版還沒看的（第 N 版）
+function fcCard(id) { return fcCards().find((c) => c.id === id) || fcCross().find((c) => c.id === id); }
 function fcTabs() { return fcTabList(fcCards(), (fc.data["不修改"] || []).length, fc.data["需留意"]); }
 function fcTab() { return fcPickTab(fcTabs(), fcTabGet()); }
 // 目前這一頁列出來的卡片（開了「只看要仔細聽的」再篩一次）。上一張／下一張、通過後找下一張只在這裡面走
@@ -201,9 +207,20 @@ function fcOutTime(t, plist) {   // 原片時間 → 成品時間（剪掉的地
 }
 
 // （純函式）卡片試聽怎麼播：現在＝成品影片本身前後多 2 秒；原本＝原片聲音前後多 2 秒（影片同步靜音播，成品裡沒有的不動）
+// 10-15 第5步2.0 第3段：「上一版」＝上一個有這張卡的版本的成品那一段聲音（/api/final/vclip）；上一版還沒看的卡（跨版本）的
+// 「現在」也是播那一版的成品聲音（畫面上的影片是這一版的，時間對不上），「原本」只放原聲
+function fcVclip(ver, p) {
+  const a = Math.max(0, p[0] - FC_AB_CONTEXT), b = (p[1] != null ? p[1] : p[0]) + FC_AB_CONTEXT;
+  return `/api/final/vclip?版本=${ver}&start=${a.toFixed(2)}&end=${b.toFixed(2)}`;
+}
 function fcCardAbPlan(c, which) {
   const p = c["成品"], o = c["原片"];
-  const has = p && p[0] != null;
+  if (which === "上一版") {
+    const u = c["上一版"];
+    return u && u["成品"] && u["成品"][0] != null ? { video: null, audio: fcVclip(u["版本號"], u["成品"]) } : null;
+  }
+  if (c["跨版本"] && which === "現在") return p && p[0] != null ? { video: null, audio: fcVclip(c["版本號"], p) } : null;
+  const has = p && p[0] != null && !c["跨版本"];
   const from = has ? Math.max(0, p[0] - FC_AB_CONTEXT) : null;
   if (which === "現在") {
     if (!has) return null;
@@ -282,13 +299,56 @@ function fcRecountLocal() {
 // 進入點
 // ---------------------------------------------------------------------------
 
+// ---------- 版本（10-15 第5步2.0 第3段，31 號設計 §6.5） ----------
+
+function fcUrl() { return fc.ver ? `/api/final?版本=${encodeURIComponent(fc.ver)}` : "/api/final"; }
+function fcOld() { return !!(fc.data && fc.data["看的是舊版"]); }
+// 選單每一項的字（純函式，§6.8）：「第 N 版　10/14 14:20（最新）」；開發者設定開著才多寫範圍標記
+function fcVersionText(v, dev) {
+  return `第 ${v["版本號"]} 版　${fcShortStamp(v["時間"])}${v["最新"] ? "（最新）" : ""}${dev && v["標記"] ? `　${v["標記"]}` : ""}`;
+}
+// 「看哪一版」選單（純函式）：兩版以上才出現；開發者在舊版上多一顆「以這一版為基礎再組裝」
+function fcVersionMenuHtml(d) {
+  const list = d["版本清單"] || [];
+  if (list.length < 2) return "";
+  const dev = !!d["開發者"];
+  const opts = list.map((v) => `<option value="${esc(String(v["版本號"]))}" ${v["版本號"] === d["目前版本"] ? "selected" : ""}>${esc(fcVersionText(v, dev))}</option>`).join("");
+  const base = dev && d["看的是舊版"] ? ` <button class="ghost small" id="fc-rebase">以這一版為基礎再組裝</button>` : "";
+  return `<label class="fc-ver">看哪一版 <select id="fc-ver" aria-label="看哪一版">${opts}</select></label>${base}`;
+}
+function fcBindVersionMenu() {
+  const sel = document.getElementById("fc-ver");
+  if (sel) sel.addEventListener("change", () => {
+    const n = Number(sel.value);
+    const v = (fc.data["版本清單"] || []).find((x) => x["版本號"] === n);
+    fc.ver = v && !v["最新"] ? n : null;
+    fc.cur = null;
+    renderFinal();
+  });
+  const rb = document.getElementById("fc-rebase");
+  if (rb) rb.addEventListener("click", () => fcRebase(rb));
+}
+// 開發者：以舊版為基礎再組裝——照那一版的範圍開始第 4 步，新的一版的「沿用」先跟那一版比；跑完一樣跳回第 5 步
+async function fcRebase(btn) {
+  const r = fc.data["範圍"] || [null, null];
+  btn.disabled = true;
+  let started = null;
+  try {
+    started = (await apiPost("/api/execute/start", { start: r[0], end: r[1], methods: null, "基礎版本": fc.data["目前版本"] }, { quiet: true }))["started_at"];
+  } catch (e) { alert(`還不能開始：${e.message}`); btn.disabled = false; return; }
+  fcRedoBackSet(started);
+  fc.ver = null;
+  location.hash = "#step4";
+}
+
 async function renderFinal() {
   cvUse(FC_CARD_CTX);
   contentEl.innerHTML = "<p>載入中…</p>";
-  fc.data = await apiGet("/api/final");
+  try { fc.data = await apiGet(fcUrl()); }
+  catch (e) { if (!fc.ver) throw e; fc.ver = null; fc.data = await apiGet(fcUrl()); }   // 那一版不在了：回最新
   contentEl.classList.add("wide");
   const d = fc.data;
-  if (!d["有處理紀錄"] || !d["成品影片"]) {   // 31 號設計 §6.8：一句話＋連結（霧化預覽拿掉）
+  if (!d["看的是舊版"] && (!d["有處理紀錄"] || !d["成品影片"])) {   // 31 號設計 §6.8：一句話＋連結（霧化預覽拿掉）
     contentEl.innerHTML = `<div class="rv2 fc"><h1>5　成品檢查</h1>
       <p class="fc-none">還沒有成品，請先到 <a href="#step4">第 4 步</a></p>${fcWhereHtml(d["專案標示"])}</div>`;
     return;
@@ -297,13 +357,15 @@ async function renderFinal() {
     <div class="rv2 fc">
       <header class="rv-bar">
         <h1>5　成品檢查</h1>
+        <div class="fc-vers">${fcVersionMenuHtml(d)}</div>
         <div class="fc-status" id="fc-status" role="status"></div>
-        <div class="rv-bar-btns"><button class="primary" id="fc-export">輸出成品</button></div>
+        <div class="rv-bar-btns"><button class="primary" id="fc-export" ${d["影片清掉了"] ? "disabled" : ""}>輸出成品</button></div>
       </header>
       <div class="fo-box" id="fc-fileout"></div>
       <section class="rv-upper">
         <div class="rv-left">
-          <video id="fc-video" controls preload="metadata" src="${esc(d["影片網址"])}?v=${encodeURIComponent(d["成品影片"] + "|" + (d["成品版本"] || ""))}"></video>
+          ${d["影片清掉了"] ? `<p class="rv-warnline">這一版的影片清掉了</p>` : ""}
+          <video id="fc-video" controls preload="metadata" ${d["影片網址"] ? `src="${esc(d["影片網址"])}${String(d["影片網址"]).includes("?") ? "&" : "?"}v=${encodeURIComponent(d["成品影片"] + "|" + (d["成品版本"] || ""))}"` : ""}></video>
           <div class="rv-timebar"><span class="rv-clock"><b id="fc-clock">0:00</b> ／ ${esc(fcFmt(d["成品長度"], 0))}</span>
             <select id="fc-rate" aria-label="播放速度"><option value="1">1 倍速</option><option value="1.25">1.25 倍速</option><option value="1.5">1.5 倍速</option><option value="2">2 倍速</option></select></div>
           <div class="rv-tl fc-tl" id="fc-tl" title="點一下或拖拉，跳到那個時間"></div>
@@ -321,6 +383,7 @@ async function renderFinal() {
     legacyEdited: false, nextData: null });
   if (!fc.cur || !fcCard(fc.cur)) fc.cur = (fcCards().find((c) => c["狀態"] === FC_ST.TODO) || fcCards()[0] || {}).id || null;
   document.getElementById("fc-export").addEventListener("click", fcExport);
+  fcBindVersionMenu();
   fileOutInit(document.getElementById("fc-fileout"));   // 10-07：打開成品資料夾、複製到 Windows
   document.getElementById("fc-rate").addEventListener("change", (e) => { fc.video.playbackRate = Number(e.target.value); });
   fc.audio.addEventListener("ended", () => { if (fc.ab && fc.ab.which === "原本") fcStopAB(); });
@@ -347,7 +410,7 @@ async function fcReload() {
   const pre = fc.nextData;
   fc.nextData = null;
   // 10-15 第2段審查修正（建議，效能）：剛存檔、/api/final/edited 回傳的整頁資料（幾秒內）直接用
-  fc.data = pre && Date.now() - pre.at < 5000 ? pre.data : await apiGet("/api/final");
+  fc.data = pre && !fc.ver && Date.now() - pre.at < 5000 ? pre.data : await apiGet(fcUrl());
   if (fc.cur && !fcCard(fc.cur)) fc.cur = (fcCards().find((c) => c["狀態"] === FC_ST.TODO) || fcCards()[0] || {}).id || null;
   fcRenderAll();
 }
@@ -364,7 +427,10 @@ function fcRenderAll() {
 function fcRenderTop() {
   const box = document.getElementById("fc-status");
   if (!box) return;
-  const s = fcStatusLine({ ...fc.data, "舊檔改過": !!fc.legacyEdited && fc.data["卡片來源"] === "舊檔" });
+  // 10-15 第5步2.0 第3段：看舊版時不提「重做」（舊版上不能重做；退回的算沒看完）
+  const st0 = fc.data["卡片統計"] || {};
+  const view = fcOld() ? { ...fc.data, "AI執行中": false, "卡片統計": { ...st0, "要重做": 0, "還沒看": (st0["還沒看"] || 0) + (st0["退回"] || 0) } } : fc.data;
+  const s = fcStatusLine({ ...view, "舊檔改過": !!fc.legacyEdited && fc.data["卡片來源"] === "舊檔" });
   // §4.4 修訂：新紀錄不能用時退回讀舊檔，提示一句（小字，不搶頂端那一句）。
   // 10-15 第2段審查修正（暫定，等宇軒）：只在開發者設定開著時顯示（老師看不懂、也不用做什麼）
   const old = fc.data["卡片來源"] === "舊檔" && fc.data["開發者"] ? `<span class="rv-meta fc-oldsrc">（先照舊的紀錄顯示）</span>` : "";
@@ -374,7 +440,7 @@ function fcRenderTop() {
   const pct = document.getElementById("fc-pct");
   if (pct) pct.textContent = String(Math.floor(((fc.data["狀態"] || {})["看過比例"] || 0) * 100));
   const ex = document.getElementById("fc-export");
-  if (ex) ex.disabled = !fc.data["有處理紀錄"] || !fc.data["成品影片"];
+  if (ex) ex.disabled = !fc.data["有處理紀錄"] || !fc.data["成品影片"];   // 那一版的影片清掉了：不能輸出
 }
 
 // ---------- 影片、時間軸 ----------
@@ -443,7 +509,7 @@ function fcRenderTimeline() {
   }).join("");
   const seen = (fc.data["看過區段"] || []).map(([s, e]) => `<i class="seen" style="left:${pct(s)}%;width:${pct(e - s)}%"></i>`).join("");
   const cur = fc.cur && fcCard(fc.cur);
-  const curMark = cur && cur["成品"] && cur["成品"][0] != null ? `<i class="cur" style="left:${pct(cur["成品"][0])}%;width:${Math.max(0.3, pct((cur["成品"][1] || cur["成品"][0]) - cur["成品"][0]))}%"></i>` : "";
+  const curMark = cur && !cur["跨版本"] && cur["成品"] && cur["成品"][0] != null ? `<i class="cur" style="left:${pct(cur["成品"][0])}%;width:${Math.max(0.3, pct((cur["成品"][1] || cur["成品"][0]) - cur["成品"][0]))}%"></i>` : "";
   el.innerHTML = `<div class="track"></div>${marks}${curMark}<div class="seenbar">${seen}</div><i class="head" id="fc-head" style="left:${pct(fc.video ? fc.video.currentTime : 0)}%"></i>`;
 }
 
@@ -474,10 +540,12 @@ function fcRenderRight() {
   const c = fc.cur && fcCard(fc.cur);
   if (!c) { box.innerHTML = `<div class="rv-card empty"><p>這一版沒有任何修改</p></div>`; return; }
   const it = fcItemOf(c);
-  const list = fcShown().length ? fcShown() : fcCards();
+  const list = c["跨版本"] ? fcCross() : fcShown().length ? fcShown() : fcCards();
   const idx = list.findIndex((x) => x.id === c.id);
   const busy = !!fc.data["AI執行中"];
-  const canJudge = ![FC_ST.NOT_MADE, FC_ST.EDITED].includes(c["狀態"]);
+  const canJudge = ![FC_ST.NOT_MADE, FC_ST.EDITED].includes(c["狀態"]) && !c["這一版沒處理到"];
+  const canEdit = it && !fcOld();   // 10-15 第5步2.0 第3段：舊版上不能改（改的是第 3 步現在的檔，回最新一版改）
+  const abPrev = fcCardAbPlan(c, "上一版");
   const back = c["狀態"] === FC_ST.BACK;
   const opts = fc.data["退回原因選項"] || [];
   const picked = back ? ((c["退回原因"] || {})["選項"] || []) : fc.picks;
@@ -489,11 +557,12 @@ function fcRenderRight() {
       ${fc.editOpen ? "" : `<p class="fc-preview">${esc(fcWho(fcPreview(c, it)))}</p>`}
       <div class="rv-row fc-ab">
         <button class="ghost small" data-ab="原本" ${abOrig ? "" : "disabled"}>原本 ▶</button>
-        <button class="ghost small" data-ab="現在" ${abNow ? "" : "disabled"}>現在 ▶</button></div>
+        <button class="ghost small" data-ab="現在" ${abNow ? "" : "disabled"}>現在 ▶</button>${abPrev ? `
+        <button class="ghost small" data-ab="上一版">上一版 ▶</button>` : ""}</div>
       <div class="rv-actions">
         <button class="${c["狀態"] === FC_ST.OK ? "primary on" : "primary"}" id="fc-pass" aria-pressed="${c["狀態"] === FC_ST.OK}" ${canJudge ? "" : "disabled"}>通過<kbd>Enter</kbd></button>
         <button class="ghost${back ? " on" : ""}" id="fc-redo" aria-pressed="${back}" aria-expanded="${fc.redoOpen}" ${canJudge ? "" : "disabled"}>退回</button>
-        ${it ? `<button class="ghost${fc.editOpen ? " on" : ""}" id="fc-edit" aria-expanded="${fc.editOpen}" ${busy ? "disabled title=\"正在重做，做完才能改\"" : ""}>改<kbd>E</kbd></button>` : ""}
+        ${canEdit ? `<button class="ghost${fc.editOpen ? " on" : ""}" id="fc-edit" aria-expanded="${fc.editOpen}" ${busy ? "disabled title=\"正在重做，做完才能改\"" : ""}>改<kbd>E</kbd></button>` : ""}
         <span class="spacer"></span>
         <button class="ghost" id="fc-prev">上一張</button><button class="ghost" id="fc-next">下一張</button>
       </div>
@@ -505,7 +574,7 @@ function fcRenderRight() {
         <div class="rv-row"><button class="primary small" id="fc-redo-go">確定退回</button><button class="ghost small" id="fc-redo-cancel">取消</button>
           ${back ? `<button class="ghost small" id="fc-redo-undo">取消退回</button>` : ""}</div>
       </div>
-      ${it && fc.editOpen ? `<div class="fc-editbox" id="fc-editbox">
+      ${canEdit && fc.editOpen ? `<div class="fc-editbox" id="fc-editbox">
         <div class="rv-body">${rvEdgeHtml(it)}${rvBodyHtml(it)}${rvAlignLine(it)}</div>
         <div class="rv-actions">${cvToolBtnsHtml(it, true)}</div>
         <div class="rv-more" id="rv-more">${rvMoreHtml(it)}</div>
@@ -525,7 +594,7 @@ function fcRenderRight() {
   if (undo) undo.addEventListener("click", () => fcDecide(c, null));
   document.getElementById("fc-prev").addEventListener("click", () => fcStep(-1));
   document.getElementById("fc-next").addEventListener("click", () => fcStep(1));
-  if (it && fc.editOpen) {   // 「改」裡面是第 3 步的卡片元件（第 3 步原本的 API）
+  if (canEdit && fc.editOpen) {   // 「改」裡面是第 3 步的卡片元件（第 3 步原本的 API）
     cvBindTools(it);
     cvBindPlayShrink(it);
     rvBindBody(it);
@@ -542,7 +611,7 @@ function fcToggleRedo() {
 
 function fcToggleEdit() {
   const c = fc.cur && fcCard(fc.cur);
-  if (!c || !fcItemOf(c) || fc.data["AI執行中"]) return;
+  if (!c || !fcItemOf(c) || fc.data["AI執行中"] || fcOld()) return;
   fc.editOpen = !fc.editOpen;
   if (fc.editOpen) fc.redoOpen = false;
   fcRenderRight();
@@ -553,11 +622,20 @@ function fcToggleEdit() {
 async function fcDecide(c, result, picks = [], extra = "") {
   fc.nextData = null;   // 10-15 第2段審查二修正：判斷之後不能再用之前留的整頁資料
   let res;
+  // 10-15 第5步2.0 第3段：在哪一版上按的（舊版、上一版還沒看的那一區記在那一版；整頁重新整理）
+  const ver = c["跨版本"] || fcOld() ? c["版本號"] : null;
   try {
-    res = await apiPost("/api/final/card", { id: c.id, "結果": result, "選項": picks, "補充": extra });
+    res = await apiPost("/api/final/card", { id: c.id, "結果": result, "選項": picks, "補充": extra, ...(ver ? { "版本": ver } : {}) });
   } catch (e) { alert(e.message); return; }
   fc.redoOpen = false;
   fc.picks = [];
+  if (ver) {
+    const list = c["跨版本"] ? fcCross() : fcCards();
+    const next = result === FC_ST.OK ? fcNextUnseen(list, c.id) : null;
+    await fcReload();
+    if (next && fcCard(next)) fcSelect(next, false);
+    return;
+  }
   const i = fcCards().findIndex((x) => x.id === c.id);
   if (res["卡片"] && i >= 0) fc.data["卡片"][i] = res["卡片"];
   else if (i >= 0) fc.data["卡片"].splice(i, 1);   // 整片退回的待釐清卡通過＝拿掉
@@ -728,7 +806,7 @@ function fcRenderIO() {
 function fcRowHtml(c) {
   const it = fcItemOf(c);
   const lab = fcCardLabel(c);
-  return `<li data-id="${esc(c.id)}" class="${c.id === fc.cur ? "cur" : ""} ${c["狀態"] === FC_ST.OK ? "done" : ""}">
+  return `<li data-id="${esc(c.id)}" class="${c.id === fc.cur ? "cur" : ""} ${c["狀態"] === FC_ST.OK ? "done" : ""}${c["這一版沒處理到"] ? " fc-faded" : ""}">
       <span class="tm">${c["原片"] && c["原片"][0] != null ? esc(fcFmt(c["原片"][0], 0)) : "—"}</span>
       <span class="ty">${fcChip(c, it)}</span>
       <span class="tx">${c["編號"] ? `<span class="idtag">#${esc(String(c["編號"]))}</span>` : ""}${esc(fcWho(fcPreview(c, it)))}</span>
@@ -754,12 +832,13 @@ function fcRenderLower() {
     const done = tab !== FC_TAB_ALL && tab !== FC_TAB_TODO && t.cards.length && !t.cards.some((c) => FC_TODO.includes(c["狀態"]));
     body = `${lookN ? `<label class="nowrap fc-only"><input type="checkbox" id="fc-only" ${fcOnlyLook() ? "checked" : ""}> 只看要仔細聽的（${lookN} 張）</label>` : ""}
       ${done ? `<p class="fc-tabdone rv-meta">這一頁看完了</p>` : ""}
-      <ol class="rv-list" id="fc-list">${shown.map(fcRowHtml).join("") || `<li class="empty">${fcCards().length ? "這一頁沒有卡片" : "這一版沒有任何修改"}</li>`}</ol>`;
+      <ol class="rv-list" id="fc-list">${shown.map(fcRowHtml).join("") || `<li class="empty">${fcCards().length ? "這一頁沒有卡片" : "這一版沒有任何修改"}</li>`}</ol>
+      ${fcCrossHtml(fcCross())}`;
   }
   const rc = fcRedoCount(fc.data);
   const n = rc.n;
   const busy = !!fc.data["AI執行中"];
-  const bar = `<div class="rv-row fc-bottom">
+  const bar = fcOld() ? "" : `<div class="rv-row fc-bottom">
       <button class="ghost" id="fc-add" ${busy ? "disabled title=\"正在重做，做完才能改\"" : ""}>＋在這裡新增修改</button>
       ${rc.show ? `<button class="primary" id="fc-redoall" ${busy ? "disabled" : ""}>${n ? `重做這幾張（${n} 張）` : "重做這幾張"}</button>` : ""}</div>
     <div class="rv-io" id="fc-io"></div>`;
@@ -767,7 +846,7 @@ function fcRenderLower() {
   lower.querySelectorAll(".fc-tabs button").forEach((b) => b.addEventListener("click", () => { fcTabSet(b.dataset.tab); fcRenderLower(); }));
   const only = document.getElementById("fc-only");
   if (only) only.addEventListener("change", () => { fcSetOnlyLook(only.checked); fcRenderLower(); });
-  lower.querySelectorAll("#fc-list li[data-id]").forEach((li) => li.addEventListener("click", () => fcSelect(li.dataset.id)));
+  lower.querySelectorAll("#fc-list li[data-id], .fc-cross li[data-id]").forEach((li) => li.addEventListener("click", () => fcSelect(li.dataset.id, !fcCard(li.dataset.id)["跨版本"])));
   lower.querySelectorAll(".fc-u-play").forEach((b) => b.addEventListener("click", () => { const u = flat[Number(b.dataset.i)]; fcPlaySpan(u["成品"][0], u["成品"][1]); }));
   lower.querySelectorAll(".fc-u-go").forEach((b) => b.addEventListener("click", () => {
     const u = flat[Number(b.dataset.i)];
@@ -777,11 +856,20 @@ function fcRenderLower() {
   }));
   lower.querySelectorAll(".fc-a-play").forEach((b) => b.addEventListener("click", () => { const u = flat[Number(b.dataset.i)]; const sg = u["成品段"][Number(b.dataset.s)]; fcPlaySpan(sg[0], sg[1]); }));
   lower.querySelectorAll(".fc-a-go").forEach((b) => b.addEventListener("click", () => rvJump(fcAttentionGo(flat[Number(b.dataset.i)]))));
-  document.getElementById("fc-add").addEventListener("click", () => fcOpenEditor(null));
+  const add = document.getElementById("fc-add");
+  if (add) add.addEventListener("click", () => fcOpenEditor(null));
   const redo = document.getElementById("fc-redoall");
   if (redo) redo.addEventListener("click", () => fcRedo(redo));
   if (fc.ed.open) fcRenderIO();
   fcMarkRow();
+}
+
+// 「上一版還沒看的（第 N 版）」那一區（純函式，31 號設計 §6.5、#221）：照版本分組；沒有就是空字串
+function fcCrossHtml(cross) {
+  if (!cross || !cross.length) return "";
+  const vers = [...new Set(cross.map((c) => c["版本號"]))];
+  return vers.map((n) => `<h3 class="fc-sub">上一版還沒看的（第 ${esc(String(n))} 版）</h3>
+    <ol class="rv-list fc-cross">${cross.filter((c) => c["版本號"] === n).map(fcRowHtml).join("")}</ol>`).join("");
 }
 
 function fcMarkRow() {
@@ -963,7 +1051,7 @@ async function fcSendWatched() {
   const sig = JSON.stringify(ranges);
   if (!ranges.length || sig === fc.sentRanges) return;
   try {
-    const r = await apiPost("/api/final/watched", { "區段": ranges, "成品影片": fc.data["成品影片"] });
+    const r = await apiPost("/api/final/watched", { "區段": ranges, "成品影片": fc.data["成品影片"], ...(fcOld() ? { "版本": fc.data["目前版本"] } : {}) });
     fc.sentRanges = sig;
     fc.data["看過區段"] = r["看過區段"];
     fc.data["狀態"] = r["狀態"];
@@ -986,12 +1074,13 @@ function fcStartWatchTracking() {
 async function fcExport() {
   fc.nextData = null;   // 10-15 第2段審查二修正：輸出之後的重新整理不能用之前留的整頁資料
   let r;
-  try { r = await apiPost("/api/final/export", {}); } catch (e) { alert(e.message); return; }
+  const ver = fcOld() ? { "版本": fc.data["目前版本"] } : {};   // 10-15 第5步2.0 第3段（§6.7）：輸出選中的那一版
+  try { r = await apiPost("/api/final/export", ver); } catch (e) { alert(e.message); return; }
   if (r["要確認"]) {
     let win = false;
     try { win = !!(await apiGet("/api/final/outputs"))["可以複製到Windows"]; } catch (e) { /* 讀不到就不提 Windows */ }
     if (!(await fcConfirmExport(r["還差"], win))) return;
-    try { r = await apiPost("/api/final/export", { "確定": true }); } catch (e) { alert(e.message); return; }
+    try { r = await apiPost("/api/final/export", { "確定": true, ...ver }); } catch (e) { alert(e.message); return; }
   }
   await fcReload();
   fileOutInit(document.getElementById("fc-fileout"));
@@ -1045,7 +1134,7 @@ document.addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   const c = fc.cur && fcCard(fc.cur);
   if (e.key === " ") { e.preventDefault(); fc.video.paused ? fc.video.play().catch(() => {}) : fc.video.pause(); }
-  else if (e.key === "Enter" && e.target.tagName !== "BUTTON" && c && ![FC_ST.NOT_MADE, FC_ST.EDITED].includes(c["狀態"])) {
+  else if (e.key === "Enter" && e.target.tagName !== "BUTTON" && c && ![FC_ST.NOT_MADE, FC_ST.EDITED].includes(c["狀態"]) && !c["這一版沒處理到"]) {
     e.preventDefault(); fcDecide(c, c["狀態"] === FC_ST.OK ? null : FC_ST.OK);
   }
   else if (k === "e") { e.preventDefault(); fcToggleEdit(); }

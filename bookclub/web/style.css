@@ -784,3 +784,9 @@ details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合�
 .rv2 .fc-tabs button.fc-tab-far:first-of-type, .rv2 .fc-tabs .fc-tab-far { margin-left: auto; }
 .rv2 .fc-tabs .fc-tab-far + .fc-tab-far { margin-left: 0; }
 .fc-only { display: inline-block; margin: 0 0 6px; font-size: 14px; }
+
+/* 10-15 第5步2.0 第3段：版本選單、這一版沒處理到（變淡）、上一版還沒看的那一區 */
+.fc-vers { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.fc-vers select { font-size: 15px; }
+.rv-list li.fc-faded { opacity: .45; }
+.fc-cross { margin-top: 4px; }

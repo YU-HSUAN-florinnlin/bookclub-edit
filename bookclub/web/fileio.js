@@ -206,13 +206,13 @@ function foStaleAsk(why) {
 }
 
 // 拿檔按鈕旁那一行（純函式）：上次輸出的不是最新的才寫；Windows（WSL）輸出過、還沒複製時寫「要拿檔案，按『複製到 Windows』」
+// 10-15 第5步2.0 第3段（31 號設計 §6.7）：拿檔按鈕拿「最新一次輸出」，那一版之後有新版本 → 「這是第 N 版的，最新是第 M 版」；
+// 新紀錄不能用時照 0.2.1b3 的過期判斷（上次輸出過期）
 function foWhichLine(d, job) {
+  const v = d["版本"];
+  if (v && v["輸出版本"] && v["輸出版本"] !== v["最新版本"]) return `<span class="rv-warnline">${esc(`這是第 ${v["輸出版本"]} 版的，最新是第 ${v["最新版本"]} 版`)}</span>`;
   const stale = d["上次輸出過期"];
-  if (stale) {
-    const v = d["版本"];
-    const text = v && v["輸出版本"] !== v["最新版本"] ? `上次輸出的是第 ${v["輸出版本"]} 版，最新是第 ${v["最新版本"]} 版` : `上次輸出的不是最新的成品（${stale["說明"] || ""}）`;
-    return `<span class="rv-warnline">${esc(text)}</span>`;
-  }
+  if (stale) return `<span class="rv-warnline">${esc(`上次輸出的不是最新的成品（${stale["說明"] || ""}）`)}</span>`;
   if (d["可以複製到Windows"] && d["成品是"] === "最終成品" && !(job && job["狀態"] === "完成")) return `<span class="muted">要拿檔案，按『複製到 Windows』</span>`;
   return "";
 }

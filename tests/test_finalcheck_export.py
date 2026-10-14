@@ -238,7 +238,7 @@ def test_web_confirm_text():
 
 def test_web_export_wiring():
     ex = _fn("fcExport")
-    assert '{ "確定": true }' in ex and "fcConfirmExport(" in ex and 'r["要確認"]' in ex
+    assert '"確定": true' in ex and '"版本"' in ex and "fcConfirmExport(" in ex and 'r["要確認"]' in ex
     assert "fileOutInit(" in ex                                       # 輸出後按鈕改指向剛輸出的那一支
     top = _fn("fcRenderTop")
     assert 'ex.disabled = !fc.data["有處理紀錄"] || !fc.data["成品影片"]' in top

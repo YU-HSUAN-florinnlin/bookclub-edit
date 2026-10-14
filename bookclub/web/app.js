@@ -529,7 +529,10 @@ async function renderExecuteBody() {
   const running = d.running;
   const redo = d["退回清單"] || [];
   const execBlocked = running || !pre["可以開始"];   // 10-08 宇軒（流程簡化）：總檢查預設先略過，不擋
-  const ra = d["只重新組裝"];
+  // 10-15 第5步2.0 第3段（31 號設計 §5.3）：範圍「從／到」與「只重新組裝」只有開發者設定（settings.toml `developer = true`）才顯示；
+  // 老師的畫面一律整支、照卡片重做（伺服器沒開開發者設定時收到範圍也不理）
+  const dev = !!d["開發者"];
+  const ra = dev ? d["只重新組裝"] : null;
   const btn = execBtnState(running, prog, !!d["有成品"]);   // 10-08：按鈕文字照狀態   // 10-05 #97：沒有退回時也能只重新組裝（伺服器算好能不能按）
   contentEl.innerHTML = `
     <h1>4　AI 執行</h1>
@@ -552,10 +555,10 @@ async function renderExecuteBody() {
     </div>
     <div id="execTimeBox">${execTimeHtml(d["執行時間"])}</div>
     <div class="card">
-      <div class="exec-opts">
+      ${dev ? `<div class="exec-opts">
         <label>從 <input type="text" id="exStart" class="short" placeholder="0:00"></label>
         <label>到 <input type="text" id="exEnd" class="short" placeholder="${esc(d["影片長度"] ? fmtRange([0, d["影片長度"]]).split("–")[1] : "結尾")}"></label>
-      </div>
+      </div>` : ""}
       <p class="muted">輸出方式：<span id="exMethodName">${esc(execMethodName(d, (d["預設輸出做法"] || ["sw"])[0]))}</span><span id="exMethodNote">${(d["預設輸出做法"] || ["sw"])[0] === "sw" ? "（Mac、Windows 都一樣）" : ""}</span></p>
       <details class="adv"><summary>進階設定</summary>
         <label>輸出方式 <select id="exMethod">${(d["輸出做法選項"] || [["sw", "標準輸出"]]).map(([m, label]) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
@@ -584,10 +587,10 @@ async function renderExecuteBody() {
         要念的字和範圍都沒改的，會換一種念法重新生成，每退回一次換一次，不會回到用過的念法；上一版的聲音留著備份。
         做完到第 5 步，這幾筆會回到「還沒看」、標「重做過」。${d["重做中"] ? "<b>上次重做還沒做完</b>，再按一次會接著做。" : ""}</p>
       <p><button id="btnRedo" ${execBlocked ? "disabled" : ""}>只重做退回的這幾筆（${redo.length} 筆）</button>
-        <button id="btnReassemble" class="secondary" ${execBlocked ? "disabled" : ""}>只重新組裝（不重新生成）</button>
+        ${dev ? `<button id="btnReassemble" class="secondary" ${execBlocked ? "disabled" : ""}>只重新組裝（不重新生成）</button>` : ""}
         ${execBlocked && !running ? `<span class="muted">要先能按「開始執行」（見上面）</span>` : ""}</p>
-      <p class="muted small">「只重新組裝」：生成的聲音不動（不重新生成、不換念法），只照現在的做法重新放回去、輸出新的成品；
-        退回的這幾筆一樣回到第 5 步「還沒看」、標「重做過（只重新組裝）」。聲音本身沒問題、要改的是接起來的地方時用這顆。</p>
+      ${dev ? `<p class="muted small">「只重新組裝」：生成的聲音不動（不重新生成、不換念法），只照現在的做法重新放回去、輸出新的成品；
+        退回的這幾筆一樣回到第 5 步「還沒看」、標「重做過（只重新組裝）」。聲音本身沒問題、要改的是接起來的地方時用這顆。</p>` : ""}
       <table class="kv">${redo.map((it, i) => `<tr><td>${esc(typeof fcKind === "function" ? fcKind(it["類型"]) : it["類型"])}　${esc((it["覆核名稱"] || []).join("、") || "—")}
         ${typeof fcBoth === "function" && (it["原片"] || it["成品"]) ? `<div class="muted">${esc(fcBoth(it))}</div>` : ""}</td>
         <td>${esc(it["原因"])}${it["改範圍"] ? `<div class="muted">範圍改了${it["改範圍"]["原本"] ? `：${esc(fmtRange(it["改範圍"]["原本"]))} → ${esc(fmtRange(it["改範圍"]["改成"]))}` : ""}（存在第 3 步〈${esc(it["改範圍"]["名稱"] || "")}〉）</div>` : ""}
@@ -635,7 +638,8 @@ async function renderExecuteBody() {
     await renderExecuteBody();
   });
   document.getElementById("btnExec").addEventListener("click", async () => {
-    const body = { start: document.getElementById("exStart").value.trim() || null, end: document.getElementById("exEnd").value.trim() || null,
+    const st = document.getElementById("exStart"), en = document.getElementById("exEnd");   // 開發者設定才有這兩格
+    const body = { start: (st && st.value.trim()) || null, end: (en && en.value.trim()) || null,
       methods: [document.getElementById("exMethod").value] };
     try { await apiPost("/api/execute/start", body, { quiet: true }); } catch (e) { alert(`無法開始：${e.message}`); return; }
     await renderExecuteBody();

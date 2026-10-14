@@ -57,7 +57,8 @@ _PURE = (_ESC + _const(FCJS, "FC_AB_CONTEXT") + _const(FCJS, "FC_ST") + _const(F
          + _const(FCJS, "FC_NO_REASON") + _fn(FCJS, "fcWhyLine") + _fn(FCJS, "fcSharedLine") + _fn(FCJS, "fcRedoCount")
          + _const(FCJS, "FC_NOTE_FIELDS") + _fn(FCJS, "fcNoteOnly")
          + _fn(FCJS, "fcTabList") + _fn(FCJS, "fcPickTab") + _fn(FCJS, "fcStepPick") + _fn(FCJS, "fcNextUnseen")
-         + _fn(FCJS, "fcSrcTime") + _fn(FCJS, "fcOutTime") + _fn(FCJS, "fcCardAbPlan"))
+         + _fn(FCJS, "fcSrcTime") + _fn(FCJS, "fcOutTime") + _fn(FCJS, "fcVclip") + _fn(FCJS, "fcCardAbPlan")
+         + _fn(FCJS, "fcVersionText") + _fn(FCJS, "fcVersionMenuHtml"))
 
 
 def test_status_line_one_sentence_in_priority():
@@ -184,7 +185,8 @@ def test_fileio_which_line_and_redo_return():
             execRedoReturn({running: false, started_at: 1001, "進度": {"錯誤": "x"}}, since),
             execRedoReturn({running: false, started_at: 1000, finished_at: 1500}, since),
             execRedoReturn({running: false, started_at: 1001, finished_at: 1500}, null)] }));""")
-    assert "上次輸出的是第 1 版，最新是第 2 版" in got["w"][0] and "第 4 步又組裝了新的成品" in got["w"][1]
+    assert "這是第 1 版的，最新是第 2 版" in got["w"][0]   # 10-15 第5步2.0 第3段：統一成 §6.7 的句子
+    assert "第 4 步又組裝了新的成品" in got["w"][1]
     assert "要拿檔案，按『複製到 Windows』" in got["w"][2] and got["w"][3] == "" and got["w"][4] == ""
     assert got["r"] == [None, "回第5步", "留下", "留下", None, None]   # 第 5 個：更早的那一次（started_at 比按的那一次早）
     poll = _fn(APPJS, "startExecPoll")
@@ -222,8 +224,9 @@ def _api_final() -> tuple[dict, Path]:
     return json.loads(json.dumps(d, ensure_ascii=False, default=str)), w
 
 
-def _run_page(scenarios: list[dict]) -> dict:
-    data, _w = _api_final()
+def _run_page(scenarios: list[dict], data: dict | None = None) -> dict:
+    if data is None:
+        data, _w = _api_final()
     files = [str(WEB / f) for f in ("cards.js", "review.js", "finalcheck.js")]
     pre = (f"H.route = 'step5'; const DATA = {json.dumps(data, ensure_ascii=False)};\n"
            "H.apiGetData['/api/final/outputs'] = {}; H.apiGetData['/api/final'] = DATA;\n"
@@ -349,6 +352,102 @@ def test_page_renders_and_buttons_post_right_things():
     lk = got["連帶與沒寫原因"]
     assert "right" in lk, lk
     assert "退回（沒寫原因）" in lk["right"] and f"跟 #{lk['n']} 共用，那張還是退回" in lk["right"] and "連帶" in lk["right"]
+
+
+
+# ---------- 10-15 第5步2.0 第3段：版本 ----------
+
+def test_versions_pure():
+    if not NODE:
+        return
+    got = _node(_PURE + """
+      const L = [{"版本號": 3, "時間": "2026-10-15T14:20:00", "標記": "0-97", "最新": true}, {"版本號": 2, "時間": "2026-10-15T10:05:00", "標記": "0-3", "最新": false}];
+      console.log(JSON.stringify({
+        text: [fcVersionText(L[0], false), fcVersionText(L[1], false), fcVersionText(L[1], true)],
+        one: fcVersionMenuHtml({"版本清單": [L[0]]}),
+        menu: fcVersionMenuHtml({"版本清單": L, "目前版本": 2}),
+        dev: fcVersionMenuHtml({"版本清單": L, "目前版本": 2, "開發者": true, "看的是舊版": true}),
+        devNew: fcVersionMenuHtml({"版本清單": L, "目前版本": 3, "開發者": true, "看的是舊版": false}),
+        lab: fcCardLabel({"狀態": "還沒生成", "這一版沒處理到": true}),
+        prev: fcCardAbPlan({"原片": [100, 104], "成品": [80, 85], "上一版": {"版本號": 2, "成品": [70, 75]}}, "上一版"),
+        noPrev: fcCardAbPlan({"原片": [100, 104], "成品": [80, 85], "上一版": null}, "上一版"),
+        crossNow: fcCardAbPlan({"原片": [100, 104], "成品": [80, 85], "跨版本": true, "版本號": 1}, "現在"),
+        crossOrig: fcCardAbPlan({"原片": [100, 104], "成品": [80, 85], "跨版本": true, "版本號": 1}, "原本"),
+        todo: fcTabList([{"id": "a", "類型": "名字", "狀態": "還沒生成", "這一版沒處理到": true}, {"id": "b", "類型": "名字", "狀態": "還沒看"}], 0, null)[1].cards.map((c) => c.id) }));""")
+    assert got["text"] == ["第 3 版　10/15 14:20（最新）", "第 2 版　10/15 10:05", "第 2 版　10/15 10:05　0-3"]
+    assert got["one"] == ""                                    # 只有一版：不出現選單
+    assert "看哪一版" in got["menu"] and 'value="2" selected' in got["menu"] and "以這一版為基礎再組裝" not in got["menu"]
+    assert "0-97" not in got["menu"] and "0-97" in got["dev"]   # 範圍標記只有開發者看得到
+    assert "以這一版為基礎再組裝" in got["dev"] and "以這一版為基礎再組裝" not in got["devNew"]
+    assert got["lab"] == {"text": "這一版沒處理到", "cls": "made", "small": []}
+    assert got["prev"] == {"video": None, "audio": "/api/final/vclip?版本=2&start=68.00&end=77.00"} and got["noPrev"] is None
+    assert got["crossNow"]["audio"].startswith("/api/final/vclip?版本=1&") and got["crossNow"]["video"] is None
+    assert got["crossOrig"]["video"] is None and got["crossOrig"]["audio"].startswith("/api/audio?")
+    assert got["todo"] == ["b"]                                # 沒處理到的不算「還沒看完」
+    # 第 4 步：範圍「從／到」、「只重新組裝」只有開發者設定才畫（31 號設計 §5.3）
+    body = _fn(APPJS, "renderExecuteBody")
+    assert "const ra = dev ?" in body and '${dev ? `<div class="exec-opts">' in body and '${dev ? `<button id="btnReassemble"' in body
+
+
+def _version_data(old: bool = False) -> dict:
+    import test_versions as tv
+
+    from bookclub import finalcards, finalcheck, needs
+
+    w = tv._three_versions()
+    with redirect_stdout(io.StringIO()):
+        page = needs.compute_page(w)
+        if old:
+            d = finalcards.version_page(w, 1, page)
+        else:
+            d = finalcheck.page_data(w)
+            d.update(finalcards.page_part(w, page))
+    return json.loads(json.dumps(d, ensure_ascii=False, default=str))
+
+
+def test_version_page_renders():
+    if not NODE:
+        return
+    latest = _version_data()
+    got = _run_page([
+        {"名稱": "最新", "程式": """
+          await renderFinal();
+          const t5 = DATA["跨版本卡片"].find((c) => c["第3步鍵"] === "學員段落:T005");
+          H.listeners.length = 0; H.log.length = 0; fcSelect(t5.id, false);
+          const right = document.getElementById("fc-right").innerHTML;
+          await click("fc-pass");
+          return {top: contentEl.innerHTML, lower: document.getElementById("fc-lower").innerHTML, right, log: H.log};"""},
+        {"名稱": "換版", "程式": """
+          await renderFinal(); H.log.length = 0;
+          const sel = document.getElementById("fc-ver"); sel.value = "1";
+          await H.fireAll((l) => l.el.id === "fc-ver" && l.type === "change");
+          return {ver: fc.ver, log: H.log};"""},
+    ], data=latest)
+    v = got["最新"]
+    assert "錯誤" not in v, v
+    assert "看哪一版" in v["top"] and "第 2 版" in v["top"] and "（最新）" in v["top"]
+    assert "上一版還沒看的（第 1 版）" in v["lower"] and "這一版沒處理到" in v["lower"] and "fc-faded" in v["lower"]
+    assert "現在 ▶" in v["right"]
+    posts = [x for x in v["log"] if x[0] == "POST"]
+    assert posts[0][1] == "/api/final/card" and posts[0][2]["版本"] == 1   # 上一版那一區按的：記在第 1 版
+    assert got["換版"]["ver"] == 1 and any(x[0] == "GET" and x[1] == "/api/final?版本=1" for x in got["換版"]["log"])
+    old = _version_data(old=True)
+    got = _run_page([{"名稱": "舊版", "程式": """
+          await renderFinal();
+          const t5 = DATA["卡片"].find((c) => c["第3步鍵"] === "學員段落:T005");
+          H.listeners.length = 0; H.log.length = 0; fcSelect(t5.id, false);
+          const right = document.getElementById("fc-right").innerHTML;
+          await click("fc-pass");
+          const log = H.log.slice(); H.log.length = 0;
+          await fcExport();
+          return {right, lower: document.getElementById("fc-lower").innerHTML, video: document.getElementById("fc-video").getAttribute("src"),
+                  log, exp: H.log};"""}], data=old)
+    o = got["舊版"]
+    assert "錯誤" not in o, o
+    assert 'id="fc-edit"' not in o["right"] and "＋在這裡新增修改" not in o["lower"] and "重做這幾張" not in o["lower"]
+    assert o["video"].startswith("/api/final/video?版本=1&v=")
+    assert [x for x in o["log"] if x[0] == "POST"][0][2]["版本"] == 1
+    assert [x for x in o["exp"] if x[0] == "POST"][0][2] == {"版本": 1}
 
 
 if __name__ == "__main__":
