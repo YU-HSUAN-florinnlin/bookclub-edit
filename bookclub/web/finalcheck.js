@@ -259,7 +259,8 @@ async function fcMarkEdited(c, key = null, isNew = false) {
     const r = await apiPost("/api/final/edited", { "鍵": key || c["第3步鍵"], "新增": isNew }, { quiet: true });
     // 10-15 第2段審查修正（建議，效能）：伺服器連同整頁資料一起回傳；接著的重新整理（fcReload）直接用，不再 GET 一次
     if (r["頁面"]) fc.nextData = { data: r["頁面"], at: Date.now() };
-    if (!r["記了"] && fc.data && fc.data["卡片來源"] === "舊檔") { fc.legacyEdited = true; fcRenderTop(); fcRenderLower(); }
+    // 10-15 第2段審查二修正：舊檔模式就記「這次畫面改過」（不只看 記了）
+    if (fc.data && fc.data["卡片來源"] === "舊檔") { fc.legacyEdited = true; fcRenderTop(); fcRenderLower(); }
     if (r["記了"] && c && !key) {
       c["狀態"] = FC_ST.EDITED;
       fcRecountLocal();
@@ -550,6 +551,7 @@ function fcToggleEdit() {
 }
 
 async function fcDecide(c, result, picks = [], extra = "") {
+  fc.nextData = null;   // 10-15 第2段審查二修正：判斷之後不能再用之前留的整頁資料
   let res;
   try {
     res = await apiPost("/api/final/card", { id: c.id, "結果": result, "選項": picks, "補充": extra });
@@ -801,7 +803,9 @@ async function fcRedo(btn) {
     started = (await apiPost("/api/execute/start", { start: null, end: null, methods: null }, { quiet: true }))["started_at"];
   } catch (e) {
     if (!/已經有.*在跑/.test(e.message)) { alert(`還不能開始：${e.message}`); btn.disabled = false; return; }
-    try { started = (await apiGet("/api/execute"))["started_at"]; } catch (e2) { started = null; }   // 已經在跑的那一次
+    // 10-15 第2段審查二修正：已經在跑的是 AI 執行（running）才記那一次的開始時間；在跑的是分析時 /api/execute 的 started_at
+    // 是上一次執行的，記了到第 4 步會馬上彈回第 5 步
+    try { const ex = await apiGet("/api/execute"); started = ex.running ? ex["started_at"] : null; } catch (e2) { started = null; }
   }
   fcRedoBackSet(started);
   location.hash = "#step4";
@@ -980,6 +984,7 @@ function fcStartWatchTracking() {
 
 // 10-08 宇軒放寬輸出：沒看完也可以輸出，按下去先問一次（都達標就直接輸出不問）
 async function fcExport() {
+  fc.nextData = null;   // 10-15 第2段審查二修正：輸出之後的重新整理不能用之前留的整頁資料
   let r;
   try { r = await apiPost("/api/final/export", {}); } catch (e) { alert(e.message); return; }
   if (r["要確認"]) {

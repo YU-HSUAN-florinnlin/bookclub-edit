@@ -81,8 +81,6 @@ def summary(cards: list[dict]) -> dict:
 
 def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, index: dict) -> list[dict] | None:
     """新紀錄 → 卡片。對不到這一版處理紀錄（版本表裡沒有這一份）＝None（呼叫的地方改讀舊檔）。"""
-    from bookclub.finalcheck import content_print
-
     st = needs.load(workdir)
     by_key = st.alive_by_key()
     flag_of: dict[str, list[str]] = {}   # 整片退回對到的卡（只對到一張的；待釐清卡另外用 舊檔鍵 對）
@@ -112,6 +110,7 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
             gen_round[c] = max(gen_round.get(c, 1), int(g.get("第幾版") or 1))
     vtime = str((v or {}).get("建立時間") or "")
     vprints = (v or {}).get("卡片指紋") or {}
+    now_prints: dict | None = None
     out = []
     for k in sorted(st.cards, key=needs._card_num):
         c = st.cards[k]
@@ -135,8 +134,11 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
         if row and state != EDITED and vprints.get(k) and recs and c["狀態"] == needs.ALIVE:
             # 10-15 第2段審查修正（第 6 條，暫定這一段做）：在第 3 步改過、還沒做進這一版的卡——照組裝時算卡片指紋的同一個算法
             # （`needs._card_prints`：這一版處理紀錄的內容指紋＋第 3 步決定裡會影響聲音的欄位）重算，跟這一版記的不同＝已改，等重做
-            now_print = needs._fp([sorted(content_print(r) for r in recs), needs._sound_print(c)])
-            if now_print != vprints[k]:
+            # 10-15 第2段審查二修正：直接用 `needs._card_prints`（組裝時算卡片指紋的那一支）——自己重算時兩筆同類型同起點
+            # （紀錄鍵一樣）會對不上、永遠「已改」
+            if now_prints is None:
+                now_prints = needs._card_prints(st, log, (v or {}).get("紀錄卡號") or {})
+            if now_prints.get(k) != vprints[k]:
                 state, step3_changed = EDITED, True
         uk = un_of.get(k)
         info = _rec_info(recs)
