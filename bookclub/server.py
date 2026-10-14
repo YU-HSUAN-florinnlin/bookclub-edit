@@ -415,23 +415,32 @@ def load_extras(workdir: Path) -> dict:
     return out
 
 
-def final_target(workdir: Path) -> tuple[Path | None, str | None]:
+TAKE_LATEST = "最新組裝的成品"   # 10-13 審查修正二（建議 4）：final_outputs 用開頭判斷 `拿檔是最新那支`
+
+
+def final_target(workdir: Path) -> tuple[Path | None, str | None, dict | None]:
     """第 5 步要拿出來的成品：按過「輸出成品」的最終成品優先，沒有就用正在檢查的那一支。
-    路徑只從工作區自己的紀錄算，不收網頁傳來的路徑。"""
+    路徑只從工作區自己的紀錄算，不收網頁傳來的路徑。回傳 (路徑, 是哪一種, 過期資訊)。
+    10-13 bug 二（宇軒：輸出後又重做，拿檔按鈕還是拿到重做前的最終成品）：上次輸出的比現在的成品舊
+    （`finalcheck.export_stale`）就跳過最終成品，改拿現在的成品、標「還沒重新輸出」；第三個值是
+    export_stale 的結果（{原因, 說明, 舊檔}），沒過期是 None。「現在的成品」經過 `_current`（新組裝完還沒打開
+    第 5 步也算新的），正在檢查的是舊的那支時改拿最新那支（`finalcheck.take_target`），不會把舊檔拿出去。"""
     from bookclub import finalcheck
 
     workdir = Path(workdir)
-    check = finalcheck.load_check(workdir)
-    out = check.get("輸出成品") or {}
-    if out.get("檔案"):
+    tg = finalcheck.take_target(workdir)
+    out, stale = tg["輸出成品"] or {}, tg["過期"]
+    if out.get("檔案") and not stale:
         p = safe_join(workdir, out["檔案"])
         if p.is_file():
-            return p, "最終成品"
-    prods = finalcheck.products(workdir)
-    cur = check.get("成品影片") if check.get("成品影片") in prods else (prods[0] if prods else None)
-    if cur:
-        return safe_join(workdir, cur), "還在檢查的成品"
-    return None, None
+            return p, "最終成品", None
+    if tg["現在"]:
+        if tg["換成最新"]:
+            what = TAKE_LATEST + "（第 5 步正在檢查的不是這支" + ("；還沒重新輸出）" if stale else "）")
+        else:
+            what = "還在檢查的成品（還沒重新輸出）" if stale else "還在檢查的成品"
+        return safe_join(workdir, tg["現在"]), what, stale
+    return None, None, None
 
 
 # ---------------------------------------------------------------------------
@@ -1119,17 +1128,21 @@ class BookclubServer(ThreadingHTTPServer):
         """`GET /api/final/outputs`：第 5 步「打開成品資料夾」「複製到 Windows 的下載資料夾」要的狀態。"""
         from bookclub import fileio
 
-        target, what = final_target(self.workdir)
+        target, what, stale = final_target(self.workdir)
         kind = fileio.platform_kind()
         with self.pick_lock:
             jobs = [j.to_dict() for j in self.copy_jobs.values() if j.purpose == "成品"]
         return {"系統": kind, "成品": target.name if target else None, "成品是": what,
-                "可以複製到Windows": kind == "wsl", "複製": jobs[-1:] if jobs else []}
+                "可以複製到Windows": kind == "wsl", "複製": jobs[-1:] if jobs else [],
+                # 10-13 bug 二：上次輸出的最終成品比現在的成品舊（null＝沒過期）——按鈕旁黃字、複製到 Windows 先問
+                "上次輸出過期": {"說明": stale["說明"], "舊檔": stale["舊檔"], "原因": stale["原因"]} if stale else None,
+                # 10-13 審查修正二（建議 4）：拿的是最新那支（不是第 5 步正在檢查的這支）——網頁照這欄寫說明
+                "拿檔是最新那支": bool(what and what.startswith(TAKE_LATEST))}
 
     def final_reveal(self) -> dict:
         from bookclub import fileio
 
-        target, _ = final_target(self.workdir)
+        target, _, _ = final_target(self.workdir)   # 10-13 bug 二：過期時 final_target 已改指正在檢查的成品，不擋
         where = target or (self.workdir / "輸出")
         if not where.exists():
             raise FileNotFoundError("還沒有成品資料夾（輸出/），先在第 4 步組裝")
@@ -1138,14 +1151,16 @@ class BookclubServer(ThreadingHTTPServer):
         except RuntimeError as e:   # 叫不起檔案總管：畫面上說人話（不要出現「RuntimeError：」）
             raise ValueError(str(e)) from None
 
-    def final_to_windows(self) -> dict:
+    def final_to_windows(self, confirm: bool = False) -> dict:
         from bookclub import fileio
 
         if fileio.platform_kind() != "wsl":
             raise ValueError("這個按鈕只在 Windows（WSL2）上用得到")
-        target, what = final_target(self.workdir)
+        target, what, stale = final_target(self.workdir)
         if target is None:
             raise FileNotFoundError("還沒有成品影片，先在第 4 步組裝")
+        if stale and not confirm:   # 10-13 bug 二：上次輸出的是重做前的版本，現在這支還沒輸出過——先問一次再複製
+            return {"ok": False, "要確認": True, "成品是": what, "說明": stale["說明"], "舊檔": stale["舊檔"]}
         with self.pick_lock:   # 「有沒有在跑」與「佔位子」同一段鎖：連按兩下也只會有一個
             if self.exporting or any(j.purpose == "成品" and j.running for j in self.copy_jobs.values()):
                 raise ValueError("上一次的複製還沒做完")
@@ -1386,7 +1401,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _serve_file(self, path: Path, content_type: str | None = None) -> None:
+    def _serve_file(self, path: Path, content_type: str | None = None, no_store: bool = False) -> None:
+        """no_store（10-13 bug 一）：第 5 步成品影片不讓瀏覽器快取（同名覆寫後還播到舊的）。"""
         if not path.is_file():
             raise FileNotFoundError(str(path))
         content_type = content_type or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
@@ -1406,7 +1422,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
-        if content_type.split(";")[0] in ("text/html", "text/javascript", "application/javascript", "text/css"):
+        if no_store:
+            self.send_header("Cache-Control", "no-store")
+        elif content_type.split(";")[0] in ("text/html", "text/javascript", "application/javascript", "text/css"):
             self.send_header("Cache-Control", "no-cache")  # 更新工具後重新整理就拿到新版網頁，不會卡在舊快取
         if is_partial:
             self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
@@ -1529,7 +1547,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/final/video":
             from bookclub import finalcheck
 
-            self._serve_file(finalcheck.video_file(server.workdir))
+            self._serve_file(finalcheck.video_file(server.workdir), no_store=True)   # 10-13 bug 一：不快取
         elif path == "/api/final/clip":
             from bookclub import finalcheck
 
@@ -1633,7 +1651,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, server.final_reveal())
             return
         if path == "/api/final/to_windows":
-            self._send_json(200, server.final_to_windows())
+            self._send_json(200, server.final_to_windows(confirm=bool(body.get("confirm"))))
             return
         if path == "/api/projects/switch":
             d = Path(str(body["路徑"])) if body.get("路徑") else safe_join(workroot(), str(body["名稱"]))
@@ -1788,6 +1806,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, fc.add_watched(w, body.get("區段", []), body.get("成品影片")))
             elif path == "/api/final/product":
                 self._send_json(200, fc.choose_product(w, str(body["成品影片"])))
+            elif path == "/api/final/switchnote":   # 10-13 bug 一：「已改成檢查新的成品」顯示過了就清掉
+                self._send_json(200, fc.clear_switch_note(w))
             elif path == "/api/final/sendback":
                 self._send_json(200, fc.send_back(w))
             elif path == "/api/final/export":

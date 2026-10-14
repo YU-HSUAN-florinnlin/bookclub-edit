@@ -14,6 +14,7 @@ import _testtmp  # noqa: F401 — 這支測試建的暫存資料夾跑完自己�
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -222,7 +223,7 @@ def test_final_outputs_reveal_and_copy_to_windows():
 
         # 按過「輸出成品」：最終成品優先
         final = w / "輸出" / "最終成品_0-98_sw.mp4"
-        final.write_bytes(b"f" * 3000)
+        shutil.copy2(prod, final)   # 10-13 bug 二：輸出用 copy2（大小、修改時間相同＝同一份，沒過期）
         (w / "覆核").mkdir()
         (w / "覆核" / "成品檢查.json").write_text(json.dumps({"輸出成品": {"檔案": "輸出/最終成品_0-98_sw.mp4"}}),
                                                 encoding="utf-8")
@@ -245,6 +246,47 @@ def test_final_outputs_reveal_and_copy_to_windows():
         fileio.windows_downloads = no_windows
         code, r = call("POST", "/api/final/to_windows", {})
         assert code == 400 and "Windows" in r["error"]
+
+
+def test_final_target_skips_stale_export_and_windows_asks_first():
+    """10-13 bug 二：上次輸出的最終成品比現在檢查的成品舊（重新組裝過）→ 拿檔按鈕改拿正在檢查的那支，
+    標「還沒重新輸出」；複製到 Windows 沒帶 confirm 先回「要確認」、不開始複製，帶了才複製。"""
+    from bookclub import finalcheck
+
+    w = Path(tempfile.mkdtemp()) / "第三堂_剪輯工作區"
+    (w / "輸出").mkdir(parents=True)
+    prod = w / "輸出" / "成品_0-98_sw.mp4"
+    prod.write_bytes(b"p" * 2000)
+    final = w / "輸出" / "最終成品_0-98_sw_20261013-100000.mp4"
+    shutil.copy2(prod, final)
+    (w / "覆核").mkdir()
+    rec = {"檔案": "輸出/" + final.name, "來源": "輸出/成品_0-98_sw.mp4", "成品檔指紋": finalcheck.product_print(prod)}
+    (w / "覆核" / "成品檢查.json").write_text(json.dumps({"成品影片": "輸出/成品_0-98_sw.mp4", "輸出成品": rec}),
+                                            encoding="utf-8")
+    t, what, stale = srv.final_target(w)
+    assert t.resolve() == final.resolve() and what == "最終成品" and stale is None       # 沒過期：拿最終成品
+    prod.write_bytes(b"q" * 2500)                                                   # 第 4 步重新組裝
+    t, what, stale = srv.final_target(w)
+    assert t.name == prod.name and "還沒重新輸出" in what and stale["舊檔"] == final.name
+    # 舊格式紀錄（沒指紋）：比兩個檔，不一樣就過期
+    (w / "覆核" / "成品檢查.json").write_text(json.dumps({"輸出成品": {"檔案": rec["檔案"], "來源": rec["來源"]}}),
+                                            encoding="utf-8")
+    assert "還沒重新輸出" in srv.final_target(w)[1]
+    with _server(workdir=w) as (httpd, call, data):
+        fileio.platform_kind = lambda *a, **k: "wsl"
+        dl = Path(tempfile.mkdtemp()) / "Downloads"
+        dl.mkdir()
+        fileio.windows_downloads = lambda: dl
+        r = call("GET", "/api/final/outputs")[1]
+        assert r["成品"] == prod.name and "還沒重新輸出" in r["成品是"]
+        assert r["上次輸出過期"]["舊檔"] == final.name and r["上次輸出過期"]["說明"]
+        code, r = call("POST", "/api/final/to_windows", {})
+        assert code == 200 and r["要確認"] and not r["ok"] and r["說明"]
+        assert call("GET", "/api/final/outputs")[1]["複製"] == [] and not list(dl.iterdir())   # 沒有開始複製
+        code, r = call("POST", "/api/final/to_windows", {"confirm": True})
+        assert code == 200 and r["ok"] and "還沒重新輸出" in r["成品是"]
+        _wait_until(lambda: (call("GET", "/api/final/outputs")[1]["複製"] or [{}])[0].get("狀態") == "完成")
+        assert (dl / prod.name).read_bytes() == prod.read_bytes()
 
 
 def test_final_endpoints_without_product_or_project():

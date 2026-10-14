@@ -200,6 +200,10 @@ async function pickBrowsed(path) {
 // ---------------------------------------------------------------------------
 
 let foPollTimer = null;
+// 10-13 審查修正二（建議 5）：確認視窗用伺服器回的 `說明`（換了成品／第 4 步又組裝了，兩種情況說法不同）
+function foStaleAsk(why) {
+  return `${why || "上次輸出的不是現在這一支成品"}。現在這一支還沒按「輸出成品」，要先複製它嗎？（建議檢查完先按輸出成品）`;
+}
 
 async function fileOutInit(el) {
   if (!el) return;
@@ -221,10 +225,16 @@ async function fileOutInit(el) {
     else if (job["狀態"] === "完成") jobHtml = `<span class="badge done">已複製</span> Windows 的下載資料夾：<code>${esc(job["檔名"])}</code>`;
     else if (job["狀態"] === "失敗") jobHtml = `<span class="badge error">複製失敗</span> ${esc(job["錯誤"] || "")}`;
   }
+  // 10-13 bug 二：上次輸出的最終成品比現在的成品舊——黃字說明、複製按鈕改字。
+  // 10-13 審查修正二（建議 3、4）：照伺服器 `拿檔是最新那支` 寫拿的是哪一支（看舊檔或標字版時拿的是最新那支）
+  const stale = d["上次輸出過期"];
+  const takeWhich = d["拿檔是最新那支"] ? "這裡拿的是最新組裝的那支（不是第 5 步正在檢查的這支）" : "這裡拿的是還在檢查的成品";
+  const winLabel = stale ? "複製現在的成品到 Windows（還沒重新輸出）" : "複製成品到 Windows 的下載資料夾";
+  const which = d["成品"] ? `<span class="${stale ? "rv-warnline" : "muted"}">${esc(d["成品是"] || "")}：${esc(d["成品"])}${stale ? `　上次輸出的最終成品（${esc(stale["舊檔"])}）比現在的舊，${takeWhich}` : ""}</span>` : "";
   main.innerHTML = `<div class="fo-row">
       <button class="secondary" id="fo-open" ${d["成品"] ? "" : "disabled"}>${openName}</button>
-      ${d["可以複製到Windows"] ? `<button class="secondary" id="fo-win" ${d["成品"] && !running ? "" : "disabled"}>複製成品到 Windows 的下載資料夾</button>` : ""}
-      ${d["成品"] ? `<span class="muted">${esc(d["成品是"] || "")}：${esc(d["成品"])}</span>` : ""}
+      ${d["可以複製到Windows"] ? `<button class="secondary" id="fo-win" ${d["成品"] && !running ? "" : "disabled"}>${winLabel}</button>` : ""}
+      ${which}
       <span id="fo-msg" role="status">${jobHtml}</span></div>`;
   const msg = main.querySelector("#fo-msg");
   main.querySelector("#fo-open").addEventListener("click", async () => {
@@ -234,7 +244,13 @@ async function fileOutInit(el) {
   const win = main.querySelector("#fo-win");
   if (win) win.addEventListener("click", async () => {
     win.disabled = true;
-    try { await apiPost("/api/final/to_windows", {}, { quiet: true }); }
+    try {
+      const r = await apiPost("/api/final/to_windows", {}, { quiet: true });
+      if (r && r["要確認"]) {   // 10-13 bug 二：上次輸出的是重做前的版本，先問一次
+        if (!confirm(foStaleAsk(r["說明"]))) { win.disabled = false; return; }
+        await apiPost("/api/final/to_windows", { confirm: true }, { quiet: true });
+      }
+    }
     catch (e) { msg.innerHTML = `<span class="badge error">沒有複製</span> ${esc(e.message)}`; win.disabled = false; return; }
     fileOutInit(el);
   });

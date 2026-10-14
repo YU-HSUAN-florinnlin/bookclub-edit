@@ -582,6 +582,580 @@ def test_gen_id_from_generated_file_name():
     assert fc.gen_id({}) is None
 
 
+# ---------- 10-13 bug 一：第 4 步換了範圍或輸出方式再做一次，第 5 步跟著換成這次做出的成品 ----------
+
+T1, T2, T3 = "2026-10-13T10:00:00", "2026-10-13T11:00:00", "2026-10-13T12:00:00"
+PL = [{"src": [0.0, 100.0], "freeze": 0.0}]
+
+
+def _ts(stamp: str) -> float:
+    from datetime import datetime
+
+    return datetime.fromisoformat(stamp).timestamp()
+
+
+def _blog(w: Path, stamp: str, src: str = "render video 0-3", recs: list | None = None) -> dict:
+    log = {"版本": 1, "來源": src, "範圍": [0.0, 100.0], "產生時間": stamp, "片段": PL,
+           "紀錄": recs if recs is not None else [REC, CUT], "未登記的變動": [{"原片": [70.0, 70.4], "長度秒": 0.4, "格數": 20}]}
+    wd.write_json(proclog.log_path(w), log)
+    return log
+
+
+def _prod(w: Path, name: str, stamp: str, after_s: float = 60.0, data: bytes = b"fake-mp4") -> str:
+    """假成品檔（不是真的影片），修改時間設成處理紀錄產生時間之後 after_s 秒。"""
+    import os
+
+    f = w / "輸出" / name
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(data)
+    t = _ts(stamp) + after_s
+    os.utime(f, (t, t))
+    return f"輸出/{name}"
+
+
+class _Len:
+    """假的量長度（假成品不是真影片）：一律 100 秒。"""
+
+    def __enter__(self):
+        self.old = fc.probe_duration
+        fc.probe_duration = lambda p: 100.0
+
+    def __exit__(self, *a):
+        fc.probe_duration = self.old
+
+
+def _bw() -> Path:
+    w = Path(tempfile.mkdtemp()) / "工作區"
+    (w / "輸出").mkdir(parents=True)
+    return w
+
+
+def test_log_products_by_tag_and_mtime():
+    w = _bw()
+    log = _blog(w, T2, "render video 0-3")
+    old = _prod(w, "成品_0-3_sw.mp4", T1)                     # 同標記、上一次做的
+    new_sw = _prod(w, "成品_0-3_hw.mp4", T2, 30)
+    edge = _prod(w, "成品_0-3_smart.mp4", T2, -1.5)            # 早 1.5 秒以內也算（處理紀錄先算好、成品後換上）
+    _prod(w, "成品_0-3_標字版.mp4", T2, 90)                     # 標字版不算
+    _prod(w, "成品_0-3_sw_驗證沒過.mp4", T2, 90)                # 驗證沒過不算
+    _prod(w, "成品_0-2_sw.mp4", T2, 90)                        # 別的範圍不算
+    got = fc.log_products(w, log)
+    assert got == [new_sw, edge], got
+    marks = fc.product_marks(fc.products(w), got)
+    assert marks[old] == "舊的" and marks[new_sw] == "最新" and marks[edge] == "最新"
+    assert marks["輸出/成品_0-3_標字版.mp4"] == "標字版" and marks["輸出/成品_0-2_sw.mp4"] == "舊的"
+    assert fc.log_tag({"來源": "render audio"}) is None and fc.log_products(w, {**log, "來源": "render audio"}) is None
+    assert fc.log_products(w, {**log, "產生時間": "t1"}) is None                # 產生時間讀不懂：推不出來
+    assert set(fc.product_marks([old], None).values()) == {None}               # 推不出來就不標
+
+
+def test_new_range_switches_and_keeps_passes_and_watched():
+    """換範圍再做一次：自動改看新的那支，通過與看過區段保留（refresh 已經用原片時間換算），頂端提示一次。"""
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        old = _prod(w, "成品_0-3_sw.mp4", T1)
+        d = fc.page_data(w)
+        assert d["成品影片"] == old and d["成品標記"][old] == "最新" and not d["檢查的是舊成品"] and d["成品切換提示"] is None
+        k1 = fc.record_key(REC)
+        fc.decide_record(w, k1, fc.PASS)
+        fc.decide_unlogged(w, "70.00", fc.UNLOGGED_OK)
+        fc.add_watched(w, [[0.0, 100.0]])
+        _blog(w, T2, "render video 0-2")                     # 第 4 步改成 0:00–2:00 再跑
+        new = _prod(w, "成品_0-2_sw.mp4", T2)
+        d = fc.page_data(w)
+        assert d["成品影片"] == new and d["成品標記"] == {new: "最新", old: "舊的"} and d["舊成品支數"] == 1
+        assert d["成品切換提示"]["從"] == old and d["成品切換提示"]["到"] == new
+        assert d["成品切換提示"]["原因"] == fc.SWITCH_NEW
+        assert {r["鍵"]: r["結果"] for r in d["紀錄"]}[k1] == fc.PASS            # 通過保留
+        assert d["看過區段"] == [[0.0, 100.0]] and d["未登記的變動"][0]["結果"] == fc.UNLOGGED_OK
+        fc.clear_switch_note(w)
+        assert "成品切換提示" not in fc.load_check(w) and fc.page_data(w)["成品切換提示"] is None
+        assert not fc.export_final(w).get("不能輸出")                              # 最新那支不擋
+
+
+def test_same_tag_new_method_switches():
+    """同標記換輸出方式（sw → hw）：新的那支是最新，舊的 sw 標舊的。"""
+    w = _bw()
+    with _Len():
+        _blog(w, T1)
+        sw = _prod(w, "成品_0-3_sw.mp4", T1)
+        assert fc.page_data(w)["成品影片"] == sw
+        _blog(w, T2)
+        hw = _prod(w, "成品_0-3_hw.mp4", T2)
+        d = fc.page_data(w)
+        assert d["成品影片"] == hw and d["成品標記"] == {hw: "最新", sw: "舊的"}
+        # 兩種輸出方式都通過：兩支都標最新，換來換去看過區段不歸零
+        _blog(w, T3)
+        sw = _prod(w, "成品_0-3_sw.mp4", T3, 30)
+        hw = _prod(w, "成品_0-3_hw.mp4", T3, 60)
+        fc.page_data(w)
+        fc.add_watched(w, [[0.0, 40.0]])
+        d = fc.page_data(w)
+        assert d["成品標記"] == {hw: "最新", sw: "最新"} and d["成品影片"] == hw
+        fc.choose_product(w, sw)
+        assert fc.page_data(w)["看過區段"] == [[0.0, 40.0]]
+
+
+def test_manual_choice_until_log_renews_and_old_blocks_export():
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        old = _prod(w, "成品_0-3_sw.mp4", T1)
+        fc.page_data(w)
+        _blog(w, T2, "render video 0-2")
+        new = _prod(w, "成品_0-2_sw.mp4", T2)
+        fc.page_data(w)
+        fc.add_watched(w, [[0.0, 30.0]])
+        fc.choose_product(w, old)                              # 手動選舊的：看過區段歸零、不會被自動換回來
+        d = fc.page_data(w)
+        assert d["成品影片"] == old and d["看過區段"] == [] and d["檢查的是舊成品"]
+        assert fc.load_check(w)["手動選擇"] == {"成品影片": old, "處理紀錄產生時間": T2, "舊的": True}
+        r = fc.export_final(w)
+        assert r["不能輸出"] and fc.OLD_PRODUCT_BLOCK in r["還差"]["擋下"]
+        try:
+            fc.export_final(w, confirm=True)
+            raise AssertionError("舊成品不能輸出")
+        except ValueError as e:
+            assert "舊的成品" in str(e)
+        fc.choose_product(w, new)                              # 換回最新：接回換走之前看過的
+        assert fc.page_data(w)["看過區段"] == [[0.0, 30.0]]
+        fc.choose_product(w, old)
+        assert fc.page_data(w)["成品影片"] == old
+        _blog(w, T3, "render video 0-2")                       # 處理紀錄換新：手動選擇作廢
+        new2 = _prod(w, "成品_0-2_sw.mp4", T3)
+        d = fc.page_data(w)
+        assert d["成品影片"] == new2 and "手動選擇" not in fc.load_check(w) and not d["檢查的是舊成品"]
+
+
+def test_render_audio_does_not_switch():
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render audio")
+        a = _prod(w, "成品_0-3_sw.mp4", T1, 60)
+        b = _prod(w, "成品_0-2_sw.mp4", T1, 120)
+        fc.page_data(w)
+        fc.choose_product(w, a)
+        _blog(w, T2, "render audio")
+        d = fc.page_data(w)
+        assert d["成品影片"] == a and d["成品切換提示"] is None and set(d["成品標記"].values()) == {None}
+        assert not d["檢查的是舊成品"] and d["舊成品支數"] == 0 and b in d["成品影片清單"]
+
+
+def test_tainted_workdir_clears_only_after_log_time():
+    """修好之前留下的工作區：處理紀錄早就換新了卻一直看舊成品 → 看過區段清空；逐筆、未登記確認只拿掉
+    更新時間不早於處理紀錄產生時間的；整片退回保留、標「在舊成品上標的」。"""
+    w = _bw()
+    with _Len():
+        log = _blog(w, T2, "render video 0-2")
+        old = _prod(w, "成品_0-3_sw.mp4", T1)
+        new = _prod(w, "成品_0-2_sw.mp4", T2)
+        k1, k2 = fc.record_key(REC), fc.record_key(CUT)
+        chk = {"版本": 1, "成品影片": old, "成品長度": 100.0, "處理紀錄產生時間": T2, "指紋版本": fc.PRINT_VERSION,
+               "處理紀錄快照": fc.snapshot(log),
+               "逐筆": {k1: {"結果": "通過", "指紋": fc.record_print(REC), "更新時間": "2026-10-13T10:30:00"},
+                      k2: {"結果": "通過", "指紋": fc.record_print(CUT), "更新時間": "2026-10-13T11:20:00"}},
+               "未登記確認": {"70.00": {"結果": "沒問題", "更新時間": T2}},
+               "整片退回": [{"id": "R001", "成品秒": 5.0, "原片秒": 5.0, "原因": "早的", "建立時間": "2026-10-13T09:00:00"},
+                         {"id": "R002", "成品秒": 9.0, "原片秒": 9.0, "原因": "晚的", "建立時間": "2026-10-13T11:30:00"}],
+               "看過區段": [[0.0, 50.0]]}
+        fc._save(w, {**chk, "手動選擇": {"成品影片": old, "處理紀錄產生時間": T2}})   # 有效的手動選擇：尊重、不動
+        d = fc.page_data(w)
+        assert d["成品影片"] == old and d["看過區段"] == [[0.0, 50.0]]
+        fc._save(w, chk)
+        d = fc.page_data(w)
+        got = fc.load_check(w)
+        assert d["成品影片"] == new and d["看過區段"] == [] and d["成品切換提示"]["原因"] == fc.SWITCH_OLD
+        assert k1 in got["逐筆"] and k2 not in got["逐筆"] and got["未登記確認"] == {}
+        flags = {x["id"]: x for x in got["整片退回"]}
+        assert set(flags) == {"R001", "R002"} and flags["R002"]["在舊成品上標的"] is True and "在舊成品上標的" not in flags["R001"]
+        d2 = fc.page_data(w)                                   # 只發生一次
+        assert d2["成品影片"] == new and k1 in fc.load_check(w)["逐筆"]
+
+
+def test_product_version_changes_after_overwrite():
+    w = _bw()
+    with _Len():
+        _blog(w, T1)
+        _prod(w, "成品_0-3_sw.mp4", T1, 60, b"first")
+        v1 = fc.page_data(w)["成品版本"]
+        _blog(w, T2)
+        _prod(w, "成品_0-3_sw.mp4", T2, 60, b"second-longer")   # 同名覆寫
+        d = fc.page_data(w)
+        assert v1 and d["成品版本"] and d["成品版本"] != v1 and d["成品切換提示"] is None   # 同一支檔名：不算切換
+
+
+def test_export_blocks_old_product_pure():
+    b = fc.export_blocks({"紀錄": []}, {"逐筆": {}}, "輸出/成品_0-3_sw.mp4", True)
+    assert b["擋下"] == [fc.OLD_PRODUCT_BLOCK]
+    assert fc.export_blocks({"紀錄": []}, {"逐筆": {}}, "輸出/成品_0-3_sw.mp4")["擋下"] == []
+
+
+# ---------- 10-13 bug 二：上次輸出的最終成品比現在的成品舊 ----------
+
+def test_copy2_keeps_product_print():
+    """輸出用 shutil.copy2：最終成品跟來源的 [大小, 修改時間] 一樣（舊紀錄沒指紋時靠這個比兩個檔）。"""
+    w = _bw()
+    src = w / _prod(w, "成品_0-3_sw.mp4", T1)
+    dst = w / "輸出" / "最終成品_0-3_sw_20261013-100000.mp4"
+    shutil.copy2(src, dst)
+    assert fc.product_print(src) == fc.product_print(dst) and fc.product_print(src) is not None
+
+
+def test_export_stale_after_rerender_and_cleared_by_new_export():
+    w = _bw()
+    with _Len():
+        _blog(w, T1)
+        cur = _prod(w, "成品_0-3_sw.mp4", T1, 60, b"first")
+        assert fc.page_data(w)["輸出成品過期"] is None                      # 還沒輸出過
+        out = fc.export_final(w, confirm=True)
+        saved = wd.read_json(fc.check_path(w))["輸出成品"]
+        assert saved["成品檔指紋"] == fc.product_print(w / cur) and saved["處理紀錄產生時間"] == T1   # 輸出記欄位
+        assert wd.read_json(fc.check_path(w))["輸出紀錄"][-1]["成品檔指紋"] == saved["成品檔指紋"]
+        assert fc.page_data(w)["輸出成品過期"] is None
+        # 送回重做、第 4 步正在重做（成品檔還沒換）：不算過期
+        chk = wd.read_json(fc.check_path(w))
+        chk["重做中"] = {"項目": ["x"], "時間": T1}
+        wd.write_json(fc.check_path(w), chk)
+        assert fc.page_data(w)["輸出成品過期"] is None
+        # 第 4 步重新組裝（同名成品換新）：過期「成品換新了」
+        _blog(w, T2)
+        _prod(w, "成品_0-3_sw.mp4", T2, 60, b"second-version")
+        d = fc.page_data(w)
+        assert d["輸出成品過期"]["原因"] == "成品換新了" and d["輸出成品過期"]["舊檔"] == Path(out["檔案"]).name, d["輸出成品過期"]
+        assert d["輸出成品"]["檔案"] == out["檔案"]                           # 紀錄不動，只是讀的時候判斷
+        # 只重新組裝、內容沒變（同樣的位元組、修改時間不同）也算舊（調整 3 的代價）
+        _prod(w, "成品_0-3_sw.mp4", T2, 90, b"second-version")
+        assert fc.page_data(w)["輸出成品過期"]["原因"] == "成品換新了"
+        # 再輸出一次：過期清掉、舊的最終成品還在
+        out2 = fc.export_final(w, confirm=True)
+        assert fc.page_data(w)["輸出成品過期"] is None
+        assert (w / out["檔案"]).is_file() and (w / out2["檔案"]).is_file() and out["檔案"] != out2["檔案"]
+
+
+def test_export_stale_other_product_and_old_records():
+    w = _bw()
+    sw = _prod(w, "成品_0-3_sw.mp4", T1)
+    hw = _prod(w, "成品_0-3_hw.mp4", T1, 90, b"hw-version")
+    final = w / "輸出" / "最終成品_0-3_sw_20261013-100000.mp4"
+    shutil.copy2(w / sw, final)
+    rel = "輸出/" + final.name
+    rec = {"檔案": rel, "來源": sw, "成品檔指紋": fc.product_print(w / sw)}
+    assert fc.export_stale(w, {"輸出成品": rec, "成品影片": sw}) is None
+    other = fc.export_stale(w, {"輸出成品": rec, "成品影片": hw})                # 換檢查的那支
+    assert other["原因"] == "換了成品" and "成品_0-3_hw.mp4" in other["說明"]
+    assert fc.export_stale(w, {"輸出成品": rec}, hw)["原因"] == "換了成品"        # 指定現在那支
+    # 舊格式紀錄沒指紋：直接比最終成品與成品兩個檔（copy2 的相等＝同一份）
+    legacy = {"檔案": rel, "來源": sw}
+    assert fc.export_stale(w, {"輸出成品": legacy, "成品影片": sw}) is None
+    _prod(w, "成品_0-3_sw.mp4", T2, 60, b"rerendered")
+    assert fc.export_stale(w, {"輸出成品": legacy, "成品影片": sw})["原因"] == "成品換新了"
+    assert fc.export_stale(w, {"輸出成品": {"檔案": rel}, "成品影片": sw})["原因"] == "成品換新了"   # 連來源都沒記的更舊紀錄
+    assert fc.export_stale(w, {"成品影片": sw}) is None                          # 沒輸出過
+    assert fc.export_stale(w, {"輸出成品": rec, "成品影片": "輸出/不見了.mp4"}) is None   # 現在那支讀不到：不判斷
+
+
+def test_final_target_uses_current_and_never_hands_out_old_product():
+    """10-13 bug 二（審查補）：拿檔按鈕的「現在的成品」經過 _current——第 4 步換範圍做完、還沒打開第 5 步
+    （存檔裡還記著舊的那支）也拿新的；老師手動選舊成品來看時，拿檔按鈕仍然拿最新那支、標示說明。"""
+    from bookclub import server as srv
+
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        old = _prod(w, "成品_0-3_sw.mp4", T1)
+        out = fc.export_final(w, confirm=True)
+        p, what, stale = srv.final_target(w)
+        assert what == "最終成品" and p.name == Path(out["檔案"]).name and stale is None
+        _blog(w, T2, "render video 0-2")                       # 換範圍再組裝；第 5 步還沒打開（沒呼叫 page_data）
+        new = _prod(w, "成品_0-2_sw.mp4", T2)
+        assert fc.load_check(w)["成品影片"] == old             # 存檔裡還是舊的那支
+        p, what, stale = srv.final_target(w)
+        assert p.name == Path(new).name and "還沒重新輸出" in what and stale["原因"] == "換了成品", (p, what, stale)
+        assert fc.load_check(w)["成品影片"] == old             # 只讀不存檔
+        fc.page_data(w)
+        fc.choose_product(w, old)                              # 老師手動選舊的來看
+        assert fc.page_data(w)["檢查的是舊成品"]
+        p, what, stale = srv.final_target(w)
+        assert p.name == Path(new).name and "正在檢查的不是這支" in what and "還沒重新輸出" in what
+        assert stale["原因"] == "換了成品"                      # 跟最新那支比（輸出的是 0-3）
+        assert fc.page_data(w)["輸出成品過期"]["原因"] == "換了成品"   # 頂端提示也跟最新那支比
+        fc.choose_product(w, new)
+        fc.export_final(w, confirm=True)                       # 最新那支輸出後：拿最終成品
+        fc.choose_product(w, old)
+        p, what, stale = srv.final_target(w)
+        assert what == "最終成品" and p.name.startswith("最終成品_0-2_sw_") and stale is None
+        assert fc.page_data(w)["輸出成品過期"] is None            # 看舊的那支、最新那支已輸出：不算過期
+        assert fc.take_pick("a", ["a", "b"], {"a": "舊的", "b": "最新"}) == "b"
+        assert fc.take_pick("a", ["a"], {"a": "舊的"}) == "a" and fc.take_pick("a", ["a", "b"], {"a": None, "b": None}) == "a"
+
+
+def test_server_video_no_store_and_switchnote_route():
+    """`/api/final/video` 送 `Cache-Control: no-store`（同名覆寫後瀏覽器不會播快取的舊檔）；其他檔案照舊；
+    `POST /api/final/switchnote` 清掉切換提示（直接呼叫，不開網路埠）。"""
+    import io
+
+    from bookclub import server as srv
+
+    w = _bw()
+    with _Len():
+        _blog(w, T1)
+        _prod(w, "成品_0-3_sw.mp4", T1)
+        heads, sent = [], []
+
+        class H:
+            server = type("S", (), {"workdir": w})()
+            headers: dict = {}
+            command = "GET"
+
+            def __init__(self):
+                self.wfile = io.BytesIO()
+
+            def send_response(self, code):
+                heads.append(("status", code))
+
+            def send_header(self, k, v):
+                heads.append((k, v))
+
+            def end_headers(self):
+                pass
+
+            def _send_json(self, code, data):
+                sent.append((code, data))
+
+        h = H()
+        srv.Handler._serve_file(h, fc.video_file(w), no_store=True)
+        assert ("Cache-Control", "no-store") in heads and h.wfile.getvalue() == b"fake-mp4"
+        heads.clear()
+        srv.Handler._serve_file(H(), fc.video_file(w))
+        assert not any(k == "Cache-Control" for k, _v in heads)
+        assert "no_store=True" in (REPO_ROOT / "bookclub" / "server.py").read_text(encoding="utf-8").split('"/api/final/video"')[1][:200]
+        chk = fc.load_check(w)
+        chk["成品切換提示"] = {"時間": T1, "從": "a", "到": "b", "原因": fc.SWITCH_NEW}
+        fc._save(w, chk)
+        srv.Handler._route_post_api(H(), "/api/final/switchnote", {})
+        assert sent[-1][0] == 200 and "成品切換提示" not in fc.load_check(w)
+
+
+# ---------- 10-13 審查修正 ----------
+
+def test_old_product_watched_not_carried_to_new_product():
+    """必修 1（審查員重現的情境）：最新那支看 0–30 → 手動換舊檔看 0–80 → 第 4 步再組裝 →
+    新成品的看過區段只有 0–30（換算後），舊檔上看的不帶進來。"""
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        old = _prod(w, "成品_0-3_sw.mp4", T1)
+        fc.page_data(w)
+        log2 = _blog(w, T2, "render video 0-2")
+        _prod(w, "成品_0-2_sw.mp4", T2)
+        fc.page_data(w)
+        assert fc.add_watched(w, [[0.0, 30.0]])["記了"] is True
+        fc.choose_product(w, old)
+        r = fc.add_watched(w, [[0.0, 80.0]], old)                 # 舊檔上看的：不記
+        assert r["記了"] is False and r["看過區段"] == [] and fc.load_check(w)["看過區段"] == []
+        # 再組裝（同範圍、同檔名覆寫），處理紀錄換新
+        log3 = _blog(w, T3, "render video 0-2")
+        new3 = _prod(w, "成品_0-2_sw.mp4", T3)
+        d = fc.page_data(w)
+        want = fc.subtract_ranges(fc.watched_from_source([[0.0, 30.0]], [], PL), fc.changed_windows(log3, fc.snapshot(log2)))
+        assert d["成品影片"] == new3 and d["看過區段"] == want == [[0.0, 30.0]], d["看過區段"]
+        assert "最新成品看過暫存" not in fc.load_check(w)
+
+
+def test_old_product_legacy_watched_replaced_by_kept_or_zeroed():
+    """必修 1：就算舊檔上已經記了看過區段（這次修正之前留下的），處理紀錄換新時改用暫存；
+    內容變了的那幾筆範圍扣掉；暫存的產生時間對不上就歸零。"""
+    for kept_stamp, recs3 in ((T2, [REC]), ("2026-10-13T09:00:00", None)):
+        w = _bw()
+        with _Len():
+            _blog(w, T1, "render video 0-3")
+            old = _prod(w, "成品_0-3_sw.mp4", T1)
+            fc.page_data(w)
+            log2 = _blog(w, T2, "render video 0-2")
+            _prod(w, "成品_0-2_sw.mp4", T2)
+            fc.page_data(w)
+            fc.add_watched(w, [[0.0, 100.0]])
+            fc.choose_product(w, old)
+            chk = fc.load_check(w)
+            chk["看過區段"], chk["看過區段原片"], chk["看過停格原片"] = [[0.0, 80.0]], [[0.0, 80.0]], []   # 舊版記下的
+            chk["最新成品看過暫存"]["處理紀錄產生時間"] = kept_stamp
+            del chk["手動選擇"]["舊的"]                            # 修正之前選的：沒這欄當作舊的
+            fc._save(w, chk)
+            log3 = _blog(w, T3, "render video 0-2", recs3)       # CUT 不見了（第一輪）
+            _prod(w, "成品_0-2_sw.mp4", T3)
+            got = fc.page_data(w)["看過區段"]
+            if kept_stamp == T2:
+                want = fc.subtract_ranges([[0.0, 100.0]], fc.changed_windows(log3, fc.snapshot(log2)))
+                assert got == want and got != [[0.0, 100.0]] and [0.0, 78.0] in got, got   # CUT 附近扣掉、0–80 不是從舊檔來的
+            else:
+                assert got == [], got
+
+
+def test_old_product_cannot_decide():
+    """建議 5：檢查的是舊成品時，逐筆、沒登記的變動、整片退回都回錯誤；換回最新就可以。"""
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        old = _prod(w, "成品_0-3_sw.mp4", T1)
+        fc.page_data(w)
+        _blog(w, T2, "render video 0-2")
+        new = _prod(w, "成品_0-2_sw.mp4", T2)
+        fc.page_data(w)
+        fc.choose_product(w, old)
+        k1 = fc.record_key(REC)
+        for call in (lambda: fc.decide_record(w, k1, fc.PASS), lambda: fc.decide_unlogged(w, "70.00", fc.UNLOGGED_OK),
+                     lambda: fc.add_whole_redo(w, 5.0, "聲音怪")):
+            try:
+                call()
+                raise AssertionError("舊成品不能判斷")
+            except ValueError as e:
+                assert str(e) == fc.OLD_PRODUCT_NO_DECIDE
+        chk = fc.load_check(w)
+        assert chk["逐筆"] == {} and chk["未登記確認"] == {} and chk["整片退回"] == []
+        fc.choose_product(w, new)
+        fc.decide_record(w, k1, fc.PASS)
+        fc.add_whole_redo(w, 5.0, "聲音怪")
+        assert fc.load_check(w)["逐筆"][k1]["結果"] == fc.PASS
+
+
+def test_label_of_other_range_switches_same_range_stays():
+    """建議 3：標字版只有跟這份處理紀錄同範圍的才不自動換；別的範圍的標字版照一般規則換到最新。"""
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        _prod(w, "成品_0-3_sw.mp4", T1)
+        lab = _prod(w, "成品_0-3_標字版.mp4", T1, 90)
+        fc.page_data(w)
+        fc.choose_product(w, lab)
+        _blog(w, T2, "render video 0-3")                       # 同範圍再做一次：標字版留著
+        _prod(w, "成品_0-3_sw.mp4", T2)
+        assert fc.page_data(w)["成品影片"] == lab
+        _blog(w, T3, "render video 0-2")                       # 換範圍：舊範圍的標字版換掉
+        new = _prod(w, "成品_0-2_sw.mp4", T3)
+        d = fc.page_data(w)
+        assert d["成品影片"] == new and d["成品切換提示"]["從"] == lab
+
+
+def test_marks_when_only_label_rendered():
+    """建議 4：推得出標記但一支都沒找到（只做了標字版）→ 別的範圍的標「舊的」、不能輸出；同範圍的不標；None 才全部不標。"""
+    prods = ["輸出/成品_0-3_sw.mp4", "輸出/成品_0-2_sw.mp4", "輸出/成品_0-2_標字版.mp4"]
+    m = fc.product_marks(prods, [], "0-2")
+    assert m == {prods[0]: "舊的", prods[1]: None, prods[2]: "標字版"}
+    assert fc.product_marks(prods, [], None)[prods[0]] is None
+    assert fc.product_marks(prods, None, "0-2")[prods[0]] is None
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        old = _prod(w, "成品_0-3_sw.mp4", T1)
+        fc.page_data(w)
+        _blog(w, T2, "render video 0-2")                       # 這次只做了 0-2 的標字版
+        _prod(w, "成品_0-2_標字版.mp4", T2)
+        d = fc.page_data(w)
+        assert d["成品影片"] == old and d["成品標記"][old] == "舊的" and d["檢查的是舊成品"]
+        r = fc.export_final(w)
+        assert r["不能輸出"] and fc.OLD_PRODUCT_BLOCK in r["還差"]["擋下"]
+
+
+
+# ---------- 10-13 審查修正二 ----------
+
+def test_label_of_other_range_counts_as_old():
+    """必修 1（審查員重現的情境）：最新是 0-2 → 手動選 `成品_0-3_標字版` → 看過不記、不能按通過、不能輸出、
+    選單標舊的；再組裝後新成品的看過區段不含在標字版上看的那段。"""
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        _prod(w, "成品_0-3_sw.mp4", T1)
+        lab = _prod(w, "成品_0-3_標字版.mp4", T1, 90)
+        fc.page_data(w)
+        log2 = _blog(w, T2, "render video 0-2")
+        new = _prod(w, "成品_0-2_sw.mp4", T2)
+        d = fc.page_data(w)
+        assert d["成品影片"] == new and d["成品標記"][lab] == "舊的", d["成品標記"]
+        assert fc.add_watched(w, [[0.0, 30.0]])["記了"] is True
+        fc.choose_product(w, lab)
+        assert fc.load_check(w)["手動選擇"]["舊的"] is True
+        r = fc.add_watched(w, [[0.0, 80.0]], lab)
+        assert r["記了"] is False and fc.load_check(w)["看過區段"] == []
+        try:
+            fc.decide_record(w, fc.record_key(REC), fc.PASS)
+            raise AssertionError("別的範圍的標字版不能判斷")
+        except ValueError as e:
+            assert str(e) == fc.OLD_PRODUCT_NO_DECIDE
+        d = fc.page_data(w)
+        assert d["檢查的是舊成品"] and d["拿檔是最新那支"]
+        assert fc.OLD_PRODUCT_BLOCK in fc.export_final(w)["還差"]["擋下"]
+        log3 = _blog(w, T3, "render video 0-2")                 # 再組裝
+        new3 = _prod(w, "成品_0-2_sw.mp4", T3)
+        d = fc.page_data(w)
+        want = fc.subtract_ranges(fc.watched_from_source([[0.0, 30.0]], [], PL), fc.changed_windows(log3, fc.snapshot(log2)))
+        assert d["成品影片"] == new3 and d["看過區段"] == want == [[0.0, 30.0]], d["看過區段"]
+    # 同範圍的標字版照舊標「標字版」；推不出範圍（tag None）也照舊
+    prods = ["輸出/成品_0-2_sw.mp4", "輸出/成品_0-2_標字版.mp4", "輸出/成品_0-3_標字版.mp4"]
+    m = fc.product_marks(prods, [prods[0]], "0-2")
+    assert m == {prods[0]: "最新", prods[1]: "標字版", prods[2]: "舊的"}
+    assert fc.product_marks(prods, None, None)[prods[2]] == "標字版"
+
+
+def test_take_pick_never_hands_out_label():
+    """建議 2：只做了標字版那次組裝、手動選標字版——拿檔不拿標字版：有正式那支（不是舊的）拿那支，
+    都沒有回 None（當作沒過期、拿最終成品）。"""
+    from bookclub import server as srv
+
+    lab, sw, old = "輸出/成品_0-3_標字版.mp4", "輸出/成品_0-3_sw.mp4", "輸出/成品_0-2_sw.mp4"
+    assert fc.take_pick(lab, [lab], {lab: "標字版"}) is None
+    assert fc.take_pick(lab, [old, lab], {old: "舊的", lab: "標字版"}) is None
+    assert fc.take_pick(lab, [sw, lab], {sw: None, lab: "標字版"}) == sw
+    assert fc.take_pick(lab, [sw, lab], {}) == sw                       # 推不出標記也不拿標字版
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        _prod(w, "成品_0-3_sw.mp4", T1)
+        fc.page_data(w)
+        out = fc.export_final(w, confirm=True)
+        _blog(w, T2, "render video 0-3")                       # 這次只做了標字版
+        _prod(w, "成品_0-3_標字版.mp4", T2)
+        fc.page_data(w)
+        fc.choose_product(w, lab)
+        d = fc.page_data(w)
+        assert d["成品影片"] == lab and d["輸出成品過期"] is None
+        p, what, stale = srv.final_target(w)
+        assert what == "最終成品" and p.name == Path(out["檔案"]).name and stale is None
+        tg = fc.take_target(w)
+        assert tg["現在"] == sw and tg["過期"] is None
+    w = _bw()                                                    # 工作區裡只有標字版、沒輸出過：拿不到東西（不拿標字版）
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        _prod(w, "成品_0-3_標字版.mp4", T1)
+        d = fc.page_data(w)
+        assert d["成品影片"] == lab and d["輸出成品過期"] is None and not d["拿檔是最新那支"]
+        assert srv.final_target(w) == (None, None, None)
+        assert fc.take_target(w)["現在"] is None
+
+
+def test_export_record_print_taken_before_copy():
+    """順手：輸出紀錄的成品檔指紋是複製前那支的（複製途中成品被換掉也記得到複製的那份）。"""
+    w = _bw()
+    with _Len():
+        _blog(w, T1, "render video 0-3")
+        sw = _prod(w, "成品_0-3_sw.mp4", T1)
+        fc.page_data(w)
+        before = fc.product_print(w / sw)
+        real = fc.shutil.copy2
+
+        def swap(a, b):   # 複製完就把成品換掉（模擬第 4 步剛好換檔）
+            r = real(a, b)
+            _prod(w, "成品_0-3_sw.mp4", T1, 120, b"changed-later")
+            return r
+
+        fc.shutil.copy2 = swap
+        try:
+            rec = fc.export_final(w, confirm=True)
+        finally:
+            fc.shutil.copy2 = real
+        assert rec["成品檔指紋"] == before and fc.page_data(w)["輸出成品過期"]["原因"] == "成品換新了"
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

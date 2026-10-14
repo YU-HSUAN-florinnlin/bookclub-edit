@@ -126,6 +126,98 @@ def test_goto_output_time_uses_same_mapping():
     assert fc.goto_output_time(w2, 42.5) == {"成品秒": 42.5, "說明": ""}
 
 
+# ---------- 10-13 bug 一：選單標記、頂端提示多行 ----------
+
+def test_top_lines_multi_and_product_marks():
+    if not NODE:
+        print("（沒有 node，跳過）")
+        return
+    code = ("const esc = (s) => String(s); const fmtStamp = (s) => s;\n" + _fn(FCJS, "fcExportedEarly") + _fn(FCJS, "fcProdMark")
+            + _fn(FCJS, "fcTopLines") + """
+    const st = {"可以輸出": false, "還不能輸出的原因": ["還有 1 筆沒通過"]};
+    const base = {"成品影片": "輸出/成品_0-2_sw.mp4", "舊成品支數": 1};
+    const sw = {"到": "輸出/成品_0-2_sw.mp4", "原因": "第 4 步做了新的成品"};
+    const all = fcTopLines({...base, "輸出成品": {"檔案": "輸出/最終成品_x.mp4", "時間": "t"}, "重做過": {"項目": [1], "時間": "t"}}, st, sw);
+    const stale = fcTopLines({...base, "成品影片": "輸出/成品_0-3_sw.mp4", "檢查的是舊成品": true}, st, sw);
+    const tainted = fcTopLines(base, st, {...sw, "原因": "之前播的是舊成品"});
+    console.log(JSON.stringify({all: all.map((x) => x.html), stale: stale.map((x) => [x.cls, x.html]), tainted: tainted[0].html,
+      marks: [fcProdMark("最新"), fcProdMark("舊的"), fcProdMark("標字版"), fcProdMark(null),
+              fcProdMark("舊的", "輸出/成品_0-3_標字版.mp4")]}));""")
+    got = _node(code)
+    assert len(got["all"]) == 3, got["all"]                                    # 切換、已輸出、重做過各一行（不再互相蓋掉）
+    assert "已改成檢查 <code>成品_0-2_sw.mp4</code>" in got["all"][0] and "1 支舊成品" in got["all"][0]
+    assert "已輸出" in got["all"][1] and "重做了 1 筆" in got["all"][2]
+    assert got["stale"][0][0] == "fc-stale" and "舊的成品" in got["stale"][0][1]   # 舊檔：紅字常駐；切換提示指的不是這支就不顯示
+    assert len(got["stale"]) == 2 and "還沒檢查完" in got["stale"][1][1]
+    assert "處理紀錄換新之後按的判斷已拿掉、要重看" in got["tainted"]
+    assert got["marks"] == ["（最新）", "（舊的，時間軸對不上）", "", "", "（舊的標字版，時間軸對不上）"]   # 10-13 審查修正二（必修 1）
+
+
+def test_top_lines_stale_export_and_unchecked_together():
+    """10-13 bug 二：上次輸出的比現在的成品舊——「要重新輸出」一行（不顯示早輸出警語）、「還沒檢查完」也要出現；
+    沒過期照舊「已輸出」、不顯示「還沒檢查完」。"""
+    if not NODE:
+        print("（沒有 node，跳過）")
+        return
+    code = ("const esc = (s) => String(s); const fmtStamp = (s) => s;\n" + _fn(FCJS, "fcExportedEarly") + _fn(FCJS, "fcStaleWhen")
+            + _fn(FCJS, "fcTopLines") + """
+    const st = {"可以輸出": false, "還不能輸出的原因": ["還有 1 筆沒通過"]};
+    const out = {"檔案": "輸出/最終成品_x.mp4", "時間": "t", "檢查完才輸出": false, "看過百分比": 40};
+    const base = {"成品影片": "輸出/成品_0-2_sw.mp4", "輸出成品": out, "重做過": {"項目": [1], "時間": "t"}};
+    const stale = fcTopLines({...base, "輸出成品過期": {"原因": "成品換新了", "說明": "x", "舊檔": "最終成品_x.mp4"}}, st, null);
+    const fresh = fcTopLines({...base, "輸出成品過期": null}, st, null);
+    console.log(JSON.stringify({stale: stale.map((x) => [x.cls, x.html]), fresh: fresh.map((x) => x.html)}));""")
+    got = _node(code)
+    s = got["stale"]
+    assert len(s) == 3, s                                                          # 要重新輸出、重做過、還沒檢查完
+    assert s[0][0] == "fc-export-stale" and "要重新輸出" in s[0][1] and "第 4 步重新組裝之前的版本" in s[0][1]
+    assert "還在檢查的成品" in s[0][1] and "還沒看完" not in s[0][1] and "已輸出" not in s[0][1]
+    assert "重做了 1 筆" in s[1][1] and "還沒檢查完" in s[2][1]
+    f = got["fresh"]
+    assert len(f) == 2 and "已輸出" in f[0] and "還沒看完（看過 40%）" in f[0] and not any("還沒檢查完" in x for x in f)
+
+
+def test_export_button_and_fileio_stale_wiring():
+    rt = _fn(FCJS, "fcRenderTop")
+    assert 'ex.classList.toggle("fc-export-due"' in rt and "現在的成品還沒輸出過" in rt
+    fio = (WEB / "fileio.js").read_text(encoding="utf-8")
+    assert '"上次輸出過期"' in fio and "複製現在的成品到 Windows（還沒重新輸出）" in fio
+    assert 'r["要確認"]' in fio and 'confirm(foStaleAsk(r["說明"]))' in fio and "{ confirm: true }" in fio
+    assert 'd["拿檔是最新那支"]' in fio   # 10-13 審查修正二（建議 3、4）
+
+
+def test_video_url_carries_version_and_old_choice_confirms():
+    assert '"成品影片"] + "|" + (d["成品版本"] || "")' in FCJS
+    rf = _fn(FCJS, "renderFinal")
+    assert 'marks[prod.value] === "舊的" && !confirm(FC_OLD_PRODUCT_ASK)' in rf and "/api/final/switchnote" in rf
+
+
+def test_flag_note_and_old_product_wording():
+    """10-13 審查修正：整片退回有 `在舊成品上標的` 時畫面加附註（必修 2）；選舊檔的確認文字（建議 5）；
+    看舊檔又過期時頂端黃字說按鈕拿的是最新那支（bug 二遺留）。"""
+    assert "${fcFlagNote(x)}" in _fn(FCJS, "fcRenderWhole")
+    assert "在舊的上面不能按通過或退回" in FCJS
+    if not NODE:
+        print("（沒有 node，跳過）")
+        return
+    code = ("const esc = (s) => String(s); const fmtStamp = (s) => s;\n" + _fn(FCJS, "fcFlagNote") + _fn(FCJS, "fcExportedEarly")
+            + _fn(FCJS, "fcStaleWhen") + _fn(FCJS, "fcTopLines") + """
+    const st = {"可以輸出": true, "還不能輸出的原因": []};
+    const out = {"檔案": "輸出/最終成品_x.mp4", "時間": "t"};
+    const stale = {"原因": "換了成品", "說明": "x", "舊檔": "最終成品_x.mp4"};
+    const oldLines = fcTopLines({"成品影片": "輸出/成品_0-3_sw.mp4", "檢查的是舊成品": true, "拿檔是最新那支": true, "輸出成品": out, "輸出成品過期": stale}, st, null);
+    const labelLines = fcTopLines({"成品影片": "輸出/成品_0-2_標字版.mp4", "拿檔是最新那支": true, "輸出成品": out, "輸出成品過期": stale}, st, null);
+    const curLines = fcTopLines({"成品影片": "輸出/成品_0-2_sw.mp4", "輸出成品": out, "輸出成品過期": stale}, st, null);
+    console.log(JSON.stringify({a: fcFlagNote({"在舊成品上標的": true}), b: fcFlagNote({}),
+      old: oldLines.map((x) => x.html), cur: curLines.map((x) => x.html), label: labelLines.map((x) => x.html)}));""")
+    got = _node(code)
+    assert "（在舊成品上標的，時間可能對不上）" in got["a"] and got["b"] == ""
+    assert "下面按鈕拿到的是最新組裝的那支（不是現在檢查的這支）" in got["old"][1] and "還在檢查的成品" not in got["old"][1]
+    assert "下面按鈕拿到的是現在還在檢查的成品" in got["cur"][0]
+    # 10-13 審查修正二（建議 4、5）：看標字版（不是舊的）時也照 `拿檔是最新那支` 寫；原因「換了成品」寫「換成品之前的版本」
+    assert "最新組裝的那支" in got["label"][0] and "換成品之前的版本" in got["label"][0] and "換了成品" not in got["label"][0]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

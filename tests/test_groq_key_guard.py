@@ -8,8 +8,10 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from bookclub import tts
-from bookclub.execute import execute_key_problem
+# 10-13 審查修正二（順手）：比照其他測試檔，先把專案資料夾加進 sys.path（在 worktree 裡跑測到的是這個分支的程式）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from bookclub import tts  # noqa: E402
+from bookclub.execute import execute_key_problem  # noqa: E402
 sys.path.insert(0, str(Path(__file__).parent))
 from test_tts import SR, FakeSynth  # noqa: E402
 
