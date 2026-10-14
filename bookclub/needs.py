@@ -893,7 +893,8 @@ def add_version(workdir: str | Path, log: dict, *, note: str | None = None) -> d
 
 def _keep_prev_watched(w: Path, prev: dict | None) -> None:
     """10-15 第3段審查修正（建議）：建新版時，上一版在成品檢查檔裡的看過區段（還是上一版那份處理紀錄的）補進 `看過.json`
-    ——升級前看的、沒經過 `add_watched` 雙寫的也留得住，之後切回上一版看過比例不會是 0%。成品檢查檔換新後就沒有這一份了。"""
+    ——升級前看的、沒經過 `add_watched` 雙寫的也留得住，之後切回上一版看過比例不會是 0%。成品檢查檔換新後就沒有這一份了。
+    檢查的成品影片不是上一版 `成品檔` 裡的、或手動換到舊成品（`手動選擇.舊的`）時不補（那些看過區段是別支成品的時間）。"""
     if not prev:
         return
     try:
@@ -901,6 +902,9 @@ def _keep_prev_watched(w: Path, prev: dict | None) -> None:
 
         check = fc.load_check(w)
         if check.get("處理紀錄產生時間") != prev.get("時間") or not check.get("看過區段"):
+            return
+        # 10-15 第3段審查二修正：檢查的那支要是上一版的成品——手動換到舊成品（`手動選擇.舊的`）看過的不是上一版的時間
+        if (check.get("手動選擇") or {}).get("舊的") or check.get("成品影片") not in (prev.get("成品檔") or []):
             return
         n = int(prev["版本號"])
         have = watched(w, n)

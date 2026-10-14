@@ -328,28 +328,55 @@ def test_old_version_export_asks_when_not_fully_watched():
 
 
 def test_new_version_keeps_prev_watched():
-    """10-15 第3段審查修正（建議）：建新版時，上一版在成品檢查檔的看過區段補進看過.json（升級前看的也留得住）。"""
+    """10-15 第3段審查修正（建議）：建新版時，上一版在成品檢查檔的看過區段補進看過.json（升級前看的也留得住）。
+    審查二修正：檢查的成品影片要是上一版 `成品檔` 裡的那支，手動換到舊成品（`手動選擇.舊的`）看過的不補。"""
     w = tn._fresh()
     tn._quiet(needs.upgrade, w)
     _assemble(w, _t(1), tn._records())
     chk = fc.load_check(w)
+    chk["成品影片"] = "輸出/成品_v1_0-3_sw.mp4"
     chk["看過區段"] = [[0.0, 30.0]]   # 沒經過 add_watched 雙寫（例如升級前看的）
     tn._quiet(fc._save, w, chk)
     assert needs.watched(w, 1) == []
     # 組裝寫處理紀錄、建版本的那一刻，成品檢查檔還是上一版那一份（打開第 5 步才換新）
     log = tn._log(stamp=_t(2))
     log["版本號"] = needs.next_version_no(w)
+    rel2 = tn._prod(w, "成品_v2_0-3_sw.mp4", _t(2), after_s=1.0)
     tn._setup(w, log, None)
     tn._quiet(needs.add_version, w, log)
+    needs.add_product(w, _t(2), rel2)
     assert needs.watched(w, 1) == [[0.0, 30.0]] and needs.watched(w, 2) == []
     # 成品檢查檔換成第 2 版那一份：再建第 3 版時補的是第 2 版（第 1 版不會被第 2 版的時間汙染）
     chk = fc.refresh(fc.load_check(w), log)
+    chk["成品影片"] = rel2
     chk["看過區段"] = [[50.0, 60.0]]
     tn._quiet(fc._save, w, chk)
     log3 = tn._log(stamp=_t(3))
+    log3["版本號"] = needs.next_version_no(w)
+    rel3 = tn._prod(w, "成品_v3_0-3_sw.mp4", _t(3), after_s=1.0)
     tn._setup(w, log3, None)
     tn._quiet(needs.add_version, w, log3)
+    needs.add_product(w, _t(3), rel3)
     assert needs.watched(w, 1) == [[0.0, 30.0]] and needs.watched(w, 2) == [[50.0, 60.0]], needs.watched(w, 2)   # 第 2 版那一份補進第 2 版，第 1 版不動
+    # 審查二：手動換到舊成品（第 1 版那支，`手動選擇.舊的`）看過的，建第 4 版時不併進第 3 版
+    chk = fc.refresh(fc.load_check(w), log3)
+    chk["成品影片"] = "輸出/成品_v1_0-3_sw.mp4"
+    chk["手動選擇"] = {"成品影片": chk["成品影片"], "處理紀錄產生時間": _t(3), "舊的": True}
+    chk["看過區段"] = [[100.0, 120.0]]
+    tn._quiet(fc._save, w, chk)
+    log4 = tn._log(stamp=_t(4))
+    tn._setup(w, log4, None)
+    tn._quiet(needs.add_version, w, log4)
+    assert needs.watched(w, 3) == [], needs.watched(w, 3)
+    # 沒記 `舊的`、但檢查的那支不在上一版的成品檔裡：也不併
+    chk["處理紀錄產生時間"] = _t(4)
+    chk.pop("手動選擇")
+    chk["成品影片"] = rel2
+    tn._quiet(fc._save, w, chk)
+    log5 = tn._log(stamp=_t(5))
+    tn._setup(w, log5, None)
+    tn._quiet(needs.add_version, w, log5)
+    assert needs.watched(w, 4) == [] and needs.watched(w, 2) == [[50.0, 60.0]] and needs.watched(w, 1) == [[0.0, 30.0]]
 
 
 def _serve(w: Path):
