@@ -1233,8 +1233,10 @@ class BookclubServer(ThreadingHTTPServer):
                     return {"started": False, "error": why}
             self.exec_state = self._fresh_run_state()
             self.exec_state.update(running=True, started_at=time.time(), 防睡眠=AWAKE_STARTING)
+            started = self.exec_state["started_at"]
             threading.Thread(target=self._exec_job, args=(opts,), daemon=True).start()
-        return {"started": True}
+        # 10-15 第2段審查修正（建議）：回傳伺服器記的開始時間——第 5 步「重做這幾張」跑完自動跳回，比的是這個（不比瀏覽器時鐘）
+        return {"started": True, "started_at": started}
 
     def _has_returned(self) -> bool:
         """10-05 #97：第 5 步有沒有退回（或上次重做沒做完）——有的話「只重新組裝」照原本的做法（退回的那幾筆一起收尾），不另外擋。"""
@@ -1553,20 +1555,11 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/audio":
             self._handle_audio(query)
         elif path == "/api/final":
-            from bookclub import finalcards, finalcheck, needs
-
             # 10-15 第5步2.0 第2段：第 5 步用第 3 步的卡片——第 3 步的資料在算之前先拍快照、算的時候不寫舊檔（needs.compute_page），
             # 同一份給修改需求紀錄同步用，不另外算
-            snap = _needs_snap(server)
-            try:
-                page = needs.compute_page(server.workdir)
-            except Exception as e:  # noqa: BLE001 — 第 3 步的資料算不出來：卡片照樣列（不能按「改」）
-                print(f"[成品檢查] ⚠️ 第 3 步的卡片讀不到（第 5 步的「改」先不能用）：{type(e).__name__}")
-                page, snap = None, None
+            page, snap = _final_step3(server)
             _needs_ensure(server, page, snap)   # 10-14 第5步2.0 第1段
-            data = finalcheck.page_data(server.workdir)
-            data.update(finalcards.page_part(server.workdir, page, running=server.exec_running()))
-            self._send_json(200, data)
+            self._send_json(200, _final_data(server, page))
         elif path == "/api/final/video":
             from bookclub import finalcheck
 
@@ -1840,7 +1833,12 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/final/edited":   # 10-15：第 5 步按「改」改過 → 那張卡「已改，等重做」
                 from bookclub import finalcards
 
-                self._send_json(200, finalcards.edited(w, str(body["鍵"]), bool(body.get("新增"))))
+                # 10-15 第2段審查修正（建議，效能）：第 3 步的資料這裡算一次——同步卡片用它、也連同整頁資料一起回傳
+                # （網頁接著的重新整理直接用這一份，不再 GET /api/final 重算一次第 3 步）
+                page, snap = _final_step3(server)
+                r = finalcards.edited(w, str(body["鍵"]), bool(body.get("新增")), page=page, snap=snap)
+                r["頁面"] = _final_data(server, page)
+                self._send_json(200, r)
             elif path == "/api/final/sendback":
                 self._send_json(200, fc.send_back(w))
             elif path == "/api/final/export":
@@ -1915,6 +1913,29 @@ def open_browser_hint(port: int, plan: str) -> str:
     if plan == "wsl":
         return f"[網頁伺服器] 這是 WSL2，不會自動開瀏覽器：請在 Windows 的瀏覽器（Edge 或 Chrome）開 {url}"
     return f"[網頁伺服器] 請在瀏覽器開 {url}"
+
+
+def _final_step3(server) -> tuple[dict | None, dict | None]:
+    """10-15 第5步2.0 第2段：第 5 步要的第 3 步資料——先拍快照、再算（算的時候不寫舊檔，needs.compute_page）。
+    算不出來＝(None, None)：卡片照樣列，只是不能按「改」。"""
+    from bookclub import needs
+
+    snap = _needs_snap(server)
+    try:
+        return needs.compute_page(server.workdir), snap
+    except Exception as e:  # noqa: BLE001
+        print(f"[成品檢查] ⚠️ 第 3 步的卡片讀不到（第 5 步的「改」先不能用）：{type(e).__name__}")
+        return None, None
+
+
+def _final_data(server, page: dict | None) -> dict:
+    """`GET /api/final` 的整頁資料（成品檢查＋第 5 步卡片）。10-15 第2段審查修正（建議，效能）：`review.item_index` 只算一次，兩邊共用。"""
+    from bookclub import finalcards, finalcheck
+
+    index = finalcheck._index(server.workdir)
+    data = finalcheck.page_data(server.workdir, index=index)
+    data.update(finalcards.page_part(server.workdir, page, running=server.exec_running(), index=index))
+    return data
 
 
 def _needs_snap(server) -> dict | None:

@@ -15,6 +15,7 @@ import _testtmp  # noqa: F401
 import json
 import sys
 import threading
+import time
 import urllib.request
 from pathlib import Path
 
@@ -129,12 +130,192 @@ def test_edited_then_next_version_clears():
         raise AssertionError("已改的不能按通過")
     except ValueError:
         pass
-    # 第 4 步組裝出新的一版 → 已改清掉（做進這一版了）
-    log2 = tn._log(stamp=T2)
+    # 第 4 步組裝出新的一版 → 已改清掉（做進這一版了）。
+    # 10-15 第2段審查修正：只清「改」早於處理紀錄產生時間的——處理紀錄的時間用現在（以前用 T2＝比改的時間早，現在不會清）
+    log2 = tn._log(stamp=_now())
     tn._setup(w, log2, None)
     tn._quiet(needs.add_version, w, log2)
     c2 = _by(finalcards.build(w)["卡片"], "學員段落:T005")
     assert c2["狀態"] == needs.NOT_SEEN and not needs.load(w).cards[c2["卡號"]].get("等重做")
+
+
+def test_edited_after_log_made_is_not_cleared():
+    """10-15 第2段審查修正（建議）：處理紀錄產生之後才改的（這一版沒做進去），建版本時不清「已改，等重做」。"""
+    w, log = _ready()
+    finalcards.edited(w, "學員段落:T005")
+    log2 = tn._log(stamp="2026-10-12T12:00:00")   # 比「改」的時間早
+    tn._setup(w, log2, None)
+    tn._quiet(needs.add_version, w, log2)
+    c = _by(finalcards.build(w)["卡片"], "學員段落:T005")
+    assert c["狀態"] == finalcards.EDITED and needs.load(w).cards[c["卡號"]]["等重做"]["起因"] == needs.WHY_EDITED
+
+
+def _now() -> str:
+    from datetime import datetime, timedelta
+
+    return (datetime.now() + timedelta(seconds=1)).isoformat(timespec="seconds")
+
+
+# ---------- 10-15 第2段審查修正 ----------
+
+def _ready_shared(results: dict | None = None, *, legacy: bool = False):
+    """名字卡（名字:1）＋疊到它的重疊卡（重疊:O69.60）：各有一筆自己的處理紀錄，另外共用一筆（覆核項目兩個都有）。"""
+    w = tn._fresh()
+    recs = tn._records() + [tn._rec("重疊", 69.6, 70.1, ["重疊:O69.60"], "生成/學員/O1.wav"),
+                            tn._rec("疊放", 70.0, 70.5, ["名字:1", "重疊:O69.60"], "生成/老師/S009.wav")]
+    log = tn._log(recs=recs)
+    tn._setup(w, log, tn._check(log, results or {}))
+    tn._quiet(needs.upgrade, w)
+    if legacy:
+        needs.note_error(w, "第5步存檔", RuntimeError("boom"))
+    return w, log
+
+
+def _shared_flow(legacy: bool):
+    w, log = _ready_shared(legacy=legacy)
+    cards = finalcards.build(w)["卡片"]
+    name, ov = _by(cards, "名字:1"), _by(cards, "重疊:O69.60")
+    assert "疊放@70.00" in name["紀錄鍵"] and "疊放@70.00" in ov["紀錄鍵"] and ov["id"] in name["共用"]
+    # 退回名字卡 → 重疊卡連帶退回（畫面標「連帶」：跟 #名字 共用）
+    r = tn._quiet(finalcards.decide, w, name["id"], needs.RETURNED, ["念錯字"], "")
+    assert any(m["id"] == ov["id"] and m["狀態"] == needs.RETURNED for m in r["共用卡片"])
+    ov2 = _by(finalcards.build(w)["卡片"], "重疊:O69.60")
+    assert ov2["狀態"] == needs.RETURNED and [x["id"] for x in ov2["連帶自"]] == [name["id"]]
+    assert _by(finalcards.build(w)["卡片"], "名字:1")["連帶自"] == []
+    # 按重疊卡通過：自己那筆通過、共用那筆跳過（名字卡還退回）→ 回傳告訴畫面；名字卡的退回還在（以前會被蓋掉）
+    r = tn._quiet(finalcards.decide, w, ov["id"], needs.PASSED)
+    assert [x["id"] for x in r["跳過"]] == [name["id"]] and r["卡片"]["狀態"] == needs.RETURNED and r["卡片"]["連帶自"]
+    rows = fc.load_check(w)["逐筆"]
+    assert rows["重疊@69.60"]["結果"] == fc.PASS and rows["疊放@70.00"]["結果"] == fc.REDO
+    assert rows["疊放@70.00"]["原因"] == "念錯字"
+    cards = finalcards.build(w)["卡片"]
+    assert _by(cards, "名字:1")["狀態"] == needs.RETURNED and _by(cards, "名字:1")["退回原因"]["補充" if legacy else "選項"]
+    # 名字卡通過 → 共用那筆沒人退回了 → 通過；重疊卡（自己那筆早就通過）跟著通過
+    r = tn._quiet(finalcards.decide, w, name["id"], needs.PASSED)
+    assert r["跳過"] == [] and any(m["id"] == ov["id"] and m["狀態"] == needs.PASSED for m in r["共用卡片"])
+    cards = finalcards.build(w)["卡片"]
+    assert _by(cards, "名字:1")["狀態"] == needs.PASSED and _by(cards, "重疊:O69.60")["狀態"] == needs.PASSED
+    # 兩張都自己退回 → 取消其中一張：共用那筆還是退回、原因只剩另一張的
+    tn._quiet(finalcards.decide, w, name["id"], needs.RETURNED, [], "名字念錯")
+    tn._quiet(finalcards.decide, w, ov["id"], needs.RETURNED, [], "重疊太大聲")
+    row = fc.load_check(w)["逐筆"]["疊放@70.00"]
+    assert set(row["各卡原因"]) == {"名字:1", "重疊:O69.60"} and row["原因"] == "名字念錯；重疊太大聲"
+    r = tn._quiet(finalcards.decide, w, ov["id"], None)
+    row = fc.load_check(w)["逐筆"]["疊放@70.00"]
+    assert row["結果"] == fc.REDO and row["原因"] == "名字念錯" and list(row["各卡原因"]) == ["名字:1"]
+    assert "重疊@69.60" not in fc.load_check(w)["逐筆"] and [x["id"] for x in r["跳過"]] == [name["id"]]
+    n = _by(finalcards.build(w)["卡片"], "名字:1")
+    assert n["狀態"] == needs.RETURNED and n["連帶自"] == []
+    if not legacy:   # 新紀錄：名字卡的原因是它自己的那一句（共用那筆記了各卡原因）
+        assert n["退回原因"]["補充"] == "名字念錯"
+    return w
+
+
+def test_shared_record_return_not_overwritten_by_other_card_pass():
+    """必修 1：名字卡＋疊到它的重疊卡共用一筆處理紀錄。退回名字卡、按重疊卡通過 → 名字卡的退回還在。"""
+    _shared_flow(legacy=False)
+
+
+def test_shared_record_legacy_mode_same_rule():
+    """必修 1：舊檔模式（新紀錄不能用）同一套規則。"""
+    w = _shared_flow(legacy=True)
+    assert finalcards.build(w)["來源"] == finalcards.SRC_OLD
+
+
+def test_shared_record_old_file_without_owner_keeps_old_behaviour():
+    """舊工具寫的退回（沒有 各卡原因）：誰按通過都直接改（跟以前一樣，不會卡住）。"""
+    w, log = _ready_shared({"疊放@70.00": ["退回重做", "舊的"]})
+    ov = _by(finalcards.build(w)["卡片"], "重疊:O69.60")
+    assert ov["狀態"] == needs.RETURNED and ov["連帶自"] == []
+    r = tn._quiet(finalcards.decide, w, ov["id"], needs.PASSED)
+    assert r["跳過"] == [] and fc.load_check(w)["逐筆"]["疊放@70.00"]["結果"] == fc.PASS
+
+
+def test_step5_new_card_without_record_in_new_version_not_stuck():
+    """必修 2：第 5 步新增的卡，重做出來的這一版沒有它的處理紀錄（例如新增消音又改回還原、或沒對到）→ 不再永遠「還沒生成」，
+    「重做這幾張」消失。"""
+    from bookclub import review
+
+    w, log = _ready()
+    m = review.manual_edit(w, {"類型": "局部消音", "start": 100.0, "end": 101.0, "方式": review.MUTE_WAYS[0]})
+    key = f"局部消音:{m['id']}"
+    assert finalcards.edited(w, key, new=True)["記了"]
+    assert needs.load(w).cards[_by(finalcards.build(w)["卡片"], key)["卡號"]]["來源"] == needs.SRC_STEP5
+    assert finalcards.build(w)["統計"]["要重做"] == 1
+    log2 = tn._log(stamp=_now())   # 重做出來的這一版：沒有這張的處理紀錄
+    tn._setup(w, log2, None)
+    tn._quiet(needs.add_version, w, log2)
+    part = finalcards.build(w)
+    assert not any(c.get("第3步鍵") == key for c in part["卡片"]) and part["統計"]["要重做"] == 0
+    # 改還原的那一條路也一樣：新增 → 還原 → 重做 → 按鈕消失
+    m2 = review.manual_edit(w, {"類型": "局部消音", "start": 120.0, "end": 121.0, "方式": review.MUTE_WAYS[0]})
+    k2 = f"局部消音:{m2['id']}"
+    finalcards.edited(w, k2, new=True)
+    review.save_mute(w, {"id": m2["id"], "狀態": "還原"})
+    finalcards.edited(w, k2)
+    assert finalcards.build(w)["統計"]["要重做"] == 1
+    time.sleep(1.1)   # 處理紀錄產生時間要跟上一份不一樣（同一個時間＝同一版）
+    log3 = tn._log(stamp=_now())
+    tn._setup(w, log3, None)
+    tn._quiet(needs.add_version, w, log3)
+    assert finalcards.build(w)["統計"]["要重做"] == 0
+
+
+def test_no_matching_version_reads_legacy():
+    """建議：新紀錄對不到這一版處理紀錄（版本表沒有這一份）→ 讀舊檔，不拿上一版湊。"""
+    w, log = _ready({"學員重念@40.00": ["退回重做", "x"]})
+    log2 = tn._log(stamp=T2)
+    tn._setup(w, log2, tn._check(log2, {"學員重念@55.00": ["退回重做", "y"]}))   # 舊工具寫的、還沒同步成版本
+    part = finalcards.build(w)
+    assert part["來源"] == finalcards.SRC_OLD
+    t3 = _by(part["卡片"], "學員段落:T003")
+    assert t3["狀態"] == needs.RETURNED and t3["退回原因"]["補充"] == "y"
+
+
+def test_step3_edit_shows_edited_until_redone():
+    """第 6 條：在第 3 步改過、這一版還沒做進去的卡，聲音指紋跟這一版的卡片指紋不同 → 已改，等重做（算進重做這幾張）；
+    只改「問老師」不算；重做出新的一版之後就不是了。"""
+    from bookclub import turns as _turns
+
+    w, log = _ready()
+    _turns.save_turn(w, "T005", {"問老師": True})
+    needs.sync_cards(w)
+    assert _by(finalcards.build(w)["卡片"], "學員段落:T005")["狀態"] == needs.NOT_SEEN
+    _turns.save_turn(w, "T005", {"校對稿": "第三步改過的字"})
+    needs.sync_cards(w)
+    part = finalcards.build(w)
+    c = _by(part["卡片"], "學員段落:T005")
+    assert c["狀態"] == finalcards.EDITED and c["第3步改過"] and part["統計"]["要重做"] == 1
+    try:
+        tn._quiet(finalcards.decide, w, c["id"], needs.PASSED)
+        raise AssertionError("已改的不能按通過")
+    except ValueError:
+        pass
+    log2 = tn._log(stamp=_now())
+    tn._setup(w, log2, None)
+    tn._quiet(needs.add_version, w, log2)
+    c2 = _by(finalcards.build(w)["卡片"], "學員段落:T005")
+    assert c2["狀態"] == needs.NOT_SEEN and not c2["第3步改過"]
+
+
+def test_developer_setting():
+    """「先照舊的紀錄顯示」只在開發者設定顯示：settings.toml 最上層 `developer = true`；沒有設定檔＝沒開。"""
+    import os
+
+    from bookclub import config
+
+    old = os.environ["BOOKCLUB_DATA_DIR"]
+    try:
+        for text, want in ((None, False), ('developer = true\n[server]\nport = 1\n', True), ('developer = "yes"\n', False)):
+            d = Path(tn.tempfile.mkdtemp())
+            if text is not None:
+                (d / "settings.toml").write_text(text, encoding="utf-8")
+            os.environ["BOOKCLUB_DATA_DIR"] = str(d)
+            config.load_settings.cache_clear()
+            assert tn._quiet(config.developer) is want, text
+    finally:
+        os.environ["BOOKCLUB_DATA_DIR"] = old
+        config.load_settings.cache_clear()
 
 
 def test_reason_text_pure():
@@ -178,6 +359,8 @@ def test_api_final_cards_endpoints():
         assert fc.load_check(w)["逐筆"]["學員重念@55.00"]["原因"] == "念錯字"
         r = tn._quiet(_post, base, "/api/final/edited", {"鍵": "學員段落:T005"})
         assert r["記了"]
+        # 10-15 第2段審查修正（建議，效能）：連同整頁資料一起回傳（網頁的重新整理直接用這一份）
+        assert _by(r["頁面"]["卡片"], "學員段落:T005")["狀態"] == finalcards.EDITED and "第3步" in r["頁面"]
         d = tn._quiet(_get, base, "/api/final")
         assert _by(d["卡片"], "學員段落:T005")["狀態"] == finalcards.EDITED and d["卡片統計"]["要重做"] == 2
     finally:

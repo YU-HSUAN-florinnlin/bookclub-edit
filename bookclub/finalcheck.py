@@ -1191,8 +1191,9 @@ def group_counts(log: dict | None, index: dict | None = None) -> dict[str, int]:
     return out
 
 
-def page_data(workdir: str | Path) -> dict:
-    """`GET /api/final`：成品檢查頁一次要的全部資料。"""
+def page_data(workdir: str | Path, *, index: dict | None = None) -> dict:
+    """`GET /api/final`：成品檢查頁一次要的全部資料。
+    10-15 第2段審查修正（建議，效能）：index＝`review.item_index`（伺服器算好了跟第 5 步卡片共用，不重算）。"""
     workdir = Path(workdir)
     with _lock:
         log, check = _current(workdir)
@@ -1201,7 +1202,7 @@ def page_data(workdir: str | Path) -> dict:
     prods = products(workdir)
     marks = log_marks(workdir, log, prods)   # 10-13 bug 一：選單標「最新」「舊的」
     pick = take_pick(check["成品影片"], prods, marks)   # 10-13 bug 二：拿檔按鈕與過期判斷用的那支
-    index = _index(workdir)
+    index = _index(workdir) if index is None else index
     try:   # 10-02 第六批：老師重念範圍前後沒有人講話的那幾筆，卡片上提醒＋「照建議縮小」
         from bookclub import silentedge
 
@@ -1404,12 +1405,17 @@ def decide_record(workdir: str | Path, key: str, result: str | None, reason: str
 
 
 def decide_many(workdir: str | Path, keys: list[str], result: str | None, reason: str = "", *,
-                unlogged: list[str] | None = None, flags: list[str] | None = None) -> dict:
+                unlogged: list[str] | None = None, flags: list[str] | None = None, owner: str | None = None,
+                sharers: dict[str, list[str]] | None = None) -> dict:
     """10-15 第5步2.0 第2段：第 5 步按「一張卡」通過／退回，回寫舊檔這張卡對到的每一筆（一次存檔）。
     keys：處理紀錄的鍵（這張卡在這一版對到的每一筆）；unlogged：沒登記的變動的鍵；flags：對到這張卡的整片退回 id
     （卡片通過或取消退回時拿掉；再退回一次時換成新的原因）。
     result：PASS／REDO／None（改回還沒看）。退回原因每一筆都寫同一句（第 1 段審查同意的反向規則：任一筆退回＝退回，
-    所以卡片退回＝每一筆都退回、原因同一份；卡片通過＝每一筆都通過）。檢查的是舊成品時不能按（同 `decide_record`）。"""
+    所以卡片退回＝每一筆都退回、原因同一份；卡片通過＝每一筆都通過）。檢查的是舊成品時不能按（同 `decide_record`）。
+    10-15 第2段審查修正（必修 1）：一筆處理紀錄可以對到好幾張卡（名字＋疊到它的重疊卡⋯）。owner＝按的這張卡（`finalcards.owner_key`），
+    sharers＝{處理紀錄鍵: [對到同一筆的別張卡]}。退回時那一筆記 `各卡原因{卡: 原因}`（`原因` 是合起來的一句）；
+    通過／取消時，那一筆如果還有別張（還在清單上的）卡退回著，就不改（拿掉這張卡的原因、照樣退回），回傳 `跳過{鍵: [那幾張卡]}`。
+    舊檔沒記 `各卡原因` 的（舊工具寫的、升級前的）照以前：誰按都直接改。owner 沒給＝以前的做法。"""
     if result not in (PASS, REDO, None):
         raise ValueError("只能選：通過、退回重做")
     if result == REDO and not str(reason).strip():
@@ -1422,17 +1428,31 @@ def decide_many(workdir: str | Path, keys: list[str], result: str | None, reason
         recs = {record_key(r): r for r in (log or {}).get("紀錄", [])}
         uks = {unlogged_key(u) for u in (log or {}).get("未登記的變動", [])}
         n = 0
+        skipped: dict[str, list[str]] = {}
         for key in keys:
             rec = recs.get(key)
             if rec is None:
                 continue
             n += 1
+            cur = check["逐筆"].get(key) or {}
+            per = dict(cur.get("各卡原因") or {}) if cur.get("結果") == REDO and owner else {}
+            alive = set((sharers or {}).get(key) or [])
+            others = {k: v for k, v in per.items() if k != owner and k in alive}   # 別張（還在的）卡退回著這一筆
+            if result != REDO and others:
+                skipped[key] = sorted(others)
+                check["逐筆"][key] = {**cur, "原因": _join_reasons(others.values()), "各卡原因": others, "更新時間": _now()}
+                continue
             if result is None:
                 check["逐筆"].pop(key, None)
                 continue
-            old = (check["逐筆"].get(key) or {}).get("改範圍") if result == REDO else None
-            check["逐筆"][key] = {"結果": result, "原因": str(reason).strip() if result == REDO else "",
-                                 "指紋": record_print(rec), "更新時間": _now(), **({"改範圍": old} if old else {})}
+            old = cur.get("改範圍") if result == REDO else None
+            text = str(reason).strip() if result == REDO else ""
+            mine: dict = {}
+            if result == REDO and owner:
+                mine = {**others, owner: text}
+                text = _join_reasons(mine.values())
+            check["逐筆"][key] = {"結果": result, "原因": text, "指紋": record_print(rec), "更新時間": _now(),
+                                 **({"改範圍": old} if old else {}), **({"各卡原因": mine} if mine else {})}
         for key in unlogged or []:
             if key not in uks:
                 continue
@@ -1455,7 +1475,12 @@ def decide_many(workdir: str | Path, keys: list[str], result: str | None, reason
         if not n:
             raise ValueError("這張卡這一版的成品裡沒有對到的地方（還沒生成）：按「重做這幾張」做好之後再看")
         _save(workdir, check)
-        return {"ok": True, "筆數": n, "狀態": status(log, check)}
+        return {"ok": True, "筆數": n, "狀態": status(log, check), "跳過": skipped}
+
+
+def _join_reasons(texts) -> str:
+    """10-15 第2段審查修正：好幾張卡退回同一筆時，舊檔那一格原因合成一句（一樣的只留一次）。"""
+    return "；".join(dict.fromkeys(x for x in (str(y).strip() for y in texts) if x))
 
 
 def decide_unlogged(workdir: str | Path, key: str, result: str | None, reason: str = "") -> dict:

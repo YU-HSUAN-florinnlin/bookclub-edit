@@ -763,6 +763,17 @@ def _log_tag(log: dict) -> str | None:
     return log_tag(log)
 
 
+def _ts(x) -> float | None:
+    """10-15 第2段審查修正：時間字串（有沒有時區都可以）→ 秒數（比先後用）；讀不懂＝None。沒寫時區的當本機時間。"""
+    if not x:
+        return None
+    try:
+        d = datetime.fromisoformat(str(x))
+    except ValueError:
+        return None
+    return d.timestamp()
+
+
 def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *, note: str | None = None,
                   products: list[str] | None = None, src: str = SRC_ASSEMBLE, step: int = 4) -> dict:
     """處理紀錄 → 版本表一列（改 st，不寫檔；處理紀錄副本由呼叫的地方寫）。同一份處理紀錄（產生時間一樣）只建一次。"""
@@ -784,10 +795,13 @@ def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *,
            "紀錄卡號": m["紀錄卡號"], "未登記卡號": m["未登記卡號"], "沒對到卡片的紀錄": m["沒對到卡片的紀錄"],
            "成品時間": _card_spans(log, m["紀錄卡號"]), "建立時間": now}
     st.versions[n] = row
-    # 10-15 第5步2.0 第2段：第 5 步按「改」改過的卡（等重做，起因：改了）——組裝會照第 3 步現在的檔做，改過的都做進這一版了
+    # 10-15 第5步2.0 第2段：第 5 步按「改」改過的卡（等重做，起因：改了）——組裝會照第 3 步現在的檔做，改過的都做進這一版了。
+    # 10-15 第2段審查修正（建議）：只清「改」的時間早於這份處理紀錄產生時間的（處理紀錄產生之後才改的，這一版沒有做進去）
+    made = _ts(log.get("產生時間"))
     for k in sorted(st.cards, key=_card_num):
         c = st.cards[k]
-        if (c.get("等重做") or {}).get("起因") == WHY_EDITED:
+        pend = c.get("等重做") or {}
+        if pend.get("起因") == WHY_EDITED and (made is None or (_ts(pend.get("時間")) or 0) <= made):
             c["等重做"] = None
             c["更新時間"] = now
             st.log(now, k, step, f"重做進第{n}版", {"起因": WHY_EDITED}, None)
@@ -1066,7 +1080,10 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
         res = [(check.get("逐筆") or {}).get(rk) or {} for rk in rks]
         backs = [d for d in res if d.get("結果") == REDO]
         if backs:
-            new[c] = {"狀態": RETURNED, "原因": [d.get("原因", "") for d in backs]}
+            # 10-15 第2段審查修正（必修 1）：共用的那一筆記了各張卡的原因（`各卡原因`，鍵＝第 3 步鍵或卡號）→ 用這張卡自己的；
+            # 這張卡沒退回它（連帶）就用合起來那一句
+            k3 = (st.cards.get(c) or {}).get("第3步鍵") or c
+            new[c] = {"狀態": RETURNED, "原因": [(d.get("各卡原因") or {}).get(k3, d.get("原因", "")) for d in backs]}
         elif rks and all(d.get("結果") == PASS for d in res):
             new[c] = {"狀態": PASSED, "原因": []}
         else:
@@ -1186,7 +1203,8 @@ def set_reason(workdir: str | Path, card: str, options: list[str] | None, extra:
     return True
 
 
-def mark_edited(workdir: str | Path, key: str, *, new: bool = False) -> str | None:
+def mark_edited(workdir: str | Path, key: str, *, new: bool = False, page: dict | None = None,
+                snap: dict | None = None) -> str | None:
     """10-15 第5步2.0 第2段：第 5 步按「改」改了第 3 步的東西（改字、改範圍、這是老師聲音、刪掉、新增）之後：
     先把第 3 步的檔同步成卡片，再把那張卡標「等重做（起因：改了）」——畫面上是「已改，等重做」，組裝做進新的一版時清掉
     （`build_version`）。new：這張是在第 5 步新增的（來源改「第5步新增」）。key：第 3 步鍵（`學員段落:T003`）。
@@ -1194,7 +1212,7 @@ def mark_edited(workdir: str | Path, key: str, *, new: bool = False) -> str | No
     w = Path(workdir)
     if not exists(w):
         return None
-    sync_cards(w)
+    sync_cards(w, page, snap=snap)   # 10-15 第2段審查修正（建議，效能）：page／snap 伺服器算好了就用，不另外算
     with _locked(w):
         st = load(w)
         c = st.alive_by_key().get(key)

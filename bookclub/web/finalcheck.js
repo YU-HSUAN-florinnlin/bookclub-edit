@@ -47,6 +47,8 @@ function fcCardLabel(c) {
   if (c["要人聽"] && c["狀態"] !== FC_ST.OK) small.push("請仔細聽");
   if (c["第幾版"]) small.push(`第 ${c["第幾版"]} 版`);
   if (c["舊紀錄"]) small.push("舊紀錄");
+  if (c["狀態"] === FC_ST.BACK && (c["連帶自"] || []).length) small.push("連帶");   // 10-15 第2段審查修正（必修 1）
+  if (c["狀態"] === FC_ST.EDITED && c["第3步改過"]) small.push("在第 3 步改過");     // 10-15 第2段審查修正（第 6 條）
   const cls = { [FC_ST.NOT_MADE]: "made", [FC_ST.TODO]: "todo", [FC_ST.OK]: "ok", [FC_ST.BACK]: "back", [FC_ST.EDITED]: "edited" }[c["狀態"]] || "todo";
   return { text: c["狀態"] === FC_ST.OK ? "通過 ✓" : c["狀態"], cls, small };
 }
@@ -59,9 +61,34 @@ function fcReasonText(why) {
   return opts && extra ? `${opts}：${extra}` : opts || extra;
 }
 
+// 10-15 第2段審查修正：退回沒選原因也沒補充（後端舊檔那一格寫的就是這一句）
+const FC_NO_REASON = "退回（沒寫原因）";
+// 退回那張卡底下那一行（純函式）：有原因＝「原因：…」；沒寫原因＝「退回（沒寫原因）」
+function fcWhyLine(c) {
+  const why = fcReasonText(c["退回原因"]);
+  return why && why !== FC_NO_REASON ? `原因：${why}` : FC_NO_REASON;
+}
+
+// 10-15 第2段審查修正（必修 1）：連帶退回的卡那一行（純函式）：「跟 #N 共用，那張還是退回」
+function fcSharedLine(c) {
+  const from = c["連帶自"] || [];
+  if (!from.length) return "";
+  return `跟 ${from.map((x) => (x["編號"] ? `#${x["編號"]}` : "另一張卡")).join("、")} 共用，那張還是退回`;
+}
+
+// 「重做這幾張」那顆按鈕（純函式）：{show, n}。10-15 第2段審查修正（必修 3）：舊檔模式（新紀錄不能用）按「改」記不到
+// 「已改，等重做」，所以舊檔模式 AI 沒在跑時一律顯示（不寫張數）
+function fcRedoCount(d) {
+  const n = (d["卡片統計"] || {})["要重做"] || 0;
+  if (n) return { show: true, n };
+  return { show: d["卡片來源"] === "舊檔" && !d["AI執行中"], n: 0 };
+}
+
 // 頂端那一句（純函式，31 號設計 §6.8：只顯示一句，照優先順序選）。回傳 {text, cls, go}（go＝點了切到哪一頁）
+// 10-15 第2段審查修正（必修 3）：d["舊檔改過"]＝舊檔模式這次畫面按「改」改過（記不到卡片上，畫面自己記著）→ 當作要重做
 function fcStatusLine(d) {
-  const st = d["卡片統計"] || {};
+  const st0 = d["卡片統計"] || {};
+  const st = d["舊檔改過"] && !st0["要重做"] ? { ...st0, "要重做": 1 } : st0;
   const names = ((d["需留意"] || {})["列"] || []).filter((r) => r["名字"]).length;
   const run = (d["上次執行"] || {})["狀態"];
   const out = d["輸出成品"];
@@ -210,18 +237,29 @@ const FC_CARD_CTX = {
   rerender: () => fcRenderRight(),
 };
 
+// 10-15 第2段審查修正（建議）：只改備註、不影響聲音的欄位（問老師、問老師備註、消音的備註），存了不標「已改，等重做」
+const FC_NOTE_FIELDS = ["問老師", "問老師備註", "備註"];
+function fcNoteOnly(body) {
+  const ks = Object.keys(body || {}).filter((k) => !["id", "鍵"].includes(k));
+  return ks.length > 0 && ks.every((k) => FC_NOTE_FIELDS.includes(k));
+}
+
 // 第 5 步按「改」改第 3 步的東西：照第 3 步原本的 API 存，存好之後那張卡記「已改，等重做」（新增的另外記，見 fcEditorCtx）
 async function fcStep3Post(url, body, opts) {
+  fc.nextData = null;   // 這次存檔之前留的整頁資料不能再用
   const r = await apiPost(url, body, opts);
   const adding = fc.ed.open && !fc.ed.id && url === "/api/review/manual";
   const c = fcCard(fc.cur);
-  if (!adding && c && c["第3步鍵"] && !String(url).startsWith("/api/final/")) await fcMarkEdited(c);
+  if (!adding && c && c["第3步鍵"] && !String(url).startsWith("/api/final/") && !fcNoteOnly(body)) await fcMarkEdited(c);
   return r;
 }
 
 async function fcMarkEdited(c, key = null, isNew = false) {
   try {
     const r = await apiPost("/api/final/edited", { "鍵": key || c["第3步鍵"], "新增": isNew }, { quiet: true });
+    // 10-15 第2段審查修正（建議，效能）：伺服器連同整頁資料一起回傳；接著的重新整理（fcReload）直接用，不再 GET 一次
+    if (r["頁面"]) fc.nextData = { data: r["頁面"], at: Date.now() };
+    if (!r["記了"] && fc.data && fc.data["卡片來源"] === "舊檔") { fc.legacyEdited = true; fcRenderTop(); fcRenderLower(); }
     if (r["記了"] && c && !key) {
       c["狀態"] = FC_ST.EDITED;
       fcRecountLocal();
@@ -278,7 +316,8 @@ async function renderFinal() {
     </div>`;
   fc.video = document.getElementById("fc-video");
   fc.audio = document.getElementById("fc-audio");
-  Object.assign(fc, { seen: [], seg: null, sentRanges: "", ab: null, redoOpen: false, editOpen: false, ed: { open: false } });
+  Object.assign(fc, { seen: [], seg: null, sentRanges: "", ab: null, redoOpen: false, editOpen: false, ed: { open: false },
+    legacyEdited: false, nextData: null });
   if (!fc.cur || !fcCard(fc.cur)) fc.cur = (fcCards().find((c) => c["狀態"] === FC_ST.TODO) || fcCards()[0] || {}).id || null;
   document.getElementById("fc-export").addEventListener("click", fcExport);
   fileOutInit(document.getElementById("fc-fileout"));   // 10-07：打開成品資料夾、複製到 Windows
@@ -304,7 +343,10 @@ function fcWhereHtml(lab) {
 }
 
 async function fcReload() {
-  fc.data = await apiGet("/api/final");
+  const pre = fc.nextData;
+  fc.nextData = null;
+  // 10-15 第2段審查修正（建議，效能）：剛存檔、/api/final/edited 回傳的整頁資料（幾秒內）直接用
+  fc.data = pre && Date.now() - pre.at < 5000 ? pre.data : await apiGet("/api/final");
   if (fc.cur && !fcCard(fc.cur)) fc.cur = (fcCards().find((c) => c["狀態"] === FC_ST.TODO) || fcCards()[0] || {}).id || null;
   fcRenderAll();
 }
@@ -321,9 +363,10 @@ function fcRenderAll() {
 function fcRenderTop() {
   const box = document.getElementById("fc-status");
   if (!box) return;
-  const s = fcStatusLine(fc.data);
-  // §4.4 修訂：新紀錄不能用時退回讀舊檔，提示一句（小字，不搶頂端那一句）
-  const old = fc.data["卡片來源"] === "舊檔" ? `<span class="rv-meta fc-oldsrc">（先照舊的紀錄顯示）</span>` : "";
+  const s = fcStatusLine({ ...fc.data, "舊檔改過": !!fc.legacyEdited && fc.data["卡片來源"] === "舊檔" });
+  // §4.4 修訂：新紀錄不能用時退回讀舊檔，提示一句（小字，不搶頂端那一句）。
+  // 10-15 第2段審查修正（暫定，等宇軒）：只在開發者設定開著時顯示（老師看不懂、也不用做什麼）
+  const old = fc.data["卡片來源"] === "舊檔" && fc.data["開發者"] ? `<span class="rv-meta fc-oldsrc">（先照舊的紀錄顯示）</span>` : "";
   box.innerHTML = s.go ? `<button class="linkish ${s.cls}" id="fc-status-go">${esc(s.text)}</button>${old}` : `<span class="${s.cls}">${esc(s.text)}</span>${old}`;
   const go = document.getElementById("fc-status-go");
   if (go) go.addEventListener("click", () => { fcTabSet(FC_TAB_ATT); fcRenderLower(); document.getElementById("fc-lower").scrollIntoView({ block: "start" }); });
@@ -412,9 +455,10 @@ function fcMoveHead() {
 
 function fcStateBoxHtml(c) {
   const lab = fcCardLabel(c);
-  const why = c["狀態"] === FC_ST.BACK ? fcReasonText(c["退回原因"]) : "";
+  const back = c["狀態"] === FC_ST.BACK;
+  const shared = back ? fcSharedLine(c) : "";
   return `<span class="fc-tag fc-tag-${lab.cls}">${esc(lab.text)}</span>${lab.small.map((x) => ` <span class="rv-meta">${esc(x)}</span>`).join("")}
-    ${why ? `<p class="rv-warnline fc-why">原因：${esc(why)}</p>` : ""}`;
+    ${back ? `<p class="rv-warnline fc-why">${esc(fcWhyLine(c))}</p>` : ""}${shared ? `<p class="rv-warnline fc-shared">${esc(shared)}</p>` : ""}`;
 }
 
 function fcRenderStateBox() {
@@ -515,9 +559,12 @@ async function fcDecide(c, result, picks = [], extra = "") {
   const i = fcCards().findIndex((x) => x.id === c.id);
   if (res["卡片"] && i >= 0) fc.data["卡片"][i] = res["卡片"];
   else if (i >= 0) fc.data["卡片"].splice(i, 1);   // 整片退回的待釐清卡通過＝拿掉
+  // 10-15 第2段審查修正（必修 1）：共用處理紀錄的別張卡也換成新的（連帶退回、或跟著通過）
+  (res["共用卡片"] || []).forEach((m) => { const j = fcCards().findIndex((x) => x.id === m.id); if (j >= 0) fc.data["卡片"][j] = m; });
   fc.data["卡片統計"] = res["統計"] || fc.data["卡片統計"];
   if (res["狀態"]) fc.data["狀態"] = res["狀態"];
-  if (result === FC_ST.OK || !res["卡片"]) {   // 通過了就換下一張還沒看的（影片不跳，照常播）
+  const skipped = (res["跳過"] || []).length > 0;   // 通過了，可是共用的那一段別張卡還退回著：留在這張，讓老師看到那一行
+  if ((result === FC_ST.OK && !skipped) || !res["卡片"]) {   // 通過了就換下一張還沒看的（影片不跳，照常播）
     const next = fcNextUnseen(fcShown(), c.id) || fcNextUnseen(fcCards(), c.id);
     if (next) fc.cur = next;
     else if (!res["卡片"]) fc.cur = (fcCards()[0] || {}).id || null;
@@ -707,11 +754,12 @@ function fcRenderLower() {
       ${done ? `<p class="fc-tabdone rv-meta">這一頁看完了</p>` : ""}
       <ol class="rv-list" id="fc-list">${shown.map(fcRowHtml).join("") || `<li class="empty">${fcCards().length ? "這一頁沒有卡片" : "這一版沒有任何修改"}</li>`}</ol>`;
   }
-  const n = (fc.data["卡片統計"] || {})["要重做"] || 0;
+  const rc = fcRedoCount(fc.data);
+  const n = rc.n;
   const busy = !!fc.data["AI執行中"];
   const bar = `<div class="rv-row fc-bottom">
       <button class="ghost" id="fc-add" ${busy ? "disabled title=\"正在重做，做完才能改\"" : ""}>＋在這裡新增修改</button>
-      ${n ? `<button class="primary" id="fc-redoall" ${busy ? "disabled" : ""}>重做這幾張（${n} 張）</button>` : ""}</div>
+      ${rc.show ? `<button class="primary" id="fc-redoall" ${busy ? "disabled" : ""}>${n ? `重做這幾張（${n} 張）` : "重做這幾張"}</button>` : ""}</div>
     <div class="rv-io" id="fc-io"></div>`;
   lower.innerHTML = `${nav}${body}${bar}`;
   lower.querySelectorAll(".fc-tabs button").forEach((b) => b.addEventListener("click", () => { fcTabSet(b.dataset.tab); fcRenderLower(); }));
@@ -748,17 +796,24 @@ function fcMarkRow() {
 // 「重做這幾張」（31 號設計 §9 問題 2 定案）：第 4 步開始執行、跳到第 4 步；跑完自動跳回第 5 步（app.js execRedoReturn）
 async function fcRedo(btn) {
   btn.disabled = true;
+  let started = null;
   try {
-    await apiPost("/api/execute/start", { start: null, end: null, methods: null }, { quiet: true });
+    started = (await apiPost("/api/execute/start", { start: null, end: null, methods: null }, { quiet: true }))["started_at"];
   } catch (e) {
     if (!/已經有.*在跑/.test(e.message)) { alert(`還不能開始：${e.message}`); btn.disabled = false; return; }
+    try { started = (await apiGet("/api/execute"))["started_at"]; } catch (e2) { started = null; }   // 已經在跑的那一次
   }
-  fcRedoBackSet();
+  fcRedoBackSet(started);
   location.hash = "#step4";
 }
-// 從第 5 步按「重做這幾張」的時間（第 4 步跑完看這個決定要不要跳回來）。網頁重新整理就不記得（照常停在第 4 步）
+// 從第 5 步按「重做這幾張」開始的那一次執行（伺服器記的 started_at，秒；第 4 步跑完看這個決定要不要跳回來）。
+// 10-15 第2段審查修正（建議）：以前記瀏覽器的時間、跟伺服器時間比（WSL 時鐘會差），改成記伺服器回傳的開始時間。
+// 網頁重新整理（同一個分頁）還記得；拿不到開始時間就不記（照常停在第 4 步）
 let fcRedoBack = null;
-function fcRedoBackSet() { fcRedoBack = Date.now(); try { sessionStorage.setItem("fc-redo-back", String(fcRedoBack)); } catch (e) { /* 存不了也沒關係 */ } }
+function fcRedoBackSet(started) {
+  fcRedoBack = typeof started === "number" ? started : null;
+  try { if (fcRedoBack) sessionStorage.setItem("fc-redo-back", String(fcRedoBack)); else sessionStorage.removeItem("fc-redo-back"); } catch (e) { /* 存不了也沒關係 */ }
+}
 function fcRedoBackGet() {
   if (fcRedoBack) return fcRedoBack;
   try { return Number(sessionStorage.getItem("fc-redo-back")) || null; } catch (e) { return null; }

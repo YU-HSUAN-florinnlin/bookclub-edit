@@ -778,11 +778,13 @@ function awakeLine(s) {
   return `<p><span class="badge ${t.startsWith("沒開成") ? "error" : ""}">防睡眠</span> ${esc(t)}</p>`;
 }
 
-// 10-15 第5步2.0 第2段：第 5 步按「重做這幾張」跳過來的（since＝按的時間），這一次執行好好跑完就自動跳回第 5 步（純函式）。
+// 10-15 第5步2.0 第2段：第 5 步按「重做這幾張」跳過來的，這一次執行好好跑完就自動跳回第 5 步（純函式）。
+// since＝那一次執行的開始時間（伺服器 /api/execute/start 回傳的 started_at，秒）。10-15 第2段審查修正（建議）：
+// 以前比瀏覽器時間（WSL 時鐘會差），改成比伺服器時間：started_at 是同一次（或之後）才算
 // 回傳 "回第5步"（跑完了）、"留下"（停止、失敗、中斷：停在第 4 步照現有提示）、null（還在跑、或不是從第 5 步來的）
 function execRedoReturn(d, since) {
   if (!since || !d || d.running) return null;
-  if (!d.started_at || d.started_at * 1000 < since - 10000) return null;   // 不是這一次（伺服器還沒開始跑，或是更早的那一次）
+  if (!d.started_at || d.started_at < since - 0.001) return null;   // 不是這一次（更早的那一次）
   const prog = d["進度"] || {};
   if (d.error || d.stopped || prog["停止"] || prog["錯誤"] || prog["中斷"]) return "留下";
   return d.finished_at ? "回第5步" : null;

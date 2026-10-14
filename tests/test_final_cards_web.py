@@ -54,6 +54,8 @@ def _node(code: str):
 _PURE = (_ESC + _const(FCJS, "FC_AB_CONTEXT") + _const(FCJS, "FC_ST") + _const(FCJS, "FC_TODO") + _const(FCJS, "FC_REDO")
          + _const(FCJS, "FC_TAB_ALL") + _const(FCJS, "FC_TYPE_TABS")
          + _fn(FCJS, "fcShortStamp") + _fn(FCJS, "fcCardLabel") + _fn(FCJS, "fcReasonText") + _fn(FCJS, "fcStatusLine")
+         + _const(FCJS, "FC_NO_REASON") + _fn(FCJS, "fcWhyLine") + _fn(FCJS, "fcSharedLine") + _fn(FCJS, "fcRedoCount")
+         + _const(FCJS, "FC_NOTE_FIELDS") + _fn(FCJS, "fcNoteOnly")
          + _fn(FCJS, "fcTabList") + _fn(FCJS, "fcPickTab") + _fn(FCJS, "fcStepPick") + _fn(FCJS, "fcNextUnseen")
          + _fn(FCJS, "fcSrcTime") + _fn(FCJS, "fcOutTime") + _fn(FCJS, "fcCardAbPlan"))
 
@@ -95,6 +97,29 @@ def test_card_label_and_reason():
     assert got[2]["cls"] == "back" and got[2]["small"] == ["舊紀錄"]
     assert got[3] == {"text": "已改，等重做", "cls": "edited", "small": []} and got[4]["cls"] == "made"
     assert got[5:] == ["念錯字、其他：第二句", "舊的一句", ""]
+
+
+def test_review_fixes_pure():
+    """10-15 第2段審查修正：退回沒寫原因、連帶那一行、舊檔模式一律有「重做這幾張」、只改備註不標已改。"""
+    if not NODE:
+        return
+    got = _node(_PURE + """
+      console.log(JSON.stringify({
+        why: [fcWhyLine({"退回原因": {"選項": [], "補充": ""}}), fcWhyLine({"退回原因": {"選項": [], "補充": "退回（沒寫原因）"}}),
+              fcWhyLine({"退回原因": null}), fcWhyLine({"退回原因": {"選項": ["念錯字"], "補充": ""}})],
+        shared: [fcSharedLine({"連帶自": [{"id": "K1", "編號": 12}]}), fcSharedLine({"連帶自": [{"id": "x", "編號": null}]}), fcSharedLine({})],
+        lab: [fcCardLabel({"狀態": "退回", "連帶自": [{"編號": 3}]}).small, fcCardLabel({"狀態": "已改，等重做", "第3步改過": true}).small],
+        redo: [fcRedoCount({"卡片統計": {"要重做": 2}}), fcRedoCount({"卡片來源": "舊檔", "卡片統計": {}}),
+               fcRedoCount({"卡片來源": "舊檔", "卡片統計": {}, "AI執行中": true}), fcRedoCount({"卡片來源": "新紀錄", "卡片統計": {}})],
+        st: [fcStatusLine({"卡片統計": {"還沒看": 0}, "舊檔改過": true}).text, fcStatusLine({"卡片統計": {"還沒看": 0}}).text],
+        note: [fcNoteOnly({id: "T1", "問老師": true}), fcNoteOnly({id: "T1", "問老師備註": "x"}), fcNoteOnly({id: "M1", "備註": "x"}),
+               fcNoteOnly({id: "T1", "校對稿": "x"}), fcNoteOnly({id: "T1", "問老師": true, "說話者": "老師"}), fcNoteOnly({})]}));""")
+    assert got["why"] == ["退回（沒寫原因）", "退回（沒寫原因）", "退回（沒寫原因）", "原因：念錯字"]
+    assert got["shared"] == ["跟 #12 共用，那張還是退回", "跟 另一張卡 共用，那張還是退回", ""]
+    assert got["lab"] == [["連帶"], ["在第 3 步改過"]]
+    assert got["redo"] == [{"show": True, "n": 2}, {"show": True, "n": 0}, {"show": False, "n": 0}, {"show": False, "n": 0}]
+    assert got["st"] == ["改過的還沒重做：按下面『重做這幾張』", "全部看完了，可以輸出"]
+    assert got["note"] == [True, True, True, False, False, False]
 
 
 def test_tabs_step_and_next():
@@ -147,7 +172,7 @@ def test_fileio_which_line_and_redo_return():
         return
     got = _node(_ESC + _fn(FIOJS, "foWhichLine") + _fn(APPJS, "execRedoReturn") + """
       const stale = {"說明": "上次輸出之後，第 4 步又組裝了新的成品"};
-      const since = 1000000;
+      const since = 1000.5;   // 10-15 第2段審查修正：伺服器回傳的 started_at（秒），不是瀏覽器時間
       console.log(JSON.stringify({
         w: [foWhichLine({"上次輸出過期": stale, "版本": {"輸出版本": 1, "最新版本": 2}}, null),
             foWhichLine({"上次輸出過期": stale, "版本": null}, null),
@@ -157,11 +182,11 @@ def test_fileio_which_line_and_redo_return():
         r: [execRedoReturn({running: true}, since), execRedoReturn({running: false, started_at: 1001, finished_at: 1500}, since),
             execRedoReturn({running: false, started_at: 1001, finished_at: 1500, stopped: true}, since),
             execRedoReturn({running: false, started_at: 1001, "進度": {"錯誤": "x"}}, since),
-            execRedoReturn({running: false, started_at: 900, finished_at: 950}, since),
+            execRedoReturn({running: false, started_at: 1000, finished_at: 1500}, since),
             execRedoReturn({running: false, started_at: 1001, finished_at: 1500}, null)] }));""")
     assert "上次輸出的是第 1 版，最新是第 2 版" in got["w"][0] and "第 4 步又組裝了新的成品" in got["w"][1]
     assert "要拿檔案，按『複製到 Windows』" in got["w"][2] and got["w"][3] == "" and got["w"][4] == ""
-    assert got["r"] == [None, "回第5步", "留下", "留下", None, None]
+    assert got["r"] == [None, "回第5步", "留下", "留下", None, None]   # 第 5 個：更早的那一次（started_at 比按的那一次早）
     poll = _fn(APPJS, "startExecPoll")
     assert "execRedoGoBack(d)" in poll and "execRedoGoBack(d)" in _fn(APPJS, "renderExecuteBody")
 
@@ -253,7 +278,29 @@ def test_page_renders_and_buttons_post_right_things():
           await click("fc-add"); fc.ed.kind = "局部消音"; fc.ed.b = fc.ed.a + 1; fcRenderIO();
           await H.fireAll((l) => l.el.attrs && "data-te-save" in l.el.attrs); return H.log;"""},
         {"名稱": "重做這幾張", "程式": """
-          await renderFinal(); H.log.length = 0; await click("fc-redoall"); return {log: H.log, hash: location.hash, back: !!fcRedoBackGet()};"""},
+          H.api['/api/execute/start'] = {started: true, started_at: 1234.5};
+          await renderFinal(); H.log.length = 0; await click("fc-redoall"); return {log: H.log, hash: location.hash, back: fcRedoBackGet()};"""},
+        {"名稱": "只改問老師不標已改", "程式": """
+          await open("學員段落:T005"); await click("fc-edit");
+          await FC_CARD_CTX.post("/api/turns/save", {id: "T005", "問老師": true}); return H.log;"""},
+        {"名稱": "改完用回傳的整頁資料", "程式": """
+          const page = JSON.parse(JSON.stringify(DATA)); page["卡片"].find((c) => c["第3步鍵"] === "學員段落:T005")["狀態"] = "已改，等重做";
+          H.api['/api/final/edited'] = {'記了': true, '頁面': page};
+          await open("學員段落:T005"); await FC_CARD_CTX.post("/api/turns/save", {id: "T005", "說話者": "老師"}); await FC_CARD_CTX.reload();
+          return {log: H.log, state: fcCards().find((c) => c["第3步鍵"] === "學員段落:T005")["狀態"]};"""},
+        {"名稱": "舊檔模式", "程式": """
+          const old = JSON.parse(JSON.stringify(DATA)); old["卡片來源"] = "舊檔"; old["卡片統計"] = {"還沒看": 0, "要重做": 0};
+          old["卡片"].forEach((c) => { c["狀態"] = "通過"; });
+          H.apiGetData['/api/final'] = old; H.api['/api/final/edited'] = {'記了': false};
+          await renderFinal();
+          const before = {status: document.getElementById("fc-status").innerHTML, lower: document.getElementById("fc-lower").innerHTML};
+          await open("學員段落:T005"); await FC_CARD_CTX.post("/api/turns/save", {id: "T005", "校對稿": "x"});
+          const after = document.getElementById("fc-status").innerHTML;
+          old["開發者"] = true; await renderFinal();
+          return {before, after, dev: document.getElementById("fc-status").innerHTML};"""},
+        {"名稱": "連帶與沒寫原因", "程式": """
+          const k = card("學員段落:T005"); k["狀態"] = "退回"; k["退回原因"] = {"選項": [], "補充": ""}; k["連帶自"] = [{"id": card("名字:1").id, "編號": card("名字:1")["編號"]}];
+          await open("學員段落:T005"); return {right: document.getElementById("fc-right").innerHTML, n: card("名字:1")["編號"]};"""},
     ])
     v = got["畫面"]
     assert "錯誤" not in v, v
@@ -287,7 +334,21 @@ def test_page_renders_and_buttons_post_right_things():
     assert m[0][1] == "/api/review/manual" and m[0][2]["類型"] == "局部消音" and m[0][2]["start"] == 100
     assert m[1][1] == "/api/final/edited" and m[1][2] == {"鍵": "局部消音:M009", "新增": True}   # 新增的卡記「第5步新增」、不是記在目前這張
     rd = got["重做這幾張"]
-    assert [x[1] for x in rd["log"] if x[0] == "POST"] == ["/api/execute/start"] and rd["hash"] == "#step4" and rd["back"]
+    assert [x[1] for x in rd["log"] if x[0] == "POST"] == ["/api/execute/start"] and rd["hash"] == "#step4" and rd["back"] == 1234.5
+    # 10-15 第2段審查修正
+    q = [x[1] for x in got["只改問老師不標已改"] if x[0] == "POST"]
+    assert q == ["/api/turns/save"], q
+    e2 = got["改完用回傳的整頁資料"]
+    assert [x[1] for x in e2["log"] if x[0] in ("POST", "GET")] == ["/api/turns/save", "/api/final/edited"], e2["log"]
+    assert e2["state"] == "已改，等重做"
+    o = got["舊檔模式"]
+    assert "錯誤" not in o, o
+    assert "重做這幾張" in o["before"]["lower"] and "重做這幾張（" not in o["before"]["lower"]   # 必修 3：舊檔模式一律有按鈕
+    assert "全部看完了" in o["before"]["status"] and "改過的還沒重做" in o["after"]           # 按「改」之後這次畫面記著
+    assert "先照舊的紀錄顯示" not in o["before"]["status"] and "先照舊的紀錄顯示" in o["dev"]   # 只在開發者設定顯示
+    lk = got["連帶與沒寫原因"]
+    assert "right" in lk, lk
+    assert "退回（沒寫原因）" in lk["right"] and f"跟 #{lk['n']} 共用，那張還是退回" in lk["right"] and "連帶" in lk["right"]
 
 
 if __name__ == "__main__":
