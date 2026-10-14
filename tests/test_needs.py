@@ -886,6 +886,80 @@ def test_upgrade_never_writes_old_files_intercepted():
     assert any(c["類型"] == "名字" for c in needs.card_rows(w)) and any(c["類型"] == "重疊" for c in needs.card_rows(w))
 
 
+# ---------- 10-15 第1段審查二修正 ----------
+
+def test_history_tail_broken_line_and_newline():
+    """檔尾那一行寫到一半：往前一行找序號；下一次寫歷史先補換行，新的一條不黏在後面。"""
+    w = _fresh()
+    log = _log()
+    _setup(w, log, _check(log, {}))
+    _quiet(needs.upgrade, w)
+    hp = w / needs.DIR_NAME / needs.HISTORY_FILE
+    rows = needs.read_history(w)
+    last = rows[-1]["序號"]
+    with open(hp, "a", encoding="utf-8") as f:
+        f.write('{"序號": 99999, "時間": "2026-')   # 中斷：沒寫完、沒換行
+    assert needs._last_history_no(hp) == last
+    st = needs.load(w)
+    st.log("2026-10-15T00:00:00", None, 5, "測試")
+    needs.save(w, st)
+    text = hp.read_text(encoding="utf-8")
+    good = needs.read_history(w)
+    assert good[-1]["動作"] == "測試" and good[-1]["序號"] == last + 1, good[-1]
+    assert text.endswith("\n") and '"2026-\n{' in text
+
+
+def test_stage_lock_renamed_away_is_busy():
+    """別人剛把 `.升級中` 改名走（open 鎖檔 FileNotFoundError）：當作 Busy，不是錯誤。"""
+    import builtins
+
+    stage = Path(tempfile.mkdtemp()) / needs.STAGING
+    real = builtins.open
+
+    def gone(path, *a, **k):
+        if str(path).endswith(needs.LOCK_FILE):
+            raise FileNotFoundError(path)
+        return real(path, *a, **k)
+
+    builtins.open = gone
+    try:
+        try:
+            with needs._stage_lock(stage, wait=False):
+                pass
+            raise AssertionError("應該丟 Busy")
+        except needs.Busy:
+            pass
+    finally:
+        builtins.open = real
+
+
+def test_resync_clears_error_keeps_last():
+    """同步錯誤：下一次打開工作區照舊檔整份重新同步，成功就清成 0 次，最後一次錯誤留著給 inspect。"""
+    from bookclub import safeview
+
+    w = _fresh()
+    log = _log()
+    _setup(w, log, _check(log, {}))
+    _quiet(needs.upgrade, w)
+    real = needs.mirror_final
+    needs.mirror_final = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+    try:
+        _quiet(fc.decide_record, w, "學員重念@40.00", "退回重做", "念錯")
+    finally:
+        needs.mirror_final = real
+    assert not needs.healthy(w)
+    needs._failed_at.pop(str(w), None)
+    _quiet(needs.ensure, w)
+    assert needs.healthy(w), needs.sync_errors(w)
+    fm = json.loads((w / needs.DIR_NAME / needs.FORMAT_FILE).read_text(encoding="utf-8"))
+    assert fm[needs.ERR_KEY]["次數"] == 0 and fm[needs.LAST_ERR_KEY]["種類"] == "RuntimeError"
+    st = needs.load(w)
+    v = st.latest_version()["版本號"]
+    assert any(r["狀態"] == needs.RETURNED for (c, n), r in st.states.items() if n == v)   # 重新同步補上了漏掉的退回
+    text = "\n".join(safeview.run([str(w), "修改需求"]))
+    assert "同步錯誤：沒有" in text and "已重新同步清掉" in text
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

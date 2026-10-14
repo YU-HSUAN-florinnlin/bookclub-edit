@@ -575,15 +575,21 @@ def topic_needs(w: Path, f: Filter, out: list[str], limit: int = 300) -> None:
                f"；歷史 {int(fm.get('下一個歷史序號') or 1) - 1} 條")
     # 10-15 第1段審查修正（建議）：同步失敗看得到（只印次數、時間、哪裡、錯誤種類；錯誤訊息本來就沒記）
     er = fm.get(needs.ERR_KEY) or {}
-    if er:
-        where = er.get("哪裡")
-        kind = er.get("種類")
-        out.append(f"⚠️ 同步錯誤 {val('', er.get('次數'))} 次：第一次 {val('時間', er.get('第一次時間'))}，"
-                   f"最後 {val('時間', er.get('最後時間'))}，最後一次在 {where if where in needs.ERR_WHERE else mask(where or '')}"
-                   f"（{kind if isinstance(kind, str) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', kind) else mask(kind or '')}）"
-                   "——新紀錄可能跟舊檔不一致，第 2 段起會改讀舊檔；要重建就把 修改需求/ 改名再打開")
+
+    def _err_text(e: dict) -> str:
+        where, kind = e.get("哪裡"), e.get("種類")
+        return (f"第一次 {val('時間', e.get('第一次時間'))}，最後 {val('時間', e.get('最後時間'))}，"
+                f"最後一次在 {where if where in needs.ERR_WHERE else mask(where or '')}"
+                f"（{kind if isinstance(kind, str) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', kind) else mask(kind or '')}）")
+
+    if er and int(er.get("次數") or 0) > 0:
+        out.append(f"⚠️ 同步錯誤 {val('', er.get('次數'))} 次：{_err_text(er)}"
+                   "——新紀錄可能跟舊檔不一致，第 5 步先改讀舊檔；下次打開工作區會整份重新同步一次（成功就清掉）")
     else:
         out.append("同步錯誤：沒有")
+        last = fm.get(needs.LAST_ERR_KEY) or {}   # 10-15 第1段審查二修正：重新同步成功清掉之後，最後一次留著給人看
+        if last:
+            out.append(f"  （以前有過，已重新同步清掉：{val('', last.get('次數'))} 次，{_err_text(last)}）")
     cards = [st.cards[k] for k in sorted(st.cards, key=needs._card_num)]
 
     def cnt(rows, key):

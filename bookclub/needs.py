@@ -60,6 +60,7 @@ STAGING = f"{DIR_NAME}.升級中"
 LOCK_FILE = ".寫入鎖"
 # 10-15 第1段審查修正（建議）：同步失敗記在 `格式.json`，`inspect 修改需求` 印出來；第 2 段讀新紀錄前看到有錯誤就退回讀舊檔
 ERR_KEY = "同步錯誤"
+LAST_ERR_KEY = "最後一次錯誤"   # 10-15 第1段審查二修正：同步錯誤清成 0 次之後，inspect 還看得到最後一次
 ERR_WHERE = ("打開工作區", "第5步存檔", "組裝建版本", "成品記到版本", "開始執行")
 # 打開工作區（GET）升級／補差異失敗後，這段時間內不再重試（不要每次打開第 3／4／5 步都整套重跑）
 RETRY_AFTER_S = 300.0
@@ -83,8 +84,9 @@ WHY_RETURNED, WHY_EDITED = "退回", "改了"
 # 第 3 步卡片「做了什麼決定」的摘要欄位（同步副本；指紋只看這些，計時之類的欄位不算）
 DECISION_KEYS = ("做法", "排法", "方式", "狀態", "決定", "說話者", "學員說話者", "已確認", "校對稿", "老師文字", "學員文字",
                  "救回", "tags", "代號", "問老師")
-# 10-15 第1段審查修正（建議）：版本的「卡片指紋」只算會影響聲音的欄位——這幾個改了聲音不會變，不算「這一版做了」、
-# 也不擋沿用上一版的通過（`第3步決定指紋` 照舊全部算：改了照樣記歷史）
+# 10-15 第1段審查修正（建議）、審查二修正：這幾欄（tags、已確認）會影響聲音，但靠處理紀錄的內容指紋把關（聲音真的變了，
+# 處理紀錄那幾筆的內容指紋就會變），所以版本的「卡片指紋」不算它們——不算「這一版做了」、也不擋沿用上一版的通過；
+# 問老師只是備註。`第3步決定指紋` 照舊全部算：改了照樣記歷史
 NOT_SOUND_KEYS = ("已確認", "tags", "問老師")
 # 第 3 步的檔：改了就要重新同步卡片（`覆核/覆核決定.json` 看內容、不看計時欄位，其他看大小＋修改時間）
 STEP3_FILES = ("校對/段落.json", "名字覆核決定.json", "覆核/覆核決定.json", "學員名字覆核決定.json", "名字候選.json",
@@ -252,8 +254,21 @@ def _last_history_no(path: Path) -> int:
             try:
                 return int(json.loads(line).get("序號") or 0)
             except (ValueError, AttributeError, TypeError):
-                return 0
+                continue   # 10-15 第1段審查二修正：檔尾那一行寫到一半（中斷）→ 往前一行找
     return 0
+
+
+def _ends_with_newline(path: Path) -> bool:
+    """10-15 第1段審查二修正：檔案最後一個字元是不是換行（沒有檔、空檔＝是）。"""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell() == 0:
+                return True
+            f.seek(-1, os.SEEK_END)
+            return f.read(1) == b"\n"
+    except OSError:
+        return True
 
 
 def load(workdir: str | Path) -> Store:
@@ -286,7 +301,10 @@ def save(workdir: str | Path, st: Store, *, base: Path | None = None) -> None:
     _write(d / f"{T_VERSIONS}.json", _table_data(T_VERSIONS, [st.versions[k] for k in sorted(st.versions)]))
     _write(d / f"{T_STATES}.json", _table_data(T_STATES, [st.states[k] for k in sorted(st.states, key=lambda x: (_card_num(x[0]), x[1]))]))
     if st.history:
-        with open(d / HISTORY_FILE, "a", encoding="utf-8") as f:
+        hp = d / HISTORY_FILE
+        lead = "" if _ends_with_newline(hp) else "\n"   # 10-15 第1段審查二修正：上次寫到一半沒換行 → 先補一個，新的一條不黏在後面
+        with open(hp, "a", encoding="utf-8") as f:
+            f.write(lead)
             for h in st.history:
                 f.write(json.dumps(h, ensure_ascii=False) + "\n")
         st.history = []
@@ -315,21 +333,46 @@ def note_error(workdir: str | Path, where: str, e: BaseException) -> None:
             now = _now()
             fm[ERR_KEY] = {"次數": int(old.get("次數") or 0) + 1, "第一次時間": old.get("第一次時間") or now, "最後時間": now,
                            "哪裡": where if where in ERR_WHERE else "其他", "種類": type(e).__name__}
+            fm[LAST_ERR_KEY] = dict(fm[ERR_KEY])   # 10-15 第1段審查二修正：清掉之後 inspect 還看得到最後一次
             _write(_p(w, FORMAT_FILE), fm)
     except Exception:  # noqa: BLE001
         pass
 
 
 def sync_errors(workdir: str | Path) -> dict | None:
-    """`格式.json` 記的同步錯誤（沒有＝None）。"""
-    return _fmt(Path(workdir)).get(ERR_KEY) or None
+    """`格式.json` 記的同步錯誤（沒有、或重新同步成功後清成 0 次＝None）。"""
+    er = _fmt(Path(workdir)).get(ERR_KEY) or None
+    return er if er and int(er.get("次數") or 0) > 0 else None
 
 
 def healthy(workdir: str | Path) -> bool:
-    """新紀錄能不能拿來讀：升級過、而且從來沒有同步失敗過（第 2 段起讀新紀錄前先問這個，False 就讀舊檔）。
-    清掉錯誤的方法：把 `修改需求/` 改名，重新升級一次（照舊檔重建）。"""
+    """新紀錄能不能拿來讀：升級過、而且沒有還沒清掉的同步錯誤（第 2 段起讀新紀錄前先問這個，False 就讀舊檔）。
+    10-15 第1段審查二修正：有錯誤時，下一次打開工作區（`ensure`）照舊檔整份重新同步一次（`resync`）；成功就把 `同步錯誤`
+    清成 0 次（`最後一次錯誤` 留給 inspect 看）。要整個重建：把 `修改需求/` 改名，重新升級一次。"""
     w = Path(workdir)
     return exists(w) and not sync_errors(w)
+
+
+def resync(workdir: str | Path) -> bool:
+    """10-15 第1段審查二修正：有同步錯誤時照舊檔整份重新同步一次（第 3 步卡片、處理紀錄的版本、成品檢查的判斷，都強制重算），
+    成功就把 `同步錯誤` 清成 0 次、留 `最後一次錯誤`。沒有錯誤什麼都不做。失敗照樣丟錯（呼叫的地方記錯誤）。回傳有沒有清。"""
+    from bookclub import proclog
+
+    w = Path(workdir)
+    if not sync_errors(w):
+        return False
+    sync_cards(w, force=True)
+    log = proclog.load(w)
+    if log and not audio_only(log) and load(w).version_at(log.get("產生時間")) is None:
+        add_version(w, log, note=NOTE_OLD_TOOL)
+    mirror_final(w, force=True)
+    with _locked(w):
+        fm = _fmt(w)
+        er = fm.get(ERR_KEY) or {}
+        fm[LAST_ERR_KEY] = fm.get(LAST_ERR_KEY) or dict(er)
+        fm[ERR_KEY] = {"次數": 0, "清掉時間": _now()}
+        _write(_p(w, FORMAT_FILE), fm)
+    return True
 
 
 def read_history(workdir: str | Path) -> list[dict]:
@@ -1366,7 +1409,10 @@ def _stage_lock(stage: Path, *, wait: bool = True):
     try:
         import fcntl
 
-        fh = open(stage / LOCK_FILE, "a+")
+        try:
+            fh = open(stage / LOCK_FILE, "a+")
+        except FileNotFoundError:   # 10-15 第1段審查二修正：別人剛把 `.升級中` 改名走（升級做完了）→ 當作正在忙，不記同步錯誤
+            raise Busy() from None
         try:
             fcntl.flock(fh, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
         except BlockingIOError:
@@ -1521,6 +1567,7 @@ def ensure(workdir: str | Path, *, running: bool = False, page: dict | None = No
             sync_cards(w, page, snap=snap)
         if not running:
             catch_up(w)
+            resync(w)   # 10-15 第1段審查二修正：有同步錯誤就整份重新同步一次，成功清成 0 次
         return None
     except Exception as e:  # noqa: BLE001 — 新紀錄出錯不能擋住老師用舊功能
         _failed_at[key] = time.monotonic()
