@@ -42,7 +42,7 @@ def test_steps_zero_to_five():
 
 def test_local_storage_wrapped_in_try():
     # 私密視窗、封鎖網站資料時 localStorage 會丟例外；讀不到要當作預設值，不能讓整頁掛掉
-    for name in ("app.js", "review.js", "finalcheck.js", "fileio.js"):
+    for name in ("app.js", "cards.js", "review.js", "finalcheck.js", "fileio.js"):
         path = WEB / name
         if not path.exists():
             continue
@@ -66,7 +66,7 @@ def test_nav_toggle_exists():
 
 def test_step3_go4_button_and_confirm():
     # 09-29 宇軒：第 3 步全部通過才能按；確認視窗兩個按鈕「開始修改」「回去檢查」，預設焦點在回去檢查
-    js = (WEB / "review.js").read_text(encoding="utf-8")
+    js = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     assert 'id="rv-go4" disabled' in js
     assert "開始修改" in js and "回去檢查" in js
     assert '#rv-confirm-back").focus()' in js
@@ -92,7 +92,7 @@ def test_save_failure_banner():
 
 def test_step3_wording():
     # 09-30：主按鈕寫動作「通過」（不是狀態「未通過」）；名字卡是「不是名字，不用改」；開始前是 4 件事
-    js = (WEB / "review.js").read_text(encoding="utf-8")
+    js = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     assert "未通過" not in js and "✓ 已通過（再按取消）" in js
     assert "保留原聲（不用改）" not in js and "不是名字，不用改" in js
     assert "3 件事" not in js and "開始前 4 件事" in js
@@ -101,7 +101,7 @@ def test_step3_wording():
 def test_step4_stop_and_step3_readonly():
     # 09-30：第 4 步有停止按鈕、預估剩餘時間；執行中第 3 步唯讀＋上方橫幅
     app = (WEB / "app.js").read_text(encoding="utf-8")
-    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     assert 'id="btnStop"' in app and "/api/execute/stop" in app and "execEtaText" in app
     assert 'id="rv-busy"' in rv and "rvApplyReadonly" in rv and 'rv.data["AI執行中"]' in rv
 
@@ -206,7 +206,7 @@ def test_overview_no_horizontal_scroll():
 
 def test_keep_all_voices_needs_confirm():
     # 09-30：「全部保留原聲」先跳確認視窗（會讓 N 位學員保留原聲、不換聲音），取消不變
-    js = (WEB / "review.js").read_text(encoding="utf-8")
+    js = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     block = js[js.index('querySelectorAll(".rv-voice-all")'):]
     block = block[:block.index("}));")]
     assert "confirm(" in block and "位學員保留原聲、不換聲音" in block
@@ -218,11 +218,11 @@ def test_interface_1001():
     # 第 5 步紅線重畫時放在目前時間；總檢查每一列可以去第 3 步；重疊卡片沒人選時顯示「（請選）」
     import re as _re
 
-    for name in ("app.js", "review.js", "finalcheck.js"):
+    for name in ("app.js", "cards.js", "review.js", "finalcheck.js"):
         code = "\n".join(_re.sub(r"//.*$", "", ln) for ln in (WEB / name).read_text(encoding="utf-8").splitlines()
                          if not ln.lstrip().startswith(("*", "/*")))
         assert not _re.search(r"\d{2}-\d{2} ?定", code), name
-    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     fcjs = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
     assert "function teRender(ctx)" in rv and "teRender(rvEdCtx)" in rv and "teRender(ctx)" in fcjs
@@ -239,7 +239,7 @@ def test_walkthrough_1001():
     import subprocess
 
     app = (WEB / "app.js").read_text(encoding="utf-8")
-    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     fcjs = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     assert "renderSeq" in app and "renderDone" in app                  # 很快連點兩步，不會停在慢的那一頁
     assert '["局部消音", "消音"]' in rv and '["改成老師", "改成老師"]' in rv   # 篩選加起來等於全部
@@ -259,7 +259,7 @@ def test_walkthrough_1001():
 def test_third_batch_1001():
     """10-01 第三批：畫面上的字與新按鈕（不出現專有名詞、內部編號、終端機指令）。"""
     app = (WEB / "app.js").read_text(encoding="utf-8")
-    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     fcj = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     assert "重新分析（做完的會跳過）" in app                                     # 10
     assert "進階設定" in app and "伺服器埠號" not in app and "<b>settings.toml</b>" not in app   # 8
@@ -280,7 +280,7 @@ def test_fourth_batch_1002():
     """10-02 第四批：總檢查確認過的列留著（灰色、可以取消或改答案、可以收合且記得）；退回重做換一種念法、看得出第幾版。
     畫面上不出現「種子」。"""
     app = (WEB / "app.js").read_text(encoding="utf-8")
-    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     fcj = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     css = (WEB / "style.css").read_text(encoding="utf-8")
     assert "fc-done" in app and "tr.fc-done" in css and "已確認" in app

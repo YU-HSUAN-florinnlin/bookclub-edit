@@ -312,7 +312,7 @@ def test_inspect_prints_attention_numbers_not_names():
 # ---------- 網頁（node 跑純函式） ----------
 
 def test_web_step3_buttons():
-    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     assert 'id="rv-go4" disabled>開始 AI 修改<' in rv and "全部通過，開始 AI 修改" not in rv
     assert "/api/execute/finalcheck" not in rv                       # 開始前不再先查總檢查
     side = _fn(rv, "rvRenderPrepSide")

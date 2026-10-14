@@ -232,7 +232,7 @@ def test_clash_includes_decisions_and_matched_text():
 
 
 def test_web_strings():
-    js = (REPO_ROOT / "bookclub" / "web" / "review.js").read_text(encoding="utf-8")
+    js = ((REPO_ROOT / "bookclub" / "web" / "review.js").read_text(encoding="utf-8") + (REPO_ROOT / "bookclub" / "web" / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     for want in ('id="rv-code-btn"', 'id="rv-codes"', "rvRenderCodeMap", "截圖或分享螢幕時，這裡會露出本名",
                  "/api/codes/initial", ">自動配</span>", "rvCodeClashOk", "rvWhoHtml"):
         assert want in js, want

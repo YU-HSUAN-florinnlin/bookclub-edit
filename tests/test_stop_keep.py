@@ -183,7 +183,7 @@ def test_project_label():
 
 def test_web_pure_functions():
     app = (WEB / "app.js").read_text(encoding="utf-8")
-    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     fcj = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     assert 'id="rv-confirm-main"' in rv and '<details class="rv-confirm-more"><summary>詳細</summary>' in rv
     assert "略過或照建議通過的項目，第 5 步都可以再檢查。要開始 AI 修改嗎？" in rv
