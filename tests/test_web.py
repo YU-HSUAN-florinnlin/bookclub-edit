@@ -73,10 +73,10 @@ def test_step3_go4_button_and_confirm():
     assert 'location.hash = "#step4"' in js
 
 
-def test_step5_blurred_preview_when_no_product():
-    # 09-29 宇軒：還沒有成品時照正式版面擺霧化預覽，按不下去（inert）
+def test_step5_no_product_one_line():
+    # 10-15 第5步2.0 第2段（31 號設計 §6.8）：還沒有成品時一句「還沒有成品，請先到第 4 步」＋連結（霧化預覽拿掉）
     js = (WEB / "finalcheck.js").read_text(encoding="utf-8")
-    assert "fcPreviewHtml" in js and "inert" in js
+    assert "還沒有成品，請先到 <a href=\"#step4\">第 4 步</a>" in js and "fcPreviewHtml" not in js and "inert" not in js
 
 
 def test_save_failure_banner():
@@ -136,7 +136,9 @@ def test_no_promises_of_unbuilt_redo():
     fc = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
     # 10-01 第三批：一鍵只重做做好了；畫面上不再叫人照指令手動重做、也不出現指令
-    assert "手動重做" not in fc and "只重做退回的這幾筆" in fc and "只重做退回的這幾筆" in app
+    assert "手動重做" not in fc and "只重做退回的這幾筆" in app
+    # 10-15 第5步2.0 第2段：第 5 步只有一顆「重做這幾張」（「送回 AI 重做」拿掉）
+    assert "重做這幾張" in fc and "送回 AI 重做" not in fc and "/api/final/sendback" not in fc
     assert "bookclub gen" not in app and "<code>${esc(it[\"建議指令\"])}" not in app
     assert "能省掉的是第 2、3 步的人工" not in app and 'id="btnAutoCode"' in app
     skill = (REPO_ROOT / "skills" / "bookclub-edit" / "SKILL.md").read_text(encoding="utf-8")
@@ -225,12 +227,12 @@ def test_interface_1001():
     rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     fcjs = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
-    assert "function teRender(ctx)" in rv and "teRender(rvEdCtx)" in rv and "teRender(ctx)" in fcjs
+    assert "function teRender(ctx)" in rv and "teRender(rvEdCtx)" in rv and "teRender(FC_ED_CTX)" in fcjs
     assert "function rvEdSave" not in rv and "rv-ed-save" not in rv           # 舊的那一份拿掉了，只留共用的
     assert 'id="fc-head" style="left:' in fcjs and '"seeked"' in fcjs
     assert "data-fcgo" in app and "data-fcpath" in app and "rvJump(" in app and "function rvJump" in rv
     assert "（請選）" in rv and "就是這一位" in rv and "程式猜是" in rv
-    assert '"primary on"' in fcjs and "已退回重做" in fcjs
+    assert '"primary on"' in fcjs and "已退回重做" not in fcjs   # 10-15：按過的按鈕變色，不另加字
 
 
 def test_walkthrough_1001():
@@ -243,10 +245,10 @@ def test_walkthrough_1001():
     fcjs = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     assert "renderSeq" in app and "renderDone" in app                  # 很快連點兩步，不會停在慢的那一頁
     assert '["局部消音", "消音"]' in rv and '["改成老師", "改成老師"]' in rv   # 篩選加起來等於全部
-    assert "fmtStamp(" in app and "fmtStamp(" in fcjs                  # 不顯示 2026-10-01T03:16:01
-    assert '"刪除": "剪掉（連畫面）"' in fcjs and "刪除點" not in fcjs
+    assert "fmtStamp(" in app and "fcShortStamp(" in fcjs              # 不顯示 2026-10-01T03:16:01
+    assert '"剪掉（連畫面）"' in rv and "刪除點" not in fcjs            # 10-15：第 5 步卡片的類型名稱跟第 3 步同一份
     assert 'it["狀態"] === "還原" ? "不消音"' in rv
-    assert "rvRuleHint(t[\"類型\"], t[\"老師整段\"], true)" in fcjs
+    assert "rvRuleHint(ed.kind, ed.whole, !!ed.id)" in fcjs
     assert "存逐字稿（音檔不換）" in app and "換成這個候選的新音檔" in app
     node = shutil.which("node")
     if node:   # rvFmt 不會出現「:60.0」
@@ -269,7 +271,7 @@ def test_third_batch_1001():
     assert "execGoCheck" not in rv and "execGoCheck" in app   # 9：10-08 流程簡化後第 3 步不再帶去第 4 步總檢查（總檢查預設略過）
     assert "第 5 步退回：" in rv                                                   # 5
     assert "現在狀態" in app and "上次執行：" in app                               # 4
-    assert "不會像第 3 步那樣自動對齊到句子的開頭、結尾，切點要自己聽準" in fcj        # 11
+    assert "調整時間範圍" not in fcj   # 11：10-15 第 5 步改範圍改用第 3 步卡片的「改時間」（面板拿掉）
     assert "已還原的（" in rv and "刪掉這一筆" in rv and "刪掉的紀錄（" in rv       # 第三批 3
     assert "會換掉的範圍" in rv and "裡面老師的聲音都不保留" in rv                   # 第三批 1
     for old in ("老師整句生成", "學員整句生成（", "老師 AI 重念：", "剪掉片段（連畫面）"):
@@ -286,7 +288,7 @@ def test_fourth_batch_1002():
     assert "fc-done" in app and "tr.fc-done" in css and "已確認" in app
     assert "把確認好的收合起來" in app and "（點了展開）" in app and "FC_FOLD_KEY" in app
     assert "data-fcout" in app and "/api/review/outside" in app and "改答案" in app
-    assert "換一種念法" in app and "換一種念法" in fcj and "版" in fcj
+    assert "換一種念法" in app and '第 ${c["第幾版"]} 版' in fcj   # 10-15：第 5 步只留「第 N 版」標籤
     assert "多半會跟上一版一樣" not in app and "生成的規則一樣" not in fcj
     assert "第 4 步總檢查不會再問這幾秒" not in rv
     for js in (app, rv, fcj):   # 畫面上的字不用「種子」

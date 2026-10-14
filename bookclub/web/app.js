@@ -520,6 +520,7 @@ function bindFinalCheck(reload) {
 
 async function renderExecuteBody() {
   const d = await apiGet("/api/execute");
+  if (execRedoGoBack(d)) return;   // 10-15：從第 5 步「重做這幾張」來的，跑完了就回第 5 步
   let fc = null;
   try { if (!d.running) fc = await apiGet("/api/execute/finalcheck"); } catch (e) { fc = null; }
   const pre = d["前置檢查"];
@@ -777,6 +778,25 @@ function awakeLine(s) {
   return `<p><span class="badge ${t.startsWith("沒開成") ? "error" : ""}">防睡眠</span> ${esc(t)}</p>`;
 }
 
+// 10-15 第5步2.0 第2段：第 5 步按「重做這幾張」跳過來的（since＝按的時間），這一次執行好好跑完就自動跳回第 5 步（純函式）。
+// 回傳 "回第5步"（跑完了）、"留下"（停止、失敗、中斷：停在第 4 步照現有提示）、null（還在跑、或不是從第 5 步來的）
+function execRedoReturn(d, since) {
+  if (!since || !d || d.running) return null;
+  if (!d.started_at || d.started_at * 1000 < since - 10000) return null;   // 不是這一次（伺服器還沒開始跑，或是更早的那一次）
+  const prog = d["進度"] || {};
+  if (d.error || d.stopped || prog["停止"] || prog["錯誤"] || prog["中斷"]) return "留下";
+  return d.finished_at ? "回第5步" : null;
+}
+
+function execRedoGoBack(d) {
+  const r = execRedoReturn(d, typeof fcRedoBackGet === "function" ? fcRedoBackGet() : null);
+  if (!r) return false;
+  fcRedoBackClear();
+  if (r !== "回第5步") return false;
+  location.hash = "#step5";
+  return true;
+}
+
 function startExecPoll() {
   if (execPollTimer) clearInterval(execPollTimer);
   execPollTimer = setInterval(async () => {
@@ -796,7 +816,7 @@ function startExecPoll() {
       if (aw) aw.innerHTML = awakeLine(d);
       const tb = document.getElementById("execTimeBox");   // 10-08：執行中「已執行 x 分」跟著更新
       if (tb) tb.innerHTML = execTimeHtml(d["執行時間"]);
-      if (!d.running) { clearInterval(execPollTimer); execPollTimer = null; await renderExecuteBody(); }
+      if (!d.running) { clearInterval(execPollTimer); execPollTimer = null; if (execRedoGoBack(d)) return; await renderExecuteBody(); }
     } catch (e) { pollFailed(e); /* 輪詢失敗，下一次再試；連續幾次連不上就出橫幅 */ }
   }, 2000);
 }

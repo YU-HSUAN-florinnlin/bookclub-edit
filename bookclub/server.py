@@ -1137,7 +1137,17 @@ class BookclubServer(ThreadingHTTPServer):
                 # 10-13 bug 二：上次輸出的最終成品比現在的成品舊（null＝沒過期）——按鈕旁黃字、複製到 Windows 先問
                 "上次輸出過期": {"說明": stale["說明"], "舊檔": stale["舊檔"], "原因": stale["原因"]} if stale else None,
                 # 10-13 審查修正二（建議 4）：拿的是最新那支（不是第 5 步正在檢查的這支）——網頁照這欄寫說明
-                "拿檔是最新那支": bool(what and what.startswith(TAKE_LATEST))}
+                "拿檔是最新那支": bool(what and what.startswith(TAKE_LATEST)),
+                # 10-15 第5步2.0 第2段：上次輸出的是第幾版、最新是第幾版（拿檔按鈕旁只在不是最新時寫一行）
+                "版本": self._export_versions()}
+
+    def _export_versions(self) -> dict | None:
+        from bookclub import finalcards
+
+        try:
+            return finalcards.export_versions(self.workdir)
+        except Exception:  # noqa: BLE001 — 讀不到就照舊的說法
+            return None
 
     def final_reveal(self) -> dict:
         from bookclub import fileio

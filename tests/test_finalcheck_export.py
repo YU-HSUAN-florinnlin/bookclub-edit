@@ -192,6 +192,8 @@ def test_api_confirm_must_be_true():
 
 
 def test_web_blocked_dialog_has_no_export_button():
+    """10-15 第5步2.0 第2段（31 號設計 §6.8）：確認視窗一句「還有 N 張沒看完，確定要輸出嗎？」；本名紅字照留；其他收進「詳細」。
+    擋下的（標字版）只說要先做什麼、沒有輸出鈕。"""
     if not NODE:
         return
     blocked = {"說明": ["整片還沒看完（看過 10%）"], "擋下": ["現在檢查的是「標字版」（畫面上標了 AI 改了哪裡，給人對照用），不能當成品輸出"],
@@ -199,16 +201,16 @@ def test_web_blocked_dialog_has_no_export_button():
     redo = {"說明": ["還有 1 筆沒通過（其中 1 筆是退回重做、還沒重做）"], "擋下": [],
             "退回清單": [{"成品秒": 9.0, "原片秒": 10.0, "原因": "第二句念錯"}, {"成品秒": None, "原片秒": 30.0, "原因": "x"}],
             "提醒": ["第 4 步正在重做退回的那幾筆（或上次沒做完）：現在輸出的是重做之前的版本"]}
-    got = _node(_fn("fcExportAsk") + f"""
-      console.log(JSON.stringify([fcExportAsk({json.dumps(blocked, ensure_ascii=False)}, true),
-                                  fcExportAsk({json.dumps(redo, ensure_ascii=False)}, false)]));""")
+    got = _node("function fcFmt(t) { return String(t); }\n" + _fn("fcExportAsk") + f"""
+      console.log(JSON.stringify([fcExportAsk({json.dumps(blocked, ensure_ascii=False)}, true, 3),
+                                  fcExportAsk({json.dumps(redo, ensure_ascii=False)}, false, 2)]));""")
     b, r = got
-    assert b["blocked"] and b["title"] == "還不能輸出" and "標字版" in b["body"] and b["win"] == ""
-    assert not r["blocked"] and r["redoHead"] == "有 2 筆退回重做還沒重做，輸出的是重做之前的樣子"
-    assert r["redo"] == [{"t": 9.0, "kind": "成品", "why": "第二句念錯"}, {"t": 30.0, "kind": "原片", "why": "x"}]
-    assert "重做之前的版本" in r["warn"][0]
+    assert b["blocked"] and b["title"] == "還不能輸出" and "標字版" in b["details"][0] and len(b["details"]) == 1
+    assert not r["blocked"] and r["title"] == "還有 2 張沒看完，確定要輸出嗎？"
+    d = "\n".join(r["details"])
+    assert "有 2 筆退回重做還沒重做" in d and "成品 9 第二句念錯" in d and "原片 30 x" in d and "重做之前的版本" in d
     dlg = _fn("fcConfirmExport")
-    assert "a.blocked ?" in dlg and 'id="fc-export-yes"' in dlg and "知道了" in dlg
+    assert "a.blocked ?" in dlg and 'id="fc-export-yes"' in dlg and "知道了" in dlg and "<summary>詳細</summary>" in dlg
 
 
 def _fn(name: str) -> str:
@@ -221,21 +223,17 @@ def _node(code: str):
     return json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
 
 
-def test_web_confirm_text_and_early_note():
+def test_web_confirm_text():
     if not NODE:
         print("（沒有 node，略過）")
         return
     gaps = fc.export_gaps({"看過比例": 0.73, "逐筆": {"通過": 8, "退回": 0, "總數": 20}, "未登記": {"沒問題": 0, "總數": 0}, "退回數": 0})
-    got = _node(_fn("fcExportAsk") + _fn("fcExportedEarly") + f"""
+    got = _node("function fcFmt(t) { return String(t); }\n" + _fn("fcExportAsk") + f"""
       const g = {json.dumps(gaps, ensure_ascii=False)};
-      console.log(JSON.stringify({{ mac: fcExportAsk(g, false), win: fcExportAsk(g, true),
-        early: fcExportedEarly({{"檢查完才輸出": false, "看過百分比": 73, "沒通過筆數": 12, "沒確認變動筆數": 0}}),
-        ok: fcExportedEarly({{"檢查完才輸出": true, "看過百分比": 100}}),
-        old: fcExportedEarly({{"檔案": "輸出/最終成品_x.mp4"}}), none: fcExportedEarly(null) }}));""")
-    assert got["mac"]["body"] == "整片還沒看完（看過 73%）、還有 12 筆沒通過。確定要以目前的狀態輸出嗎？"
-    assert got["mac"]["win"] == "" and "複製成品到 Windows 的下載資料夾" in got["win"]["win"]
-    assert got["early"] == "這次輸出時還沒看完（看過 73%）、還有 12 筆沒通過"
-    assert got["ok"] == "" and got["old"] == "" and got["none"] == ""   # 舊的輸出紀錄沒這幾欄：不提示
+      console.log(JSON.stringify({{ mac: fcExportAsk(g, false, 0), win: fcExportAsk(g, true, 12) }}));""")
+    assert got["mac"]["title"] == "確定要輸出嗎？" and "整片還沒看完（看過 73%）" in got["mac"]["details"]
+    assert not any("Windows" in x for x in got["mac"]["details"]) and any("複製成品到 Windows 的下載資料夾" in x for x in got["win"]["details"])
+    assert got["win"]["title"] == "還有 12 張沒看完，確定要輸出嗎？"
 
 
 def test_web_export_wiring():
@@ -244,8 +242,7 @@ def test_web_export_wiring():
     assert "fileOutInit(" in ex                                       # 輸出後按鈕改指向剛輸出的那一支
     top = _fn("fcRenderTop")
     assert 'ex.disabled = !fc.data["有處理紀錄"] || !fc.data["成品影片"]' in top
-    # 10-13 bug 一：頂端提示改多行，「已輸出」那一行搬到 fcTopLines
-    assert "fcTopLines(" in top and "fcExportedEarly(" in _fn("fcTopLines")
+    assert "fcStatusLine(" in top and "fcExportedEarly" not in FCJS   # 10-15：頂端只一句；提早輸出的細節收進輸出紀錄
 
 
 if __name__ == "__main__":

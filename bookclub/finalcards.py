@@ -260,3 +260,17 @@ def edited(workdir: str | Path, key: str, new: bool = False) -> dict:
         return {"ok": True, "記了": False}
     no = needs.mark_edited(workdir, str(key), new=bool(new))
     return {"ok": True, "記了": bool(no), "卡號": no}
+
+
+def export_versions(workdir: str | Path) -> dict | None:
+    """拿檔按鈕旁那一行要的：上次輸出的是第幾版、最新是第幾版（新紀錄不能用、沒輸出過、對不到版本＝None）。"""
+    workdir = Path(workdir)
+    if not needs.healthy(workdir):
+        return None
+    out = fc.load_check(workdir).get("輸出成品") or {}
+    st = needs.load(workdir)
+    v = st.version_at(out.get("處理紀錄產生時間")) if out.get("處理紀錄產生時間") else None
+    last = st.latest_version()
+    if v is None or last is None:
+        return None
+    return {"輸出版本": v["版本號"], "最新版本": last["版本號"]}

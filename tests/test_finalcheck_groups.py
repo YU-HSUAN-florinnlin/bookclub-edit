@@ -242,26 +242,16 @@ def _node(code: str):
     return json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
 
 
-def test_web_group_recs_and_unchanged():
+def test_web_unchanged_groups():
+    """「第 3 步選定不修改」照子類分組（10-15 起收在第 5 步最右邊那一頁；「有修改的」改成第 3 步的卡片分頁，見 test_final_cards_web.py）。"""
     if not NODE:
         print("（沒有 node，略過）")
         return
-    groups = [{"組": g, "名稱": n, "說明": x} for g, n, x in fc.CHANGE_GROUPS]
-    recs = [{"鍵": "a", "組": "剪掉", "結果": "通過"}, {"鍵": "b", "組": "學員重念"}, {"鍵": "c", "組": "剪掉", "要人看": True},
-            {"鍵": "d"}, {"鍵": "e", "組": "不認得的"}]
     kinds = [{"子類": k, "名稱": n, "去改": x} for k, n, x in fc.UNCHANGED_KINDS]
     rows = [{"鍵": "u1", "子類": "保留原聲"}, {"鍵": "u2", "子類": "改成老師"}, {"鍵": "u3", "子類": "保留原聲"}, {"鍵": "u4", "子類": "新的"}]
-    got = _node(_fn("fcGroupRecs") + _fn("fcGroupUnchanged") + f"""
-      const G = fcGroupRecs({json.dumps(recs, ensure_ascii=False)}, {json.dumps(groups, ensure_ascii=False)});
-      const O = fcGroupRecs([{{"鍵": "z"}}], undefined);   // 舊的後端沒有「修改類型」
+    got = _node(_fn("fcGroupUnchanged") + f"""
       const U = fcGroupUnchanged({json.dumps(rows, ensure_ascii=False)}, {json.dumps(kinds, ensure_ascii=False)});
-      console.log(JSON.stringify({{
-        g: G.map((x) => [x["組"], x.recs.map((r) => r["鍵"]), x["通過"], x["要人看"]]),
-        o: O.map((x) => [x["組"], x.recs.length]),
-        u: U.map((x) => [x["子類"], x.rows.map((r) => r["鍵"])]),
-        none: fcGroupUnchanged(undefined, undefined).length }}));""")
-    assert got["g"] == [["學員重念", ["b"], 0, 0], ["剪掉", ["a", "c"], 1, 1], ["其他", ["d", "e"], 0, 0]]
-    assert got["o"] == [["其他", 1]]
+      console.log(JSON.stringify({{u: U.map((x) => [x["子類"], x.rows.map((r) => r["鍵"])]), none: fcGroupUnchanged(undefined, undefined).length}}));""")
     assert got["u"] == [["改成老師", ["u2"]], ["保留原聲", ["u1", "u3"]], ["新的", ["u4"]]]
     assert got["none"] == 0
 
@@ -291,92 +281,19 @@ def test_web_play_span_gives_up_after_10s():
     assert "fcSpanStep(fc.span, t, Date.now())" in js and "FC_SPAN_WAIT_MS + 50" in js
 
 
-def _consts() -> str:
-    m = re.search(r"^const FC_TAB_ALL = .*?;\n", FCJS, re.M)
-    assert m
-    return m.group(0)
-
-
-def test_web_tabs_like_step3():
-    """10-08 宇軒：第 5 步下方照第 3 步用分頁。分頁列：全部、還沒通過、每一組（有筆數的）、第 3 步選定不修改（有才列）；
-    徽章寫通過 x／n 與要人聽幾筆；記住的頁不見了回全部。"""
-    if not NODE:
-        return
-    groups = [{"組": g, "名稱": n, "說明": x} for g, n, x in fc.CHANGE_GROUPS]
-    recs = [{"鍵": "a", "組": "剪掉", "結果": "通過"}, {"鍵": "b", "組": "學員重念", "要人看": True}, {"鍵": "c", "組": "剪掉"},
-            {"鍵": "d", "組": "學員重念", "結果": "通過"}]
-    got = _node(_consts() + _fn("fcGroupRecs") + _fn("fcTabList") + _fn("fcPickTab") + f"""
-      const R = {json.dumps(recs, ensure_ascii=False)}, G = {json.dumps(groups, ensure_ascii=False)};
-      const T = fcTabList(R, G, [{{"鍵": "u1"}}], "d");
-      const T2 = fcTabList(R, G, [], null);
-      console.log(JSON.stringify({{
-        t: T.map((x) => [x.id, x["名稱"], x.recs.map((r) => r["鍵"]), x["通過"], x["筆數"], x["要人看"] || 0]),
-        keep: T[T.length - 1]["不修改"] === true,
-        t2: T2.map((x) => x.id),
-        pick: [fcPickTab(T, "組:剪掉"), fcPickTab(T2, "不修改"), fcPickTab(T, "組:停格"), fcPickTab(T, null)] }}));""")
-    assert got["t"] == [["全部", "全部", ["a", "b", "c", "d"], 2, 4, 1],
-                        ["還沒通過", "還沒通過", ["b", "c", "d"], 1, 3, 1],    # 目前這一筆（d）通過了也先留著
-                        ["組:學員重念", "學員段落：AI 重念", ["b", "d"], 1, 2, 1],
-                        ["組:剪掉", "剪掉（連畫面）", ["a", "c"], 1, 2, 0],
-                        ["不修改", "第 3 步選定不修改", [], 0, 1, 0]]
-    assert got["keep"] and got["t2"] == ["全部", "還沒通過", "組:學員重念", "組:剪掉"]   # 沒有不修改就不列那一頁
-    assert got["pick"] == ["組:剪掉", "全部", "全部", "全部"]
-
-
-def test_web_step_pick_when_current_is_on_another_tab():
-    """上一筆／下一筆：目前這一筆在這一頁就照順序；不在這一頁（影片跟著播到別頁的）就照播放位置找前後最近的一筆。"""
-    if not NODE:
-        return
-    L = [{"鍵": "a", "成品": [10, 12]}, {"鍵": "b", "成品": [30, 31]}, {"鍵": "c", "成品": None}, {"鍵": "d", "成品": [50, 52]}]
-    got = _node(_fn("fcStepPick") + f"""
-      const L = {json.dumps(L)};
-      console.log(JSON.stringify([
-        fcStepPick(L, "b", 0, 1), fcStepPick(L, "b", 0, -1),   // 在清單裡：照順序（沒有時間的 c 也照位置）
-        fcStepPick(L, "a", 0, -1), fcStepPick(L, "d", 0, 1),
-        fcStepPick(L, "x", 20, 1),    // 別頁那一筆、播到 20 秒：下一筆是 30 秒的 b（以前會跳過第一筆、選到 b 以後）
-        fcStepPick(L, "x", 20, -1),   // 上一筆是 10 秒的 a
-        fcStepPick(L, "x", 5, 1),     // 都在後面：第一筆 a（以前會選到第二筆）
-        fcStepPick(L, "x", 5, -1),    // 前面沒有：第一筆
-        fcStepPick(L, "x", 60, 1),    // 後面沒有：最後一筆
-        fcStepPick(L, "x", 60, -1),   // 前面最後一筆有時間的是 d
-        fcStepPick(L, "x", 30, 1),    // 正好在 b 的起點：下一筆是 b 之後的 d
-        fcStepPick([], "x", 0, 1)]));""")
-    assert got == ["c", "a", "a", "d", "b", "a", "a", "a", "d", "d", "d", None]
-
-
-def test_web_tab_done_hint():
-    """某一頁都通過了、別頁還有沒通過的：顯示「這一頁都通過了，還有 N 筆沒通過（到『還沒通過』）」。"""
-    if not NODE:
-        return
-    allr = [{"鍵": "a", "結果": "通過"}, {"鍵": "b", "結果": "通過"}, {"鍵": "c"}, {"鍵": "d", "結果": "退回重做"}]
-    got = _node(_consts() + _fn("fcTabDoneLeft") + f"""
-      const A = {json.dumps(allr, ensure_ascii=False)};
-      console.log(JSON.stringify([
-        fcTabDoneLeft("組:剪掉", A.slice(0, 2), A),     // 這一頁都通過：別頁還有 2 筆（退回的也算沒通過）
-        fcTabDoneLeft("組:剪掉", A.slice(1, 3), A),     // 這一頁還有沒通過的：不顯示
-        fcTabDoneLeft("組:剪掉", [], A),                // 空的頁：不顯示
-        fcTabDoneLeft("全部", A.slice(0, 2), A), fcTabDoneLeft("還沒通過", A.slice(0, 2), A), fcTabDoneLeft("不修改", [], A),
-        fcTabDoneLeft("組:剪掉", A.slice(0, 2), A.slice(0, 2))]));   // 全部都通過了：不顯示""")
-    assert got == [2, 0, 0, 0, 0, 0, 0]
-
-
 def test_web_lower_wiring():
-    """分頁列沿用第 3 步的 .rv-filters；頁面記在瀏覽器；只看要人聽的、上一筆／下一筆、通過後找下一筆都在目前這一頁裡走；
-    從第 3 步回來切到那一筆所在的頁；按鈕接到只播那一段與回第 3 步。"""
+    """10-15 第5步2.0 第2段：分頁列沿用第 3 步的 .rv-filters（分頁、上一張下一張的純函式在 test_final_cards_web.py）；
+    頁面記在瀏覽器；「第 3 步選定不修改」「需留意」收在最右邊、按鈕照舊接到只播那一段與回第 3 步。"""
     lower = _fn("fcRenderLower")
-    assert 'class="rv-filters fc-tabs"' in lower and "fcTabSet(b.dataset.tab)" in lower and "fcTabBadge(" in lower
-    assert 'id="fc-only"' in lower and "fcShown()" in lower and "<details" not in FCJS   # 不再用可收合的群組
+    assert 'class="rv-filters fc-tabs"' in lower and "fcTabSet(b.dataset.tab)" in lower
+    assert 'id="fc-only"' in lower and "fcShown()" in lower
     assert 'const FC_TAB_KEY = "fc-tab"' in FCJS and "localStorage.getItem(FC_TAB_KEY)" in FCJS
     shown = _fn("fcShown")
     assert "fcTab()" in shown and "fcOnlyLook()" in shown
     assert "fcShown()" in _fn("fcStep") and "fcStepPick(" in _fn("fcStep")
-    assert 'id="fc-curhint"' in lower and "fcRenderCurHint();" in _fn("fcMarkRow") and "fc-dot" in _fn("fcRenderCurHint")
-    assert "fcTabDoneLeft(" in lower and "fcTabSet(FC_TAB_TODO)" in lower
-    assert "fcTab() !== FC_TAB_ALL ? fcShown()" in _fn("fcDecide")
-    rf = _fn("renderFinal")
-    assert "fcTabSet(fcTabOf(key))" in rf and "fcTabSet(FC_TAB_KEEP)" in rf
+    assert "fcTabSet(FC_TAB_KEEP)" in _fn("renderFinal")
     assert "fcPlaySpan(" in lower and "rvJump({ key: u[\"第3步\"] || null, back: \"step5\", backKey: u[\"鍵\"]" in lower
-    assert 'id="fc-list"' in lower and 'id="fc-ulist"' in lower and "fcSpanTick(v.currentTime)" in FCJS
+    assert 'id="fc-list"' in lower and 'id="fc-ulist"' in _fn("fcKeepHtml") and "fcSpanTick(v.currentTime)" in FCJS
     assert FCJS.count("fileOutInit(") >= 1 and 'id="fc-fileout"' in FCJS   # 10-07 加的檔案進出照留
 
 

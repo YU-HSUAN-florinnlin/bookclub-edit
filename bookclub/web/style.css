@@ -758,3 +758,29 @@ details.fc-whole > summary { cursor: pointer; list-style: none; display: flex; f
 details.fc-whole > summary::-webkit-details-marker { display: none; }
 details.fc-whole > summary .fc-foldbtn { font-size: 13px; border: 1px solid var(--line, #ccc); border-radius: 6px; padding: 2px 8px; }
 details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合）"; }
+
+/* 10-15 第5步2.0 第2段：第 5 步用第 3 步的卡片——狀態標籤、頂端一句、時間軸上的點照狀態上色 */
+.fc { --fc-todo: #8a8f98; --fc-ok: #3f8f5a; --fc-back: #d62828; }
+.fc-status { flex: 1; font-size: 17px; font-weight: 600; }
+.fc-status .fc-st-name { color: var(--danger); }
+.fc-status .fc-st-redo { color: var(--warn); }
+.fc-status .fc-st-done { color: var(--fc-ok); }
+.fc-oldsrc { margin-left: 8px; font-weight: normal; }
+.fc-none { font-size: 18px; margin: 24px 0 8px; }
+.fc-seenpct { margin: 4px 0 0; }
+.fc-tag { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 14px; font-weight: 600; background: var(--bg-soft); color: var(--fg); }
+.fc-tag-todo { background: var(--bg-soft); }
+.fc-tag-ok { background: #e3f3e8; color: var(--fc-ok); }
+.fc-tag-back { background: var(--danger-bg); color: var(--danger); }
+.fc-tag-edited, .fc-tag-made { background: var(--warn-bg); color: var(--warn); }
+.fc-card .fc-preview { margin: 8px 0; line-height: 1.6; }
+.fc-card .fc-why { margin: 6px 0 0; }
+.fc-editbox { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rv-line); }
+.fc-tl .fm.fc-todo { background: var(--fc-todo); } .fc-tl .fm.fc-ok { background: var(--fc-ok); } .fc-tl .fm.fc-back { background: var(--fc-back); }
+.sw.fc-todo { background: var(--fc-todo); } .sw.fc-ok { background: var(--fc-ok); } .sw.fc-back { background: var(--fc-back); }
+.rv-list .st.fc-tag { justify-self: end; }
+.fc-bottom { margin: 12px 0; gap: 12px; }
+.rv2 .fc-tabs button.fc-tab-far { opacity: .7; }
+.rv2 .fc-tabs button.fc-tab-far:first-of-type, .rv2 .fc-tabs .fc-tab-far { margin-left: auto; }
+.rv2 .fc-tabs .fc-tab-far + .fc-tab-far { margin-left: 0; }
+.fc-only { display: inline-block; margin: 0 0 6px; font-size: 14px; }

@@ -205,6 +205,18 @@ function foStaleAsk(why) {
   return `${why || "上次輸出的不是現在這一支成品"}。現在這一支還沒按「輸出成品」，要先複製它嗎？（建議檢查完先按輸出成品）`;
 }
 
+// 拿檔按鈕旁那一行（純函式）：上次輸出的不是最新的才寫；Windows（WSL）輸出過、還沒複製時寫「要拿檔案，按『複製到 Windows』」
+function foWhichLine(d, job) {
+  const stale = d["上次輸出過期"];
+  if (stale) {
+    const v = d["版本"];
+    const text = v && v["輸出版本"] !== v["最新版本"] ? `上次輸出的是第 ${v["輸出版本"]} 版，最新是第 ${v["最新版本"]} 版` : `上次輸出的不是最新的成品（${stale["說明"] || ""}）`;
+    return `<span class="rv-warnline">${esc(text)}</span>`;
+  }
+  if (d["可以複製到Windows"] && d["成品是"] === "最終成品" && !(job && job["狀態"] === "完成")) return `<span class="muted">要拿檔案，按『複製到 Windows』</span>`;
+  return "";
+}
+
 async function fileOutInit(el) {
   if (!el) return;
   if (!el.querySelector("#foMain")) {   // 第一次：排好三塊（按鈕列每秒重畫時，片頭片尾與資料夾瀏覽不會被洗掉）
@@ -228,9 +240,9 @@ async function fileOutInit(el) {
   // 10-13 bug 二：上次輸出的最終成品比現在的成品舊——黃字說明、複製按鈕改字。
   // 10-13 審查修正二（建議 3、4）：照伺服器 `拿檔是最新那支` 寫拿的是哪一支（看舊檔或標字版時拿的是最新那支）
   const stale = d["上次輸出過期"];
-  const takeWhich = d["拿檔是最新那支"] ? "這裡拿的是最新組裝的那支（不是第 5 步正在檢查的這支）" : "這裡拿的是還在檢查的成品";
   const winLabel = stale ? "複製現在的成品到 Windows（還沒重新輸出）" : "複製成品到 Windows 的下載資料夾";
-  const which = d["成品"] ? `<span class="${stale ? "rv-warnline" : "muted"}">${esc(d["成品是"] || "")}：${esc(d["成品"])}${stale ? `　上次輸出的最終成品（${esc(stale["舊檔"])}）比現在的舊，${takeWhich}` : ""}</span>` : "";
+  // 10-15 第5步2.0 第2段（31 號設計 §6.8）：拿的是哪一支只在「不是最新」時寫一行；Windows 輸出後提醒要再按複製
+  const which = foWhichLine(d, job);
   main.innerHTML = `<div class="fo-row">
       <button class="secondary" id="fo-open" ${d["成品"] ? "" : "disabled"}>${openName}</button>
       ${d["可以複製到Windows"] ? `<button class="secondary" id="fo-win" ${d["成品"] && !running ? "" : "disabled"}>${winLabel}</button>` : ""}
