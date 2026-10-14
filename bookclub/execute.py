@@ -1843,6 +1843,9 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     from bookclub import nameplan
 
     nameplan.refresh_plan(workdir)   # 10-02 第七批（A1）：每次都重排名字處理計畫，組裝才拿得到最新的做法
+    from bookclub import needs   # 10-14 第5步2.0 第1段：第 3 步改過的同步成卡片、記下每一句生成句是為了哪幾張卡
+
+    needs.on_execute_start(workdir, log=log)
     # 10-08：這次要組裝成品 → 記下開始當下總檢查沒處理（預設略過）的列；不組裝（只生成聲音）就沿用上一次的紀錄
     if reassemble_only or not only_steps or "組裝" in only_steps:
         skipped = skipped_snapshot(workdir)

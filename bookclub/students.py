@@ -373,8 +373,9 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
                 })
             continue
         pieces = split_edited(t, all_sents) if edited else None
-        qm = turn_quiet(workdir, t["start"], t["end"]) if len(sents) > 1 else None
-        for k, chunk in enumerate(plan_slots(sents, cuts, boundary=qm.boundary if qm else None), start=1):
+        qm = turn_quiet(workdir, t["start"], t["end"]) if len(sents) > 1 or len(all_sents) > 1 else None
+        chunks = plan_slots(sents, cuts, boundary=qm.boundary if qm else None)
+        for k, chunk in zip(turn_numbers(chunks, all_sents, sents, cuts, qm), chunks):
             group = chunk["句子"]
             raw = "".join(s["text"] for s in group)
             src = "".join(pieces[s["id"]] for s in group) if pieces else raw
@@ -397,6 +398,26 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
     if not keep_empty:
         items += overlap_items(workdir, items, spans, kept, cuts, table, lo, hi, only)
     return items, spans
+
+
+def turn_numbers(chunks: list[dict], all_sents: list[dict], sents: list[dict], cuts: list,
+                 qm: "QuietMap | None" = None) -> list[int]:
+    """10-14 第5步2.0 第1段（31 號設計 §3.5、§8.4）：學員生成句 `<段落id>_<序號>` 的序號改成在**整個段落**裡數，
+    不看這次範圍——範圍不同，同一格不會換號（以前 `_02` 是在這次範圍裡從頭數）。
+    整個段落都在範圍裡（最常見）時跟以前完全一樣：1、2、3⋯。段落被範圍切到時，先照整段排一次格子，
+    範圍裡的每一格取「第一句所在的整段格子」的序號（用過了改用最後一句的，再撞號才往後找沒用過的）。"""
+    if len(sents) == len(all_sents):
+        return list(range(1, len(chunks) + 1))
+    full = plan_slots(all_sents, cuts, boundary=qm.boundary if qm else None)
+    where = {s["id"]: k for k, c in enumerate(full, start=1) for s in c["句子"]}
+    out: list[int] = []
+    for c in chunks:
+        ids = [s["id"] for s in c["句子"]]
+        n = next((where[i] for i in (ids[:1] + ids[-1:]) if i in where and where[i] not in out), None)
+        if n is None:
+            n = max(out + [len(full)]) + 1
+        out.append(n)
+    return out
 
 
 def overlap_items(workdir: Path, turn_items: list[dict], spans: dict, kept: set, cuts: list, table: list,

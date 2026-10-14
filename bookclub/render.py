@@ -1261,6 +1261,12 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
             tmp.replace(dst)
             final = dst
             commit_logs()
+            try:   # 10-14 第5步2.0 第1段：這一支成品記到這一版（修改需求紀錄的版本表）
+                from bookclub import needs
+
+                needs.add_product(workdir, log_data.get("產生時間"), str(dst.relative_to(workdir)))
+            except Exception as e:  # noqa: BLE001
+                print(f"[修改需求紀錄] ⚠️ 成品沒記到版本（不影響成品）：{type(e).__name__}")
         else:
             final = out / f"成品_{tag}_{m}_驗證沒過.mp4"
             tmp.replace(final)

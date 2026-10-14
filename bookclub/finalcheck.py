@@ -571,6 +571,20 @@ def load_check(workdir: Path) -> dict:
 
 def _save(workdir: Path, data: dict) -> None:
     wd.write_json(check_path(workdir), data)
+    _mirror(workdir, data)
+
+
+def _mirror(workdir: Path, data: dict) -> None:
+    """10-14 第5步2.0 第1段：雙寫——成品檢查照舊格式寫完，修改需求紀錄算出每張卡在這一版的狀態（`needs.mirror_final`）。
+    判斷沒變（例如只記了看過區段）時不重算；沒升級過的工作區不做；出錯只提醒，不擋第 5 步。"""
+    if wd.writes_blocked():
+        return
+    try:
+        from bookclub import needs
+
+        needs.mirror_final(workdir, data)
+    except Exception as e:  # noqa: BLE001
+        print(f"[修改需求紀錄] ⚠️ 第 5 步的判斷沒同步到新紀錄（不影響第 5 步）：{type(e).__name__}")
 
 
 def products(workdir: Path) -> list[str]:

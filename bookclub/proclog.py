@@ -423,6 +423,13 @@ def collect_links(workdir: Path, d: dict) -> dict:
 
 def _write(workdir: Path, data: dict) -> dict:
     wd.write_json(log_path(workdir), data)
+    if not wd.writes_blocked():
+        try:   # 10-14 第5步2.0 第1段：每次組裝（寫處理紀錄的那一刻）在修改需求紀錄建一個版本；沒升級過的工作區不建
+            from bookclub import needs
+
+            needs.add_version(workdir, data)
+        except Exception as e:  # noqa: BLE001 — 新紀錄出錯不擋組裝
+            print(f"[修改需求紀錄] ⚠️ 這次組裝沒記成新版本（不影響成品）：{type(e).__name__}")
     n = len(data["未登記的變動"])
     print(f"[處理紀錄] {len(data['紀錄'])} 筆 → {log_path(workdir)}；"
           + (f"⚠️ 有 {n} 處聲音變了但沒有紀錄，第 5 步要人確認" if n else "沒有未登記的變動"))

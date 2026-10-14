@@ -1524,8 +1524,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/review":
             from bookclub.review import page_data as review_page
 
-            self._send_json(200, {**review_page(server.workdir, video=server.video),
-                                  "AI執行中": server.exec_running()})   # 09-30：執行中第 3 步變唯讀
+            page = review_page(server.workdir, video=server.video)
+            _needs_ensure(server, page)   # 10-14 第5步2.0 第1段：第一次打開升級；之後同步第 3 步的卡片（用這份 page，不另外算）
+            self._send_json(200, {**page, "AI執行中": server.exec_running()})   # 09-30：執行中第 3 步變唯讀
         elif path == "/api/video":
             from bookclub.review import video_path
 
@@ -1543,6 +1544,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/final":
             from bookclub import finalcheck
 
+            _needs_ensure(server)   # 10-14 第5步2.0 第1段
             self._send_json(200, finalcheck.page_data(server.workdir))
         elif path == "/api/final/video":
             from bookclub import finalcheck
@@ -1559,6 +1561,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/run/status":
             self._send_json(200, server.run_status())
         elif path == "/api/execute":
+            _needs_ensure(server)   # 10-14 第5步2.0 第1段
             self._send_json(200, server.exec_status())
         elif path == "/api/execute/finalcheck":   # 10-01：開始前總檢查（只讀）
             from bookclub.execute import final_check
@@ -1882,6 +1885,18 @@ def open_browser_hint(port: int, plan: str) -> str:
     if plan == "wsl":
         return f"[網頁伺服器] 這是 WSL2，不會自動開瀏覽器：請在 Windows 的瀏覽器（Edge 或 Chrome）開 {url}"
     return f"[網頁伺服器] 請在瀏覽器開 {url}"
+
+
+def _needs_ensure(server, page: dict | None = None) -> None:
+    """10-14 第5步2.0 第1段：打開第 3、4、5 步時，修改需求紀錄第一次就升級（第 4 步執行中先不升級）、之後補差異。
+    出錯只印提醒，不擋畫面（`needs.ensure` 自己接住）。"""
+    from bookclub import needs
+
+    try:
+        w = server.workdir
+    except Exception:  # noqa: BLE001 — 沒有專案：不用做
+        return
+    needs.ensure(w, running=server.exec_running(), page=page)
 
 
 def _bookclub_already_running(port: int, timeout: float = 2.0) -> bool:
