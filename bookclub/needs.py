@@ -26,9 +26,11 @@
 第 5 步舊檔是「處理紀錄的每一筆」一個判斷，新紀錄是「每張卡」一個狀態：一張卡對到好幾筆處理紀錄時（學員段落切成好幾格），
 任何一筆退回＝這張卡退回、每一筆都通過＝通過、其他＝還沒看（第 2 段畫面改成以卡片為單位後就一致了）。
 
-隱私：`卡片.json` 的 `第3步決定` 是第 3 步檔案的同步副本（含要念的文字），跟其他工作區檔案一樣只留在本機；
-`歷史.jsonl`、升級報告只放編號、數字、狀態與指紋，不放學員分享原文與退回原因文字。
-AI 助手查這份紀錄一律用 `bookclub inspect <工作區> 修改需求`。
+隱私：含學員文字的有三處（10-15 第1段審查修正：以前只寫了第一處）——`卡片.json` 的 `第3步決定`（第 3 步檔案的同步副本，
+含要念的文字）、`版本/v*/處理紀錄.json`（處理紀錄副本，含文字）、`升級前備份_*/`（第 3 步、第 5 步舊檔的備份，含逐字稿、
+退回原因）。跟其他工作區檔案一樣只留在本機、不直接讀；`成品狀態.json` 的 `退回原因` 也是文字。
+`歷史.jsonl`、`格式.json`、升級報告只放編號、數字、狀態與指紋，不放學員分享原文與退回原因文字。
+AI 助手查這份紀錄一律用 `bookclub inspect <工作區> 修改需求`。#222（結案打包）若整包帶走 `修改需求/`，打包檔一樣含學員文字。
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ import json
 import os
 import shutil
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +55,16 @@ HISTORY_FILE = "歷史.jsonl"
 FORMAT_FILE = "格式.json"
 REPORT_JSON, REPORT_MD = "升級報告.json", "升級報告.md"
 BACKUP_PREFIX = "升級前備份_"
+# 10-15 第1段審查修正（必修 2）：升級先寫到這個資料夾，全部寫完才一次改名成 `修改需求/`（中途失敗不會留下半套 `修改需求/`）
+STAGING = f"{DIR_NAME}.升級中"
+LOCK_FILE = ".寫入鎖"
+# 10-15 第1段審查修正（建議）：同步失敗記在 `格式.json`，`inspect 修改需求` 印出來；第 2 段讀新紀錄前看到有錯誤就退回讀舊檔
+ERR_KEY = "同步錯誤"
+ERR_WHERE = ("打開工作區", "第5步存檔", "組裝建版本", "成品記到版本", "開始執行")
+# 打開工作區（GET）升級／補差異失敗後，這段時間內不再重試（不要每次打開第 3／4／5 步都整套重跑）
+RETRY_AFTER_S = 300.0
+# `render audio`（開發者指令，只組聲音軌）寫的處理紀錄：不建版本（沒有成品影片）
+AUDIO_ONLY_SOURCE = "render audio"
 
 # 卡片類型：第 3 步的七種（沿用 `review.page_data` 的 `類型`）＋第 5 步才會出現的兩種
 STEP3_TYPES = ("學員段落", "改成老師", "名字", "學員名字", "重疊", "刪除段落", "局部消音")
@@ -70,6 +83,9 @@ WHY_RETURNED, WHY_EDITED = "退回", "改了"
 # 第 3 步卡片「做了什麼決定」的摘要欄位（同步副本；指紋只看這些，計時之類的欄位不算）
 DECISION_KEYS = ("做法", "排法", "方式", "狀態", "決定", "說話者", "學員說話者", "已確認", "校對稿", "老師文字", "學員文字",
                  "救回", "tags", "代號", "問老師")
+# 10-15 第1段審查修正（建議）：版本的「卡片指紋」只算會影響聲音的欄位——這幾個改了聲音不會變，不算「這一版做了」、
+# 也不擋沿用上一版的通過（`第3步決定指紋` 照舊全部算：改了照樣記歷史）
+NOT_SOUND_KEYS = ("已確認", "tags", "問老師")
 # 第 3 步的檔：改了就要重新同步卡片（`覆核/覆核決定.json` 看內容、不看計時欄位，其他看大小＋修改時間）
 STEP3_FILES = ("校對/段落.json", "名字覆核決定.json", "覆核/覆核決定.json", "學員名字覆核決定.json", "名字候選.json",
                "校對/刪除建議.json", "重疊.json", "學員名字候選.json")
@@ -143,7 +159,7 @@ def _locked(workdir: str | Path):
             if depth == 0 and d.is_dir():   # 同一個執行緒裡面又鎖一次（巢狀）：檔案鎖只拿最外層那一次
                 import fcntl
 
-                fh = open(d / ".寫入鎖", "a+")
+                fh = open(d / LOCK_FILE, "a+")
                 fcntl.flock(fh, fcntl.LOCK_EX)
         except (ImportError, OSError):
             fh = None
@@ -221,6 +237,25 @@ def _read_table(workdir: Path, table: str) -> list[dict]:
     return list(data.get("列") or [])
 
 
+def _last_history_no(path: Path) -> int:
+    """`歷史.jsonl` 最後一條的序號（沒有檔、讀不懂＝0）。只讀檔尾，不整份讀。"""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 65536))
+            tail = f.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return 0
+    for line in reversed(tail.splitlines()):
+        if line.strip():
+            try:
+                return int(json.loads(line).get("序號") or 0)
+            except (ValueError, AttributeError, TypeError):
+                return 0
+    return 0
+
+
 def load(workdir: str | Path) -> Store:
     """讀整份紀錄（沒有的表當空的）。"""
     w = Path(workdir)
@@ -230,6 +265,11 @@ def load(workdir: str | Path) -> Store:
     st.gen = {(r["句id"], r["角色"]): r for r in _read_table(w, T_GEN)}
     st.versions = {int(r["版本號"]): r for r in _read_table(w, T_VERSIONS)}
     st.states = {(r["卡號"], int(r["版本號"])): r for r in _read_table(w, T_STATES)}
+    # 10-15 第1段審查修正（必修 2）：下一個歷史序號跟 `歷史.jsonl` 最後一條比、取大的
+    # （上次歷史寫了、`格式.json` 沒寫到就中斷時，序號不會重複）
+    last = _last_history_no(_p(w, HISTORY_FILE))
+    if last >= int(st.fmt.get("下一個歷史序號") or 1):
+        st.fmt["下一個歷史序號"] = last + 1
     return st
 
 
@@ -237,21 +277,59 @@ def _table_data(table: str, rows: list[dict]) -> dict:
     return {"表": table, "格式版本": FORMAT_VERSION, "主鍵": list(TABLE_KEYS[table]), "列": rows}
 
 
-def save(workdir: str | Path, st: Store) -> None:
-    """整份寫回（每張表一個檔；歷史只往下加）。"""
-    w = Path(workdir)
-    needs_dir(w).mkdir(parents=True, exist_ok=True)
-    _write(table_path(w, T_CARDS), _table_data(T_CARDS, [st.cards[k] for k in sorted(st.cards, key=_card_num)]))
-    _write(table_path(w, T_GEN), _table_data(T_GEN, [st.gen[k] for k in sorted(st.gen)]))
-    _write(table_path(w, T_VERSIONS), _table_data(T_VERSIONS, [st.versions[k] for k in sorted(st.versions)]))
-    _write(table_path(w, T_STATES), _table_data(T_STATES, [st.states[k] for k in sorted(st.states, key=lambda x: (_card_num(x[0]), x[1]))]))
+def save(workdir: str | Path, st: Store, *, base: Path | None = None) -> None:
+    """整份寫回（每張表一個檔；歷史只往下加）。base：寫到哪個資料夾（升級時是 `修改需求.升級中/`，平常是 `修改需求/`）。"""
+    d = Path(base) if base is not None else needs_dir(workdir)
+    d.mkdir(parents=True, exist_ok=True)
+    _write(d / f"{T_CARDS}.json", _table_data(T_CARDS, [st.cards[k] for k in sorted(st.cards, key=_card_num)]))
+    _write(d / f"{T_GEN}.json", _table_data(T_GEN, [st.gen[k] for k in sorted(st.gen)]))
+    _write(d / f"{T_VERSIONS}.json", _table_data(T_VERSIONS, [st.versions[k] for k in sorted(st.versions)]))
+    _write(d / f"{T_STATES}.json", _table_data(T_STATES, [st.states[k] for k in sorted(st.states, key=lambda x: (_card_num(x[0]), x[1]))]))
     if st.history:
-        with open(_p(w, HISTORY_FILE), "a", encoding="utf-8") as f:
+        with open(d / HISTORY_FILE, "a", encoding="utf-8") as f:
             for h in st.history:
                 f.write(json.dumps(h, ensure_ascii=False) + "\n")
         st.history = []
     st.fmt.setdefault("格式版本", FORMAT_VERSION)
-    _write(_p(w, FORMAT_FILE), st.fmt)   # 格式.json 最後寫：中途失敗時下次打開會重新升級，不會只寫一半就當作做完
+    _write(d / FORMAT_FILE, st.fmt)   # 格式.json 最後寫：中途失敗時下次打開會重新升級，不會只寫一半就當作做完
+
+
+def _save_fmt(workdir: str | Path, st: Store) -> None:
+    """10-15 第1段審查修正（建議）：只有同步指紋變了（表沒變）時只寫 `格式.json`，不整份重寫。"""
+    _write(_p(workdir, FORMAT_FILE), st.fmt)
+
+
+def note_error(workdir: str | Path, where: str, e: BaseException) -> None:
+    """10-15 第1段審查修正（建議）：雙寫／同步失敗記到 `格式.json` 的 `同步錯誤`（次數、第一次、最後時間、哪裡、錯誤種類；
+    不記錯誤訊息，可能帶到資料內容）。`inspect 修改需求` 會印出來；第 2 段開始讀新紀錄前看 `healthy()`，有錯誤就退回讀舊檔。
+    沒升級過的工作區不記。自己絕不丟錯（記不下來就算了，已經印過提醒）。"""
+    try:
+        w = Path(workdir)
+        if not exists(w):
+            return
+        with _locked(w):
+            fm = _fmt(w)
+            if not fm:
+                return
+            old = fm.get(ERR_KEY) or {}
+            now = _now()
+            fm[ERR_KEY] = {"次數": int(old.get("次數") or 0) + 1, "第一次時間": old.get("第一次時間") or now, "最後時間": now,
+                           "哪裡": where if where in ERR_WHERE else "其他", "種類": type(e).__name__}
+            _write(_p(w, FORMAT_FILE), fm)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def sync_errors(workdir: str | Path) -> dict | None:
+    """`格式.json` 記的同步錯誤（沒有＝None）。"""
+    return _fmt(Path(workdir)).get(ERR_KEY) or None
+
+
+def healthy(workdir: str | Path) -> bool:
+    """新紀錄能不能拿來讀：升級過、而且從來沒有同步失敗過（第 2 段起讀新紀錄前先問這個，False 就讀舊檔）。
+    清掉錯誤的方法：把 `修改需求/` 改名，重新升級一次（照舊檔重建）。"""
+    w = Path(workdir)
+    return exists(w) and not sync_errors(w)
 
 
 def read_history(workdir: str | Path) -> list[dict]:
@@ -493,13 +571,17 @@ def step3_snapshot(workdir: str | Path) -> dict:
     return out
 
 
-def sync_cards(workdir: str | Path, page: dict | None = None, *, force: bool = False) -> dict | None:
+def sync_cards(workdir: str | Path, page: dict | None = None, *, force: bool = False,
+               snap: dict | None = None) -> dict | None:
     """第 3 步寫入之後，把卡片表跟第 3 步的檔對齊（同步副本＋歷史）。page 給了就用（`GET /api/review` 已經算好的），
-    沒給才自己算（不寫舊檔）。第 3 步的檔沒變、又沒給 page 時什麼都不做。沒升級過的工作區不做。回傳統計或 None。"""
+    沒給才自己算（不寫舊檔）。第 3 步的檔沒變時什麼都不做。沒升級過的工作區不做。回傳統計或 None。
+    10-15 第1段審查修正（建議）：snap＝算 page **之前**拍的第 3 步快照（page 給了就要一起給）。記的是這份快照：
+    算 page 的期間第 3 步又被改了（另一個請求 POST），下次快照不一樣就會再同步，不會漏。"""
     w = Path(workdir)
     if not exists(w):
         return None
-    snap = step3_snapshot(w)
+    if snap is None:
+        snap = step3_snapshot(w)
     if not force and (_fmt(w).get("同步") or {}).get("第3步") == snap:   # 第 3 步的檔沒變：page 算出來也一樣
         return None
     if page is None:
@@ -514,7 +596,7 @@ def sync_cards(workdir: str | Path, page: dict | None = None, *, force: bool = F
         if st.history or json.dumps(st.cards, ensure_ascii=False, sort_keys=True) != before:
             save(w, st)
         else:   # 卡片沒變（例如只改了計時以外、不影響卡片的欄位）：只記同步指紋
-            _write(_p(w, FORMAT_FILE), st.fmt)
+            _save_fmt(w, st)
     return res
 
 
@@ -600,7 +682,20 @@ def _card_prints(st: Store, log: dict, rec_cards: dict[str, list[str]]) -> dict[
     for r in (log or {}).get("紀錄") or []:
         for c in rec_cards.get(_record_key(r)) or []:
             per.setdefault(c, []).append(content_print(r))
-    return {c: _fp([sorted(ps), (st.cards.get(c) or {}).get("第3步決定指紋")]) for c, ps in per.items()}
+    return {c: _fp([sorted(ps), _sound_print(st.cards.get(c) or {})]) for c, ps in per.items()}
+
+
+def _sound_print(card: dict) -> str | None:
+    """10-15 第1段審查修正（建議）：第 3 步決定裡會影響聲音的欄位的指紋（`已確認`、`tags`、`問老師` 不算）。"""
+    dec = card.get("第3步決定")
+    if not dec:
+        return card.get("第3步決定指紋")
+    return _fp({k: v for k, v in dec.items() if k not in NOT_SOUND_KEYS})
+
+
+def audio_only(log: dict | None) -> bool:
+    """10-15 第1段審查修正（建議）：`render audio`（開發者指令，只組聲音軌、沒有成品影片）寫的處理紀錄，不建版本。"""
+    return bool(log) and str(log.get("來源") or "") == AUDIO_ONLY_SOURCE
 
 
 def _card_spans(log: dict, rec_cards: dict[str, list[str]]) -> dict[str, list]:
@@ -661,15 +756,15 @@ def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *,
     return row
 
 
-def _write_version_copy(workdir: Path, n: int, log: dict) -> None:
-    _write(needs_dir(workdir) / _version_dir(n) / "處理紀錄.json", log)
+def _write_version_copy(workdir: Path, n: int, log: dict, *, base: Path | None = None) -> None:
+    _write((Path(base) if base is not None else needs_dir(workdir)) / _version_dir(n) / "處理紀錄.json", log)
 
 
 def add_version(workdir: str | Path, log: dict, *, note: str | None = None) -> dict | None:
     """第 4 步組裝完、換上成品、寫處理紀錄的那一刻（`proclog._write`）：建一個版本（含範圍、處理紀錄副本、
     每張卡的指紋與起始狀態）。沒升級過的工作區不建（之後升級時把最新的處理紀錄當版本 1）。回傳版本列。"""
     w = Path(workdir)
-    if not exists(w) or not log:
+    if not exists(w) or not log or audio_only(log):   # 10-15：render audio 不建版本
         return None
     sync_cards(w)   # 第 3 步改過還沒同步的先同步，鍵才對得上
     index = _index(w)
@@ -844,6 +939,7 @@ def on_execute_start(workdir: str | Path, log=print) -> None:
         sync_cards(w)
         record_gen_plan(w)
     except Exception as e:  # noqa: BLE001
+        note_error(w, "開始執行", e)   # 10-15 第1段審查修正（建議）：同步失敗記下來
         log(f"[AI 執行] ⚠️ 修改需求紀錄沒更新到（不影響執行）：{type(e).__name__}")
 
 
@@ -922,6 +1018,9 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
             card = _extra_card(st, UNCLEAR, anchor, [_r3(sec), _r3(sec)] if sec is not None else None, src_unclear,
                                {"整片退回": x.get("id")}, now, step)
             c = card["卡號"]
+            if card["狀態"] == REMOVED:   # 10-15：同一處整片退回取消後又標回來 → 同一張卡恢復有效
+                st.log(now, c, step, "恢復有效", REMOVED, ALIVE)
+                card.update({"狀態": ALIVE, "更新時間": now})
             if (c, n) not in st.states:
                 t = _r3(x.get("成品秒"))
                 st.states[(c, n)] = {"卡號": c, "版本號": n, "成品": [t, t] if t is not None else None, "狀態": NOT_SEEN,
@@ -949,6 +1048,25 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
         elif s["狀態"] == PASSED and row.get("沿用自") != carry and carry is not None:
             row["沿用自"] = carry
         st.states[(c, n)] = row
+    # 10-15 第1段審查修正（必修 1）：這一版已經有狀態列、這次卻沒算到的卡也要重算（不能停在上一次算的「退回」）。
+    # 只有整片退回會讓這種列出現：整片退回取消了（舊檔裡那一筆不在了）——
+    #   待釐清卡：卡片標「刪掉」（舊檔已經沒有這一筆），這一版改回「還沒看」；
+    #   整片退回對到的一般卡（這一版的處理紀錄沒有它）：拿掉這一列（＝回到「還沒生成」）。
+    for (c, m) in sorted((k for k in st.states if k[1] == n and k[0] not in new), key=lambda k: _card_num(k[0])):
+        row = st.states[(c, m)]
+        card = st.cards.get(c) or {}
+        if card.get("類型") == UNCLEAR and (card.get("舊檔鍵") or {}).get("整片退回") is not None:
+            if row.get("狀態") != NOT_SEEN or row.get("退回原因"):
+                st.log(now, c, step, "改回還沒看", row.get("狀態"), {"版本號": n})
+                row.update({"狀態": NOT_SEEN, "退回原因": None, "沿用自": None, "更新時間": now})
+                changed += 1
+            if card.get("狀態") == ALIVE:
+                st.log(now, c, step, "刪掉", ALIVE, {"狀態": REMOVED, "指向": []})
+                card.update({"狀態": REMOVED, "指向": [], "更新時間": now})
+        elif not row.get("紀錄鍵"):
+            st.log(now, c, step, "改回還沒生成", row.get("狀態"), {"版本號": n})
+            del st.states[(c, m)]
+            changed += 1
     # 等重做：這一版退回的＋重做中的每一項
     want: dict[str, dict] = {c: {"起因": WHY_RETURNED} for c, s in new.items() if s["狀態"] == RETURNED}
     doing = check.get("重做中") or {}
@@ -991,14 +1109,14 @@ def mirror_final(workdir: str | Path, check: dict | None = None, log: dict | Non
     fp = _check_print(check)
     if not force and (_fmt(w).get("同步") or {}).get("成品檢查") == fp:   # 判斷沒變（例如只記了看過區段）
         return None
-    st = load(w)
     log = proclog.load(w) if log is None else log
-    if not log:
+    if not log or audio_only(log):   # 10-15：render audio 的處理紀錄不建版本，跟沒有處理紀錄一樣
         with _locked(w):
             st = load(w)
             st.fmt.setdefault("同步", {})["成品檢查"] = fp
-            save(w, st)
+            _save_fmt(w, st)
         return None
+    st = load(w)
     if not st.version_at(log.get("產生時間")):
         add_version(w, log, note=NOTE_OLD_TOOL)
     if check.get("處理紀錄產生時間") != log.get("產生時間"):
@@ -1042,15 +1160,17 @@ def _small_files(workdir: Path) -> list[Path]:
     return out
 
 
-def _backup(workdir: Path, stamp: str) -> tuple[str, int]:
-    dst = needs_dir(workdir) / f"{BACKUP_PREFIX}{stamp}"
+def _backup(workdir: Path, stamp: str, *, base: Path | None = None) -> tuple[str, int]:
+    """小檔備份到 base（升級時是 `修改需求.升級中/`）底下；回傳改名成 `修改需求/` 之後的相對路徑。"""
+    name = f"{BACKUP_PREFIX}{stamp}"
+    dst = (Path(base) if base is not None else needs_dir(workdir)) / name
     n = 0
     for p in _small_files(workdir):
         rel = p.relative_to(workdir)
         (dst / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(p, dst / rel)
         n += 1
-    return str(dst.relative_to(workdir)), n
+    return f"{DIR_NAME}/{name}", n
 
 
 def _history_from_old(st: Store, check: dict, index: dict, now: str) -> int:
@@ -1082,12 +1202,30 @@ def _current_product(workdir: Path, log: dict, check: dict) -> list[str]:
     return out
 
 
-def plan_upgrade(workdir: str | Path, page: dict | None = None) -> tuple[Store, dict]:
-    """升級要寫的全部東西（只讀舊檔，不寫任何檔）：回傳（記憶體裡的紀錄, 報告）。"""
+def _renumbered(workdir: Path, log: dict | None) -> int:
+    """10-15 第1段審查修正（必修 3）：學員生成句改成在整個段落裡數之後，照上一次組裝的範圍會換號的格數
+    （範圍切到段落的那幾格；下次第 4 步那幾格會重新生成一次）。整支範圍、沒組裝過、算不出來＝0。"""
+    from bookclub import students
+
+    rng = (log or {}).get("範圍")
+    if not rng or rng[0] is None or rng[1] is None:
+        return 0
+    try:
+        with wd.no_writes():
+            return students.renumbered_slots(workdir, float(rng[0]), float(rng[1]))
+    except Exception:  # noqa: BLE001 — 算不出來不擋升級
+        return 0
+
+
+def plan_upgrade(workdir: str | Path, page: dict | None = None, snap: dict | None = None) -> tuple[Store, dict]:
+    """升級要寫的全部東西（只讀舊檔，不寫任何檔）：回傳（記憶體裡的紀錄, 報告）。
+    snap：算 page 之前拍的第 3 步快照（page 是呼叫的地方算好的才給；見 `sync_cards`）。"""
     from bookclub import __version__, finalcheck, proclog
 
     w = Path(workdir)
     now = _now()
+    if snap is None or page is None:
+        snap = step3_snapshot(w)
     st = Store()
     st.fmt = {"格式版本": FORMAT_VERSION, "升級自程式版本": __version__, "升級時間": now, "下一個卡號": 1, "下一個歷史序號": 1}
     page = compute_page(w) if page is None else page
@@ -1107,6 +1245,9 @@ def plan_upgrade(workdir: str | Path, page: dict | None = None) -> tuple[Store, 
     _update_gen_rounds(st, w, now)
     # 3–9. 處理紀錄＋成品檢查 → 版本 1、成品狀態、等重做、歷史、輸出紀錄
     log = proclog.load(w)
+    renum = _renumbered(w, log)
+    if audio_only(log):   # 10-15：render audio 的處理紀錄不建版本
+        log = None
     raw = finalcheck.load_check(w)
     vrow, other = None, []
     redo_hist = 0
@@ -1119,8 +1260,9 @@ def plan_upgrade(workdir: str | Path, page: dict | None = None) -> tuple[Store, 
         other = [p for p in finalcheck.products(w) if p not in (vrow.get("成品檔") or [])]
         st.fmt.setdefault("同步", {})["處理紀錄"] = log.get("產生時間")
         st.fmt["同步"]["成品檢查"] = _check_print(raw)
-    st.fmt.setdefault("同步", {})["第3步"] = step3_snapshot(w)
+    st.fmt.setdefault("同步", {})["第3步"] = snap
     rep = _report(st, vrow, {"對上": g1["對上"] + g2["對上"], "對不到": g1["對不到"] + g2["對不到"]}, other, redo_hist, log)
+    rep["學員換號格數"] = renum
     return st, rep
 
 
@@ -1191,6 +1333,9 @@ def report_lines(rep: dict, *, dry: bool = False) -> list[str]:
         out.append(f"以前的「重做過」「送回 AI 重做」寫進歷史 {rep['重做過送回寫進歷史']} 條")
     if rep.get("舊成品沒建版本"):
         out.append(f"輸出/ 裡另外 {rep['舊成品沒建版本']} 支舊成品沒有處理紀錄，不建版本（檔案照舊留著）")
+    n = int(rep.get("學員換號格數") or 0)   # 10-15 第1段審查修正（必修 3）
+    out.append(f"會換號的學員句：{n} 格" + ("（上次組裝的範圍切到段落；學員生成句改成在整個段落裡數，"
+                                          "下次第 4 步這幾格會重新生成一次）" if n else "（沒有：上次是整支、或沒切到段落）"))
     return out
 
 
@@ -1199,35 +1344,104 @@ def _report_md(rep: dict, backup: tuple[str, int] | None) -> str:
              f"升級時間：{rep['升級時間']}（程式版本 {rep['升級自程式版本']}）", "",
              "舊檔一個都沒改、沒刪；這份報告只有數字、編號、狀態，不含逐字稿與退回原因。", ""]
     lines += [f"- {x}" for x in report_lines(rep)[1:]]
+    lines += ["", "做過部分範圍的工作區，切到段落的那幾格下次會重新生成一次（學員生成句的編號改成在整個段落裡數；"
+                  "聲音會換、第 5 步那幾張要重看）。"]
     if backup:
         lines += ["", f"升級前的小檔備份在 `{backup[0]}/`（{backup[1]} 個檔）。",
                   "要重新升級：把 `修改需求/` 整個改名（例如 `修改需求_停用`），下次打開工作區就會重跑；不用刪。"]
     return "\n".join(lines) + "\n"
 
 
-def upgrade(workdir: str | Path, *, dry_run: bool = False, page: dict | None = None, force: bool = False) -> dict:
+class Busy(Exception):
+    """別的程式（或伺服器另一個請求）正在升級這個工作區。"""
+
+
+@contextmanager
+def _stage_lock(stage: Path, *, wait: bool = True):
+    """10-15 第1段審查修正（建議）：第一次升級的檔案鎖——先建 `修改需求.升級中/` 再鎖它裡面的 `.寫入鎖`
+    （以前 `修改需求/` 還不在就沒上鎖，伺服器跟 `bookclub upgrade` 同時跑時沒有互斥）。wait=False 時拿不到就丟 Busy。
+    改名成 `修改需求/` 之後鎖檔跟著過去，就是平常 `_locked` 用的那一個。"""
+    stage.mkdir(parents=True, exist_ok=True)
+    fh = None
+    try:
+        import fcntl
+
+        fh = open(stage / LOCK_FILE, "a+")
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+        except BlockingIOError:
+            fh.close()
+            raise Busy() from None
+    except ImportError:
+        fh = None
+    try:
+        yield
+    finally:
+        if fh is not None:
+            try:
+                import fcntl
+
+                fcntl.flock(fh, fcntl.LOCK_UN)
+            finally:
+                fh.close()
+
+
+def _clear_stage(stage: Path) -> None:
+    """清掉上次升級失敗留在 `修改需求.升級中/` 的半套（鎖檔留著）。這個資料夾只有升級自己會寫。"""
+    for p in stage.iterdir():
+        if p.name == LOCK_FILE:
+            continue
+        if p.is_dir() and not p.is_symlink():
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+
+
+def _drop_stage(stage: Path) -> None:
+    """已經升級好了（別的程式剛做完）：剛剛為了上鎖建的空 `修改需求.升級中/` 收掉（裡面只有鎖檔才收）。"""
+    try:
+        left = [p for p in stage.iterdir() if p.name != LOCK_FILE]
+        if not left:
+            (stage / LOCK_FILE).unlink(missing_ok=True)
+            stage.rmdir()
+    except OSError:
+        pass
+
+
+def upgrade(workdir: str | Path, *, dry_run: bool = False, page: dict | None = None, force: bool = False,
+            snap: dict | None = None, wait: bool = True) -> dict:
     """舊工作區升級（31 號設計 §4）：只讀舊檔、只寫 `修改需求/`；小檔先備份；只跑一次（`格式.json` 在就不跑）。
-    dry_run：只算、印數字，不寫任何檔。回傳報告（`升級了`＝這次有沒有真的寫）。"""
+    dry_run：只算、印數字，不寫任何檔（也不建資料夾）。回傳報告（`升級了`＝這次有沒有真的寫）。
+    10-15 第1段審查修正（必修 2）：先全部寫到 `修改需求.升級中/`，寫完才一次改名成 `修改需求/`；中途失敗留在 `.升級中`
+    （`修改需求/` 不會出現半套、歷史序號不會重複），下次重跑先清掉它。wait=False：別的程式正在升級就丟 Busy、不等。"""
     w = Path(workdir)
     if exists(w) and not force:
         return {"升級了": False, "原因": "已經升級過了"}
-    st, rep = plan_upgrade(w, page)
     if dry_run:
+        st, rep = plan_upgrade(w, page, snap)
         return {**rep, "升級了": False, "試跑": True}
-    with _locked(w):
+    stage = w / STAGING
+    with _stage_lock(stage, wait=wait):
         if exists(w) and not force:
+            _drop_stage(stage)
             return {"升級了": False, "原因": "已經升級過了"}
+        _clear_stage(stage)
+        st, rep = plan_upgrade(w, page, snap)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        bk = _backup(w, stamp)
+        bk = _backup(w, stamp, base=stage)
         st.fmt["升級前備份"] = bk[0]
         v = st.latest_version()
         if v is not None:
             log = wd.read_json(w / "生成" / "處理紀錄.json", default=None)
             if log:
-                _write_version_copy(w, v["版本號"], log)
-        _write(_p(w, REPORT_JSON), rep)
-        (_p(w, REPORT_MD)).write_text(_report_md(rep, bk), encoding="utf-8")
-        save(w, st)
+                _write_version_copy(w, v["版本號"], log, base=stage)
+        _write(stage / REPORT_JSON, rep)
+        (stage / REPORT_MD).write_text(_report_md(rep, bk), encoding="utf-8")
+        save(w, st, base=stage)
+        final = needs_dir(w)
+        if final.exists():   # 沒有 格式.json 的 修改需求/（舊版程式升級失敗留下的）或 force：搬開、不刪
+            final.rename(w / f"{DIR_NAME}_升級前_{stamp}")
+        os.rename(stage, final)   # 一次換上：從這一刻起 exists() 才是 True
     return {**rep, "升級了": True, "備份": bk[0], "備份檔數": bk[1]}
 
 
@@ -1247,15 +1461,15 @@ def catch_up(workdir: str | Path) -> None:
     if (_fmt(w).get("同步") or {}).get("檔案") == stats:
         return
     log = proclog.load(w)
-    if log:
+    if log and not audio_only(log):
         st = load(w)
         if st.version_at(log.get("產生時間")) is None:
             add_version(w, log, note=NOTE_OLD_TOOL)
     mirror_final(w)
-    with _locked(w):
+    with _locked(w):   # 10-15 第1段審查修正（建議）：這裡只記檔案指紋，只寫 格式.json（以前整份表重寫）
         st = load(w)
         st.fmt.setdefault("同步", {})["檔案"] = stats
-        save(w, st)
+        _save_fmt(w, st)
 
 
 def _file_stats(workdir: Path) -> dict:
@@ -1270,27 +1484,52 @@ def _file_stats(workdir: Path) -> dict:
     return out
 
 
-def ensure(workdir: str | Path, *, running: bool = False, page: dict | None = None, log=print) -> dict | None:
+_busy: set[str] = set()
+_busy_lock = threading.Lock()
+_failed_at: dict[str, float] = {}
+
+
+def ensure(workdir: str | Path, *, running: bool = False, page: dict | None = None, snap: dict | None = None,
+           log=print) -> dict | None:
     """打開工作區時呼叫：沒升級過就升級（第 4 步執行中先不升級，等跑完）；升級過就補差異。
-    任何錯誤都只印提醒，不擋畫面（第 1 段讀的那一邊還是舊檔）。"""
+    任何錯誤都只印提醒，不擋畫面（第 1 段讀的那一邊還是舊檔）。
+    10-15 第1段審查修正（建議）：這是在 GET 請求裡同步跑的——
+    - 非阻塞：同一個工作區已經有一個請求在升級／補差異，這個請求直接跳過（不等、不重算一次）；別的程式（`bookclub upgrade`）
+      正在升級也不等；
+    - 失敗冷卻：失敗後 `RETRY_AFTER_S` 秒內不重試（以前升級一直失敗，每次打開第 3／4／5 步都整套重跑），失敗記進 `格式.json`。"""
     w = Path(workdir)
+    key = str(w)
+    if time.monotonic() - _failed_at.get(key, -1e18) < RETRY_AFTER_S:
+        return None
+    with _busy_lock:
+        if key in _busy:
+            return None
+        _busy.add(key)
     try:
         if not exists(w):
             if running:
                 return None
-            rep = upgrade(w, page=page)
+            try:
+                rep = upgrade(w, page=page, snap=snap, wait=False)
+            except Busy:
+                return None
             if rep.get("升級了"):
                 log(f"[修改需求紀錄] 第一次用新版打開：已升級（卡片 {rep['卡片']['總數']} 張；舊檔沒動），"
                     f"報告在 {DIR_NAME}/{REPORT_MD}")
             return rep
         if page is not None:
-            sync_cards(w, page)
+            sync_cards(w, page, snap=snap)
         if not running:
             catch_up(w)
         return None
     except Exception as e:  # noqa: BLE001 — 新紀錄出錯不能擋住老師用舊功能
-        log(f"[修改需求紀錄] ⚠️ 沒更新到（不影響畫面）：{type(e).__name__}")
+        _failed_at[key] = time.monotonic()
+        note_error(w, "打開工作區", e)
+        log(f"[修改需求紀錄] ⚠️ 沒更新到（不影響畫面；{int(RETRY_AFTER_S // 60)} 分鐘內不再重試）：{type(e).__name__}")
         return None
+    finally:
+        with _busy_lock:
+            _busy.discard(key)
 
 
 # ---------- `bookclub upgrade` ----------
@@ -1315,7 +1554,8 @@ def main(argv: list[str]) -> int:
         with redirect_stdout(buf):   # 呼叫到的函式自己印的東西（可能含文字）不放出去
             rep = upgrade(w, dry_run=args.dry_run)
     except Exception as e:  # noqa: BLE001 — 錯誤訊息可能帶到資料內容，只印錯誤種類
-        print(f"升級失敗：{type(e).__name__}（錯誤訊息不印，可能含資料內容）；舊檔沒動")
+        print(f"升級失敗：{type(e).__name__}（錯誤訊息不印，可能含資料內容）；舊檔沒動"
+              + ("" if args.dry_run else f"，寫到一半的留在 {STAGING}/，下次升級會先清掉"))
         return 1
     if not rep.get("升級了") and not rep.get("試跑"):
         print(f"這個工作區{rep.get('原因', '不用升級')}（{DIR_NAME}/{FORMAT_FILE} 已經在）。"

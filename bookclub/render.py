@@ -1266,6 +1266,7 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
 
                 needs.add_product(workdir, log_data.get("產生時間"), str(dst.relative_to(workdir)))
             except Exception as e:  # noqa: BLE001
+                needs.note_error(workdir, "成品記到版本", e)   # 10-15 第1段審查修正（建議）
                 print(f"[修改需求紀錄] ⚠️ 成品沒記到版本（不影響成品）：{type(e).__name__}")
         else:
             final = out / f"成品_{tag}_{m}_驗證沒過.mp4"

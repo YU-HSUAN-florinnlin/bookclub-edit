@@ -421,14 +421,15 @@ def collect_links(workdir: Path, d: dict) -> dict:
     return {"段落": seg, "刪除": cuts, "重疊": ovs}
 
 
-def _write(workdir: Path, data: dict) -> dict:
+def _write(workdir: Path, data: dict, *, version: bool = True) -> dict:
     wd.write_json(log_path(workdir), data)
-    if not wd.writes_blocked():
+    if version and not wd.writes_blocked():
         try:   # 10-14 第5步2.0 第1段：每次組裝（寫處理紀錄的那一刻）在修改需求紀錄建一個版本；沒升級過的工作區不建
             from bookclub import needs
 
             needs.add_version(workdir, data)
         except Exception as e:  # noqa: BLE001 — 新紀錄出錯不擋組裝
+            needs.note_error(workdir, "組裝建版本", e)   # 10-15 第1段審查修正（建議）：同步失敗記下來
             print(f"[修改需求紀錄] ⚠️ 這次組裝沒記成新版本（不影響成品）：{type(e).__name__}")
     n = len(data["未登記的變動"])
     print(f"[處理紀錄] {len(data['紀錄'])} 筆 → {log_path(workdir)}；"
@@ -465,10 +466,11 @@ def write_audio_log(workdir: str | Path, edits: list[dict], orig_path: Path, new
     workdir = Path(workdir)
     recs = stamp_contents(workdir, records_from_edl(edits))
     chk = check_files(orig_path, new_path, recs)
+    # 10-15 第1段審查修正（建議）：render audio（開發者指令，只組聲音軌、沒有成品影片）不在修改需求紀錄建版本
     return _write(workdir, {"版本": 1, "來源": "render audio", "範圍": None,
                             "產生時間": datetime.now().isoformat(timespec="seconds"),
                             "原聲": str(Path(orig_path).relative_to(workdir)), "新聲音": str(Path(new_path).relative_to(workdir)),
-                            "片段": None, "紀錄": recs, **chk})
+                            "片段": None, "紀錄": recs, **chk}, version=False)
 
 
 def load(workdir: str | Path) -> dict | None:

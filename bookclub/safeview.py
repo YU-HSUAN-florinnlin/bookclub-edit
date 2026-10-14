@@ -573,6 +573,17 @@ def topic_needs(w: Path, f: Filter, out: list[str], limit: int = 300) -> None:
     out.append(f"格式版本 {val('', fm.get('格式版本'))}；升級自程式版本 {ver if isinstance(ver, str) and _VER_RE.match(ver) else mask(ver or '')}"
                f"；升級時間 {val('升級時間', fm.get('升級時間'))}；下一個卡號 {needs.card_no(int(fm.get('下一個卡號') or 1))}"
                f"；歷史 {int(fm.get('下一個歷史序號') or 1) - 1} 條")
+    # 10-15 第1段審查修正（建議）：同步失敗看得到（只印次數、時間、哪裡、錯誤種類；錯誤訊息本來就沒記）
+    er = fm.get(needs.ERR_KEY) or {}
+    if er:
+        where = er.get("哪裡")
+        kind = er.get("種類")
+        out.append(f"⚠️ 同步錯誤 {val('', er.get('次數'))} 次：第一次 {val('時間', er.get('第一次時間'))}，"
+                   f"最後 {val('時間', er.get('最後時間'))}，最後一次在 {where if where in needs.ERR_WHERE else mask(where or '')}"
+                   f"（{kind if isinstance(kind, str) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', kind) else mask(kind or '')}）"
+                   "——新紀錄可能跟舊檔不一致，第 2 段起會改讀舊檔；要重建就把 修改需求/ 改名再打開")
+    else:
+        out.append("同步錯誤：沒有")
     cards = [st.cards[k] for k in sorted(st.cards, key=needs._card_num)]
 
     def cnt(rows, key):

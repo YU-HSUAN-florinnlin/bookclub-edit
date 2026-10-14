@@ -560,6 +560,332 @@ def test_server_get_upgrades_once_and_not_while_running():
     assert needs.load(w).fmt["升級時間"] == stamp
 
 
+# ---------- 10-15 第1段審查修正 ----------
+
+def test_whole_redo_cancel_recomputes_state():
+    """必修 1：整片退回（對不到卡 → 待釐清卡退回）取消後，那張卡不再停在「退回」：卡片刪掉、這一版改回還沒看、不等重做。
+    同一處再標一次 → 同一張卡恢復有效、又是退回。"""
+    w = _fresh()
+    log = _log()
+    _setup(w, log, _check(log, {}))
+    _quiet(needs.upgrade, w)
+    r = _quiet(fc.add_whole_redo, w, 120.0, "這裡怪")["項目"]
+    st = needs.load(w)
+    k = next(c for c in st.cards.values() if (c.get("舊檔鍵") or {}).get("整片退回") == r["id"])["卡號"]
+    assert needs.card_state(st, k, 1) == needs.RETURNED and st.cards[k]["等重做"]
+    _quiet(fc.remove_whole_redo, w, r["id"])
+    st = needs.load(w)
+    assert needs.card_state(st, k, 1) == needs.NOT_SEEN, needs.card_state(st, k, 1)
+    assert st.cards[k]["狀態"] == needs.REMOVED and not st.cards[k]["等重做"]
+    assert st.states[(k, 1)]["退回原因"] is None
+    acts = [h["動作"] for h in needs.read_history(w) if h["卡號"] == k]
+    assert "改回還沒看" in acts and "刪掉" in acts and "取消等重做" in acts
+    r2 = _quiet(fc.add_whole_redo, w, 120.0, "還是怪")["項目"]
+    st = needs.load(w)
+    k2 = next(c for c in st.cards.values() if (c.get("舊檔鍵") or {}).get("整片退回") is not None
+              and c["狀態"] == needs.ALIVE)["卡號"]
+    assert k2 == k and r2["id"] and needs.card_state(st, k, 1) == needs.RETURNED
+
+
+def test_whole_redo_on_card_outside_version_cancel_back_to_not_made():
+    """必修 1（另一種）：整片退回對到一張這一版沒處理到的卡 → 那張卡這一版退回；取消 → 回到「還沒生成」（拿掉那一列）。"""
+    w = _fresh()
+    log = _log()
+    _setup(w, log, _check(log, {}))
+    _quiet(needs.upgrade, w)
+    k7 = _card(w, "學員段落:T007")["卡號"]
+    index = needs._index(w)
+    st = needs.load(w)
+    v = st.version_at(T1)
+    chk = fc.refresh(_check(log, {}, 整片退回=[{"id": "R009", "成品秒": 140.0, "原片秒": 143.6,
+                                                 "覆核項目": ["學員段落:T007"], "原因": "怪", "建立時間": T1}]), log)
+    needs.apply_check(st, v, chk, index, T2)
+    assert needs.card_state(st, k7, 1) == needs.RETURNED and st.cards[k7]["等重做"]
+    needs.apply_check(st, v, fc.refresh(_check(log, {}), log), index, T3)
+    assert needs.card_state(st, k7, 1) == needs.NOT_MADE and (k7, 1) not in st.states and not st.cards[k7]["等重做"]
+    assert st.cards[k7]["狀態"] == needs.ALIVE
+    assert any(h["卡號"] == k7 and h["動作"] == "改回還沒生成" for h in st.history)
+
+
+def test_upgrade_fails_midway_rerun_no_duplicate_history():
+    """必修 2：升級寫到一半失敗 → 沒有半套 修改需求/（留在 修改需求.升級中/）；重跑先清掉它，歷史序號 1..N 不重複。"""
+    w = _fresh()
+    log = _log()
+    _setup(w, log, _check(log, {"學員重念@55.00": ("退回重做", "念錯")}))
+    real_write = needs._write
+
+    def boom(path, data):
+        if path.name == needs.FORMAT_FILE:
+            raise OSError("寫不進去")
+        real_write(path, data)
+
+    needs._write = boom
+    try:
+        try:
+            _quiet(needs.upgrade, w)
+            raise AssertionError("應該要失敗")
+        except OSError:
+            pass
+    finally:
+        needs._write = real_write
+    stage = w / needs.STAGING
+    assert not (w / needs.DIR_NAME).exists() and not needs.exists(w)
+    assert (stage / needs.HISTORY_FILE).is_file()   # 失敗的留在 .升級中（下次重跑先清）
+    rep = _quiet(needs.upgrade, w)
+    assert rep["升級了"] and needs.exists(w) and not stage.exists()
+    nos = [h["序號"] for h in needs.read_history(w)]
+    assert nos == list(range(1, len(nos) + 1)), nos
+    assert len(list((w / needs.DIR_NAME).glob(f"{needs.BACKUP_PREFIX}*"))) == 1
+    # 平常存檔：歷史寫了、格式.json 沒寫到（下一個歷史序號落後）→ load 跟歷史檔最後一條比、取大的
+    fm = wd.read_json(w / needs.DIR_NAME / needs.FORMAT_FILE)
+    fm["下一個歷史序號"] = 1
+    wd.write_json(w / needs.DIR_NAME / needs.FORMAT_FILE, fm)
+    _quiet(fc.decide_record, w, "學員重念@55.00", "通過")
+    nos = [h["序號"] for h in needs.read_history(w)]
+    assert len(nos) == len(set(nos)) and nos == sorted(nos)
+
+
+def test_old_partial_folder_without_format_is_moved_aside():
+    """舊版程式升級失敗留下的 修改需求/（沒有 格式.json）：升級時整個搬開（不刪），換上新的。"""
+    w = _fresh()
+    (w / needs.DIR_NAME).mkdir()
+    (w / needs.DIR_NAME / needs.HISTORY_FILE).write_text('{"序號": 1}\n', encoding="utf-8")
+    _quiet(needs.upgrade, w)
+    assert needs.exists(w)
+    aside = list(w.glob(f"{needs.DIR_NAME}_升級前_*"))
+    assert len(aside) == 1 and (aside[0] / needs.HISTORY_FILE).is_file()
+    assert [h["序號"] for h in needs.read_history(w)][:1] == [1] and len(needs.read_history(w)) > 1
+
+
+def test_renumbered_student_slots_in_dry_run_and_report():
+    """必修 3：上次組裝範圍切到學員段落 → dry-run 與升級報告印「會換號的學員句」格數；整支範圍＝0。"""
+    from bookclub import cli
+
+    w = _fresh()
+    recs = [r for r in _records() if r["原片"][0] >= 55]
+    log = _log(tag="1-3", rng=(60.0, 180.0), recs=recs)
+    _setup(w, log, _check(log, {}))
+    rep = _quiet(needs.upgrade, w, dry_run=True)
+    assert rep["學員換號格數"] >= 1, rep["學員換號格數"]
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        assert cli.main(["upgrade", str(w), "--dry-run"]) == 0
+    assert f"會換號的學員句：{rep['學員換號格數']} 格" in buf.getvalue() and "重新生成一次" in buf.getvalue()
+    _quiet(needs.upgrade, w)
+    md = (w / needs.DIR_NAME / needs.REPORT_MD).read_text(encoding="utf-8")
+    assert "會換號的學員句" in md and "做過部分範圍的工作區，切到段落的那幾格下次會重新生成一次" in md
+    w2 = _fresh()
+    _setup(w2, _log(), _check(_log(), {}))
+    assert _quiet(needs.upgrade, w2, dry_run=True)["學員換號格數"] == 0
+
+
+def test_sync_error_recorded_and_shown_in_inspect():
+    """建議：雙寫失敗記進 格式.json 的 同步錯誤，inspect 印出來；healthy() 變 False。"""
+    from bookclub import safeview
+
+    w = _fresh()
+    log = _log()
+    _setup(w, log, _check(log, {}))
+    _quiet(needs.upgrade, w)
+    assert needs.healthy(w) and "同步錯誤：沒有" in "\n".join(safeview.run([str(w), "修改需求"]))
+    real = needs.mirror_final
+
+    def boom(*a, **k):
+        raise RuntimeError("小美的退回原因")   # 錯誤訊息不能被記、不能被印
+
+    needs.mirror_final = boom
+    try:
+        _quiet(fc.decide_record, w, "學員重念@40.00", "通過")
+        _quiet(fc.decide_record, w, "學員重念@55.00", "通過")
+    finally:
+        needs.mirror_final = real
+    er = needs.sync_errors(w)
+    assert er["次數"] == 2 and er["哪裡"] == "第5步存檔" and er["種類"] == "RuntimeError" and not needs.healthy(w)
+    text = "\n".join(safeview.run([str(w), "修改需求"]))
+    assert "同步錯誤 2 次" in text and "第5步存檔" in text and "RuntimeError" in text and "小美" not in text
+    assert "小美" not in (w / needs.DIR_NAME / needs.FORMAT_FILE).read_text(encoding="utf-8")
+
+
+def test_ensure_nonblocking_and_cooldown():
+    """建議：GET 裡的升級——另一個請求正在做就跳過；別的程式拿著升級鎖也不等；失敗後冷卻期間不重試。"""
+    w = _fresh()
+    key = str(w)
+    needs._busy.add(key)
+    try:
+        assert _quiet(needs.ensure, w) is None and not needs.exists(w)   # 另一個請求正在做：直接跳過
+    finally:
+        needs._busy.discard(key)
+    with needs._stage_lock(w / needs.STAGING):   # 別的程式（bookclub upgrade）正在升級：不等
+        try:
+            _quiet(needs.upgrade, w, wait=False)
+            raise AssertionError("應該拿不到鎖")
+        except needs.Busy:
+            pass
+        assert _quiet(needs.ensure, w) is None and not needs.exists(w)
+    assert key not in needs._failed_at   # 拿不到鎖不算失敗
+    calls = []
+    real = needs.upgrade
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise RuntimeError("壞了")
+
+    needs.upgrade = boom
+    try:
+        _quiet(needs.ensure, w)
+        _quiet(needs.ensure, w)
+    finally:
+        needs.upgrade = real
+    assert calls == [1] and key in needs._failed_at   # 第二次在冷卻期間，不重試
+    needs._failed_at.pop(key)
+    _quiet(needs.ensure, w)
+    assert needs.exists(w) and not (w / needs.STAGING).exists()
+
+
+def test_card_print_ignores_non_sound_fields():
+    """建議：只改「已確認」（聲音不變）→ 下一版這張卡不算「這一版做了」、沿用上一版的通過。"""
+    from bookclub import turns
+
+    w = _fresh()
+    log = _log()
+    _setup(w, log, _check(log, {fc.record_key(r): ("通過",) for r in log["紀錄"]}))
+    _quiet(needs.upgrade, w)
+    k3 = _card(w, "學員段落:T003")["卡號"]
+    _quiet(turns.save_turn, w, "T003", {"已確認": True})
+    _quiet(needs.sync_cards, w)
+    assert any(h["卡號"] == k3 and h["動作"] == "改了第3步決定" for h in needs.read_history(w))   # 歷史照記
+    _quiet(proclog.write_log, w, _log(T2))
+    v = needs.version_rows(w)
+    assert len(v) == 2 and k3 not in v[1]["這一版做了哪幾張"], v[1]["這一版做了哪幾張"]
+    st = needs.load(w)
+    assert needs.card_state(st, k3, 2) == needs.PASSED and st.states[(k3, 2)]["沿用自"] == 1
+
+
+def test_catch_up_unchanged_writes_format_only():
+    """建議：第 5 步只記看過區段（判斷沒變）→ 下次打開只寫 格式.json，表不重寫。"""
+    w = _fresh()
+    log = _log()
+    prod = _prod(w, "成品_0-3_sw.mp4", T1)
+    _setup(w, log, _check(log, {}, 成品影片=prod))
+    _quiet(needs.upgrade, w)
+    _quiet(needs.ensure, w)
+    d = w / needs.DIR_NAME
+    tables = {p.name: p.stat().st_mtime_ns for p in d.glob("*.json") if p.name != needs.FORMAT_FILE}
+    fm_before = (d / needs.FORMAT_FILE).read_text(encoding="utf-8")
+    _quiet(fc.add_watched, w, [[0, 5.0]], prod)
+    _quiet(needs.ensure, w)
+    assert {p.name: p.stat().st_mtime_ns for p in d.glob("*.json") if p.name != needs.FORMAT_FILE} == tables
+    assert (d / needs.FORMAT_FILE).read_text(encoding="utf-8") != fm_before   # 檔案指紋有記
+
+
+def test_sync_snapshot_taken_before_page():
+    """建議：page 算好之後、同步之前第 3 步又被改（另一個請求 POST）→ 記的是算 page 之前的快照，下次會再同步，不漏。"""
+    w = _fresh()
+    _quiet(needs.upgrade, w)
+    k3 = _card(w, "學員段落:T003")["卡號"]
+    snap = needs.step3_snapshot(w)
+    page = needs.compute_page(w)
+    data = _turns(w)                               # 算完 page 之後第 3 步被改了
+    for t in data["段落"]:
+        if t["id"] == "T003":
+            t["end"] = 70.0
+    wd.write_json(w / "校對" / "段落.json", data)
+    _quiet(needs.sync_cards, w, page, snap=snap)   # 用舊 page：這次還看不到改動
+    assert needs.load(w).cards[k3]["原片"][1] == 71.6
+    _quiet(needs.sync_cards, w)                    # 下次：快照不一樣 → 再同步
+    assert needs.load(w).cards[k3]["原片"][1] == 70.0
+
+
+def test_render_audio_log_does_not_make_version():
+    """建議：render audio（開發者指令）寫的處理紀錄不建版本，打開工作區也不補。"""
+    w = _fresh()
+    log = _log()
+    _setup(w, log, _check(log, {}))
+    _quiet(needs.upgrade, w)
+    saved = (proclog.records_from_edl, proclog.stamp_contents, proclog.check_files)
+    proclog.records_from_edl = lambda edits: []
+    proclog.stamp_contents = lambda workdir, recs: recs
+    proclog.check_files = lambda a, b, recs: {"未登記的變動": []}
+    try:
+        _quiet(proclog.write_audio_log, w, [], w / "audio.flac", w / "生成" / "新聲音.wav")
+    finally:
+        proclog.records_from_edl, proclog.stamp_contents, proclog.check_files = saved
+    assert proclog.load(w)["來源"] == "render audio"
+    _quiet(needs.ensure, w)
+    assert len(needs.version_rows(w)) == 1 and needs.add_version(w, proclog.load(w)) is None
+
+
+def test_upgrade_never_writes_old_files_intercepted():
+    """建議：用會讓 page_data 想存檔的假工作區（名字、重疊、名字決定沒有指紋要重新錨定），攔 open／os.replace／rename／mkdir，
+    證明升級（試跑、真的升級、之後打開）只寫 修改需求/（和 修改需求.升級中/），舊檔一個都不寫。"""
+    import builtins
+
+    from bookclub import review
+
+    def make() -> Path:
+        w = _fresh()
+        log = _log()
+        _setup(w, log, _check(log, {}, 整片退回=[{"id": "R001", "成品秒": 120.0, "原片秒": 124.0, "覆核項目": [],
+                                                  "原因": "怪", "建立時間": T1}]))
+        wd.write_json(w / "名字覆核決定.json", {"1": {"做法": "直接消音"}, "2": {"做法": "直接消音"}})   # 沒有候選指紋
+        return w
+
+    probe = make()                                  # 先證明這個假工作區平常打開第 3 步會寫檔（不然攔截沒意義）
+    before = _sha(probe)
+    _quiet(review.page_data, probe)
+    assert _sha(probe) != before, "假工作區要能讓 page_data 寫檔"
+
+    w = make()
+    before = _sha(w)
+    allowed = (str(w / needs.DIR_NAME), str(w / needs.STAGING))
+    bad: list[str] = []
+
+    def check(p) -> None:
+        s = os.path.abspath(os.fspath(p))
+        if s.startswith(str(w)) and not s.startswith(allowed):
+            bad.append(s[len(str(w)):])
+
+    real = {"open": builtins.open, "io_open": io.open, "replace": os.replace, "rename": os.rename, "mkdir": os.mkdir}
+
+    def fopen(file, mode="r", *a, **k):
+        if isinstance(file, (str, bytes, os.PathLike)) and any(c in mode for c in "wax+"):
+            check(file)
+        return real["open"](file, mode, *a, **k)
+
+    def fio_open(file, mode="r", *a, **k):
+        if isinstance(file, (str, bytes, os.PathLike)) and any(c in mode for c in "wax+"):
+            check(file)
+        return real["io_open"](file, mode, *a, **k)
+
+    def frep(src, dst, *a, **k):
+        check(src)
+        check(dst)
+        return real["replace"](src, dst, *a, **k)
+
+    def fren(src, dst, *a, **k):
+        check(src)
+        check(dst)
+        return real["rename"](src, dst, *a, **k)
+
+    def fmk(p, *a, **k):
+        check(p)
+        return real["mkdir"](p, *a, **k)
+
+    builtins.open, io.open, os.replace, os.rename, os.mkdir = fopen, fio_open, frep, fren, fmk
+    try:
+        _quiet(needs.upgrade, w, dry_run=True)
+        _quiet(needs.upgrade, w)
+        _quiet(needs.ensure, w)
+        _quiet(needs.sync_cards, w, force=True)
+        _quiet(needs.mirror_final, w, force=True)
+    finally:
+        builtins.open, io.open, os.replace, os.rename, os.mkdir = (real["open"], real["io_open"], real["replace"],
+                                                                     real["rename"], real["mkdir"])
+    assert not bad, bad
+    assert _sha(w) == before and needs.exists(w)
+    assert any(c["類型"] == "名字" for c in needs.card_rows(w)) and any(c["類型"] == "重疊" for c in needs.card_rows(w))
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

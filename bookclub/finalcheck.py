@@ -584,6 +584,7 @@ def _mirror(workdir: Path, data: dict) -> None:
 
         needs.mirror_final(workdir, data)
     except Exception as e:  # noqa: BLE001
+        needs.note_error(workdir, "第5步存檔", e)   # 10-15 第1段審查修正（建議）：同步失敗記進 格式.json（inspect 看得到）
         print(f"[修改需求紀錄] ⚠️ 第 5 步的判斷沒同步到新紀錄（不影響第 5 步）：{type(e).__name__}")
 
 

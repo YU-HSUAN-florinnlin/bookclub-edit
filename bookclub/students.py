@@ -420,6 +420,39 @@ def turn_numbers(chunks: list[dict], all_sents: list[dict], sents: list[dict], c
     return out
 
 
+def renumbered_slots(workdir: Path, start: float | None, end: float | None) -> int:
+    """10-15 第1段審查修正（必修 3）：這個範圍裡，學員生成句的序號「在整個段落裡數」（`turn_numbers`）跟以前
+    「在這次範圍裡從 1 數」不一樣的格數——範圍切到段落時那幾格會換號，下次第 4 步會重新生成一次。
+    跟 `build_items` 同一套挑段落、排格子的規則（只數格子，不建生成項目、不寫檔）。整支範圍＝0。"""
+    from bookclub import review
+    from bookclub import turns as turns_mod
+
+    if start is None and end is None:
+        return 0
+    workdir = Path(workdir)
+    tdata = turns_mod.page_data(workdir)
+    if tdata.get("尚未準備"):
+        return 0
+    speakers = wd.read_json(wd.speakers_path(workdir)) or {}
+    by_id = {s["id"]: s for s in speakers.get("sentences", [])}
+    cuts = cut_ranges(workdir)
+    kept = {k for k, v in review.load_decisions(workdir)["學員聲音"].items() if v == "保留原聲"}
+    lo, hi = start if start is not None else -1.0, end if end is not None else 1e12
+    n = 0
+    for t in tdata["段落"]:
+        who = t.get("說話者")
+        if not who or who == "老師" or who in kept or t["end"] <= lo or t["start"] >= hi:
+            continue
+        all_sents = turns_mod.turn_sentences(t, by_id)
+        sents = in_window(all_sents, lo, hi)
+        if not all_sents or not sents or len(sents) == len(all_sents):
+            continue
+        qm = turn_quiet(workdir, t["start"], t["end"]) if len(sents) > 1 or len(all_sents) > 1 else None
+        chunks = plan_slots(sents, cuts, boundary=qm.boundary if qm else None)
+        n += sum(1 for i, k in enumerate(turn_numbers(chunks, all_sents, sents, cuts, qm), start=1) if k != i)
+    return n
+
+
 def overlap_items(workdir: Path, turn_items: list[dict], spans: dict, kept: set, cuts: list, table: list,
                   lo: float, hi: float, only: list[str] | None) -> list[dict]:
     """重疊卡片要自己生成的學員那一句（10-01）：
