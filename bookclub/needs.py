@@ -784,6 +784,13 @@ def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *,
            "紀錄卡號": m["紀錄卡號"], "未登記卡號": m["未登記卡號"], "沒對到卡片的紀錄": m["沒對到卡片的紀錄"],
            "成品時間": _card_spans(log, m["紀錄卡號"]), "建立時間": now}
     st.versions[n] = row
+    # 10-15 第5步2.0 第2段：第 5 步按「改」改過的卡（等重做，起因：改了）——組裝會照第 3 步現在的檔做，改過的都做進這一版了
+    for k in sorted(st.cards, key=_card_num):
+        c = st.cards[k]
+        if (c.get("等重做") or {}).get("起因") == WHY_EDITED:
+            c["等重做"] = None
+            c["更新時間"] = now
+            st.log(now, k, step, f"重做進第{n}版", {"起因": WHY_EDITED}, None)
     for c in done:
         st.log(now, c, step, f"組裝進第{n}版", None, {"版本號": n, "指紋": prints[c]})
     # 新版每張卡的起始狀態：指紋沒變、上一版通過 → 通過（沿用）；其他 → 還沒看（第 5 步的判斷由 mirror_final 接著算）
@@ -998,8 +1005,26 @@ def _check_print(check: dict) -> str:
                 "輸出": len(check.get("輸出紀錄") or []), "處理紀錄": check.get("處理紀錄產生時間")})
 
 
-def _reason(texts: list[str]) -> dict | None:
-    t = "；".join(x for x in (str(y).strip() for y in texts) if x)
+# 10-15 第5步2.0 第2段：退回原因的選項（31 號設計 §9 問題 1 定案方案甲：照「怎麼修」分；「其實是老師的聲音」不放這裡，
+# 是卡片上「裡面有老師的聲音」按鈕）。舊檔只有一格文字：選項＋補充合成一句寫進 `成品檢查.json`（`reason_text`）
+REASON_OPTIONS = ("念錯字", "聲音不像、不自然", "長度或停頓怪", "其他")
+REASON_NONE = "退回（沒寫原因）"
+
+
+def reason_text(options: list[str] | None, extra: str = "") -> str:
+    """（純函式）退回原因的選項＋補充 → 舊檔那一格文字：「念錯字、長度或停頓怪：補充」；都沒有＝「退回（沒寫原因）」。"""
+    opts = [o for o in REASON_OPTIONS if o in (options or [])]
+    extra = str(extra or "").strip()
+    head = "、".join(opts)
+    return f"{head}：{extra}" if head and extra else head or extra or REASON_NONE
+
+
+def _reason(texts: list[str], prev: dict | None = None) -> dict | None:
+    # 10-15 第5步2.0 第2段：一張卡的每一筆寫同一句原因（卡片退回），合起來只留一次
+    t = "；".join(dict.fromkeys(x for x in (str(y).strip() for y in texts) if x))
+    # 10-15 第5步2.0 第2段：第 5 步按退回時存的選項＋補充（`set_reason`），合起來跟舊檔這一句一樣就留著（不被打平成一句）
+    if prev and prev.get("選項") is not None and reason_text(prev.get("選項"), prev.get("補充", "")) == t:
+        return prev
     return {"選項": [], "補充": t} if t or texts else None
 
 
@@ -1075,7 +1100,7 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
     for c, s in new.items():
         row = st.states.get((c, n)) or {"卡號": c, "版本號": n, "成品": (v.get("成品時間") or {}).get(c), "狀態": NOT_SEEN,
                                         "退回原因": None, "沿用自": None, "紀錄鍵": sorted(per.get(c) or []), "更新時間": now}
-        why = _reason(s["原因"]) if s["狀態"] == RETURNED else None
+        why = _reason(s["原因"], row.get("退回原因")) if s["狀態"] == RETURNED else None
         carry = None
         if s["狀態"] == PASSED and prev_v is not None:
             ps = st.states.get((c, prev_v))
@@ -1136,6 +1161,62 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
     if outs != (v.get("輸出紀錄") or []):
         v["輸出紀錄"] = outs
     return {"狀態有變": changed, "等重做": sorted(want, key=_card_num)}
+
+
+def set_reason(workdir: str | Path, card: str, options: list[str] | None, extra: str = "") -> bool:
+    """10-15 第5步2.0 第2段：第 5 步按卡片「退回」時選的原因（選項＋補充）記到最新一版這張卡的 `退回原因`。
+    舊檔照樣寫合成的一句（雙寫：先寫舊檔、`mirror_final` 重算狀態，再呼叫這裡補上結構）；之後重算時合起來一樣就留著。
+    這一版這張卡不是退回（例如舊檔寫失敗）就不寫。回傳有沒有寫。"""
+    w = Path(workdir)
+    if not exists(w):
+        return False
+    opts = [o for o in REASON_OPTIONS if o in (options or [])]
+    with _locked(w):
+        st = load(w)
+        v = st.latest_version()
+        row = st.states.get((card, v["版本號"])) if v else None
+        if not row or row.get("狀態") != RETURNED:
+            return False
+        want = {"選項": opts, "補充": str(extra or "").strip()}
+        if row.get("退回原因") == want:
+            return False
+        row["退回原因"] = want
+        row["更新時間"] = _now()
+        save(w, st)
+    return True
+
+
+def mark_edited(workdir: str | Path, key: str, *, new: bool = False) -> str | None:
+    """10-15 第5步2.0 第2段：第 5 步按「改」改了第 3 步的東西（改字、改範圍、這是老師聲音、刪掉、新增）之後：
+    先把第 3 步的檔同步成卡片，再把那張卡標「等重做（起因：改了）」——畫面上是「已改，等重做」，組裝做進新的一版時清掉
+    （`build_version`）。new：這張是在第 5 步新增的（來源改「第5步新增」）。key：第 3 步鍵（`學員段落:T003`）。
+    找不到卡（例如刪掉的人工新增，第 3 步那一筆已經沒有了）回 None。沒升級過的工作區不做。"""
+    w = Path(workdir)
+    if not exists(w):
+        return None
+    sync_cards(w)
+    with _locked(w):
+        st = load(w)
+        c = st.alive_by_key().get(key)
+        if c is None:
+            c = next((st.cards[k] for k in sorted(st.cards, key=_card_num, reverse=True) if st.cards[k].get("第3步鍵") == key), None)
+        if c is None:
+            return None
+        now = _now()
+        changed = False
+        if new and c.get("來源") in (SRC_STEP3, SRC_AUTO):
+            st.log(now, c["卡號"], 5, "改來源", c["來源"], SRC_STEP5)
+            c["來源"] = SRC_STEP5
+            changed = True
+        cur = c.get("等重做")
+        if not cur:
+            c["等重做"] = {"起因": WHY_EDITED, "時間": now}
+            st.log(now, c["卡號"], 5, "等重做", None, {"起因": WHY_EDITED})
+            changed = True
+        if changed:
+            c["更新時間"] = now
+            save(w, st)
+        return c["卡號"]
 
 
 def mirror_final(workdir: str | Path, check: dict | None = None, log: dict | None = None, *, force: bool = False) -> dict | None:

@@ -1403,6 +1403,61 @@ def decide_record(workdir: str | Path, key: str, result: str | None, reason: str
         return {"ok": True, "狀態": status(log, check)}
 
 
+def decide_many(workdir: str | Path, keys: list[str], result: str | None, reason: str = "", *,
+                unlogged: list[str] | None = None, flags: list[str] | None = None) -> dict:
+    """10-15 第5步2.0 第2段：第 5 步按「一張卡」通過／退回，回寫舊檔這張卡對到的每一筆（一次存檔）。
+    keys：處理紀錄的鍵（這張卡在這一版對到的每一筆）；unlogged：沒登記的變動的鍵；flags：對到這張卡的整片退回 id
+    （卡片通過或取消退回時拿掉；再退回一次時換成新的原因）。
+    result：PASS／REDO／None（改回還沒看）。退回原因每一筆都寫同一句（第 1 段審查同意的反向規則：任一筆退回＝退回，
+    所以卡片退回＝每一筆都退回、原因同一份；卡片通過＝每一筆都通過）。檢查的是舊成品時不能按（同 `decide_record`）。"""
+    if result not in (PASS, REDO, None):
+        raise ValueError("只能選：通過、退回重做")
+    if result == REDO and not str(reason).strip():
+        raise ValueError("退回重做要寫原因")
+    workdir = Path(workdir)
+    with _lock:
+        log, check = _current(workdir)
+        if _checking_old(workdir, log, check):
+            raise ValueError(OLD_PRODUCT_NO_DECIDE)
+        recs = {record_key(r): r for r in (log or {}).get("紀錄", [])}
+        uks = {unlogged_key(u) for u in (log or {}).get("未登記的變動", [])}
+        n = 0
+        for key in keys:
+            rec = recs.get(key)
+            if rec is None:
+                continue
+            n += 1
+            if result is None:
+                check["逐筆"].pop(key, None)
+                continue
+            old = (check["逐筆"].get(key) or {}).get("改範圍") if result == REDO else None
+            check["逐筆"][key] = {"結果": result, "原因": str(reason).strip() if result == REDO else "",
+                                 "指紋": record_print(rec), "更新時間": _now(), **({"改範圍": old} if old else {})}
+        for key in unlogged or []:
+            if key not in uks:
+                continue
+            n += 1
+            if result is None:
+                check["未登記確認"].pop(key, None)
+            else:
+                check["未登記確認"][key] = {"結果": UNLOGGED_OK if result == PASS else REDO,
+                                         "原因": str(reason).strip() if result == REDO else "", "更新時間": _now()}
+        hit = set(flags or [])
+        if hit and result == REDO:
+            for x in check["整片退回"]:
+                if x["id"] in hit:
+                    x["原因"] = str(reason).strip()
+                    n += 1
+        elif hit:
+            before = len(check["整片退回"])
+            check["整片退回"] = [x for x in check["整片退回"] if x["id"] not in hit]
+            n += before - len(check["整片退回"])
+        if not n:
+            raise ValueError("這張卡這一版的成品裡沒有對到的地方（還沒生成）：按「重做這幾張」做好之後再看")
+        _save(workdir, check)
+        return {"ok": True, "筆數": n, "狀態": status(log, check)}
+
+
 def decide_unlogged(workdir: str | Path, key: str, result: str | None, reason: str = "") -> dict:
     """`POST /api/final/unlogged`：沒登記的變動確認沒問題或退回重做。"""
     if result not in (UNLOGGED_OK, REDO, None):

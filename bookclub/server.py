@@ -1543,10 +1543,20 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/audio":
             self._handle_audio(query)
         elif path == "/api/final":
-            from bookclub import finalcheck
+            from bookclub import finalcards, finalcheck, needs
 
-            _needs_ensure(server)   # 10-14 第5步2.0 第1段
-            self._send_json(200, finalcheck.page_data(server.workdir))
+            # 10-15 第5步2.0 第2段：第 5 步用第 3 步的卡片——第 3 步的資料在算之前先拍快照、算的時候不寫舊檔（needs.compute_page），
+            # 同一份給修改需求紀錄同步用，不另外算
+            snap = _needs_snap(server)
+            try:
+                page = needs.compute_page(server.workdir)
+            except Exception as e:  # noqa: BLE001 — 第 3 步的資料算不出來：卡片照樣列（不能按「改」）
+                print(f"[成品檢查] ⚠️ 第 3 步的卡片讀不到（第 5 步的「改」先不能用）：{type(e).__name__}")
+                page, snap = None, None
+            _needs_ensure(server, page, snap)   # 10-14 第5步2.0 第1段
+            data = finalcheck.page_data(server.workdir)
+            data.update(finalcards.page_part(server.workdir, page, running=server.exec_running()))
+            self._send_json(200, data)
         elif path == "/api/final/video":
             from bookclub import finalcheck
 
@@ -1812,6 +1822,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, fc.choose_product(w, str(body["成品影片"])))
             elif path == "/api/final/switchnote":   # 10-13 bug 一：「已改成檢查新的成品」顯示過了就清掉
                 self._send_json(200, fc.clear_switch_note(w))
+            elif path == "/api/final/card":   # 10-15 第5步2.0 第2段：一張卡通過／退回（回寫舊檔這張卡的每一筆）
+                from bookclub import finalcards
+
+                self._send_json(200, finalcards.decide(w, str(body["id"]), body.get("結果"), body.get("選項") or [],
+                                                       str(body.get("補充", ""))))
+            elif path == "/api/final/edited":   # 10-15：第 5 步按「改」改過 → 那張卡「已改，等重做」
+                from bookclub import finalcards
+
+                self._send_json(200, finalcards.edited(w, str(body["鍵"]), bool(body.get("新增"))))
             elif path == "/api/final/sendback":
                 self._send_json(200, fc.send_back(w))
             elif path == "/api/final/export":
