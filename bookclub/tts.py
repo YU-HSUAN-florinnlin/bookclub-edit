@@ -934,23 +934,47 @@ def _ctx_from_json(data: dict, out_dir: Path) -> dict:
 
 def redo_avoid(entry: dict | None, it: dict) -> list[int]:
     """這一句重新生成時要避開的種子（純函式）。entry 是 `REDO_VERSIONS` 裡這一句的那一筆：
-    {text, 生成用文字, slot, 避開: [種子], 以前的版本: [{第幾版, 種子, 試過的種子, 嘗試, 選定, 備份資料夾, 重做時間, 退回原因}]}。
-    要念的字、生成用文字、時間格跟上一版一樣才避開（換一種念法）；有改的照原本的規則（從種子 42 開始）。"""
-    if not entry or not entry.get("避開") or not same_content(entry, it):
+    {text, 生成用文字, slot, 避開: [種子], 換一種念法: bool, 以前的版本: [{第幾版, 種子, 試過的種子, 嘗試, 選定, 備份資料夾,
+    重做時間, 退回原因}]}。
+    10-15 C1 實跑修正（1015-7）：一個判斷來源——第 4 步排重做時（`finalcheck.redo_list` 的 `沒改`）已經判過「文字和範圍
+    都沒改」，`note_versions` 把結果記成 entry 的 `換一種念法`；這裡有這個旗標就照它（true＝避開、換一種念法），不再用時間格
+    重判（計畫重算後時間格常漂 0.1 秒，以前 0.05 秒容忍會判成「改了」、又選回種子 42，同一個聲音再做一次）。
+    只有要念的字真的改了（text、生成用文字跟記的不同）才不避開、從 42 重算。沒有旗標的舊 entry 照 `same_content`。"""
+    if not entry or not entry.get("避開"):
+        return []
+    if "換一種念法" in entry:
+        if not entry["換一種念法"] or not same_text(entry, it):
+            return []
+        return [int(x) for x in entry["避開"]]
+    if not same_content(entry, it):
         return []
     return [int(x) for x in entry["避開"]]
 
 
-def same_content(a: dict, b: dict) -> bool:
-    """兩邊要念的字、生成用文字、時間格是不是一樣（時間格前後差 0.05 秒以內）（純函式）。"""
+# 10-15 C1 實跑修正（1015-7）：重做時判斷「範圍沒改」的時間格容忍（計畫重算後常漂 0.1 秒；改範圍一般是整秒以上）。
+# 只用在「要不要換一種念法」；生成結果能不能沿用（`record_stale`）照舊用 SLOT_TOLERANCE_S
+REDO_SLOT_TOLERANCE_S = 0.5
+
+
+def same_text(a: dict, b: dict) -> bool:
+    """兩邊要念的字、生成用文字是不是一樣（純函式）。"""
     if (a.get("text") or "") != (b.get("text") or ""):
         return False
-    if (a.get("生成用文字") or a.get("text") or "") != (b.get("生成用文字") or b.get("text") or ""):
-        return False
-    old, new = a.get("slot"), b.get("slot")
+    return (a.get("生成用文字") or a.get("text") or "") == (b.get("生成用文字") or b.get("text") or "")
+
+
+def same_slot(old, new, tol: float = REDO_SLOT_TOLERANCE_S) -> bool:
+    """兩個時間格是不是同一格（前後差 tol 秒以內；一邊沒有＝不同）（純函式）。"""
     if bool(old) != bool(new):
         return False
-    return not (old and new and (abs(old[0] - new[0]) > SLOT_TOLERANCE_S or abs(old[1] - new[1]) > SLOT_TOLERANCE_S))
+    return not (old and new and (len(old) < 2 or len(new) < 2 or old[0] is None or new[0] is None
+                                 or abs(old[0] - new[0]) > tol or abs(old[1] - new[1]) > tol))
+
+
+def same_content(a: dict, b: dict) -> bool:
+    """兩邊要念的字、生成用文字、時間格是不是一樣（純函式）。10-15 C1 實跑修正：時間格容忍放寬成 REDO_SLOT_TOLERANCE_S
+    （0.5 秒；這支只用在重做時要不要換一種念法）。"""
+    return same_text(a, b) and same_slot(a.get("slot"), b.get("slot"))
 
 
 def run_generation(
@@ -1091,6 +1115,9 @@ def run_generation(
         h = histories[it["id"]]
         if avoid[it["id"]] and not h:
             say(f"  第 {len(versions[it['id']].get('以前的版本') or []) + 1} 版：上一版退回重做、文字和範圍沒改，換一種念法重新生成")
+        elif not h and (versions.get(it["id"]) or {}).get("以前的版本"):
+            # 10-15 C1 實跑修正（1015-7）：重做的句子沒避開時也印一句，之後對 log 看得出有沒有換念法
+            say(f"  第 {len(versions[it['id']].get('以前的版本') or []) + 1} 版：這一句文字或範圍改了，從頭算種子")
         while (nxt := next_attempt(h, None, tolerance, avoid[it["id"]])) is not None:
             try:
                 h.append(attempt(it, len(h) + 1, *nxt))

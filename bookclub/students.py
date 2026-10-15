@@ -373,8 +373,9 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
                 })
             continue
         pieces = split_edited(t, all_sents) if edited else None
-        qm = turn_quiet(workdir, t["start"], t["end"]) if len(sents) > 1 else None
-        for k, chunk in enumerate(plan_slots(sents, cuts, boundary=qm.boundary if qm else None), start=1):
+        qm = turn_quiet(workdir, t["start"], t["end"]) if len(sents) > 1 or len(all_sents) > 1 else None
+        chunks = plan_slots(sents, cuts, boundary=qm.boundary if qm else None)
+        for k, chunk in zip(turn_numbers(chunks, all_sents, sents, cuts, qm), chunks):
             group = chunk["句子"]
             raw = "".join(s["text"] for s in group)
             src = "".join(pieces[s["id"]] for s in group) if pieces else raw
@@ -397,6 +398,59 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
     if not keep_empty:
         items += overlap_items(workdir, items, spans, kept, cuts, table, lo, hi, only)
     return items, spans
+
+
+def turn_numbers(chunks: list[dict], all_sents: list[dict], sents: list[dict], cuts: list,
+                 qm: "QuietMap | None" = None) -> list[int]:
+    """10-14 第5步2.0 第1段（31 號設計 §3.5、§8.4）：學員生成句 `<段落id>_<序號>` 的序號改成在**整個段落**裡數，
+    不看這次範圍——範圍不同，同一格不會換號（以前 `_02` 是在這次範圍裡從頭數）。
+    整個段落都在範圍裡（最常見）時跟以前完全一樣：1、2、3⋯。段落被範圍切到時，先照整段排一次格子，
+    範圍裡的每一格取「第一句所在的整段格子」的序號（用過了改用最後一句的，再撞號才往後找沒用過的）。"""
+    if len(sents) == len(all_sents):
+        return list(range(1, len(chunks) + 1))
+    full = plan_slots(all_sents, cuts, boundary=qm.boundary if qm else None)
+    where = {s["id"]: k for k, c in enumerate(full, start=1) for s in c["句子"]}
+    out: list[int] = []
+    for c in chunks:
+        ids = [s["id"] for s in c["句子"]]
+        n = next((where[i] for i in (ids[:1] + ids[-1:]) if i in where and where[i] not in out), None)
+        if n is None:
+            n = max(out + [len(full)]) + 1
+        out.append(n)
+    return out
+
+
+def renumbered_slots(workdir: Path, start: float | None, end: float | None) -> int:
+    """10-15 第1段審查修正（必修 3）：這個範圍裡，學員生成句的序號「在整個段落裡數」（`turn_numbers`）跟以前
+    「在這次範圍裡從 1 數」不一樣的格數——範圍切到段落時那幾格會換號，下次第 4 步會重新生成一次。
+    跟 `build_items` 同一套挑段落、排格子的規則（只數格子，不建生成項目、不寫檔）。整支範圍＝0。"""
+    from bookclub import review
+    from bookclub import turns as turns_mod
+
+    if start is None and end is None:
+        return 0
+    workdir = Path(workdir)
+    tdata = turns_mod.page_data(workdir)
+    if tdata.get("尚未準備"):
+        return 0
+    speakers = wd.read_json(wd.speakers_path(workdir)) or {}
+    by_id = {s["id"]: s for s in speakers.get("sentences", [])}
+    cuts = cut_ranges(workdir)
+    kept = {k for k, v in review.load_decisions(workdir)["學員聲音"].items() if v == "保留原聲"}
+    lo, hi = start if start is not None else -1.0, end if end is not None else 1e12
+    n = 0
+    for t in tdata["段落"]:
+        who = t.get("說話者")
+        if not who or who == "老師" or who in kept or t["end"] <= lo or t["start"] >= hi:
+            continue
+        all_sents = turns_mod.turn_sentences(t, by_id)
+        sents = in_window(all_sents, lo, hi)
+        if not all_sents or not sents or len(sents) == len(all_sents):
+            continue
+        qm = turn_quiet(workdir, t["start"], t["end"]) if len(sents) > 1 or len(all_sents) > 1 else None
+        chunks = plan_slots(sents, cuts, boundary=qm.boundary if qm else None)
+        n += sum(1 for i, k in enumerate(turn_numbers(chunks, all_sents, sents, cuts, qm), start=1) if k != i)
+    return n
 
 
 def overlap_items(workdir: Path, turn_items: list[dict], spans: dict, kept: set, cuts: list, table: list,

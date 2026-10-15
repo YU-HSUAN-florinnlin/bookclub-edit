@@ -312,7 +312,7 @@ def test_inspect_prints_attention_numbers_not_names():
 # ---------- 網頁（node 跑純函式） ----------
 
 def test_web_step3_buttons():
-    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     assert 'id="rv-go4" disabled>開始 AI 修改<' in rv and "全部通過，開始 AI 修改" not in rv
     assert "/api/execute/finalcheck" not in rv                       # 開始前不再先查總檢查
     side = _fn(rv, "rvRenderPrepSide")
@@ -356,15 +356,15 @@ def test_web_step4_folded_default_skip():
 
 def test_web_step5_badges_tab_and_attention():
     fcj = (WEB / "finalcheck.js").read_text(encoding="utf-8")
-    assert "fc-tab-look" not in _fn(fcj, "fcTabBadge")                # 「要人聽 k」不寫在分頁上
-    assert "只看要人聽的" in _fn(fcj, "fcRenderLower")                  # 篩選留在清單裡
+    assert "只看要仔細聽的" in _fn(fcj, "fcRenderLower")                # 篩選留在清單裡（10-15：改「要仔細聽的」）
     if not NODE:
         return
     pre = (_ESC + "function fcFmt(t) { return String(t); }\nfunction fcWho(t) { return t; }\n"
-           + _const(fcj, "FC_TAB_KEY") + "const FC_TAB_ALL = \"全部\", FC_TAB_TODO = \"還沒通過\", FC_TAB_KEEP = \"不修改\", FC_TAB_ATT = \"需留意\";\n"
-           + _fn(fcj, "fcSpan") + _fn(fcj, "fcGroupRecs") + _fn(fcj, "fcTabList") + _fn(fcj, "fcTabBadge")
+           + "const FC_TODO = [\"還沒看\", \"退回\", \"已改，等重做\", \"還沒生成\"];\n"
+           + _const(fcj, "FC_TAB_ALL") + _const(fcj, "FC_TYPE_TABS")
+           + _fn(fcj, "fcSpan") + _fn(fcj, "fcTabList")
            + _const(fcj, "FC_ATT_MAX_PLAY") + _fn(fcj, "fcAttentionRow") + _fn(fcj, "fcAttentionHtml") + _fn(fcj, "fcAttentionGo"))
-    recs = [{"鍵": "a", "組": "剪掉", "結果": "通過", "要人看": True}, {"鍵": "b", "組": "剪掉", "要人看": True}]
+    cards = [{"id": "a", "類型": "刪除段落", "狀態": "通過"}, {"id": "b", "類型": "刪除段落", "狀態": "還沒看"}]
     att = {"有紀錄": True, "第4步沒處理": 5, "列": [
         {"鍵": "名字:4", "類別": "名字換不了代號", "第3步": "名字:4", "原片": [30, 31], "剩下": [[30, 31]], "剩下秒": 1,
          "成品段": [[20, 21]], "成品": [20, 21], "名字": True, "卡片名稱": "老師提到名字 0:30"},
@@ -372,21 +372,21 @@ def test_web_step5_badges_tab_and_attention():
          "成品段": [[2, 3], [4, 5]], "成品": [2, 5], "名字": False, "卡片名稱": ""}]}
     kinds = [{"類別": "名字換不了代號", "名稱": "名字換不了代號（會念出本名）", "說明": ""}, {"類別": "聲紋", "名稱": "聲音不像老師", "說明": "x"}]
     got = _node(pre + f"""
-      const recs = {json.dumps(recs, ensure_ascii=False)}, att = {json.dumps(att, ensure_ascii=False)}, kinds = {json.dumps(kinds, ensure_ascii=False)};
-      const tabs = fcTabList(recs, [{{"組": "剪掉", "名稱": "剪掉", "說明": ""}}], [{{"子類": "x"}}], null, att);
+      const cards = {json.dumps(cards, ensure_ascii=False)}, att = {json.dumps(att, ensure_ascii=False)}, kinds = {json.dumps(kinds, ensure_ascii=False)};
+      const tabs = fcTabList(cards, 1, att);
       const flat = [];
-      console.log(JSON.stringify({{ ids: tabs.map((t) => t.id), badges: tabs.map(fcTabBadge), html: fcAttentionHtml(att, kinds, flat), n: flat.length,
+      console.log(JSON.stringify({{ ids: tabs.map((t) => t.id), html: fcAttentionHtml(att, kinds, flat), n: flat.length,
         go1: fcAttentionGo(att["列"][0]), go2: fcAttentionGo(att["列"][1]), old: fcAttentionHtml({{"有紀錄": false, "列": []}}, kinds, []),
-        noAtt: fcTabList(recs, [], [], null, undefined).map((t) => t.id),
+        noAtt: fcTabList(cards, 0, undefined).map((t) => t.id),
         unsearched: fcAttentionHtml({{"有紀錄": true, "列": [], "名冊外沒找": true}}, kinds, []) }}));""")
-    assert got["ids"] == ["全部", "還沒通過", "組:剪掉", "不修改", "需留意"]          # 需留意在最後、不修改旁邊
-    assert got["badges"] == ["<span>完成 1／2</span>", "<span>1</span>", "<span>完成 1／2</span>", "<span>1</span>", "<span>2</span>"]
+    # 10-15 宇軒驗證回饋六：「還沒看完」分頁拿掉
+    assert got["ids"] == ["全部", "刪除段落", "不修改", "需留意"]          # 需留意在最後、不修改旁邊（最右邊）
     h = got["html"]
     assert h.index("fc-att-red") < h.index("聲音不像老師") and "這 1 處會照原聲念出本名" in h and got["n"] == 2
     assert h.count("fc-a-play") == 3 and "還留著 2 秒原聲（其餘被別筆處理蓋到），2 段" in h and "還留著 1 秒原聲" in h and "總檢查有 5 列沒處理" in h
     assert got["go1"]["key"] == "名字:4" and got["go1"]["back"] == "step5"
     assert got["go2"]["key"] is None and got["go2"]["edit"] == {"類型": "學員發言", "start": 2, "end": 3}
-    assert "舊版工具組裝的" in got["old"] and "需留意" not in got["noAtt"]
+    assert "舊版工具組裝的" in got["old"] and got["noAtt"] == ["全部", "刪除段落"]
     assert "名冊外的名字這次沒有找" in got["unsearched"] and "沒有要留意的地方" in got["unsearched"]
 
 
@@ -396,10 +396,11 @@ def test_web_export_dialog_names_not_blocked():
         return
     g = {"說明": [], "擋下": [], "名字提醒": ["還有 1 處名字程式沒處理、原片沒動"], "退回清單": [], "提醒": [],
          "需留意說明": "需留意 3 處（含名字 1 處）還沒聽過"}
-    got = _node(_fn(fcj, "fcExportAsk") + f"console.log(JSON.stringify(fcExportAsk({json.dumps(g, ensure_ascii=False)}, false)));")
-    assert not got["blocked"] and got["names"] == g["名字提醒"] and got["att"] == g["需留意說明"] and got["title"] == "確定要輸出嗎？"
+    got = _node("function fcFmt(t) { return String(t); }\n" + _fn(fcj, "fcExportAsk") + f"console.log(JSON.stringify(fcExportAsk({json.dumps(g, ensure_ascii=False)}, false)));")
+    assert not got["blocked"] and got["names"] == g["名字提醒"] and got["title"] == "確定要輸出嗎？"
+    assert any(g["需留意說明"] in x for x in got["details"])
     dlg = _fn(fcj, "fcConfirmExport")
-    assert "fc-export-names" in dlg and "fc-export-att" in dlg
+    assert "fc-export-names" in dlg
 
 
 # ---------- 第十七輪審查：重疊缺東西整句消音、猜的學員、名冊外沒找、組裝成功才換略過紀錄 ----------

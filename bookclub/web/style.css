@@ -398,18 +398,8 @@ dialog.rv-confirm p { margin: 0 0 10px; line-height: 1.6; font-size: 15px; }
 dialog.rv-confirm button.primary { background: var(--fg); color: var(--bg); border: 1px solid var(--fg); font-weight: 600; }
 dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--muted); }
 
-/* 第 5 步還沒有成品：霧化的版面預覽＋說明卡 */
-.fc-preview-wrap { position: relative; min-height: 520px; }
-.fc-preview { filter: blur(4px) grayscale(.3); opacity: .7; pointer-events: none; user-select: none; }
-.fc-preview-video { aspect-ratio: 16 / 9; background: var(--bg-soft); border-radius: 8px; }
-.fc-preview-tl { position: relative; height: 28px; }
-.fc-preview-tl i { position: absolute; top: 4px; bottom: 4px; border-radius: 2px; }
-.fc-preview-card { background: var(--rv-card); border-radius: 12px; padding: 14px 18px; }
-.fc-preview-note { position: absolute; top: 120px; left: 50%; transform: translateX(-50%); width: min(460px, calc(100% - 32px));
-  background: var(--bg); color: var(--fg); border-radius: 14px; padding: 20px 24px; box-shadow: 0 12px 40px rgba(0,0,0,.2); }
-.fc-preview-note h2 { margin: 0 0 8px; font-size: 19px; }
-.fc-preview-note p { margin: 0 0 10px; line-height: 1.6; font-size: 15px; }
-.fc-preview-note a.btn { display: inline-block; background: var(--fg); color: var(--bg); padding: 8px 16px; border-radius: 8px; text-decoration: none; font-weight: 600; }
+/* 10-15 宇軒驗證回饋：第 5 步舊的霧化預覽樣式（.fc-preview 的 blur）整段拿掉——畫面早就不用（§6.8），
+   卻撞到卡片上那一行字的 class，讓要念的字變模糊 */
 
 /* 第 4 步逐類統計 */
 .exec-stats td.num { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; }
@@ -572,15 +562,19 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
   padding: 8px 14px; margin-bottom: 12px; font-weight: 600; }
 .fc-prod { display: block; margin-bottom: 8px; font-size: 14px; }
 .fc video { width: 100%; aspect-ratio: 16 / 9; max-height: 52vh; background: #000; border-radius: 10px; display: block; }
-.fc-tl { height: 40px; }
-.fc-tl .fm { position: absolute; top: 10px; height: 14px; min-width: 3px; opacity: .9; }
-.fc-tl .fm.pt { width: 3px; top: 4px; height: 26px; }
+.fc-tl { height: 44px; }
+/* 10-15 宇軒驗證回饋二：卡片標題的成品時間小字（原片時間照第 3 步 .rv-when） */
+.fc-outwhen { font-size: 13px; font-variant-numeric: tabular-nums; }
+/* 10-15 宇軒驗證回饋：卡片色塊（還沒看灰、通過綠、退回紅）以時間軸（.track，10–24px）為中心、上下各突出 7px，強調 */
+.fc-tl .fm { position: absolute; top: 3px; height: 28px; min-width: 3px; border-radius: 3px; opacity: .9; }
+.fc-tl .fm.pt { width: 4px; top: 1px; height: 32px; }
+.fc-tl .cur { top: 0; height: 34px; }
 .fc-tl .fm.stu { background: var(--rv-stu); } .fc-tl .fm.name { background: var(--rv-name); }
 .fc-tl .fm.cut { background: var(--rv-cut); } .fc-tl .fm.frz { background: var(--fc-frz); }
 .fc-tl .fm.blur { background: var(--fc-blur); opacity: .35; } .fc-tl .fm.ov { background: var(--rv-ov); opacity: .6; }
 .fc-tl .fm.bad { background: var(--fc-bad); } .fc-tl .fm.redo { outline: 2px solid var(--fc-bad); }
 .fc-tl .fm.ok { opacity: .45; }
-.fc-tl .seenbar { position: absolute; left: 0; right: 0; top: 32px; height: 5px; border-radius: 3px; background: var(--rv-line); overflow: hidden; }
+.fc-tl .seenbar { position: absolute; left: 0; right: 0; top: 37px; height: 5px; border-radius: 3px; background: var(--rv-line); overflow: hidden; }
 .fc-tl .seenbar .seen, .fc-seen i { position: absolute; top: 0; bottom: 0; background: var(--fc-seen); }
 .sw.frz { background: var(--fc-frz); } .sw.blur { background: var(--fc-blur); } .sw.bad { background: var(--fc-bad); } .sw.seen { background: var(--fc-seen); }
 .rv-chip.fc-stu i { background: var(--rv-stu); } .rv-chip.fc-name i { background: var(--rv-name); } .rv-chip.fc-cut i { background: var(--rv-cut); }
@@ -722,7 +716,11 @@ table.kv.pk-table td.pk-btns { width: 11em; white-space: nowrap; }
 .rv-codepool { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: baseline; margin: 6px 0; font-size: 14px; }
 .rv-codepool > b { min-width: 7em; }
 .rv-codechip { display: inline-flex; gap: 4px; align-items: baseline; padding: 1px 8px; border-radius: 8px; border: 1px solid var(--border); }
-.rv-codechip.used { font-weight: 600; }
+.rv-codechip.used { font-weight: 600; border-color: var(--fg); }
+/* 10-15 宇軒驗證回饋：代號對照——來源整欄變灰、已用只寫給了誰、未用的連框框變淡（最明顯的是已配出去的名字） */
+.rv-codemap .rv-cm-src { color: var(--muted); opacity: .7; font-weight: normal; }
+.rv-codechip .rv-cm-who { font-weight: normal; }
+.rv-codechip.unused { opacity: .4; }
 .rv-codechip .rv-warnline { margin: 0; font-size: 12px; }
 /* 10-08：片頭片尾搬到第 5 步輸出成品這一區 */
 #feExtras .fe-title { margin: 10px 0 4px; font-size: 15px; }
@@ -758,3 +756,70 @@ details.fc-whole > summary { cursor: pointer; list-style: none; display: flex; f
 details.fc-whole > summary::-webkit-details-marker { display: none; }
 details.fc-whole > summary .fc-foldbtn { font-size: 13px; border: 1px solid var(--line, #ccc); border-radius: 6px; padding: 2px 8px; }
 details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合）"; }
+
+/* 10-15 第5步2.0 第2段：第 5 步用第 3 步的卡片——狀態標籤、頂端一句、時間軸上的點照狀態上色 */
+.fc { --fc-todo: #8a8f98; --fc-ok: #3f8f5a; --fc-back: #d62828; }
+.fc-status { flex: 1; font-size: 17px; font-weight: 600; }
+.fc-status .fc-st-name { color: var(--danger); }
+.fc-status .fc-st-redo { color: var(--warn); }
+.fc-status .fc-st-done { color: var(--fc-ok); }
+.fc-oldsrc { margin-left: 8px; font-weight: normal; }
+.fc-none { font-size: 18px; margin: 24px 0 8px; }
+.fc-seenpct { margin: 4px 0 0; }
+.fc-tag { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 14px; font-weight: 600; background: var(--bg-soft); color: var(--fg); }
+.fc-tag-todo { background: var(--bg-soft); }
+.fc-tag-ok { background: #e3f3e8; color: var(--fc-ok); }
+.fc-tag-back { background: var(--danger-bg); color: var(--danger); }
+.fc-tag-edited, .fc-tag-made { background: var(--warn-bg); color: var(--warn); }
+.fc-card .fc-cardtext { margin: 8px 0; line-height: 1.6; font-size: 17px; }
+/* 10-15 宇軒驗證回饋：AI 重新生成的卡列兩行「原本：」「改成：」；字不縮、不模糊（以前 .fc-preview 撞到舊預覽的霧化樣式） */
+.fc-card .fc-lines p { margin: 0 0 4px; }
+.fc-card .fc-lab { font-weight: 600; margin-right: 4px; }
+/* 10-15 宇軒驗證回饋：「原本」「改成」超過 2 行各自收合（只顯示前 2 行）；右邊「展開 ▾」字 15px、可點區域至少 40px 高 */
+.fc-card .fc-line { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 4px; }
+.fc-card .fc-line .fc-clamp { flex: 1; min-width: 0; margin: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.fc-card .fc-line .fc-clamp.open { display: block; -webkit-line-clamp: unset; line-clamp: none; overflow: visible; }
+.fc-card .fc-more { flex: none; min-height: 40px; min-width: 72px; padding: 6px 12px; font-size: 15px; border: 1px solid var(--rv-line); border-radius: 8px; background: var(--bg-soft); color: var(--fg); cursor: pointer; }
+.fc-card .fc-more:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
+/* 10-15 宇軒驗證回饋：「前後多 2 秒」iOS 樣式滑動開關（44×24；關＝灰底圓鈕在左、開＝綠底圓鈕在右）；checkbox 藏起來、label 畫軌道與圓鈕 */
+.fc-pad { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; margin-left: 10px; cursor: pointer; user-select: none; }
+.fc-pad input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
+.fc-switch { position: relative; flex: none; width: 44px; height: 24px; border-radius: 12px; background: #c7c7cc; transition: background .2s; }
+.fc-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: transform .2s; }
+.fc-pad input:checked + .fc-switch { background: #34c759; }
+.fc-pad input:checked + .fc-switch::after { transform: translateX(20px); }
+.fc-pad input:focus-visible + .fc-switch { outline: 3px solid var(--fg); outline-offset: 2px; }
+/* 10-15 前後 2 秒開關統一（1015-5）：同一顆開關第 3 步也用（卡片標題列「聽這一段」旁、名字卡重念範圍那一列、切在外面的問題視窗） */
+.rv-card header .fc-pad { margin-left: 6px; font-size: 14px; }
+/* 「回到預設範圍」是重設起訖、不是播放：次要樣式（底線文字），放在起訖欄下面 */
+.rv2 button.linkish.rv-reset { font-size: 14px; color: var(--muted); }
+.fc-actbar .fc-bottom { margin: 10px 0 4px; }
+.fc-card .fc-why { margin: 6px 0 0; }
+/* 10-15 要修改合併（1015-4）：「要修改」那一塊（以前的退回框＋「改」）；改範圍的編輯器自己的「儲存修改」藏起來，存檔跟著「確定」 */
+.fc-fixbox { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rv-line); }
+.fc-fixbox .fc-fixopts { display: flex; flex-direction: column; gap: 6px; font-size: 17px; }
+.fc-fixbox .fc-fixpick { font-size: 16px; }
+.fc-fixbox [data-te-save] { display: none; }
+.fc-tl .fm.fc-todo { background: var(--fc-todo); } .fc-tl .fm.fc-ok { background: var(--fc-ok); } .fc-tl .fm.fc-back { background: var(--fc-back); }
+.sw.fc-todo { background: var(--fc-todo); } .sw.fc-ok { background: var(--fc-ok); } .sw.fc-back { background: var(--fc-back); }
+.rv-list .st.fc-tag { justify-self: end; }
+.fc-bottom { margin: 12px 0; gap: 12px; }
+.rv2 .fc-tabs button.fc-tab-far { opacity: .7; }
+.rv2 .fc-tabs button.fc-tab-far:first-of-type, .rv2 .fc-tabs .fc-tab-far { margin-left: auto; }
+.rv2 .fc-tabs .fc-tab-far + .fc-tab-far { margin-left: 0; }
+.fc-only { display: inline-block; margin: 0 0 6px; font-size: 14px; }
+
+/* 10-15 第5步2.0 第3段：版本選單、範圍外的卡（舊版「這一版沒做這張」變淡）。10-15 總檢查修正（1015-7）：註解改成現況 */
+.fc-vers { display: flex; align-items: center; gap: 8px; font-size: 15px; flex: 1; }
+/* 10-15 要修改合併（1015-4）順手：頂端一句另起一行放在標題下方（太長時不跟「看哪一版」擠成三行） */
+.fc > .fc-status { margin: -4px 0 12px; }
+.fc-vers select { font-size: 15px; }
+.rv-list li.fc-faded { opacity: .45; }
+/* 10-15 宇軒驗證回饋五：「已通過（沿用上一版）」只刷淡文字、綠色標籤保留 */
+.rv-list li.fc-faded-ok > :not(.st) { opacity: .45; }
+/* 10-15 宇軒驗證回饋六：下面「已通過的」那一區；上面清單的跨版本卡在時間格下面加小字「第 N 版」 */
+.fc-passed { margin-top: 4px; }
+.rv-list .tm .fc-vtag { display: block; font-size: 12px; color: var(--muted); font-weight: normal; }
+/* 10-15 總檢查修正（1015-7）：舊版畫面上「最新版：要重做（原因）」小字 */
+.fc-latest-redo { margin: 4px 0 0; }

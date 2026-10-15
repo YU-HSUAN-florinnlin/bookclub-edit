@@ -78,6 +78,11 @@ VOCAB = {
     "太短句", "不確定句", "老師段落裡的不是老師句", "找名字範圍放寬後補找", "段落改成老師後補找",
     # 10-08：第 5 步「有修改的」的組（finalcheck.CHANGE_GROUPS）
     "學員空隙", "名字重念", "名字消音", "名字要人處理", "學員名字", "重疊", "剪掉", "消音", "停格", "其他", "學員重念",
+    # 10-14 第5步2.0 第1段：修改需求紀錄（needs）的卡片類型、狀態、來源、成品狀態、生成句的角色與對應方式、歷史的動作
+    "待釐清", "有效", "刪掉", "併入", "拆成", "消失", "自動", "第3步新增", "第5步新增", "升級時對不到", "組裝時對不到",
+    "還沒生成", "還沒看", "退回", "改了", "升級前的成品", "舊版工具組的", "保留原聲學員", "計畫", "照段落", "照編號猜",
+    "建立", "改鍵", "改類型", "改範圍", "改了第3步決定", "恢復有效", "從別張拆出", "拆出一張", "排進生成", "改回還沒看",
+    "等重做", "取消等重做", "不用重做了", "重做過（升級時記）", "送回AI重做（升級時記）",
 }
 ENUM_KEYS = {"狀態", "類型", "做法", "排法", "放回做法", "版本", "建議做法", "結果", "方式", "內容類型", "信心", "label", "role",
              "文字判斷", "聲音判斷", "比對層級", "位置", "切點信心", "聲線", "角色", "文字來源", "來源", "判斷依據", "建議類型",
@@ -88,7 +93,8 @@ ENUM_KEYS = {"狀態", "類型", "做法", "排法", "放回做法", "版本", "
              "被蓋過改消音", "要人聽原因", "警告類型", "處理",
              "補找",   # 10-04 #119：名字候選是怎麼補找到的
              "錯開處理", "停格錯開處理",   # 10-04 #134：停格點跟結尾錯開時怎麼接
-             "組"}   # 10-08：第 5 步「有修改的」的組
+             "組",   # 10-08：第 5 步「有修改的」的組
+             "對應方式", "動作", "起因", "備註"}   # 10-14 第5步2.0 第1段：修改需求紀錄
 ID_KEYS = {"id", "鍵", "key", "段落", "sentence_id", "區域", "候選", "覆核項目", "句子", "重疊項目", "生成編號", "建議id",
            "來源段落", "edit", "第3步", "生成", "聽過", "編號", "前一格", "後一格",
            # 10-03 第八批補修（#12）：名字候選併進哪一張卡（同一處、同一句同代號）
@@ -96,12 +102,14 @@ ID_KEYS = {"id", "鍵", "key", "段落", "sentence_id", "區域", "候選", "覆
            # 10-04 #111：學員段落裡自動處理的重疊落在哪一段
            "學員段落",
            # 10-04 #61 補修：警告裡蓋過這一筆的動作
-           "蓋過的", "碰到邊的"}
+           "蓋過的", "碰到邊的",
+           # 10-14 第5步2.0 第1段：修改需求紀錄的卡號（K0001）、第 3 步的鍵、生成句、指向哪幾張卡、處理紀錄的鍵
+           "卡號", "第3步鍵", "句id", "指向", "這一版做了哪幾張", "紀錄鍵", "從", "到"}
 SPEAKER_KEYS = {"說話者", "學員", "學員說話者", "文字學員編號", "學員猜的"}
 # 10-02 第七批：代號（艾瑪、Emma 這類）不是個資，但值只有在新舊代號名單裡才印（自己打的、其他字照樣遮）
 CODE_KEYS = {"代號", "建議代號", "舊", "建議", "新"}
 STAMP_KEYS = {"更新時間", "建立時間", "時間", "產生時間", "開始", "結束", "看過時間", "處理紀錄產生時間", "開始時間", "結束時間",
-              "重做時間"}
+              "重做時間", "升級時間"}
 TIME_KEYS = {"start", "end", "slot", "原片", "成品", "at", "標的起訖", "改過的起訖", "整句起訖", "老師起訖", "學員起訖",
              "原本起訖", "src", "成品秒", "原片秒", "範圍", "句子外面", "段落外起訖", "建議", "原本", "改成", "前後",
              "疊到的範圍", "現在的slot"}
@@ -284,7 +292,9 @@ def topic_files(w: Path, f: Filter, out: list[str]) -> None:
     names = ["transcript/merged.json", "說話者判斷.json", "重疊.json", "名字候選.json", "名字覆核決定.json", "分析結果.json",
              "校對/段落.json", "校對/刪除建議.json", "覆核/覆核決定.json", "覆核/成品檢查.json", "生成/名字處理計畫.json",
              "生成/老師紀錄.json", "生成/學員紀錄.json", "生成/保留原聲學員紀錄.json", "生成/處理紀錄.json",
-             "生成/執行進度.json", "生成/子程式紀錄.jsonl", "生成/剪輯決策.json", "參考音/底噪.json"]
+             "生成/執行進度.json", "生成/子程式紀錄.jsonl", "生成/剪輯決策.json", "參考音/底噪.json",
+             "修改需求/格式.json", "修改需求/卡片.json", "修改需求/版本.json", "修改需求/成品狀態.json",
+             "修改需求/生成句.json", "修改需求/歷史.jsonl"]   # 10-14 第5步2.0 第1段
     for n in names:
         p = w / n
         if p.is_file():
@@ -526,6 +536,107 @@ def topic_final_check(w: Path, f: Filter, out: list[str]) -> None:
     auto = s.get("學員段落裡自動處理") or []   # 10-04 #111
     out.append(f"學員段落裡自動處理的重疊 {len(auto)} 處" + ("：" + "、".join(
         f"{x['id']} {timemap.t1(x['start'])}–{timemap.t1(x['end'])}" for x in auto if safe_id(x["id"])) if auto else ""))
+
+
+_TAG_RE = re.compile(r"^\d+-\d+$")
+_VER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[ab]\d+)?$")
+_ACT_RE = re.compile(r"^(組裝進|重做進)第\d+版$")
+
+
+def _act(v) -> str:
+    return v if isinstance(v, str) and (_ACT_RE.match(v) or v in VOCAB) else mask(v or "")
+
+
+def _hv(v) -> str:
+    """歷史的「前」「後」：固定說法、編號照印；物件攤開一層（每個欄位照白名單）；其他遮掉。"""
+    if isinstance(v, str):
+        return v if v in VOCAB or safe_id(v) else mask(v)
+    if isinstance(v, dict):
+        return "{" + fmt_row({k: x for k, x in v.items() if not isinstance(x, dict)}) + "}"
+    if isinstance(v, list) and all(isinstance(x, (int, float)) or x is None for x in v):
+        return "[" + ", ".join("—" if x is None else tfmt(x) for x in v) + "]"
+    return val("前", v)
+
+
+def topic_needs(w: Path, f: Filter, out: list[str], limit: int = 300) -> None:
+    """10-14 第5步2.0 第1段：修改需求紀錄（`修改需求/`）——卡片、版本、每張卡在每一版的狀態、生成句、歷史。
+    只印編號、數量、狀態、時間（第 3 步決定的文字、退回原因都不印，只印「有原因」）。"""
+    from bookclub import needs
+
+    if not needs.exists(w):
+        out.append("還沒升級（沒有 修改需求/格式.json）：用新版打開第 3、4、5 步任一步會自動升級，"
+                   "或跑 bookclub upgrade <工作區>（--dry-run 只看不寫）")
+        return
+    st = needs.load(w)
+    fm = st.fmt
+    ver = fm.get("升級自程式版本")
+    out.append(f"格式版本 {val('', fm.get('格式版本'))}；升級自程式版本 {ver if isinstance(ver, str) and _VER_RE.match(ver) else mask(ver or '')}"
+               f"；升級時間 {val('升級時間', fm.get('升級時間'))}；下一個卡號 {needs.card_no(int(fm.get('下一個卡號') or 1))}"
+               f"；歷史 {int(fm.get('下一個歷史序號') or 1) - 1} 條")
+    # 10-15 第1段審查修正（建議）：同步失敗看得到（只印次數、時間、哪裡、錯誤種類；錯誤訊息本來就沒記）
+    er = fm.get(needs.ERR_KEY) or {}
+
+    def _err_text(e: dict) -> str:
+        where, kind = e.get("哪裡"), e.get("種類")
+        return (f"第一次 {val('時間', e.get('第一次時間'))}，最後 {val('時間', e.get('最後時間'))}，"
+                f"最後一次在 {where if where in needs.ERR_WHERE else mask(where or '')}"
+                f"（{kind if isinstance(kind, str) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', kind) else mask(kind or '')}）")
+
+    if er and int(er.get("次數") or 0) > 0:
+        out.append(f"⚠️ 同步錯誤 {val('', er.get('次數'))} 次：{_err_text(er)}"
+                   "——新紀錄可能跟舊檔不一致，第 5 步先改讀舊檔；下次打開工作區會整份重新同步一次（成功就清掉）")
+    else:
+        out.append("同步錯誤：沒有")
+        last = fm.get(needs.LAST_ERR_KEY) or {}   # 10-15 第1段審查二修正：重新同步成功清掉之後，最後一次留著給人看
+        if last:
+            out.append(f"  （以前有過，已重新同步清掉：{val('', last.get('次數'))} 次，{_err_text(last)}）")
+    cards = [st.cards[k] for k in sorted(st.cards, key=needs._card_num)]
+
+    def cnt(rows, key):
+        c = Counter(str(r.get(key)) for r in rows)
+        return "、".join(f"{k if k in VOCAB else mask(k)} {n}" for k, n in c.items()) or "（沒有）"
+
+    out.append(f"卡片 {len(cards)} 張：{cnt(cards, '類型')}")
+    out.append(f"  狀態：{cnt(cards, '狀態')}；來源：{cnt(cards, '來源')}；等重做 {sum(1 for c in cards if c.get('等重做'))} 張")
+    for c in cards:
+        if not f.ok({"id": c["卡號"], "鍵": c.get("第3步鍵"), "原片": c.get("原片")}):
+            continue
+        row = {"卡號": c["卡號"], "類型": c.get("類型"), "第3步鍵": c.get("第3步鍵"), "原片": c.get("原片"),
+               "狀態": c.get("狀態"), "來源": c.get("來源"), "指向": c.get("指向") or [],
+               "等重做": bool(c.get("等重做")), "起因": (c.get("等重做") or {}).get("起因"),
+               "決定欄位數": len(c.get("第3步決定") or {}), "更新時間": c.get("更新時間")}
+        out.append("卡片 " + fmt_row(row))
+    for n in sorted(st.versions):
+        v = st.versions[n]
+        tag = v.get("標記")
+        out.append(f"版本 {n}：時間 {val('時間', v.get('時間'))}，範圍 {val('範圍', v.get('範圍'))}，"
+                   f"標記 {tag if isinstance(tag, str) and _TAG_RE.match(tag) else ('—' if tag is None else mask(tag))}，"
+                   f"輸出做法 {'、'.join(x for x in v.get('輸出做法') or [] if re.match(r'^[a-z]+$', x)) or '—'}，"
+                   f"以第 {val('', v.get('以哪一版為基礎'))} 版為基礎，成品 {len(v.get('成品檔') or [])} 支，"
+                   f"卡片 {len(v.get('卡片指紋') or {})} 張（這一版做了 {len(v.get('這一版做了哪幾張') or [])} 張），"
+                   f"沒對到卡片的紀錄 {len(v.get('沒對到卡片的紀錄') or [])} 筆，輸出 {len(v.get('輸出紀錄') or [])} 次，"
+                   f"備註 {val('備註', v.get('備註'))}，影片還在={val('', v.get('影片還在'))}")
+        rows = [r for (k, m), r in st.states.items() if m == n]
+        out.append(f"  第 {n} 版成品狀態：{cnt(rows, '狀態')}")
+        for r in sorted(rows, key=lambda x: needs._card_num(x["卡號"])):
+            if not f.ok({"id": r["卡號"]}):
+                continue
+            out.append("  狀態 " + fmt_row({"卡號": r["卡號"], "版本號": n, "狀態": r.get("狀態"), "成品": r.get("成品"),
+                                            "有原因": bool((r.get("退回原因") or {}).get("補充")),
+                                            "沿用自": r.get("沿用自"), "紀錄鍵": r.get("紀錄鍵") or []}))
+    gens = [st.gen[k] for k in sorted(st.gen)]
+    out.append(f"生成句 {len(gens)} 句：{cnt(gens, '角色')}；對應方式：{cnt(gens, '對應方式')}")
+    for g in gens:
+        if not f.ok({"id": g["句id"], "鍵": "、".join(g.get("卡號") or [])}) and not any(f.ok({"id": c}) for c in g.get("卡號") or []):
+            continue
+        out.append("生成句 " + fmt_row({k: g.get(k) for k in ("句id", "角色", "卡號", "第幾版", "種子", "對應方式")}))
+    hist = needs.read_history(w)
+    shown = [h for h in hist if not f.ids or f.ok({"id": h.get("卡號")})][-limit:]
+    out.append(f"歷史 {len(hist)} 條（印最後 {len(shown)} 條）")
+    for h in shown:
+        out.append("歷史 " + "  ".join([f"序號={val('', h.get('序號'))}", f"時間={val('時間', h.get('時間'))}",
+                                        f"卡號={val('卡號', h.get('卡號'))}", f"步驟={val('', h.get('步驟'))}",
+                                        f"動作={_act(h.get('動作'))}", f"前={_hv(h.get('前'))}", f"後={_hv(h.get('後'))}"]))
 
 
 def topic_run_times(w: Path, out: list[str]) -> None:
@@ -942,11 +1053,13 @@ TOPICS = {
     "前後沒聲音": "老師重念範圍開頭或結尾有一段沒有字（第六批）：建議範圍、能不能一鍵縮小",
     "底噪": "全片底噪（第六批第五件）：挑到哪一段、音量、確認了沒有、候選",
     "代號": "這一集用到的代號（每個幾個人用，不印本名）、還在用的英文代號與建議的中文、要念的文字裡還有舊英文代號的地方",
+    "修改需求": "修改需求紀錄（10-14）：每張卡的卡號、類型、第 3 步鍵、狀態、來源、等重做；每一版的範圍、成品數、"
+               "每張卡在那一版的狀態（不印原因文字）；生成句對到哪幾張卡；歷史（--id K0003 只看一張卡）",
 }
 ALIASES = {"files": "檔案", "turns": "段落", "sentences": "句子", "words": "字", "overlaps": "重疊", "names": "名字",
            "mutes": "消音", "cuts": "消音", "剪掉": "消音", "finalcheck": "總檢查", "gen": "生成", "parts": "子程式", "progress": "執行進度", "執行時間": "執行進度",
            "final": "成品檢查", "第5步": "成品檢查", "decisions": "剪輯決策", "convert": "換算", "time": "換算",
-           "edges": "前後沒聲音", "room": "底噪", "codes": "代號"}
+           "edges": "前後沒聲音", "room": "底噪", "codes": "代號", "needs": "修改需求", "卡片": "修改需求"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1018,6 +1131,8 @@ def run(argv: list[str]) -> list[str]:
             topic_room(w, f, out)
         elif topic == "代號":
             topic_codes(w, f, out)
+        elif topic == "修改需求":
+            topic_needs(w, f, out, args.limit)
     return out
 
 

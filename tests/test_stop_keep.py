@@ -183,12 +183,13 @@ def test_project_label():
 
 def test_web_pure_functions():
     app = (WEB / "app.js").read_text(encoding="utf-8")
-    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     fcj = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     assert 'id="rv-confirm-main"' in rv and '<details class="rv-confirm-more"><summary>詳細</summary>' in rv
     assert "略過或照建議通過的項目，第 5 步都可以再檢查。要開始 AI 修改嗎？" in rv
     assert "confirm(`切換到「" in app                                     # 切換專案前先說要切去哪一個
-    assert "fcRunNoteHtml(d[\"上次執行\"], true)" in fcj and "FC_NO_PRODUCT" in _fn(fcj, "renderFinal")
+    # 10-15 第5步2.0 第2段：第 4 步上次沒做完改成頂端一句「上次重做沒做完：按『重做這幾張』繼續」（fcStatusLine）；沒有成品時一句話＋連結
+    assert "上次重做沒做完" in _fn(fcj, "fcStatusLine") and "還沒有成品，請先到" in _fn(fcj, "renderFinal")
     if not NODE:
         return
     fmt = _fn(app, "fmtStamp")
@@ -214,13 +215,9 @@ def test_web_pure_functions():
     assert 'id="btnReassembleAll"' in adv and body.count('id="btnReassembleAll"') == 1
     assert 'const EXEC_UPDATE_NOTE = "只補做第 3 步改過的部分，做過的不重做";' in app
     assert "現在在：第一堂（開發專案）" in got["now"] and got["none"] == ""
-    got = _node(_ESC + "const FC_NO_PRODUCT = 1;\n" + _fn(fcj, "fcRunNoteHtml") + _fn(fcj, "fcWhereHtml") + """
-      const run = {"說明": "第 4 步上次執行到一半被停止（10-08 23:39 開始）"};
-      console.log(JSON.stringify([fcRunNoteHtml(run, true), fcRunNoteHtml(run, false), fcRunNoteHtml({"說明": ""}, true),
-        fcWhereHtml({"顯示名稱": "第一堂（從零_b）", "標示": "測試"})]));""")
-    assert "現在看的是上一支完整的成品" in got[0] and "還沒有完整的成品" in got[1] and got[2] == ""
-    assert "現在在：<b>第一堂（從零_b）</b>（測試）" in got[3]
-    assert '這個工作區還沒組裝過成品，請先在第 4 步執行' in fcj
+    got = _node(_ESC + _fn(fcj, "fcWhereHtml") + """
+      console.log(JSON.stringify([fcWhereHtml({"顯示名稱": "第一堂（從零_b）", "標示": "測試"}), fcWhereHtml(null)]));""")
+    assert "現在在：<b>第一堂（從零_b）</b>（測試）" in got[0] and got[1] == ""
 
 
 def test_render_multi_method_one_fails_and_none_pass():

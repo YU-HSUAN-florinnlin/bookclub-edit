@@ -340,7 +340,8 @@ def test_export_without_product_still_blocked():
 
 def test_whole_flags_survive_rerender_until_redone():
     """10-03 第八批 #23：整片看時退回的，重新組裝不清掉；送回重做、組裝做完（finish_redo）的那幾筆才拿掉，
-    重做過的那幾筆看過的範圍要重看，其他看過的保留。"""
+    重做過的那幾筆看過的範圍要重看，其他看過的保留。10-15 總檢查修正（1015-7，審查建議 5）：「只重新組裝」不算重做——
+    那一筆留著、看過的不扣。"""
     if not shutil.which("ffmpeg"):
         return
     w = _workdir()
@@ -353,11 +354,20 @@ def test_whole_flags_survive_rerender_until_redone():
     d = fc.page_data(w)
     assert [x["id"] for x in d["整片退回"]] == ["R001", "R002"] and d["看過區段"] == [[0.0, 10.0]]
     chk = fc.load_check(w)
-    chk["重做中"] = {"時間": "x", "項目": [{"鍵": "R001", "來源": "整片看", "原片": [2.0, 2.0], "生成": [], "只重新組裝": True}]}
+    chk["重做中"] = {"時間": "x", "項目": [{"鍵": "R002", "來源": "整片看", "原片": [7.0, 7.0], "生成": [], "只重新組裝": True}]}
+    fc._save(w, chk)
+    wd.write_json(proclog.log_path(w), {**log, "產生時間": "t-只重新組裝"})
+    back = fc.finish_redo(w)
+    assert back["只重新組裝"] is True and back["還是要重做"] is True
+    d = fc.page_data(w)
+    assert [x["id"] for x in d["整片退回"]] == ["R001", "R002"] and d["看過區段"] == [[0.0, 10.0]]
+    chk = fc.load_check(w)
+    assert "重做中" not in chk and "重做過" not in chk
+    chk["重做中"] = {"時間": "x", "項目": [{"鍵": "R001", "來源": "整片看", "原片": [2.0, 2.0], "生成": []}]}
     fc._save(w, chk)
     wd.write_json(proclog.log_path(w), {**log, "產生時間": "t-重做完"})
     back = fc.finish_redo(w)
-    assert back["只重新組裝"] is True
+    assert not back.get("只重新組裝")
     d = fc.page_data(w)
     assert [x["id"] for x in d["整片退回"]] == ["R002"] and d["看過區段"] == [[4.0, 10.0]]
 
@@ -929,7 +939,9 @@ def test_server_video_no_store_and_switchnote_route():
         heads.clear()
         srv.Handler._serve_file(H(), fc.video_file(w))
         assert not any(k == "Cache-Control" for k, _v in heads)
-        assert "no_store=True" in (REPO_ROOT / "bookclub" / "server.py").read_text(encoding="utf-8").split('"/api/final/video"')[1][:200]
+        # 10-15 第5步2.0 第3段：最新一版、舊版的成品兩條路都不快取
+        part = (REPO_ROOT / "bookclub" / "server.py").read_text(encoding="utf-8").split('"/api/final/video"')[1].split("elif path")[0]
+        assert part.count("no_store=True") == 2, part
         chk = fc.load_check(w)
         chk["成品切換提示"] = {"時間": T1, "從": "a", "到": "b", "原因": fc.SWITCH_NEW}
         fc._save(w, chk)

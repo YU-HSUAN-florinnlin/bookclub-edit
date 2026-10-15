@@ -91,6 +91,9 @@ class Settings:
     paths: Paths = field(default_factory=Paths)
     overlap: Overlap = field(default_factory=Overlap)
     teacher: Teacher = field(default_factory=Teacher)
+    # 10-15 第2段審查修正：開發者設定（settings.toml 最上層 `developer = true`；沒寫＝老師的畫面）。
+    # 開著才顯示給開發者看的小字（例如第 5 步「先照舊的紀錄顯示」）；第 3 段的範圍組裝、以舊版為基礎再組裝也看這個
+    developer: bool = False
 
 
 def settings_path() -> Path:
@@ -144,7 +147,16 @@ def load_settings() -> Settings:
             scan_pad_s=float(overlap_raw.get("scan_pad_s", 3.0)),
         ),
         teacher=Teacher(name=str(teacher_raw.get("name", "老師")).strip() or "老師"),
+        developer=raw.get("developer") is True,
     )
+
+
+def developer() -> bool:
+    """10-15 第2段審查修正：開發者設定有沒有開（settings.toml 最上層 `developer = true`）。沒有設定檔、沒寫、寫錯都＝沒開。"""
+    try:
+        return bool(load_settings().developer)
+    except Exception:  # noqa: BLE001 — 設定檔讀不懂就當老師的畫面
+        return False
 
 
 def overlap_scan_pad_s() -> float:

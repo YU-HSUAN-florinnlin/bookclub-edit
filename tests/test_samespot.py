@@ -150,7 +150,7 @@ def test_roster_duplicate_spellings_warning():
     assert dups == [{"寫法": "小美", "列": [2, 4]}]
     w = _fresh()
     assert review.page_data(w)["名冊重複寫法"] == dups
-    js = (REPO_ROOT / "bookclub" / "web" / "review.js").read_text(encoding="utf-8")
+    js = ((REPO_ROOT / "bookclub" / "web" / "review.js").read_text(encoding="utf-8") + (REPO_ROOT / "bookclub" / "web" / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     assert "名冊重複寫法" in js and "也可能是" in js
 
 

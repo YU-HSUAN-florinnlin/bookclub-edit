@@ -671,7 +671,8 @@ def test_redo_returned_regenerates_only_returned_then_step5_unseen():
 
 def test_reassemble_only_keeps_generation_then_step5_unseen():
     """10-03 第八批 #23：第 4 步「只重新組裝」：退回的那幾筆記進重做中，但不清生成紀錄、快取、聲音檔，不記新版本、
-    不換種子；只跑組裝這一步；組裝做完回到第 5 步還沒看、標「重做過（只重新組裝）」。"""
+    不換種子；只跑組裝這一步。10-15 總檢查修正（1015-7，審查建議 5）：只重新組裝不算重做——組裝做完那幾筆照樣是退回
+    （第 5 步「要重做」，原因留著），不標「重做過」。"""
     from bookclub import finalcheck, proclog
 
     w = _fresh()
@@ -704,9 +705,9 @@ def test_reassemble_only_keeps_generation_then_step5_unseen():
     assert wd.read_json(students.log_path(w)) == stu_log                      # 生成紀錄（含種子）沒動
     assert not (od / tts.REDO_VERSIONS).exists()                              # 沒記新版本
     chk = wd.read_json(finalcheck.check_path(w))
-    assert k1 not in chk["逐筆"] and "重做中" not in chk and chk["重做過"]["只重新組裝"] is True
-    got = {r["鍵"]: r["重做過"] for r in finalcheck.page_data(w)["紀錄"]}
-    assert got[k1]["做法"] == "只重新組裝" and got[k1]["標籤"] == "重做過（只重新組裝）" and got[k1]["原因"] == "開頭有雜音"
+    assert chk["逐筆"][k1]["結果"] == "退回重做" and chk["逐筆"][k1]["原因"] == "開頭有雜音" and "重做中" not in chk
+    assert "重做過" not in chk
+    assert [it["鍵"] for it in finalcheck.redo_list(w)["項目"]] == [k1]   # 下次「重做這幾張」照樣有它
     # 沒有退回的時候按「只重新組裝」：照樣重新組裝一次（組裝做過了也不跳過）
     ran.clear()
     prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, redo_returned=True,
@@ -819,12 +820,18 @@ def test_redo_unchanged_regenerates_with_next_seed_and_keeps_old_versions():
         d = finalcheck.page_data(w)
         got = d["紀錄"][0]["重做過"]
         assert got["第幾版"] == rnd and got["換一種念法"] and got["做法"] == "重新生成"   # 第 5 步看得出是第幾版
-    # 文字或範圍改了：照原本的規則（不避開，從 42 開始）
+    # 文字改了：照原本的規則（不避開，從 42 開始）
     entry = wd.read_json(od / tts.REDO_VERSIONS)[target["id"]]
     assert entry["避開"] == [1, 42, 2026]                                          # 第 4 版生成時避開的（前三版用過的）
+    # 10-15 C1 實跑修正（1015-7）：第 4 步排重做時判的「沒改」記進 entry（換一種念法），生成時照它、不再用時間格重判
+    assert entry["換一種念法"] is True
     assert tts.redo_avoid(entry, {**prep(target), "text": "改過的字"}) == []
-    assert tts.redo_avoid(entry, {**prep(target), "slot": [target["slot"][0] + 0.5, target["slot"][1]]}) == []
+    assert tts.redo_avoid(entry, {**prep(target), "slot": [target["slot"][0] + 0.1, target["slot"][1]]}) == [1, 42, 2026]
     assert tts.redo_avoid(entry, prep(target)) == [1, 42, 2026]
+    assert tts.redo_avoid({**entry, "換一種念法": False}, prep(target)) == []      # 排重做時判成範圍改了
+    old = {k: v for k, v in entry.items() if k not in ("換一種念法", "換一種念法依據")}   # 舊的 entry（沒有旗標）
+    assert tts.redo_avoid(old, {**prep(target), "slot": [target["slot"][0] + 0.1, target["slot"][1]]}) == [1, 42, 2026]
+    assert tts.redo_avoid(old, {**prep(target), "slot": [target["slot"][0] + 1.0, target["slot"][1]]}) == []
 
 
 def test_redo_stopped_midway_finishes_on_next_run():
@@ -1311,8 +1318,12 @@ def test_server_reassemble_without_returns():
         return {}
 
     steps = {"now": _ALL_DONE}
+    from bookclub import config
+
     olds = (execute.precheck, execute.final_check, execute.run_execute, execute.current_steps, finalcheck.redo_list)
+    old_dev = config.developer
     try:
+        config.developer = lambda: True   # 10-15 第5步2.0 第3段：「只重新組裝」只有開發者設定開著才收
         execute.precheck = lambda wk: {"可以開始": True, "缺": [], "提醒": [], "缺代號": 0}
         execute.final_check = lambda wk: {"可以開始": True, "看過": True, "還要處理": 0}
         execute.run_execute = fake_run
@@ -1362,8 +1373,25 @@ def test_server_reassemble_without_returns():
                 break
             time.sleep(0.02)
         assert len(started) == 3
+        # 10-15 第5步2.0 第3段（31 號設計 §5.3）：沒開開發者設定（老師）——範圍、只重新組裝收到也不理：整支、照卡片重做
+        config.developer = lambda: False
+        old_key = srv.groq_key_ready
+        srv.groq_key_ready = lambda: True   # 不是只重新組裝：要有轉文字金鑰（這裡假裝有）
+        try:
+            r = httpd.start_execute({"start": "1:00", "end": "3:00", "methods": ["sw"], "只重新組裝": True, "基礎版本": 1})
+        finally:
+            srv.groq_key_ready = old_key
+        assert r["started"], r
+        for _ in range(100):
+            if not httpd.exec_running():
+                break
+            time.sleep(0.02)
+        assert len(started) == 4 and started[3]["start"] is None and started[3]["end"] is None
+        assert started[3]["reassemble_only"] is False
+        assert httpd.exec_status()["開發者"] is False
     finally:
         gate.set()
+        config.developer = old_dev
         (execute.precheck, execute.final_check, execute.run_execute, execute.current_steps, finalcheck.redo_list) = olds
         httpd.server_close()
 

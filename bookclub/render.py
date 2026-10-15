@@ -1230,6 +1230,18 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     # 10-08（宇軒：停止後第 5 步看不到舊檔）：處理紀錄、剪輯決策先算好，等至少一支成品驗證通過、換上正式檔名之後才寫；
     # 中途停止、失敗、驗證沒過時，第 5 步照樣是上一支成品配上一份處理紀錄
     log_data = proclog.build_render_log(workdir, d, plist, au["原聲"], au["新聲音"], tag)
+    # 10-15 第5步2.0 第3段（31 號設計 §3.3）：成品檔名帶版本號 `成品_v<N>_<標記>_<做法>.mp4`，同範圍再組一次不會蓋掉上一版。
+    # 版本號先預留（處理紀錄帶著，建版本時用同一個）；沒升級過的工作區照舊的檔名
+    vno = None
+    try:
+        from bookclub import needs
+
+        vno = needs.next_version_no(workdir)
+    except Exception as e:  # noqa: BLE001 — 讀不到新紀錄就照舊的檔名，不擋組裝
+        print(f"[修改需求紀錄] ⚠️ 讀不到版本號，成品照舊的檔名：{type(e).__name__}")
+    if vno:
+        log_data["版本號"] = vno
+    vtag = f"v{vno}_{tag}" if vno else tag
     written = False
 
     def commit_logs() -> None:
@@ -1249,9 +1261,9 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
             summary["輸出"][m] = {"略過": f"硬碟只剩 {free:.1f} GB"}
             problems.append(f"{m}：硬碟可用空間只剩 {free:.1f} GB（至少要 {min_free_gb:g} GB），沒有輸出")
             continue
-        dst = out / f"成品_{tag}_{m}.mp4"
+        dst = out / f"成品_{vtag}_{m}.mp4"
         # 09-29：先輸出到暫存檔名，驗證通過才換成正式檔名；中斷的殘檔、驗證沒過的檔不會被當成做好了
-        tmp = out / f"_輸出中_成品_{tag}_{m}.mp4"
+        tmp = out / f"_輸出中_成品_{vtag}_{m}.mp4"
         if m == "smart":
             spent, stat = render_smart(video, d, plist, au["新聲音"], tmp, out / f"_片段_{tag}")
         else:
@@ -1261,8 +1273,15 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
             tmp.replace(dst)
             final = dst
             commit_logs()
+            try:   # 10-14 第5步2.0 第1段：這一支成品記到這一版（修改需求紀錄的版本表）
+                from bookclub import needs
+
+                needs.add_product(workdir, log_data.get("產生時間"), str(dst.relative_to(workdir)))
+            except Exception as e:  # noqa: BLE001
+                needs.note_error(workdir, "成品記到版本", e)   # 10-15 第1段審查修正（建議）
+                print(f"[修改需求紀錄] ⚠️ 成品沒記到版本（不影響成品）：{type(e).__name__}")
         else:
-            final = out / f"成品_{tag}_{m}_驗證沒過.mp4"
+            final = out / f"成品_{vtag}_{m}_驗證沒過.mp4"
             tmp.replace(final)
             problems.append(f"{m}：成品驗證沒過（{verify_problem(ver)}），存成 {final.name}")
         summary["輸出"][m] = {"耗時秒": round(spent, 1), "大小MB": round(final.stat().st_size / 1e6, 1),
@@ -1276,7 +1295,7 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
         for k, w in enumerate(wins):
             w["png"] = ov_dir / f"{k:03d}.png"
             make_overlay(w["png"], size, w["label"], w["caption"])
-        dst = out / f"成品_{tag}_標字版.mp4"
+        dst = out / f"成品_{vtag}_標字版.mp4"
         spent = render_full(video, d, plist, au["新聲音"], dst, "hw", overlays=wins)
         summary["輸出"]["標字版"] = {"耗時秒": round(spent, 1), "大小MB": round(dst.stat().st_size / 1e6, 1),
                                   "標字時段數": len(wins), "驗證": verify(dst, expected, joins, full_decode=True),
@@ -1290,6 +1309,35 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     if problems:   # 10-02 第七批（C1）：沒產出成品不能當作做完
         raise RuntimeError("組裝沒有產出成品：" + "；".join(problems))
     return summary
+
+
+_PRODUCT_RE = None
+
+
+def product_parts(name: str) -> tuple[int | None, str]:
+    """（純函式，10-15 第5步2.0 第3段）成品檔名 → (版本號, 去掉版本號的檔名)：
+    `成品_v3_0-97_sw.mp4` → (3, `成品_0-97_sw.mp4`)；舊檔名 `成品_0-97_sw.mp4` → (None, 原樣)。"""
+    import re
+
+    global _PRODUCT_RE
+    if _PRODUCT_RE is None:
+        _PRODUCT_RE = re.compile(r"^成品_v(\d+)_(.+)$")
+    m = _PRODUCT_RE.match(name)
+    return (int(m.group(1)), f"成品_{m.group(2)}") if m else (None, name)
+
+
+def product_path(workdir: str | Path, tag: str, method: str) -> Path:
+    """（10-15 第5步2.0 第3段）這個範圍標記、這種做法最新的那一支成品：`成品_v<N>_<標記>_<做法>.mp4` 取版本號最大的；
+    沒有帶版本號的就是舊檔名 `成品_<標記>_<做法>.mp4`（在不在都回這個路徑）。第 4 步「做過沒有」用。"""
+    out = Path(workdir) / "輸出"
+    want = f"成品_{tag}_{method}.mp4"
+    best: tuple[int, Path] | None = None
+    if out.is_dir():
+        for p in out.iterdir():
+            n, rest = product_parts(p.name)
+            if n is not None and rest == want and (best is None or n > best[0]):
+                best = (n, p)
+    return best[1] if best else out / want
 
 
 def verify_problem(ver: dict) -> str:

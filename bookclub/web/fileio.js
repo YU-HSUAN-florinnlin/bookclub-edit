@@ -201,8 +201,22 @@ async function pickBrowsed(path) {
 
 let foPollTimer = null;
 // 10-13 審查修正二（建議 5）：確認視窗用伺服器回的 `說明`（換了成品／第 4 步又組裝了，兩種情況說法不同）
-function foStaleAsk(why) {
+function foStaleAsk(why, ver) {
+  // 10-15 第3段審查修正（建議）：拿的最終成品不是最新一版——問的是要不要複製這一版（不是「現在這一支還沒輸出」）
+  if (ver && ver["輸出版本"]) return `${why || `這是第 ${ver["輸出版本"]} 版的，最新是第 ${ver["最新版本"]} 版`}。要複製第 ${ver["輸出版本"]} 版嗎？（要最新的，先在第 5 步看最新一版、按輸出成品）`;
   return `${why || "上次輸出的不是現在這一支成品"}。現在這一支還沒按「輸出成品」，要先複製它嗎？（建議檢查完先按輸出成品）`;
+}
+
+// 拿檔按鈕旁那一行（純函式）：上次輸出的不是最新的才寫；Windows（WSL）輸出過、還沒複製時寫「要拿檔案，按『複製到 Windows』」
+// 10-15 第5步2.0 第3段（31 號設計 §6.7）：拿檔按鈕拿「最新一次輸出」，那一版之後有新版本 → 「這是第 N 版的，最新是第 M 版」；
+// 新紀錄不能用時照 0.2.1b3 的過期判斷（上次輸出過期）
+function foWhichLine(d, job) {
+  const v = d["版本"];
+  if (v && v["輸出版本"] && v["輸出版本"] !== v["最新版本"]) return `<span class="rv-warnline">${esc(`這是第 ${v["輸出版本"]} 版的，最新是第 ${v["最新版本"]} 版`)}</span>`;
+  const stale = d["上次輸出過期"];
+  if (stale) return `<span class="rv-warnline">${esc(`上次輸出的不是最新的成品（${stale["說明"] || ""}）`)}</span>`;
+  if (d["可以複製到Windows"] && d["成品是"] === "最終成品" && !(job && job["狀態"] === "完成")) return `<span class="muted">要拿檔案，按『複製到 Windows』</span>`;
+  return "";
 }
 
 async function fileOutInit(el) {
@@ -228,9 +242,9 @@ async function fileOutInit(el) {
   // 10-13 bug 二：上次輸出的最終成品比現在的成品舊——黃字說明、複製按鈕改字。
   // 10-13 審查修正二（建議 3、4）：照伺服器 `拿檔是最新那支` 寫拿的是哪一支（看舊檔或標字版時拿的是最新那支）
   const stale = d["上次輸出過期"];
-  const takeWhich = d["拿檔是最新那支"] ? "這裡拿的是最新組裝的那支（不是第 5 步正在檢查的這支）" : "這裡拿的是還在檢查的成品";
   const winLabel = stale ? "複製現在的成品到 Windows（還沒重新輸出）" : "複製成品到 Windows 的下載資料夾";
-  const which = d["成品"] ? `<span class="${stale ? "rv-warnline" : "muted"}">${esc(d["成品是"] || "")}：${esc(d["成品"])}${stale ? `　上次輸出的最終成品（${esc(stale["舊檔"])}）比現在的舊，${takeWhich}` : ""}</span>` : "";
+  // 10-15 第5步2.0 第2段（31 號設計 §6.8）：拿的是哪一支只在「不是最新」時寫一行；Windows 輸出後提醒要再按複製
+  const which = foWhichLine(d, job);
   main.innerHTML = `<div class="fo-row">
       <button class="secondary" id="fo-open" ${d["成品"] ? "" : "disabled"}>${openName}</button>
       ${d["可以複製到Windows"] ? `<button class="secondary" id="fo-win" ${d["成品"] && !running ? "" : "disabled"}>${winLabel}</button>` : ""}
@@ -247,7 +261,7 @@ async function fileOutInit(el) {
     try {
       const r = await apiPost("/api/final/to_windows", {}, { quiet: true });
       if (r && r["要確認"]) {   // 10-13 bug 二：上次輸出的是重做前的版本，先問一次
-        if (!confirm(foStaleAsk(r["說明"]))) { win.disabled = false; return; }
+        if (!confirm(foStaleAsk(r["說明"], r["版本"]))) { win.disabled = false; return; }   // 10-15 第3段審查修正：拿的不是最新版也先問
         await apiPost("/api/final/to_windows", { confirm: true }, { quiet: true });
       }
     }

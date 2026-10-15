@@ -489,6 +489,81 @@ def redo_items(log: dict | None, check: dict) -> list[dict]:
     return out
 
 
+CARD_SRC = "卡片"   # 10-15 總檢查修正（1015-7）：`redo_list` 裡照卡片重做的那幾項（鍵＝`卡片:<卡號>`，帶 `卡號`）
+
+
+def _needs_store(workdir: Path):
+    """修改需求紀錄（能用才讀；不能用＝None，照舊只看成品檢查檔）。"""
+    try:
+        from bookclub import needs
+
+        return needs.load(workdir) if needs.healthy(workdir) else None
+    except Exception:  # noqa: BLE001 — 讀不到新紀錄不擋第 4 步（照舊只重做成品檢查檔裡退回的）
+        return None
+
+
+def card_redo_items(st, log: dict | None, check: dict, index: dict) -> list[dict]:
+    """10-15 總檢查修正（1015-7，必修 1、分流定案甲）：`needs.redo_cards` 裡記了原因、成品檢查檔卻沒有的卡 → 第 4 步要重做的項目
+    （跟 `redo_items` 同樣的欄位，另帶 `卡號`；鍵＝`卡片:<卡號>`）：
+    - 跨版本卡、沿用卡（最新一版沒有它的狀態列）、舊版自己才有的卡按「要修改」——原因記在卡片的等重做
+    - 之前版本退回、還沒重做的（例如範圍外、上一版退回的）
+    已經在成品檢查檔退回（`redo_items`）、或上次重做到一半（`重做中`）的卡不重複。st＝None（新紀錄不能用）回空的。"""
+    if st is None:
+        return []
+    from bookclub import needs
+
+    covered: set[str] = set()
+    for e in redo_items(log, check):
+        covered.update(needs._card_of_redo(st, e, index))
+    for e in (check.get("重做中") or {}).get("項目") or []:
+        if not e.get("卡號"):
+            covered.update(needs._card_of_redo(st, e, index))
+    out = []
+    for r in needs.redo_cards(st):
+        if r["原因"] is None or r["卡號"] in covered:
+            continue
+        o = r["原片"] or [None, None]
+        out.append({"來源": CARD_SRC, "鍵": f"{CARD_SRC}:{r['卡號']}", "卡號": r["卡號"], "類型": r["類型"],
+                    "原片": [o[0], o[1] if o[1] is not None else o[0]], "成品": None,
+                    "覆核項目": [r["第3步鍵"]] if r["第3步鍵"] else [], "做了什麼": "",
+                    "原因": needs.reason_text(r["原因"].get("選項"), r["原因"].get("補充", ""))})
+    return out
+
+
+def card_units(workdir: Path, st, card: str, ctx: dict) -> list[dict]:
+    """10-15 總檢查修正（1015-7）：照卡片重做 → 要重新生成哪幾句：先查生成句表（31 號設計 §3.5：這一句是為了哪幾張卡生成的），
+    只留現在的計畫裡還有的；查不到（升級時對不到、舊的生成句）改用最近一個有這張卡的版本的處理紀錄（`redo_units`）。
+    沒有聲音可以生成（剪掉、消音⋯）＝空的，只重新組裝。"""
+    have = {(role, x.get("id")): x for role, xs in ctx.items() for x in xs}
+    out: list[dict] = []
+    seen: set = set()
+
+    def add(role: str, x: dict) -> None:
+        if (role, x["id"]) not in seen:
+            seen.add((role, x["id"]))
+            out.append({"角色": role, "id": x["id"], "slot": [round(x["slot"][0], 3), round(x["slot"][1], 3)]})
+
+    for (sid, role), g in sorted((st.gen if st is not None else {}).items()):
+        if card in (g.get("卡號") or []) and (role, sid) in have:
+            add(role, have[(role, sid)])
+    if out or st is None:
+        return out
+    for m in sorted(st.versions, reverse=True):
+        row = st.states.get((card, m))
+        if not row or not row.get("紀錄鍵"):
+            continue
+        v = st.versions[m]
+        vlog = wd.read_json(Path(workdir) / v["處理紀錄"], default=None) if v.get("處理紀錄") else None
+        by = {record_key(r): r for r in (vlog or {}).get("紀錄") or []}
+        for rk in row["紀錄鍵"]:
+            r = by.get(rk)
+            if r:
+                for u in redo_units({"類型": r.get("類型"), "覆核項目": r.get("覆核項目") or [], "原片": r.get("原片")}, ctx):
+                    add(u["角色"], u)
+        break
+    return out
+
+
 def items_near(log: dict | None, t_out: float, pad: float = 1.0) -> list[str]:
     """整片看時標的時間（成品）附近的處理紀錄 → 覆核項目（送回重做時知道是哪一筆）。"""
     keys: list[str] = []
@@ -571,6 +646,21 @@ def load_check(workdir: Path) -> dict:
 
 def _save(workdir: Path, data: dict) -> None:
     wd.write_json(check_path(workdir), data)
+    _mirror(workdir, data)
+
+
+def _mirror(workdir: Path, data: dict) -> None:
+    """10-14 第5步2.0 第1段：雙寫——成品檢查照舊格式寫完，修改需求紀錄算出每張卡在這一版的狀態（`needs.mirror_final`）。
+    判斷沒變（例如只記了看過區段）時不重算；沒升級過的工作區不做；出錯只提醒，不擋第 5 步。"""
+    if wd.writes_blocked():
+        return
+    try:
+        from bookclub import needs
+
+        needs.mirror_final(workdir, data)
+    except Exception as e:  # noqa: BLE001
+        needs.note_error(workdir, "第5步存檔", e)   # 10-15 第1段審查修正（建議）：同步失敗記進 格式.json（inspect 看得到）
+        print(f"[修改需求紀錄] ⚠️ 第 5 步的判斷沒同步到新紀錄（不影響第 5 步）：{type(e).__name__}")
 
 
 def products(workdir: Path) -> list[str]:
@@ -614,7 +704,7 @@ def _current(workdir: Path) -> tuple[dict | None, dict]:
     # 標字版是人自己選來對照的，照以前不自動換（輸出本來就擋）。
     # 10-13 審查修正（建議 3）：只有跟這份處理紀錄同一個範圍標記的標字版才不換；別的範圍的標字版照一般規則換
     label = (cur in prods and MARK_LABEL in Path(cur).stem and tag is not None
-             and Path(cur).stem.startswith(f"成品_{tag}_"))
+             and _plain_stem(cur).startswith(f"成品_{tag}_"))
     # 10-13 審查修正（必修 1）：處理紀錄換新之前，看的是手動選的舊檔——在舊檔上看過的不能帶進新成品
     was_old = old_stamp != stamp and _manual_old(raw, old_stamp)
     if latest and not manual_ok and not label and cur not in latest:
@@ -656,6 +746,13 @@ PRODUCT_MTIME_SLACK_S = 2.0   # 成品檔修改時間不早於處理紀錄產生
 SWITCH_NEW = "第 4 步做了新的成品"
 SWITCH_OLD = "之前播的是舊成品"
 MARK_LATEST, MARK_OLD, MARK_LABEL = "最新", "舊的", "標字版"
+
+
+def _plain_stem(rel: str) -> str:
+    """10-15 第5步2.0 第3段：成品檔名去掉版本號（`成品_v3_0-97_sw.mp4` → `成品_0-97_sw`），範圍標記照舊的比法比。"""
+    from bookclub.render import product_parts
+
+    return Path(product_parts(Path(rel).name)[1]).stem
 
 
 def log_tag(log: dict | None) -> str | None:
@@ -706,9 +803,15 @@ def log_products(workdir: Path, log: dict | None, prods: list[str] | None = None
         return None
     workdir = Path(workdir)
     out = []
+    from bookclub.render import product_parts
+
+    want_no = (log or {}).get("版本號")   # 10-15 第5步2.0 第3段：處理紀錄記了版本號 → 只算那一版的檔名 `成品_v<N>_…`
     for rel in products(workdir) if prods is None else prods:
-        stem = Path(rel).stem
+        no = product_parts(Path(rel).name)[0]
+        stem = _plain_stem(rel)
         if not stem.startswith(f"成品_{tag}_") or MARK_LABEL in stem or "_" in stem[len(f"成品_{tag}_"):]:
+            continue
+        if want_no is not None and no != want_no:
             continue
         try:
             mtime = (workdir / rel).stat().st_mtime
@@ -727,7 +830,7 @@ def product_marks(prods: list[str], latest: list[str] | None, tag: str | None = 
     （時間軸對不上：不能記看過、不能按通過退回、不能輸出），同範圍的才標「標字版」。"""
     out: dict[str, str | None] = {}
     for rel in prods:
-        stem = Path(rel).stem
+        stem = _plain_stem(rel)   # 10-15 第5步2.0 第3段：檔名帶版本號時去掉再比範圍標記
         if MARK_LABEL in stem:
             out[rel] = MARK_OLD if tag is not None and not stem.startswith(f"成品_{tag}_") else MARK_LABEL
         elif latest is None:
@@ -1176,8 +1279,9 @@ def group_counts(log: dict | None, index: dict | None = None) -> dict[str, int]:
     return out
 
 
-def page_data(workdir: str | Path) -> dict:
-    """`GET /api/final`：成品檢查頁一次要的全部資料。"""
+def page_data(workdir: str | Path, *, index: dict | None = None) -> dict:
+    """`GET /api/final`：成品檢查頁一次要的全部資料。
+    10-15 第2段審查修正（建議，效能）：index＝`review.item_index`（伺服器算好了跟第 5 步卡片共用，不重算）。"""
     workdir = Path(workdir)
     with _lock:
         log, check = _current(workdir)
@@ -1186,7 +1290,7 @@ def page_data(workdir: str | Path) -> dict:
     prods = products(workdir)
     marks = log_marks(workdir, log, prods)   # 10-13 bug 一：選單標「最新」「舊的」
     pick = take_pick(check["成品影片"], prods, marks)   # 10-13 bug 二：拿檔按鈕與過期判斷用的那支
-    index = _index(workdir)
+    index = _index(workdir) if index is None else index
     try:   # 10-02 第六批：老師重念範圍前後沒有人講話的那幾筆，卡片上提醒＋「照建議縮小」
         from bookclub import silentedge
 
@@ -1388,6 +1492,85 @@ def decide_record(workdir: str | Path, key: str, result: str | None, reason: str
         return {"ok": True, "狀態": status(log, check)}
 
 
+def decide_many(workdir: str | Path, keys: list[str], result: str | None, reason: str = "", *,
+                unlogged: list[str] | None = None, flags: list[str] | None = None, owner: str | None = None,
+                sharers: dict[str, list[str]] | None = None) -> dict:
+    """10-15 第5步2.0 第2段：第 5 步按「一張卡」通過／退回，回寫舊檔這張卡對到的每一筆（一次存檔）。
+    keys：處理紀錄的鍵（這張卡在這一版對到的每一筆）；unlogged：沒登記的變動的鍵；flags：對到這張卡的整片退回 id
+    （卡片通過或取消要重做時拿掉；再退回一次時換成新的原因）。
+    result：PASS／REDO／None（改回還沒看）。退回原因每一筆都寫同一句（第 1 段審查同意的反向規則：任一筆退回＝退回，
+    所以卡片退回＝每一筆都退回、原因同一份；卡片通過＝每一筆都通過）。檢查的是舊成品時不能按（同 `decide_record`）。
+    10-15 第2段審查修正（必修 1）：一筆處理紀錄可以對到好幾張卡（名字＋疊到它的重疊卡⋯）。owner＝按的這張卡（`finalcards.owner_key`），
+    sharers＝{處理紀錄鍵: [對到同一筆的別張卡]}。退回時那一筆記 `各卡原因{卡: 原因}`（`原因` 是合起來的一句）；
+    通過／取消時，那一筆如果還有別張（還在清單上的）卡退回著，就不改（拿掉這張卡的原因、照樣退回），回傳 `跳過{鍵: [那幾張卡]}`。
+    舊檔沒記 `各卡原因` 的（舊工具寫的、升級前的）照以前：誰按都直接改。owner 沒給＝以前的做法。"""
+    if result not in (PASS, REDO, None):
+        raise ValueError("只能選：通過、退回重做")
+    if result == REDO and not str(reason).strip():
+        raise ValueError("退回重做要寫原因")
+    workdir = Path(workdir)
+    with _lock:
+        log, check = _current(workdir)
+        if _checking_old(workdir, log, check):
+            raise ValueError(OLD_PRODUCT_NO_DECIDE)
+        recs = {record_key(r): r for r in (log or {}).get("紀錄", [])}
+        uks = {unlogged_key(u) for u in (log or {}).get("未登記的變動", [])}
+        n = 0
+        skipped: dict[str, list[str]] = {}
+        for key in keys:
+            rec = recs.get(key)
+            if rec is None:
+                continue
+            n += 1
+            cur = check["逐筆"].get(key) or {}
+            per = dict(cur.get("各卡原因") or {}) if cur.get("結果") == REDO and owner else {}
+            alive = set((sharers or {}).get(key) or [])
+            others = {k: v for k, v in per.items() if k != owner and k in alive}   # 別張（還在的）卡退回著這一筆
+            if result != REDO and others:
+                skipped[key] = sorted(others)
+                check["逐筆"][key] = {**cur, "原因": _join_reasons(others.values()), "各卡原因": others, "更新時間": _now()}
+                continue
+            if result is None:
+                check["逐筆"].pop(key, None)
+                continue
+            old = cur.get("改範圍") if result == REDO else None
+            text = str(reason).strip() if result == REDO else ""
+            mine: dict = {}
+            if result == REDO and owner:
+                mine = {**others, owner: text}
+                text = _join_reasons(mine.values())
+            check["逐筆"][key] = {"結果": result, "原因": text, "指紋": record_print(rec), "更新時間": _now(),
+                                 **({"改範圍": old} if old else {}), **({"各卡原因": mine} if mine else {})}
+        for key in unlogged or []:
+            if key not in uks:
+                continue
+            n += 1
+            if result is None:
+                check["未登記確認"].pop(key, None)
+            else:
+                check["未登記確認"][key] = {"結果": UNLOGGED_OK if result == PASS else REDO,
+                                         "原因": str(reason).strip() if result == REDO else "", "更新時間": _now()}
+        hit = set(flags or [])
+        if hit and result == REDO:
+            for x in check["整片退回"]:
+                if x["id"] in hit:
+                    x["原因"] = str(reason).strip()
+                    n += 1
+        elif hit:
+            before = len(check["整片退回"])
+            check["整片退回"] = [x for x in check["整片退回"] if x["id"] not in hit]
+            n += before - len(check["整片退回"])
+        if not n:
+            raise ValueError("這張卡這一版的成品裡沒有對到的地方（還沒生成）：按「重做這幾張」做好之後再看")
+        _save(workdir, check)
+        return {"ok": True, "筆數": n, "狀態": status(log, check), "跳過": skipped}
+
+
+def _join_reasons(texts) -> str:
+    """10-15 第2段審查修正：好幾張卡退回同一筆時，舊檔那一格原因合成一句（一樣的只留一次）。"""
+    return "；".join(dict.fromkeys(x for x in (str(y).strip() for y in texts) if x))
+
+
 def decide_unlogged(workdir: str | Path, key: str, result: str | None, reason: str = "") -> dict:
     """`POST /api/final/unlogged`：沒登記的變動確認沒問題或退回重做。"""
     if result not in (UNLOGGED_OK, REDO, None):
@@ -1452,8 +1635,53 @@ def add_watched(workdir: str | Path, ranges: list, product: str | None = None) -
         # 10-03 第八批 #23：同時存原片時間（用現在這份處理紀錄的片段表換），重新組裝後換得回新的成品時間
         _set_watched(check, check["看過區段"] + [[float(a), float(b)] for a, b in ranges], (log or {}).get("片段"))
         _save(workdir, check)
+        n = version_of(workdir, log)
+        if n is not None:   # 10-15 第5步2.0 第3段：看過區段每版一份（修改需求/看過.json），最新一版照舊也寫成品檢查檔
+            try:
+                from bookclub import needs
+
+                needs.set_watched(workdir, n, check["看過區段"])
+            except Exception as e:  # noqa: BLE001 — 新紀錄寫不了不擋看片
+                print(f"[修改需求紀錄] ⚠️ 看過區段沒記到這一版：{type(e).__name__}")
         st = status(log, check)
         return {"ok": True, "記了": True, "看過比例": st["看過比例"], "看過區段": check["看過區段"], "狀態": st}
+
+
+def version_of(workdir: str | Path, log: dict | None) -> int | None:
+    """10-15 第5步2.0 第3段：這份處理紀錄是修改需求紀錄的第幾版（沒升級過、版本表裡沒有回 None）。"""
+    if not log:
+        return None
+    try:
+        from bookclub import needs
+
+        if not needs.exists(workdir):
+            return None
+        v = needs.load(workdir).version_at(log.get("產生時間"))
+        return int(v["版本號"]) if v else None
+    except Exception:  # noqa: BLE001 — 讀不到就當作沒有
+        return None
+
+
+NOT_LATEST = "目前輸出的不是最新版本"
+
+
+def not_latest_note(workdir: str | Path, n: int | None) -> str:
+    """10-15 宇軒定案：按「輸出成品」時，要輸出的第 n 版不是最新版本 → 確認視窗最上面那一行（不擋，可能想退回去用前一版輸出）。
+    是最新版、舊檔模式（新紀錄不能用、沒有版本資訊）、n 是 None → 空字串。版本號用修改需求紀錄的版本表，不在前端猜。"""
+    if n is None:
+        return ""
+    try:
+        from bookclub import needs
+
+        if not needs.healthy(workdir):
+            return ""
+        vers = needs.load(workdir).versions
+        top = max(vers) if vers else None
+    except Exception:  # noqa: BLE001 — 讀不到就不提醒（不擋輸出）
+        return ""
+    if top is None or int(n) >= top:
+        return ""
+    return f"{NOT_LATEST}（這是第 {int(n)} 版，最新是第 {top} 版）"
 
 
 def send_back(workdir: str | Path) -> dict:
@@ -1564,11 +1792,14 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
             gaps.update(attention_gaps(attention_rows(workdir, log)))
         except Exception:  # noqa: BLE001 — 算不出來不擋輸出
             gaps.update(attention_gaps({}))
+        # 10-15 宇軒定案：輸出的這一版不是最新版本 → 確認視窗最上面提醒一行（不擋）
+        gaps["不是最新版本"] = not_latest_note(workdir, version_of(workdir, log))
         if gaps["擋下"]:   # 標字版：確認了也不能輸出
             if confirm:
                 raise ValueError("還不能輸出：" + "；".join(gaps["擋下"]))
             return {"ok": False, "要確認": True, "不能輸出": True, "還差": gaps}
-        if (not st["可以輸出"] or gaps["提醒"] or gaps["名字提醒"] or gaps["需留意名字"] or gaps["名冊外沒找"]) and not confirm:
+        if (not st["可以輸出"] or gaps["提醒"] or gaps["名字提醒"] or gaps["需留意名字"] or gaps["名冊外沒找"]
+                or gaps["不是最新版本"]) and not confirm:
             return {"ok": False, "要確認": True, "還差": gaps}
         src = workdir / check["成品影片"]
         src_print = product_print(src)   # 10-13 審查修正二（順手）：複製前先記指紋，複製途中第 4 步換檔也記得到複製的那份
@@ -1593,7 +1824,9 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
                "需留意": gaps["需留意"], "需留意名字": gaps["需留意名字"], "名字提醒": len(gaps["名字提醒"]),
                "檢查完才輸出": st["可以輸出"],
                # 10-13 bug 二：輸出當時那支成品的指紋與處理紀錄，之後第 5 步用來判斷「上次輸出比現在的成品舊」（export_stale）
-               "成品檔指紋": src_print, "處理紀錄產生時間": log.get("產生時間")}
+               "成品檔指紋": src_print, "處理紀錄產生時間": log.get("產生時間"),
+               # 10-15 第5步2.0 第3段（31 號設計 §6.7）：輸出的是第幾版（拿檔按鈕旁「這是第 N 版的，最新是第 M 版」）
+               "版本號": version_of(workdir, log)}
         check["輸出成品"] = rec
         check.setdefault("輸出紀錄", []).append(rec)
         _save(workdir, check)
@@ -1619,6 +1852,10 @@ def redo_list(workdir: str | Path) -> dict:
         latest = {i["鍵"]: i for i in now}
         items = [{**i, **({"改範圍": latest[i["鍵"]]["改範圍"]} if latest.get(i["鍵"], {}).get("改範圍") else {})} for i in items]
     index = _index(workdir)
+    # 10-15 總檢查修正（1015-7，必修 1）：成品檢查檔看不到的「要修改」——跨版本卡、沿用卡、看舊版時按的（原因記在卡片的等重做），
+    # 之前版本退回還沒重做的——照卡片一起重做（`card_redo_items`）
+    st = _needs_store(workdir)
+    items = items + card_redo_items(st, log, check, index)
     ctx = _redo_ctx(workdir) if items else {}
     logs: dict = {}
     doing_items = (check.get("重做中") or {}).get("項目") or []
@@ -1629,7 +1866,7 @@ def redo_list(workdir: str | Path) -> dict:
         it["建議指令"] = suggest_command(workdir, it)
         it["做了什麼"] = plain_ids(it.get("做了什麼") or "", index, workdir)   # 10-01 走查：第 4 步也不露內部編號
         # 10-01 第三批：按「開始執行」這一筆會怎麼重做（重新生成哪幾句，或只重新組裝）
-        it["生成"] = redo_units(it, ctx)
+        it["生成"] = card_units(workdir, st, it["卡號"], ctx) if it.get("來源") == CARD_SRC else redo_units(it, ctx)
         it["做法"] = "重新生成" if it["生成"] else "重新組裝"
         it["說明"] = (f"重新生成這一筆的 {len(it['生成'])} 句聲音，再重新組裝" if it["生成"]
                     else "只重新組裝：這一筆沒有聲音要重新生成；要改的地方先到第 3 步改好")
@@ -1784,15 +2021,17 @@ def _same_as_doing(workdir: Path, unit: dict, ctx: dict, logs: dict) -> bool:
 
 
 def _same_as_last(workdir: Path, unit: dict, ctx: dict, logs: dict) -> bool:
-    """這一句現在要念的字、時間格跟上一次生成的一樣嗎（一樣的話重新生成多半是同一個聲音）。讀不到就當作有改。"""
+    """這一句現在要念的字、時間格跟上一次生成的一樣嗎（一樣的話重新生成多半是同一個聲音）。讀不到就當作有改。
+    10-15 C1 實跑修正（1015-7）：時間格容忍用 `tts.REDO_SLOT_TOLERANCE_S`（0.5 秒；計畫重算後常漂 0.1 秒）；這裡的結果
+    （`沒改`）由 `note_versions` 記進 `_重新生成版本.json`（`換一種念法`），生成時 `tts.redo_avoid` 照它，不再另外判一次。"""
+    from bookclub import tts
+
     role = unit["角色"]
     last = _last_rec(workdir, unit, logs)
     now = next((x for x in ctx.get(role, []) if x.get("id") == unit["id"]), None)
     if not last or not now:
         return False
-    same_slot = all(abs(a - b) <= 0.05 for a, b in zip(now["slot"], last.get("slot") or [None, None]) if a is not None and b is not None) \
-        and len(last.get("slot") or []) == 2
-    return same_slot and (now.get("text") or "") == (last.get("text") or "")
+    return tts.same_slot(now.get("slot"), last.get("slot")) and (now.get("text") or "") == (last.get("text") or "")
 
 
 def _role_paths(workdir: Path, role: str) -> tuple[Path, Path]:
@@ -1808,7 +2047,8 @@ def redo_folder(stamp: str) -> str:
     return f"{REDO_FILE_DIR}_{stamp.replace(':', '').replace('-', '')}"
 
 
-def note_versions(workdir: Path, role: str, ids: list[str], stamp: str, reasons: dict | None = None) -> dict[str, dict]:
+def note_versions(workdir: Path, role: str, ids: list[str], stamp: str, reasons: dict | None = None,
+                  same: dict | None = None) -> dict[str, dict]:
     """10-02 第四批：清掉之前，把這幾句現在的版本記進生成資料夾的 `_重新生成版本.json`（`tts.REDO_VERSIONS`）：
     - 以前的版本：加一筆（第幾版、選定的種子、試過的種子、每一次的結果、聲音檔搬去哪個資料夾、退回原因）
     - 避開：上一版的文字、範圍跟再上一版一樣的話，接著累加；不一樣就從上一版用過的重新算
@@ -1839,6 +2079,10 @@ def note_versions(workdir: Path, role: str, ids: list[str], stamp: str, reasons:
         avoid = sorted(keep | {int(a["種子"]) for a in tries})
         data[i] = {"text": r.get("text"), "生成用文字": r.get("生成用文字", r.get("text")), "slot": r.get("slot"),
                    "避開": avoid, "以前的版本": olds}
+        if same is not None and i in same:
+            # 10-15 C1 實跑修正（1015-7）：第 4 步排重做時判的「文字和範圍都沒改」（`redo_list` 的 沒改）——生成時照這個換念法
+            data[i]["換一種念法"] = bool(same[i])
+            data[i]["換一種念法依據"] = "第 4 步排重做時：要念的字一樣、時間格差 0.5 秒以內"
         out[i] = {"第幾版": n + 1}
     if out:
         od.mkdir(parents=True, exist_ok=True)
@@ -1896,6 +2140,8 @@ def redo_plan(workdir: str | Path, a: float | None = None, b: float | None = Non
             continue
         e = {k: it.get(k) for k in ("鍵", "來源", "類型", "原片", "覆核項目", "覆核名稱", "原因", "生成", "做法", "說明", "沒改")}
         e["指紋"] = (check["逐筆"].get(it["鍵"]) or {}).get("指紋")
+        if it.get("卡號"):
+            e["卡號"] = it["卡號"]   # 10-15 總檢查修正（1015-7）：照卡片重做的——記進 `重做中`，組裝建版本時照這個清等重做
         out.append(e)
     return out
 
@@ -1904,8 +2150,8 @@ def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = 
                  log=print, reassemble_only: bool = False) -> dict | None:
     """第 4 步開始之前：把退回的那幾句清掉（見 clear_generated），記在 `覆核/成品檢查.json` 的 `重做中`。沒有退回的回傳 None。
 
-    reassemble_only（10-03 第八批 #23）：「只重新組裝」——退回的那幾筆一樣記進 `重做中`（組裝做完照 `finish_redo`
-    回到還沒看），但**不清生成、不記新版本、不換種子**（跳過 `note_versions`、`clear_generated`），每一筆標 `只重新組裝`。
+    reassemble_only（10-03 第八批 #23）：「只重新組裝」——退回的那幾筆一樣記進 `重做中`（10-15 1015-7：組裝做完照
+    `finish_redo` 還是退回／要重做，只重新組裝不算重做），但**不清生成、不記新版本、不換種子**（跳過 `note_versions`、`clear_generated`），每一筆標 `只重新組裝`。
     給「生成的聲音沒問題、要改的是組裝」用（例如接縫做法改了）。"""
     workdir = Path(workdir)
     plan = redo_plan(workdir, a, b)
@@ -1926,7 +2172,7 @@ def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = 
             have = {e["鍵"] for e in plan}
             check["重做中"] = {"時間": stamp, "項目": [e for e in old.get("項目", []) if e["鍵"] not in have] + plan}
             _save(workdir, check)
-        log(f"[AI 執行] 第 5 步退回的 {len(plan)} 筆只重新組裝：生成的聲音不動，組裝做完回到第 5 步「還沒看」")
+        log(f"[AI 執行] 第 5 步要重做的 {len(plan)} 筆只重新組裝：生成的聲音不動，組裝做完第 5 步還是「要重做」")
         return {"項目": plan, "清掉": {}, REASSEMBLE_ONLY: True}
     # 10-02 第五批：上次重做到一半停下來（停止、記憶體或硬碟門檻、失敗）的那幾筆，清過了、版本也記過了：
     # 不再清一次（不然已經生成好、還沒寫回紀錄的那一句會被當成沒做，已經寫回的會變成「以前的版本」又跳一版）。
@@ -1943,12 +2189,15 @@ def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = 
     stamp = _now()
     by_role: dict[str, list[str]] = {}
     reasons: dict[tuple, str] = {}
+    same: dict[tuple, bool] = {}   # 10-15 C1 實跑修正：每一句「文字和範圍都沒改」（同一句在好幾項裡：都沒改才算）
     for e in plan:
         for u in e["生成"]:
             by_role.setdefault(u["角色"], []).append(u["id"])
             reasons.setdefault((u["角色"], u["id"]), e.get("原因") or "")
+            same[(u["角色"], u["id"])] = same.get((u["角色"], u["id"]), True) and bool(e.get("沒改"))
     # 10-02 第四批：清掉之前先記下現在的版本；文字和範圍都沒改的，重新生成時換一種念法（避開用過的種子）
-    vers = {role: note_versions(workdir, role, ids, stamp, {i: reasons.get((role, i), "") for i in ids})
+    vers = {role: note_versions(workdir, role, ids, stamp, {i: reasons.get((role, i), "") for i in ids},
+                                {i: same[(role, i)] for i in ids})
             for role, ids in by_role.items()}
     for e in plan:
         ns = [vers.get(u["角色"], {}).get(u["id"], {}).get("第幾版") for u in e["生成"]]
@@ -1999,13 +2248,31 @@ def redo_pending(workdir: str | Path, a: float | None = None, b: float | None = 
 
 
 def finish_redo(workdir: str | Path) -> dict | None:
-    """組裝做完之後：`重做中` 的那幾筆在第 5 步回到「還沒看」，記成 `重做過`（第 5 步看得出是重做過的新版本）。"""
+    """組裝做完之後：`重做中` 的那幾筆在第 5 步回到「還沒看」，記成 `重做過`（第 5 步看得出是重做過的新版本）。
+    10-15 總檢查修正（1015-7，審查建議 5）：「只重新組裝」的那幾筆不算重做——成品檢查檔照樣是退回（第 5 步還是「要重做」，
+    跟等重做那條路一樣留著）：逐筆退回換成新處理紀錄的指紋（重新組裝後內容指紋可能變了）、整片退回／沒登記的變動不拿掉、
+    看過區段不扣、不記進 `重做過`。"""
     workdir = Path(workdir)
     with _lock:
+        raw = load_check(workdir)
         log, check = _current(workdir)
         doing = check.pop("重做中", None)
         if not doing:
             return None
+        only = [e for e in doing["項目"] if e.get(REASSEMBLE_ONLY)]
+        recs_now = {record_key(r): r for r in (log or {}).get("紀錄", [])}
+        for e in only:
+            k = e["鍵"]
+            if e.get("來源") == "逐筆" and k in recs_now:
+                row = dict((raw.get("逐筆") or {}).get(k) or {"結果": REDO, "原因": e.get("原因", "")})
+                row.update({"結果": REDO, "指紋": content_print(recs_now[k]), "更新時間": _now()})
+                check["逐筆"][k] = row
+        doing = {**doing, "項目": [e for e in doing["項目"] if not e.get(REASSEMBLE_ONLY)]}
+        if not doing["項目"]:
+            check.pop("送回AI重做", None)
+            _save(workdir, check)
+            return {"時間": _now(), "處理紀錄產生時間": (log or {}).get("產生時間"), "項目": only, REASSEMBLE_ONLY: True,
+                    "還是要重做": True}
         keys = {e["鍵"] for e in doing["項目"]}
         for e in doing["項目"]:
             check["逐筆"].pop(e["鍵"], None)
@@ -2027,15 +2294,26 @@ def finish_redo(workdir: str | Path) -> dict | None:
         if holes:
             _set_watched(check, subtract_ranges(check["看過區段"], holes), plist)
         check.pop("送回AI重做", None)
-        check["重做過"] = {"時間": _now(), "處理紀錄產生時間": (log or {}).get("產生時間"), "項目": doing["項目"],
-                        **({REASSEMBLE_ONLY: True} if any(e.get(REASSEMBLE_ONLY) for e in doing["項目"]) else {})}
+        check["重做過"] = {"時間": _now(), "處理紀錄產生時間": (log or {}).get("產生時間"), "項目": doing["項目"]}
         _save(workdir, check)
     return check["重做過"]
 
 
 def returned_by_card(workdir: str | Path, index: dict) -> dict[str, list[str]]:
     """10-01 第三批 5：第 5 步退回（還沒重做好）的，對到第 3 步哪一張卡片 → 退回的原因。只讀，不寫檔。
-    重做完（第 4 步組裝做完、回到還沒看）就不在退回清單裡，卡片上的那一行跟著消失。"""
+    重做完（第 4 步組裝做完、回到還沒看）就不在退回清單裡，卡片上的那一行跟著消失。
+    10-15 總檢查修正（1015-7，A9）：新紀錄能用時照 `needs.redo_cards`（跟第 4 步、第 5 步同一份清單）——記了原因的卡
+    （這一版退回、跨版本卡／沿用卡／舊版按的「要修改」）；新紀錄不能用才照舊讀成品檢查檔。"""
+    st = _needs_store(Path(workdir))
+    if st is not None:
+        from bookclub import needs
+
+        out: dict[str, list[str]] = {}
+        for r in needs.redo_cards(st):
+            if r["原因"] is not None and r["第3步鍵"]:
+                why = needs.reason_text(r["原因"].get("選項"), r["原因"].get("補充", ""))
+                out[r["第3步鍵"]] = ["（沒寫原因）" if why == needs.REASON_NONE else why]
+        return out
     log = proclog.load(Path(workdir))
     if not log:
         return {}
