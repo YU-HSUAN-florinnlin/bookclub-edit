@@ -1282,7 +1282,7 @@ class BookclubServer(ThreadingHTTPServer):
             r = finalcheck.redo_list(self.workdir)
         except Exception:  # noqa: BLE001 — 還沒有成品檢查就是沒有退回（跟 execute.status 一樣）
             return False
-        return bool(r.get("項目") or r.get("重做中"))
+        return bool(r.get("項目") or r.get("重做中"))   # 10-15 總檢查修正（1015-7）：項目含照卡片重做的（等重做記了原因的卡）
 
     def _awake_setter(self, state: dict):
         """10-07 #172：防睡眠開成沒有，記進 exec_state／run_state 的「防睡眠」欄位（網頁固定顯示，不會被訊息洗掉）。"""
@@ -1615,7 +1615,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._serve_file(finalcards.version_video(server.workdir, ver), no_store=True)
                 return
             self._serve_file(finalcheck.video_file(server.workdir), no_store=True)   # 10-13 bug 一：不快取
-        elif path == "/api/final/vclip":   # 10-15 第5步2.0 第3段：第 N 版成品一段的聲音（上一版 ▶、上一版還沒看的卡）
+        elif path == "/api/final/vclip":   # 10-15 第5步2.0 第3段：第 N 版成品一段的聲音（上一版 ▶、跨版本卡）
             from bookclub import finalcards
 
             self._serve_file(finalcards.version_clip(server.workdir, int(query["版本"][0]), float(query["start"][0]),
@@ -1890,10 +1890,12 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/final/card":   # 10-15 第5步2.0 第2段：一張卡通過／退回（回寫舊檔這張卡的每一筆）
                 from bookclub import finalcards
 
-                ver = body.get("版本")   # 10-15 第5步2.0 第3段：在第幾版上按的（舊版、上一版還沒看的那一區）
+                ver = body.get("版本")   # 10-15 第5步2.0 第3段：在第幾版上按的（舊版、跨版本卡）
+                # 10-15 總檢查修正（1015-7）：`取消要重做: true`＝畫面明說是「取消要重做」（不是取消通過）；沒給照卡片判斷
                 self._send_json(200, finalcards.decide(w, str(body["id"]), body.get("結果"), body.get("選項") or [],
                                                        str(body.get("補充", "")),
-                                                       version=ver if isinstance(ver, int) and not isinstance(ver, bool) else None))
+                                                       version=ver if isinstance(ver, int) and not isinstance(ver, bool) else None,
+                                                       cancel_redo=body.get("取消要重做") is True))
             elif path == "/api/final/edited":   # 10-15：第 5 步按「改」改過 → 那張卡「已改，等重做」
                 from bookclub import finalcards
 

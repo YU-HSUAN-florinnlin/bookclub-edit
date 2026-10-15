@@ -489,6 +489,81 @@ def redo_items(log: dict | None, check: dict) -> list[dict]:
     return out
 
 
+CARD_SRC = "卡片"   # 10-15 總檢查修正（1015-7）：`redo_list` 裡照卡片重做的那幾項（鍵＝`卡片:<卡號>`，帶 `卡號`）
+
+
+def _needs_store(workdir: Path):
+    """修改需求紀錄（能用才讀；不能用＝None，照舊只看成品檢查檔）。"""
+    try:
+        from bookclub import needs
+
+        return needs.load(workdir) if needs.healthy(workdir) else None
+    except Exception:  # noqa: BLE001 — 讀不到新紀錄不擋第 4 步（照舊只重做成品檢查檔裡退回的）
+        return None
+
+
+def card_redo_items(st, log: dict | None, check: dict, index: dict) -> list[dict]:
+    """10-15 總檢查修正（1015-7，必修 1、分流定案甲）：`needs.redo_cards` 裡記了原因、成品檢查檔卻沒有的卡 → 第 4 步要重做的項目
+    （跟 `redo_items` 同樣的欄位，另帶 `卡號`；鍵＝`卡片:<卡號>`）：
+    - 跨版本卡、沿用卡（最新一版沒有它的狀態列）、舊版自己才有的卡按「要修改」——原因記在卡片的等重做
+    - 之前版本退回、還沒重做的（例如範圍外、上一版退回的）
+    已經在成品檢查檔退回（`redo_items`）、或上次重做到一半（`重做中`）的卡不重複。st＝None（新紀錄不能用）回空的。"""
+    if st is None:
+        return []
+    from bookclub import needs
+
+    covered: set[str] = set()
+    for e in redo_items(log, check):
+        covered.update(needs._card_of_redo(st, e, index))
+    for e in (check.get("重做中") or {}).get("項目") or []:
+        if not e.get("卡號"):
+            covered.update(needs._card_of_redo(st, e, index))
+    out = []
+    for r in needs.redo_cards(st):
+        if r["原因"] is None or r["卡號"] in covered:
+            continue
+        o = r["原片"] or [None, None]
+        out.append({"來源": CARD_SRC, "鍵": f"{CARD_SRC}:{r['卡號']}", "卡號": r["卡號"], "類型": r["類型"],
+                    "原片": [o[0], o[1] if o[1] is not None else o[0]], "成品": None,
+                    "覆核項目": [r["第3步鍵"]] if r["第3步鍵"] else [], "做了什麼": "",
+                    "原因": needs.reason_text(r["原因"].get("選項"), r["原因"].get("補充", ""))})
+    return out
+
+
+def card_units(workdir: Path, st, card: str, ctx: dict) -> list[dict]:
+    """10-15 總檢查修正（1015-7）：照卡片重做 → 要重新生成哪幾句：先查生成句表（31 號設計 §3.5：這一句是為了哪幾張卡生成的），
+    只留現在的計畫裡還有的；查不到（升級時對不到、舊的生成句）改用最近一個有這張卡的版本的處理紀錄（`redo_units`）。
+    沒有聲音可以生成（剪掉、消音⋯）＝空的，只重新組裝。"""
+    have = {(role, x.get("id")): x for role, xs in ctx.items() for x in xs}
+    out: list[dict] = []
+    seen: set = set()
+
+    def add(role: str, x: dict) -> None:
+        if (role, x["id"]) not in seen:
+            seen.add((role, x["id"]))
+            out.append({"角色": role, "id": x["id"], "slot": [round(x["slot"][0], 3), round(x["slot"][1], 3)]})
+
+    for (sid, role), g in sorted((st.gen if st is not None else {}).items()):
+        if card in (g.get("卡號") or []) and (role, sid) in have:
+            add(role, have[(role, sid)])
+    if out or st is None:
+        return out
+    for m in sorted(st.versions, reverse=True):
+        row = st.states.get((card, m))
+        if not row or not row.get("紀錄鍵"):
+            continue
+        v = st.versions[m]
+        vlog = wd.read_json(Path(workdir) / v["處理紀錄"], default=None) if v.get("處理紀錄") else None
+        by = {record_key(r): r for r in (vlog or {}).get("紀錄") or []}
+        for rk in row["紀錄鍵"]:
+            r = by.get(rk)
+            if r:
+                for u in redo_units({"類型": r.get("類型"), "覆核項目": r.get("覆核項目") or [], "原片": r.get("原片")}, ctx):
+                    add(u["角色"], u)
+        break
+    return out
+
+
 def items_near(log: dict | None, t_out: float, pad: float = 1.0) -> list[str]:
     """整片看時標的時間（成品）附近的處理紀錄 → 覆核項目（送回重做時知道是哪一筆）。"""
     keys: list[str] = []
@@ -1752,6 +1827,10 @@ def redo_list(workdir: str | Path) -> dict:
         latest = {i["鍵"]: i for i in now}
         items = [{**i, **({"改範圍": latest[i["鍵"]]["改範圍"]} if latest.get(i["鍵"], {}).get("改範圍") else {})} for i in items]
     index = _index(workdir)
+    # 10-15 總檢查修正（1015-7，必修 1）：成品檢查檔看不到的「要修改」——跨版本卡、沿用卡、看舊版時按的（原因記在卡片的等重做），
+    # 之前版本退回還沒重做的——照卡片一起重做（`card_redo_items`）
+    st = _needs_store(workdir)
+    items = items + card_redo_items(st, log, check, index)
     ctx = _redo_ctx(workdir) if items else {}
     logs: dict = {}
     doing_items = (check.get("重做中") or {}).get("項目") or []
@@ -1762,7 +1841,7 @@ def redo_list(workdir: str | Path) -> dict:
         it["建議指令"] = suggest_command(workdir, it)
         it["做了什麼"] = plain_ids(it.get("做了什麼") or "", index, workdir)   # 10-01 走查：第 4 步也不露內部編號
         # 10-01 第三批：按「開始執行」這一筆會怎麼重做（重新生成哪幾句，或只重新組裝）
-        it["生成"] = redo_units(it, ctx)
+        it["生成"] = card_units(workdir, st, it["卡號"], ctx) if it.get("來源") == CARD_SRC else redo_units(it, ctx)
         it["做法"] = "重新生成" if it["生成"] else "重新組裝"
         it["說明"] = (f"重新生成這一筆的 {len(it['生成'])} 句聲音，再重新組裝" if it["生成"]
                     else "只重新組裝：這一筆沒有聲音要重新生成；要改的地方先到第 3 步改好")
@@ -2029,6 +2108,8 @@ def redo_plan(workdir: str | Path, a: float | None = None, b: float | None = Non
             continue
         e = {k: it.get(k) for k in ("鍵", "來源", "類型", "原片", "覆核項目", "覆核名稱", "原因", "生成", "做法", "說明", "沒改")}
         e["指紋"] = (check["逐筆"].get(it["鍵"]) or {}).get("指紋")
+        if it.get("卡號"):
+            e["卡號"] = it["卡號"]   # 10-15 總檢查修正（1015-7）：照卡片重做的——記進 `重做中`，組裝建版本時照這個清等重做
         out.append(e)
     return out
 
@@ -2168,7 +2249,19 @@ def finish_redo(workdir: str | Path) -> dict | None:
 
 def returned_by_card(workdir: str | Path, index: dict) -> dict[str, list[str]]:
     """10-01 第三批 5：第 5 步退回（還沒重做好）的，對到第 3 步哪一張卡片 → 退回的原因。只讀，不寫檔。
-    重做完（第 4 步組裝做完、回到還沒看）就不在退回清單裡，卡片上的那一行跟著消失。"""
+    重做完（第 4 步組裝做完、回到還沒看）就不在退回清單裡，卡片上的那一行跟著消失。
+    10-15 總檢查修正（1015-7，A9）：新紀錄能用時照 `needs.redo_cards`（跟第 4 步、第 5 步同一份清單）——記了原因的卡
+    （這一版退回、跨版本卡／沿用卡／舊版按的「要修改」）；新紀錄不能用才照舊讀成品檢查檔。"""
+    st = _needs_store(Path(workdir))
+    if st is not None:
+        from bookclub import needs
+
+        out: dict[str, list[str]] = {}
+        for r in needs.redo_cards(st):
+            if r["原因"] is not None and r["第3步鍵"]:
+                why = needs.reason_text(r["原因"].get("選項"), r["原因"].get("補充", ""))
+                out[r["第3步鍵"]] = ["（沒寫原因）" if why == needs.REASON_NONE else why]
+        return out
     log = proclog.load(Path(workdir))
     if not log:
         return {}

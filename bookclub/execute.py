@@ -2070,7 +2070,10 @@ def reassemble_problem(workdir: str | Path, a: float | None = None, b: float | N
 
 
 def status(workdir: str | Path) -> dict:
-    """`GET /api/execute`：前置檢查、上次的進度、第 5 步退回的清單。"""
+    """`GET /api/execute`：前置檢查、上次的進度、第 5 步要重做的清單。
+    10-15 總檢查修正（1015-7，A9）：`要重做`＝`needs.redo_cards`（跟第 5 步「重做這幾張（N 張）」同一份），每筆
+    {卡號, 編號, 類型, 第3步鍵, 原片, 原因: {選項, 補充}, 起因}；`退回清單`（每一筆怎麼重做的細節，`finalcheck.redo_list`）
+    照舊給一版，畫面換完再拿掉。"""
     from bookclub import finalcheck
 
     workdir = Path(workdir)
@@ -2082,10 +2085,31 @@ def status(workdir: str | Path) -> dict:
         redo = []
     return {"前置檢查": precheck(workdir), "進度": wd.read_json(progress_path(workdir), default=None),
             "影片長度": video_duration(workdir), "預設輸出做法": default_methods(), "輸出做法選項": method_options(),
+            "要重做": redo_cards_view(workdir, redo),
             "退回清單": redo,
             "重做中": doing,
             # 10-08（宇軒：跑完之後按鈕還寫「開始執行」看起來像出錯）：有沒有成品，第 4 步按鈕文字與狀態列用
             "有成品": bool(_safe_products(workdir))}
+
+
+def redo_cards_view(workdir: Path, redo: list[dict] | None = None) -> list[dict]:
+    """10-15 總檢查修正（1015-7）：第 4 步「要重做的（N 張）」——新紀錄能用時照 `needs.redo_cards`（第 4、5 步同一份）；
+    不能用（還沒升級、同步出錯）照舊的退回清單（redo：`finalcheck.redo_list` 的項目），一筆當一張。"""
+    from bookclub import needs, proclog
+
+    empty = {"選項": [], "補充": ""}
+    try:
+        if needs.healthy(workdir):
+            st = needs.load(workdir)
+            v = st.latest_version()
+            hist = needs.read_history(workdir) if v is not None and v.get("其他卡指紋") is None else None
+            return [{"卡號": r["卡號"], "編號": r["編號"], "類型": r["類型"], "第3步鍵": r["第3步鍵"], "原片": r["原片"],
+                     "原因": r["原因"] or dict(empty), "起因": r["起因"]}
+                    for r in needs.redo_cards(st, proclog.load(workdir), hist)]
+    except Exception:  # noqa: BLE001 — 新紀錄讀不到：照舊的退回清單
+        pass
+    return [{"卡號": None, "編號": None, "類型": it.get("類型"), "第3步鍵": None, "原片": it.get("原片"),
+             "原因": {"選項": [], "補充": it.get("原因") or ""}, "起因": needs.REDO_RETURNED} for it in redo or []]
 
 
 def _safe_products(workdir: Path) -> list[str]:

@@ -1339,7 +1339,9 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
     for it in items:   # 10-01 第三批：人工新增的漏抓重疊、老師提到名字、老師這一段 AI 重念，加錯了可以直接刪
         if it["類型"] in ("重疊", "名字") and it.get("人工新增"):
             it["可以刪"] = True
-    try:   # 10-01 第三批 5：第 5 步退回的，卡片上寫「第 5 步退回：原因」（重做完就消失）
+    # 10-01 第三批 5：第 5 步要重做的，卡片上寫「第 5 步要重做：原因」（重做完就消失）。10-15 總檢查修正（1015-7，A9）：
+    # 新紀錄能用時照 `needs.redo_cards`（跟第 4、5 步同一份，含跨版本卡、沿用卡、舊版按的「要修改」）；欄位名照舊 `第5步退回`
+    try:
         from bookclub import finalcheck
 
         back = finalcheck.returned_by_card(workdir, item_index(workdir, dec, turns))
@@ -1527,7 +1529,7 @@ BULK_SKIP = (
     ("沒有建議", "沒有建議的做法"),
     ("分開決定過", "同一句的名字以前分開決定過"),
     ("人工新增", "人工新增的"),
-    ("第5步退回", "第 5 步退回的"),
+    ("第5步退回", "第 5 步要重做的"),
 )
 BULK_SKIP_TEXT = dict(BULK_SKIP)
 

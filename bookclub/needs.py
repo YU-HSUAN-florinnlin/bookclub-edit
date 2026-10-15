@@ -797,13 +797,16 @@ def carry_source(st: Store, card: str, n: int, base: int | None = None) -> tuple
 
 
 def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *, note: str | None = None,
-                  products: list[str] | None = None, src: str = SRC_ASSEMBLE, step: int = 4) -> dict:
+                  products: list[str] | None = None, src: str = SRC_ASSEMBLE, step: int = 4,
+                  redo_run: set[str] | None = None) -> dict:
     """處理紀錄 → 版本表一列（改 st，不寫檔；處理紀錄副本由呼叫的地方寫）。同一份處理紀錄（產生時間一樣）只建一次。
     10-15 第5步2.0 第3段：
     - 版本號：處理紀錄帶了 `版本號`（組裝時先預留的，成品檔名用同一個號碼，`next_version_no`）就用它，不然照順序加一
     - 以哪一版為基礎：開發者「以這一版為基礎再組裝」記的那一版（`set_next_base`，用一次就清掉），沒有就是上一版
     - 每張卡的起始狀態照 `carry_source`（不只看上一版）：指紋沒變、那一版通過 → 通過（沿用）
-    - `其他卡指紋`：這一版沒有處理紀錄的卡（第 3 步選定不修改、範圍外）當時的聲音指紋——第 3 步把它改成要處理，第 5 步看得出來"""
+    - `其他卡指紋`：這一版沒有處理紀錄的卡（第 3 步選定不修改、範圍外）當時的聲音指紋——第 3 步把它改成要處理，第 5 步看得出來
+    10-15 總檢查修正（1015-7）：redo_run＝這一次第 4 步「重做這幾張」真的重做了的卡號（成品檢查檔 `重做中` 裡帶卡號、
+    不是只重新組裝的，`redo_run_cards`）。走等重做那條路記了原因的卡只在這裡面才清（只重新組裝、沒跑重做就組裝 → 留著）"""
     have = st.version_at(log.get("產生時間"))
     if have is not None:
         return have
@@ -844,6 +847,12 @@ def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *,
         if pend.get("版本號") and k in done and later:
             at = (st.versions.get(int(pend["版本號"])) or {}).get("卡片指紋") or {}
             redone = at.get(k) != prints[k]
+        if pend and k in (redo_run or ()):
+            redone = True   # 這一次「重做這幾張」清掉它的生成句重新生成（或本來就只會重新放一次）、組進這一版
+        elif pend.get("退回原因") is not None:
+            # 10-15 總檢查修正（1015-7，必修 1）：記了原因的（按「要修改」）要真的重做才清——沒跑重做就組裝、只重新組裝，
+            # 聲音沒換，等重做留著、歷史不寫「重做進第 N 版」
+            later = False
         if (pend.get("起因") == WHY_EDITED and later) or redone:
             if pend.get("退回原因") is not None:
                 no_carry.add(k)
@@ -868,6 +877,18 @@ def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *,
     return row
 
 
+def redo_run_cards(workdir: str | Path) -> set[str]:
+    """10-15 總檢查修正（1015-7）：這一次第 4 步「重做這幾張」重做的卡（成品檢查檔 `重做中` 裡帶 `卡號` 的那幾項，
+    `finalcheck.prepare_redo` 記的；「只重新組裝」的不算）。組裝建版本時（`重做中` 還沒收尾）用。讀不到＝空的。"""
+    try:
+        from bookclub import finalcheck
+
+        doing = finalcheck.load_check(Path(workdir)).get("重做中") or {}
+    except Exception:  # noqa: BLE001 — 讀不到成品檢查就是沒有重做
+        return set()
+    return {str(e["卡號"]) for e in doing.get("項目") or [] if e.get("卡號") and not e.get(finalcheck.REASSEMBLE_ONLY)}
+
+
 def _write_version_copy(workdir: Path, n: int, log: dict, *, base: Path | None = None) -> None:
     _write((Path(base) if base is not None else needs_dir(workdir)) / _version_dir(n) / "處理紀錄.json", log)
 
@@ -886,7 +907,7 @@ def add_version(workdir: str | Path, log: dict, *, note: str | None = None) -> d
         if have is not None:
             return have
         prev = st.latest_version()
-        row = build_version(st, w, log, index, _now(), note=note)
+        row = build_version(st, w, log, index, _now(), note=note, redo_run=redo_run_cards(w))
         _write_version_copy(w, row["版本號"], log)
         st.fmt.setdefault("同步", {})["處理紀錄"] = log.get("產生時間")
         _update_gen_rounds(st, w, _now())
@@ -1021,19 +1042,16 @@ def add_export(workdir: str | Path, n: int, rec: dict) -> None:
 
 def decide_version(workdir: str | Path, n: int, card: str, result: str | None, options: list[str] | None = None,
                    extra: str = "") -> dict:
-    """10-15 第5步2.0 第3段（31 號設計 §6.5）：在舊版（不是最新處理紀錄那一版）上按通過／退回／取消——記在那一版的成品狀態，
-    不寫成品檢查檔（舊檔只認得最新那一份處理紀錄）。10-15 第3段審查修正：舊版只能通過／取消，退回回 ValueError
-    （下面留著的退回分支給第 4 段開放用：那張卡等重做，起因退回、帶 `版本號`；之後組裝真的重做了它才清掉）。
-    這一版沒處理到這張卡（沒有狀態列）不能判斷。回傳那一列。"""
+    """10-15 第5步2.0 第3段（31 號設計 §6.5）：在舊版（不是最新處理紀錄那一版）上按通過／取消——記在那一版的成品狀態，
+    不寫成品檢查檔（舊檔只認得最新那一份處理紀錄）。這一版沒處理到這張卡（沒有狀態列）不能判斷。回傳那一列。
+    10-15 總檢查修正（1015-7，A8）：退回（要修改）不記在那一版的狀態列（第 4 步看不到、會無聲失效），改記在卡片的等重做
+    （`mark_outside_redo`），那一版的狀態列不動；回傳那一列（沒有列＝空的）。畫面由 `finalcards.decide` 分流，一般不會走到這裡。"""
     w = Path(workdir)
     if result not in (PASSED, RETURNED, None):
         raise ValueError("只能選：通過、退回")
     if result == RETURNED:
-        # 10-15 宇軒驗證回饋六：畫面上舊版、跨版本卡的「要修改」改走 `mark_outside_redo`（finalcards.decide 分流，不會走到這裡）；
-        # 這一層照舊擋（那一版的狀態列記退回仍會無聲失效）。
-        # 10-15 第3段審查修正（必修 1，宇軒定前暫定）：舊版只能通過——舊版上退回，第 4 步看不到（舊檔只認最新那一份處理紀錄），
-        # 組裝後等重做被清、歷史寫「重做進第 N 版」卻沒有重新生成。31 號設計 §5.1 按卡片重做做完（第 4 段）再開放
-        raise ValueError("要退回請回到最新一版")
+        mark_outside_redo(w, card, options, extra)
+        return dict(load(w).states.get((card, int(n))) or {})
     with _locked(w):
         st = load(w)
         row = st.states.get((card, int(n)))
@@ -1042,20 +1060,13 @@ def decide_version(workdir: str | Path, n: int, card: str, result: str | None, o
         now = _now()
         c = st.cards.get(card) or {}
         new = NOT_SEEN if result is None else result
-        why = None
-        if new == RETURNED:
-            why = {"選項": [o for o in REASON_OPTIONS if o in (options or [])], "補充": str(extra or "").strip()}
-        if row.get("狀態") != new or row.get("退回原因") != why:
-            st.log(now, card, 5, {PASSED: "通過", RETURNED: "退回", NOT_SEEN: "改回還沒看"}[new], row.get("狀態"),
-                   {"版本號": int(n), **({"原因字數": len(why["補充"])} if why else {})})
-        row.update({"狀態": new, "退回原因": why, "沿用自": None, "沿用來源": None, "更新時間": now,
+        if row.get("狀態") != new or row.get("退回原因") is not None:
+            st.log(now, card, 5, {PASSED: "通過", NOT_SEEN: "改回還沒看"}[new], row.get("狀態"), {"版本號": int(n)})
+        row.update({"狀態": new, "退回原因": None, "沿用自": None, "沿用來源": None, "更新時間": now,
                     **({"取消沿用": True} if new != PASSED and row.get("沿用自") else {})})
         pend = c.get("等重做") or {}
-        if new == RETURNED and c and not pend:
-            c["等重做"] = {"起因": WHY_RETURNED, "時間": now, "版本號": int(n)}
-            c["更新時間"] = now
-            st.log(now, card, 5, "等重做", None, {"起因": WHY_RETURNED, "版本號": int(n)})
-        elif new != RETURNED and pend.get("版本號") == int(n):
+        if pend.get("版本號") == int(n):
+            # 0.2.2b1 第 3 段原版留下的舊版退回（等重做帶版本號）：在那一版改成通過／取消＝不用重做了
             c["等重做"] = None
             c["更新時間"] = now
             st.log(now, card, 5, "取消等重做", pend, None)
@@ -1266,6 +1277,8 @@ def _card_of_redo(st: Store, e: dict, index: dict) -> list[str]:
     """重做中（或重做過、送回）的一項 → 卡號：鍵在哪一版的處理紀錄出現過就照那一版；整片看標的 → 待釐清卡；
     沒登記的變動 → 那張卡；都不是就照 `覆核項目`。"""
     key = e.get("鍵")
+    if e.get("卡號") and e["卡號"] in st.cards:   # 10-15 總檢查修正（1015-7）：照卡片重做的那幾項（`redo_list` 的卡片項）
+        return [str(e["卡號"])]
     if e.get("來源") == "沒登記的變動" or e.get("類型") == UNLOGGED:
         c = st.by_anchor(f"沒登記:{key}")
         if c is not None:
@@ -1382,6 +1395,8 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
     want: dict[str, dict] = {c: {"起因": WHY_RETURNED} for c, s in new.items() if s["狀態"] == RETURNED}
     doing = check.get("重做中") or {}
     for e in doing.get("項目") or []:
+        if e.get("卡號"):
+            continue   # 10-15 總檢查修正（1015-7）：照卡片重做的那幾項——等重做本來就在卡片上，由組裝建版本時清（`build_version`）
         for c in _card_of_redo(st, e, index):
             want.setdefault(c, {"起因": WHY_RETURNED})
     for k in sorted(st.cards, key=_card_num):
@@ -1444,7 +1459,10 @@ def mark_outside_redo(workdir: str | Path, card: str, options: list[str] | None,
     10-15 宇軒驗證回饋六：跨版本卡、看舊版時的任何卡按「要修改」也走這裡（finalcards.decide 帶 version 的退回）。
     這一版沒有它的狀態列（`set_reason` 記不了），記在卡片的 `等重做`：{起因: 改了, 時間, 退回原因: {選項, 補充}}——
     畫面變「要重做」（已改，等重做）、算進「重做這幾張」；下次組裝 `build_version` 清掉，而且新版不沿用之前的通過
-    （指紋沒變也要重新看）。已經等重做（例如先在選單裡改了字）就補上原因。回傳有沒有寫。"""
+    （指紋沒變也要重新看）。已經等重做（例如先在選單裡改了字）就補上原因。回傳有沒有寫。
+    10-15 總檢查修正（1015-7）：第 4 步「重做這幾張」讀得到這個原因（`redo_cards` → `finalcheck.redo_list`：清掉這張卡的
+    生成句、文字沒改就換一種念法）；`build_version` 只在那一次真的重做了它（`重做中` 有這張卡、不是只重新組裝）才清。
+    先在第 3 步改了字／範圍（等重做，起因改了、沒有原因）再記原因的，記 `有改: True`（取消要重做時只拿掉原因，改的字還要做）。"""
     w = Path(workdir)
     if not exists(w):
         return False
@@ -1459,12 +1477,116 @@ def mark_outside_redo(workdir: str | Path, card: str, options: list[str] | None,
             return False
         now = _now()
         new = {"起因": WHY_EDITED, "時間": now, "退回原因": why}
+        if cur.get("起因") == WHY_EDITED and (cur.get("退回原因") is None or cur.get("有改")):
+            new["有改"] = True
         c["等重做"] = new
         c["更新時間"] = now
         # 歷史不放退回原因文字（工作區格式：歷史只放編號、狀態、欄位名）
         st.log(now, card, 5, "等重做", {"起因": cur["起因"]} if cur.get("起因") else None, {"起因": WHY_EDITED, "範圍外": True})
         save(w, st)
     return True
+
+
+def clear_outside_redo(workdir: str | Path, card: str) -> bool:
+    """10-15 總檢查修正（1015-7，A2，宇軒定前暫定）：走等重做那條路（`mark_outside_redo`）的卡「取消要重做」——
+    清掉卡片的等重做；先在第 3 步改了字／範圍的（`有改`）只拿掉原因，改的字照樣等重做。沒有這種等重做回 False。"""
+    w = Path(workdir)
+    if not exists(w):
+        return False
+    with _locked(w):
+        st = load(w)
+        c = st.cards.get(card)
+        if c is None:
+            raise KeyError(f"沒有這張卡：{card}")
+        cur = c.get("等重做") or {}
+        if cur.get("起因") != WHY_EDITED or cur.get("退回原因") is None:
+            return False
+        now = _now()
+        c["等重做"] = {"起因": WHY_EDITED, "時間": cur.get("時間") or now} if cur.get("有改") else None
+        c["更新時間"] = now
+        st.log(now, card, 5, "取消等重做", {"起因": WHY_EDITED, "範圍外": True}, {"起因": WHY_EDITED} if cur.get("有改") else None)
+        save(w, st)
+    return True
+
+
+def outside_reason(c: dict) -> dict | None:
+    """（純函式）卡片走等重做那條路記的原因（`mark_outside_redo`）；沒有＝None。"""
+    pend = c.get("等重做") or {}
+    return pend.get("退回原因") if pend.get("起因") == WHY_EDITED else None
+
+
+# 第 4 步、第 3 步、第 5 步都用 `redo_cards` 這一份清單（10-15 總檢查修正 1015-7）。每一張的「起因」：
+REDO_RETURNED = "要修改"          # 第 5 步按「要修改」記了原因（這一版退回、或卡片的等重做）
+REDO_EDITED = "改了"              # 第 5 步按「改」／第 3 步改過，還沒做進成品
+REDO_NEW = "還沒生成"             # 最新一版之後才有的卡
+
+
+def _latest_reason(st: Store, k: str, vn: int | None) -> dict | None:
+    """這張卡最近一個版本（最新的先）記的退回原因（狀態列是退回的那一版）。"""
+    for m in sorted((x for x in st.versions if vn is None or x <= vn), reverse=True):
+        row = st.states.get((k, m))
+        if row and row.get("狀態") == RETURNED:
+            return row.get("退回原因") or {"選項": [], "補充": ""}
+    return None
+
+
+def redo_cards(st: Store, log: dict | None = None, hist: list | None = None) -> list[dict]:
+    """10-15 總檢查修正（1015-7，A1／A9）：「要重做的卡」唯一的清單——第 4 步「要做哪些」與「要重做的（N 張）」、
+    第 5 步「重做這幾張（N 張）」、第 3 步「第 5 步要重做：原因」都用這一份（31 號設計 §5.1）。只讀。
+    一張卡算進來（照最新一版）：
+    - 最新一版的狀態列是退回（第 5 步在最新版按「要修改」，原因＝狀態列的退回原因）
+    - 卡片有等重做：走等重做那條路記了原因的（跨版本卡、沿用卡、看舊版時按的，原因＝等重做的退回原因）；
+      按「改」改過的（沒有原因）；之前版本退回、還沒重做的（原因＝那一版狀態列的）
+    - 最新一版之後才有的卡（還沒生成）
+    - log（最新一版的處理紀錄）有給：第 3 步改過、還沒做進最新一版的（聲音指紋跟最新一版記的不同；第 3 步選定不修改、
+      之後改成要處理的）——跟第 5 步畫面「已改，等重做」同一個算法
+    刪掉、併入⋯的卡沒有等重做就不算。回傳 [{卡號, 編號, 類型, 第3步鍵, 原片, 起因, 原因: {選項, 補充} 或 None,
+    等重做那條路: bool}]（照原片時間排）。原因只有一個來源（A7）：最新一版的狀態列是退回就用它，其他用等重做的。"""
+    v = st.latest_version()
+    vn = v["版本號"] if v else None
+    vtime = str((v or {}).get("建立時間") or "")
+    vprints = (v or {}).get("卡片指紋") or {}
+    now_prints = _card_prints(st, log, (v or {}).get("紀錄卡號") or {}) if (log and v and v.get("時間") == log.get("產生時間")) else None
+    others = (v or {}).get("其他卡指紋")
+    out = []
+    for k in sorted(st.cards, key=_card_num):
+        c = st.cards[k]
+        pend = c.get("等重做") or {}
+        if c["狀態"] != ALIVE and not pend:
+            continue
+        row = st.states.get((k, vn)) if vn else None
+        why, how, outside = None, None, False
+        if row and row.get("狀態") == RETURNED:
+            why, how = row.get("退回原因") or {"選項": [], "補充": ""}, REDO_RETURNED
+        elif outside_reason(c) is not None:
+            why, how, outside = outside_reason(c), REDO_RETURNED, True
+        elif pend.get("起因") == WHY_EDITED:
+            how = REDO_EDITED
+        elif pend:
+            why = _latest_reason(st, k, vn)
+            how = REDO_RETURNED if why is not None else REDO_EDITED
+        elif v is not None and not row and c["狀態"] == ALIVE and str(c.get("建立時間") or "") > vtime:
+            how = REDO_NEW
+        elif v is not None and row and now_prints is not None and vprints.get(k) and row.get("紀錄鍵") \
+                and c["狀態"] == ALIVE and now_prints.get(k) not in (None, vprints[k]):
+            how = REDO_EDITED
+        elif v is not None and not row and c["狀態"] == ALIVE and str(c.get("建立時間") or "") <= vtime and _in_range(c, v):
+            if others is not None:
+                if k in others and others[k] != _sound_print(c):
+                    how = REDO_EDITED
+            else:
+                since = str(v.get("建立時間") or "")
+                for h in hist or []:
+                    if h.get("卡號") == k and h.get("動作") == "改了第3步決定" and str(h.get("時間") or "") > since \
+                            and any(f not in NOT_SOUND_KEYS for f in ((h.get("後") or {}).get("欄位") or [])):
+                        how = REDO_EDITED
+                        break
+        if how is None:
+            continue
+        out.append({"卡號": k, "編號": _card_num(k), "類型": c.get("類型"), "第3步鍵": c.get("第3步鍵"),
+                    "原片": c.get("原片"), "起因": how, "原因": why, "等重做那條路": outside})
+    out.sort(key=lambda x: ((x["原片"] or [None])[0] if (x["原片"] or [None])[0] is not None else 1e18, x["編號"]))
+    return out
 
 
 def mark_edited(workdir: str | Path, key: str, *, new: bool = False, page: dict | None = None,
