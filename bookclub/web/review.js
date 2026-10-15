@@ -649,6 +649,7 @@ function rvRenderCard() {
   document.getElementById("rv-prev").addEventListener("click", () => rvStep(-1));
   document.getElementById("rv-next").addEventListener("click", () => rvStep(1));
   cvBindPlayShrink(it);
+  cvBindPad("rv-pad");   // 10-15 前後 2 秒開關統一（1015-5）：這張卡唯一的一顆（標題列或名字卡的重念範圍那一列）
   rvBindBody(it);
   rvBindOutQ(it);
   rvBindMore(it);
@@ -680,14 +681,16 @@ function rvAskNewOutside(before) {
   dlg.setAttribute("aria-labelledby", "rv-out-title");
   dlg.innerHTML = `<h2 id="rv-out-title">切在外面的這幾秒是誰的聲音？</h2>
     <p>〈${esc(rvWho(it["說話者"]))}〉這一段：${q["整句"] ? "原本屬於這一段的一句" : "原本那一句"}有 ${esc(rvFmt(q.start, 1))}–${esc(rvFmt(q.end, 1))}（${(q.end - q.start).toFixed(1)} 秒）落在段落外面，沒有任何處理蓋到。</p>
-    <p><button class="ghost small" id="rv-out-play">試聽這幾秒</button></p>
+    <p><button class="ghost small" id="rv-out-play">聽這一段</button>${cvPadHtml("rv-out-pad")}</p>
     <div class="rv-out-btns">${RV_OUT.map(([v, label]) => `<button class="ghost" data-v="${esc(v)}">${esc(label)}</button>`).join("")}
       <button class="ghost" data-v="">先不回答</button></div>
     <p class="rv-meta">先不回答的話，第 4 步總檢查會列出這幾秒；卡片上也可以之後再回答。</p>`;
   document.body.appendChild(dlg);
   const close = () => { dlg.close(); dlg.remove(); };
   dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
-  dlg.querySelector("#rv-out-play").addEventListener("click", () => { rv.stopAt = q.end + 0.3; rvSeek(Math.max(0, q.start - 0.3), true); });
+  // 10-15 前後 2 秒開關統一（1015-5）：以前寫死前後 0.3 秒；改照開關（視窗蓋住卡片，所以這裡也放一顆，跟卡片上那顆同一個狀態）
+  dlg.querySelector("#rv-out-play").addEventListener("click", () => { const [a, b] = cvPadRange(q.start, q.end); rv.stopAt = b; rvSeek(a, true); });
+  cvBindPad("rv-out-pad", dlg);
   dlg.querySelectorAll("[data-v]").forEach((b) => b.addEventListener("click", async () => {
     close();
     const key = rvKey(it);

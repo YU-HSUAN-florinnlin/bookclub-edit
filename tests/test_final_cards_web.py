@@ -721,6 +721,46 @@ def test_version_page_renders():
     assert [x for x in o["exp"] if x[0] == "POST"][0][2] == {"版本": 1}
 
 
+# 10-15 前後 2 秒開關統一（1015-5）：第 5 步的開關跟第 3 步共用同一個鍵（fc-ab-pad）；「要修改」裡不再多一顆；
+# 關著只播範圍本身、開著前後各多 2 秒（「原本／現在 ▶」與「要修改」裡的「聽這一段」都照它）
+_LS = ("globalThis.LS = {fake: true, store: {}, getItem(k) { return k in this.store ? this.store[k] : null; }, setItem(k, v) { this.store[k] = String(v); }};"
+       " globalThis.localStorage = LS;\n")
+
+
+def test_pad_switch_shared_step5():
+    if not NODE:
+        print("（沒有 node，略過）")
+        return
+    sc = """
+          %s if (ON) LS.store["fc-ab-pad"] = "1";
+          await open("名字:1");
+          const before = document.getElementById("fc-right").innerHTML;
+          const c = card("名字:1"); fcPlayAB(c, "現在"); const ab = {from: fc.ab && fc.ab.from, to: fc.ab && fc.ab.to}; fcStopAB();
+          await last("fc-fix"); await pick("念錯字");
+          const right = document.getElementById("fc-right").innerHTML;
+          const w = FC_CARD_CTX.data()["項目"].find((x) => rvKey(x) === "名字:1")["整句"];
+          await last("rv-playrange");
+          const src = fc.audio.src;
+          const pad = document.getElementById("fc-pad"); pad.checked = !ON; await last("fc-pad", "change");
+          return {before, right, ab, p: c["成品"], w: [w.start, w.end], src, stored: LS.store["fc-ab-pad"]};"""
+    got = {}
+    for name, on in (("關", "false"), ("開", "true")):
+        got[name] = _run_page([{"名稱": name, "程式": f"const ON = {on};" + sc % _LS.replace("\n", " ")}])[name]
+    off, on = got["關"], got["開"]
+    assert "錯誤" not in off and "錯誤" not in on, (off, on)
+    assert not re.search(r'id="fc-pad"[^>]*checked', off["before"]) and re.search(r'id="fc-pad"[^>]*checked', on["before"])
+    for v in (off, on):
+        assert v["right"].count("data-cv-pad") == 1, "一張卡只能有一顆開關（要修改裡的重念範圍不再放）"
+        assert "聽這一段" in v["right"] and "只播重念範圍" not in v["right"]
+    p = off["p"]
+    assert (off["ab"]["from"], off["ab"]["to"]) == (max(0, p[0]), p[1]), off["ab"]                 # 關：只播範圍本身
+    assert (on["ab"]["from"], on["ab"]["to"]) == (max(0, p[0] - 2), p[1] + 2), on["ab"]            # 開：前後各多 2 秒
+    a, b = off["w"]
+    assert off["src"] == f"/api/audio?start={a:.2f}&end={b:.2f}", off["src"]
+    assert on["src"] == f"/api/audio?start={max(0, a - 2):.2f}&end={b + 2:.2f}", on["src"]
+    assert off["stored"] == "1" and on["stored"] == "0"   # 撥開關寫回同一個鍵
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

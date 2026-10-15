@@ -790,6 +790,10 @@ details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合�
 .fc-pad input:checked + .fc-switch { background: #34c759; }
 .fc-pad input:checked + .fc-switch::after { transform: translateX(20px); }
 .fc-pad input:focus-visible + .fc-switch { outline: 3px solid var(--fg); outline-offset: 2px; }
+/* 10-15 前後 2 秒開關統一（1015-5）：同一顆開關第 3 步也用（卡片標題列「聽這一段」旁、名字卡重念範圍那一列、切在外面的問題視窗） */
+.rv-card header .fc-pad { margin-left: 6px; font-size: 14px; }
+/* 「回到預設範圍」是重設起訖、不是播放：次要樣式（底線文字），放在起訖欄下面 */
+.rv2 button.linkish.rv-reset { font-size: 14px; color: var(--muted); }
 .fc-actbar .fc-bottom { margin: 10px 0 4px; }
 .fc-card .fc-why { margin: 6px 0 0; }
 /* 10-15 要修改合併（1015-4）：「要修改」那一塊（以前的退回框＋「改」）；改範圍的編輯器自己的「儲存修改」藏起來，存檔跟著「確定」 */

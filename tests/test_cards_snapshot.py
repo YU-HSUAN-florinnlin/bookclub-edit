@@ -7,6 +7,7 @@
 - 每一個按鈕事件都觸發一次（確認視窗一律按確定）→ 比送出去的 API、跳出的訊息。
 快照（`tests/snapshots/第3步卡片快照.json`）是抽元件**之前**的程式（commit b8814cc 的 review.js）產生的；
 抽完之後的程式要產生一模一樣的東西。要刻意改第 3 步畫面時才重產：`python tests/test_cards_snapshot.py --update`。
+10-15 前後 2 秒開關統一（1015-5）：宇軒授權改第 3 步卡片畫面，快照照新畫面重產過一次（播放按鈕改名、加開關、播放範圍照開關）。
 獨立可跑：.venv/bin/python tests/test_cards_snapshot.py
 """
 
@@ -170,6 +171,62 @@ def test_step3_cards_same_as_before():
     errs = [k for k, v in got.items() if isinstance(v, dict) and "錯誤" in v and isinstance(v["錯誤"], str) and "Error" in v["錯誤"]]
     assert not errs, errs   # 情境本身跑不起來（快照裡也不能有）
     print(f"  {len(want)} 個情境一樣")
+
+
+# 10-15 前後 2 秒開關統一（1015-5）：第 3 步每張卡只有一顆「前後多 2 秒」開關（標題列「聽這一段」旁、名字卡在重念範圍那一列），
+# 所有播卡片範圍的按鈕（聽這一段、第 N 處、切在外面的幾秒、改做法裡的、改時間面板的）都照它：關著只播範圍本身、開著前後各多 2 秒
+def test_step3_pad_switch():
+    if not NODE:
+        print("（沒有 node，略過）")
+        return
+    data = _items()
+    spec = _scenarios(data)[0]
+    ls = ("globalThis.LS = {store: {}, getItem(k) { return k in this.store ? this.store[k] : null; }, setItem(k, v) { this.store[k] = String(v); }};"
+          " globalThis.localStorage = LS;")
+    body = ls + """ if (ON) LS.store["fc-ab-pad"] = "1";
+      setup(); rv.video.play = async () => {};
+      const shots = {};
+      async function play(key, id, sel) {
+        rv.cur = key; rv.open = true; rvRenderCard();
+        const l = H.listeners.filter((x) => (sel ? sel(x) : x.el.id === id) && x.type === "click").pop();
+        await l.fn({target: l.el, preventDefault() {}, stopPropagation() {}});
+        return [rv.video.currentTime, rv.stopAt];
+      }
+      const T3 = rvItem("學員段落:T009"), N3 = rvItem("名字:3"), O = rvItem("重疊:O100.00");
+      shots.only = [await play("學員段落:T009", "rv-playonly"), T3.start, T3.end];
+      shots.out = [await play("學員段落:T009", null, (x) => x.el.className.includes("rv-outplay")), T3["段落外"][1].start, T3["段落外"][1].end];
+      shots.range = [await play("名字:3", "rv-playrange"), N3["整句"].start, N3["整句"].end];
+      shots.spot = [await play("名字:3", null, (x) => x.el.className.includes("rv-segplay")), N3["這一句的處"][1].start, N3["這一句的處"][1].end];
+      shots.gen = [await play("重疊:O100.00", "rv-genplay"), O["生成範圍"].start, O["生成範圍"].end];
+      const cards = {};
+      for (const k of ["學員段落:T009", "名字:3", "重疊:O100.00", "刪除段落:C1"]) { rv.cur = k; rv.open = true; rvRenderCard(); cards[k] = document.getElementById("rv-right").innerHTML; }
+      rvOpenEditor(T3); H.listeners.length = 0; rvRenderIO();
+      const te = H.listeners.filter((x) => "tePlay" in x.el.dataset && x.type === "click").pop();
+      await te.fn({}); shots.te = [[rv.video.currentTime, rv.stopAt], rv.ed.a, rv.ed.b];
+      rv.cur = "名字:3"; rvRenderCard();
+      const pad = document.getElementById("rv-pad"); pad.checked = !ON;
+      await H.listeners.filter((x) => x.el.id === "rv-pad" && x.type === "change").pop().fn({});
+      return {shots, cards, stored: LS.store["fc-ab-pad"], padOn: cvPad()};"""
+    spec["情境"] = [{"名稱": n, "程式": f"const ON = {o};" + body} for n, o in (("關", "false"), ("開", "true"))]
+    d = Path(tempfile.mkdtemp())
+    (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    r = subprocess.run([NODE, str(HARNESS), ",".join(str(WEB / f) for f in STEP3_FILES), str(d / "spec.json")],
+                       capture_output=True, text=True, check=True)
+    got = json.loads(r.stdout)
+    for name, k in (("關", 0), ("開", 2)):
+        v = got[name]
+        assert "錯誤" not in v, v
+        for what, (seen, a, b) in v["shots"].items():
+            assert [round(x, 3) for x in seen] == [round(max(0, a - k), 3), round(b + k, 3)], (name, what, seen, a, b)
+        for key, html in v["cards"].items():
+            assert html.count("data-cv-pad") == 1, (name, key)   # 一張卡一顆
+            assert ("checked" in html.split('id="rv-pad"')[1].split(">")[0]) == (k == 2), (name, key)
+            for old in ("只播這一段", "只播重念範圍", "播這一段", "試聽這幾秒", "試聽這段"):
+                assert old not in html.replace("聽這一段", ""), (name, key, old)
+        assert 'class="linkish rv-reset" id="rv-rangereset"' in v["cards"]["名字:3"]
+        assert v["cards"]["名字:3"].index('id="rv-rangereset"') > v["cards"]["名字:3"].index('data-rg="1"')   # 回到預設範圍在起訖欄後面
+    assert got["關"]["stored"] == "1" and got["關"]["padOn"] == 2   # 撥開關：記在第 5 步同一個鍵，馬上生效
+    assert got["開"]["stored"] == "0" and got["開"]["padOn"] == 0
 
 
 if __name__ == "__main__":

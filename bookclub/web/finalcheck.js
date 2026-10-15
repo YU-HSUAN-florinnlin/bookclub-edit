@@ -22,9 +22,7 @@
 const FC_MAX_RATE = 2;
 const FC_AB_CONTEXT = 2;   // 試聽前後各多 2 秒（跟後端一樣）
 // 10-15 宇軒驗證回饋：「原本 ▶」「現在 ▶」旁的滑動開關「前後多 2 秒」（iOS 樣式），預設關（只播修改的那一段）；開關記在瀏覽器
-const FC_PAD_KEY = "fc-ab-pad";
-function fcAbPad() { try { return localStorage.getItem(FC_PAD_KEY) === "1" ? FC_AB_CONTEXT : 0; } catch (e) { return 0; } }
-function fcSetAbPad(on) { try { localStorage.setItem(FC_PAD_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係 */ } }
+// 10-15 前後 2 秒開關統一（1015-5）：開關元件、狀態搬到 cards.js（cvPadHtml／cvPad／cvSetPad），第 3 步共用同一個鍵
 
 let fcBackKey = null;   // 從第 3 步按「回第 5 步成品檢查」回來時，回到出發的那張卡（或「第 3 步選定不修改」那一列）
 const fc = { ver: null, data: null, video: null, audio: null, cur: null, seen: [], seg: null, sentRanges: "", timer: null, lastT: 0,
@@ -217,6 +215,7 @@ function fcOutTime(t, plist) {   // 原片時間 → 成品時間（剪掉的地
 // 「現在」也是播那一版的成品聲音（畫面上的影片是這一版的，時間對不上），「原本」只放原聲
 // 10-15 宇軒驗證回饋：pad＝前後多播幾秒（開關開著＝FC_AB_CONTEXT，關著＝0；不給＝FC_AB_CONTEXT，跟以前一樣）。
 // 只有一個時間點（剪掉、停格的接點，沒有長度）的照樣前後各 2 秒，不然什麼都聽不到
+// 10-15 1015-5：跟 cards.js 的 cvPadRange 同一條規則（只有時間點的照樣 2 秒）；這裡留著給純函式測試單獨載入
 function fcPadOf(span, pad) {
   return span[1] == null || span[1] - span[0] < 0.05 ? Math.max(pad, FC_AB_CONTEXT) : pad;
 }
@@ -676,7 +675,7 @@ function fcRenderRight() {
         <button class="ghost small" data-ab="原本" ${abOrig ? "" : "disabled"}>原本 ▶</button>
         <button class="ghost small" data-ab="現在" ${abNow ? "" : "disabled"}>現在 ▶</button>${abPrev ? `
         <button class="ghost small" data-ab="上一版">上一版 ▶</button>` : ""}
-        <label class="fc-pad"><input type="checkbox" role="switch" id="fc-pad" aria-label="試聽前後多 2 秒" ${fcAbPad() ? "checked" : ""}><span class="fc-switch" aria-hidden="true"></span>前後多 2 秒</label></div>
+        ${cvPadHtml("fc-pad")}</div>
       <div class="rv-actions">
         <button class="${passed ? "primary on" : "primary"}" id="fc-pass" title="已通過的再按一次會取消" aria-pressed="${passed}" ${canJudge ? "" : "disabled"}>${passed ? "✓ 已通過（再按取消）" : "通過"}<kbd>Enter</kbd></button>
         <button class="ghost${open ? " on" : ""}" id="fc-fix" aria-expanded="${open}" ${canFix ? "" : `disabled title="${esc(fcFixOff(c, fcOld()))}"`}>要修改<kbd>E</kbd></button>${back ? `
@@ -687,8 +686,7 @@ function fcRenderRight() {
       ${open ? `<div class="rv-more fc-fixbox" id="fc-fixbox">${fcFixHtml(c, it)}</div>` : ""}
     </article>`;
   box.querySelectorAll("[data-ab]").forEach((b) => b.addEventListener("click", () => fcPlayAB(c, b.dataset.ab)));
-  const pad = document.getElementById("fc-pad");
-  if (pad) pad.addEventListener("change", () => fcSetAbPad(pad.checked));
+  cvBindPad("fc-pad");   // 10-15 1015-5：這張卡唯一的一顆；「要修改」裡的「聽這一段」也照它
   document.getElementById("fc-pass").addEventListener("click", () => fcDecide(c, c["狀態"] === FC_ST.OK ? null : FC_ST.OK));
   document.getElementById("fc-fix").addEventListener("click", () => fcToggleFix());
   const undo = document.getElementById("fc-back-undo");   // 10-15 要修改合併（1015-4）：以前那顆改名「取消要重做」，退回的卡一律放外面
@@ -943,7 +941,7 @@ function fcStep(dir) {
 // ---------- 試聽 ----------
 
 function fcPlayAB(c, which) {
-  const plan = fcCardAbPlan(c, which, fcAbPad());
+  const plan = fcCardAbPlan(c, which, cvPad());
   if (!plan) return;
   fcStopAB();
   fc.audio.pause();

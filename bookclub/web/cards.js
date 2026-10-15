@@ -22,6 +22,7 @@
  *   rerender()             重畫目前這張卡
  * 第 3 步的情境在 review.js（RV_CARD_CTX），第 5 步的在 finalcheck.js（FC_CARD_CTX）。
  * 第 3 步畫面與行為跟抽出來之前一模一樣：tests/test_cards_snapshot.py 用抽之前的快照鎖住。
+ * 10-15 前後 2 秒開關統一（1015-5）：宇軒授權改第 3 步卡片畫面（播放按鈕改名「聽這一段」＋「前後多 2 秒」開關），快照照新畫面重產。
  * 依賴 app.js 的 apiPost／esc。 */
 
 const cv = { ctx: null };
@@ -38,6 +39,39 @@ function cvOpenEditor(it, rng) { cv.ctx.openEditor(it, rng); }
 function cvPrefill(kind, a, b, who, note) { cv.ctx.prefill(kind, a, b, who, note); }
 function cvAskOutside(before) { if (cv.ctx.askOutside) cv.ctx.askOutside(before); }
 function cvRefreshSug() { if (cv.ctx.refreshSug) cv.ctx.refreshSug(); }
+
+// ---------------------------------------------------------------------------
+// 10-15 前後 2 秒開關統一（1015-5）：第 3 步、第 5 步所有「播卡片範圍」的按鈕共用同一顆「前後多 2 秒」滑動開關
+// （以前只有第 5 步的「原本 ▶」「現在 ▶」有；第 3 步各按鈕各自寫死前後 0、0.3、0.5 秒）。
+// 開關狀態記在瀏覽器、兩步共用（沿用第 5 步原本的鍵 fc-ab-pad，宇軒設過的不會不見）；預設關。
+// 開著：前後各多 2 秒；關著：只播範圍本身；只有一個時間點（不到 0.05 秒）的照樣前後 2 秒（不然什麼都聽不到）。
+// 一張卡只放一顆開關（卡片層級），面板裡的播放鈕（改做法、要修改、改時間面板的「聽這一段」）照同一個狀態。
+// ---------------------------------------------------------------------------
+
+const CV_PAD_KEY = "fc-ab-pad";
+const CV_PAD_SEC = 2;
+function cvPadOn() { try { return localStorage.getItem(CV_PAD_KEY) === "1"; } catch (e) { return false; } }
+function cvPad() { return cvPadOn() ? CV_PAD_SEC : 0; }
+function cvSetPad(on) {
+  try { localStorage.setItem(CV_PAD_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係 */ }
+  document.querySelectorAll("[data-cv-pad]").forEach((x) => { x.checked = !!on; });   // 畫面上別的開關（例如跳出來的問題視窗）跟著換
+}
+// [a, b] 加上前後秒數（b 沒有＝只有一個時間點）
+function cvPadRange(a, b, pad = cvPad()) {
+  const end = b != null ? b : a;
+  const k = end - a < 0.05 ? Math.max(pad, CV_PAD_SEC) : pad;
+  return [Math.max(0, a - k), end + k];
+}
+// 滑動開關（iOS 樣式，樣式在 style.css 的 .fc-pad／.fc-switch）
+function cvPadHtml(id) {
+  return `<label class="fc-pad"><input type="checkbox" role="switch" id="${esc(id)}" data-cv-pad aria-label="試聽前後多 2 秒" ${cvPadOn() ? "checked" : ""}><span class="fc-switch" aria-hidden="true"></span>前後多 2 秒</label>`;
+}
+function cvBindPad(id, root = null) {   // root：不在頁面上的元素（例如跳出來的視窗）
+  const el = root ? root.querySelector(`#${id}`) : document.getElementById(id);
+  if (el) el.addEventListener("change", () => cvSetPad(el.checked));
+}
+// 播卡片的一段範圍（照開關加前後）
+function cvPlayRange(a, b) { const [x, y] = cvPadRange(a, b); cvPlay(x, y); }
 
 // ---------------------------------------------------------------------------
 // 卡片上的工具按鈕（第 3 步在「通過、改做法」後面；第 5 步收在「要修改」→「其他」／「裡面有老師的聲音」裡面，10-15 要修改合併（1015-4）、驗證回饋二）
@@ -127,12 +161,12 @@ async function cvToTeacher(it) {
   return res;
 }
 
-// 「只播這一段」「照建議縮小」
+// 「聽這一段」（以前叫「只播這一段」）「照建議縮小」
 function cvBindPlayShrink(it) {
-  const only = document.getElementById("rv-playonly");   // 10-04 #130：從卡片起點剛好開始播，播到終點停
+  const only = document.getElementById("rv-playonly");   // 10-04 #130：從卡片起點剛好開始播，播到終點停（10-15 1015-5：照開關加前後 2 秒）
   if (only) only.addEventListener("click", (e) => {
     e.stopPropagation();
-    cvPlay(Number(only.dataset.s), Number(only.dataset.e));
+    cvPlayRange(Number(only.dataset.s), Number(only.dataset.e));
   });
   const shrink = document.getElementById("rv-shrink");
   if (shrink) shrink.addEventListener("click", () => rvShrink(it));
@@ -290,11 +324,12 @@ function rvChosen(it) {   // 現在會套用的做法：人改過的，或建議
 
 // 10-04 #130（宇軒）：每一種卡片都有「只播這一段」：從卡片的 start 剛好開始播、播到 end 停（點卡片跳過去是從前 2 秒開始播）
 // 名字卡播的是名字那一小段（重念範圍另有「只播重念範圍」）；重疊卡播的是重疊的那一段（兩邊各自的範圍在「改做法」裡「播這一段」）
+// 10-15 前後 2 秒開關統一（1015-5）：改名「聽這一段」，旁邊放這張卡唯一的一顆「前後多 2 秒」開關（名字卡的開關在重念範圍那一列）
 function rvPlayOnlyHtml(it) {
   const a = Number(it && it.start), b = Number(it && it.end);
   if (!it || it.start == null || it.end == null || !Number.isFinite(a) || !Number.isFinite(b) || b <= a) return "";
-  if (it["類型"] === "名字") return "";   // 10-04 宇軒：名字卡不要這顆（已經有「只播重念範圍」）
-  return ` <button class="ghost small" id="rv-playonly" data-s="${a}" data-e="${b}" title="從 ${esc(rvFmt(a, 1))} 開始播，播到 ${esc(rvFmt(b, 1))} 停">只播這一段</button>`;
+  if (it["類型"] === "名字") return "";   // 10-04 宇軒：名字卡不要這顆（已經有重念範圍的「聽這一段」）
+  return ` <button class="ghost small" id="rv-playonly" data-s="${a}" data-e="${b}" title="聽 ${esc(rvFmt(a, 1))}–${esc(rvFmt(b, 1))}（開了「前後多 2 秒」就前後各多 2 秒）">聽這一段</button>${cvPadHtml("rv-pad")}`;
 }
 
 // 10-02 第六批：老師重念範圍開頭或結尾有一段沒有人講話：提醒＋「照建議縮小」（不自動改；改了這一句要重新生成）
@@ -353,10 +388,12 @@ function rvRangeHtml(it) {   // 10-01 宇軒 7-1：名字的重念範圍（可�
     : w["範圍"] === "逐字" ? "照整句（句子文字裡找不到名字，改用逐字時間的字）"
     : w["範圍"] === "延伸" ? `句子斷在話中間，往前後延伸到標點或停頓（0.3 秒以上）；原本那一句 ${rvFmt(whole[0], 1)}–${rvFmt(whole[1], 1)}`
     : "照整句";
+  // 10-15 前後 2 秒開關統一（1015-5）：「只播重念範圍」改「聽這一段」＋「前後多 2 秒」開關（第 5 步卡片上已經有一顆，這裡不再放）；
+  // 「回到預設範圍」是重設起訖、不是播放：改成次要樣式，放在起訖欄下面
   return `<div class="rv-field rv-range"><div class="rv-edrow"><b>重念範圍</b><span class="rv-meta">${esc(tag)}</span>
-      <button class="ghost small" id="rv-playrange">只播重念範圍</button>
-      ${w["範圍"] === "人選" ? `<button class="ghost small" id="rv-rangereset">回到預設範圍</button>` : ""}</div>
-      ${rvTimeRows("rg", [["0", "起點", w.start], ["1", "終點", w.end]])}</div>`;
+      <button class="ghost small" id="rv-playrange">聽這一段</button>${cv.ctx && cv.ctx.mode === "第5步" ? "" : cvPadHtml("rv-pad")}</div>
+      ${rvTimeRows("rg", [["0", "起點", w.start], ["1", "終點", w.end]])}
+      ${w["範圍"] === "人選" ? `<div class="rv-edrow"><button class="linkish rv-reset" id="rv-rangereset">回到預設範圍</button></div>` : ""}</div>`;
 }
 
 async function rvSaveRange(it, a, b) {
@@ -375,7 +412,7 @@ function rvSidesHtml(it) {   // 10-01 B 方案：兩邊各自的起訖＋兩列�
   return `<div class="rv-field rv-sides" id="rv-sides">
       <div class="rv-minibar" aria-hidden="true"><div class="row t">${bar(T)}</div><div class="row s">${bar(S)}</div></div>
       <p class="rv-meta">上列老師、下列學員（${esc(rvFmt(lo, 1))}–${esc(rvFmt(hi, 1))}）。兩段各自生成、放回原本的時間，疊到的地方混在一起。
-        <button class="ghost small" id="rv-sideplay">播這一段</button></p>
+        <button class="ghost small" id="rv-sideplay">聽這一段</button></p>
       ${rvTimeRows("sd", [["老師起訖:0", "老師 起點", T[0]], ["老師起訖:1", "老師 終點", T[1]], ["學員起訖:0", "學員 起點", S[0]], ["學員起訖:1", "學員 終點", S[1]]])}</div>`;
 }
 
@@ -397,7 +434,7 @@ function rvOutQHtml(it, q, i) {
         : q["答案"] === "老師不用處理" ? `<p class="rv-meta">照原聲留著；第 4 步總檢查會列成「已確認」（灰色），不用再處理，要改答案在那裡也能改。</p>`
           : `<p class="rv-meta">先不回答的話，第 4 步總檢查會列出這幾秒。</p>`;
   return `<div class="rv-field rv-outq"><p><b>切在段落外面的 ${esc(rvFmt(q.start, 1))}–${esc(rvFmt(q.end, 1))}（${d.toFixed(1)} 秒）是誰的聲音？</b>
-      <button class="ghost small rv-outplay" data-i="${i}">試聽這幾秒</button></p>
+      <button class="ghost small rv-outplay" data-i="${i}">聽這一段</button></p>
     <p class="rv-meta">${q["整句"] ? "這一段切短的時候，原本屬於這一段的一句整句落在段落外面" : "這一段的句子有一部分在段落外面"}，沒有任何處理蓋到：照現在的樣子會留著原聲。</p>
     <div class="rv-row">${opts} ${later}</div>${follow}</div>`;
 }
@@ -415,7 +452,7 @@ function rvBindOutQ(it) {
   const qs = it["段落外"] || [];
   document.querySelectorAll(".rv-outans").forEach((b) => b.addEventListener("click", () => rvAnswerOutside(it, qs[Number(b.dataset.i)], b.dataset.v)));
   document.querySelectorAll(".rv-outplay").forEach((b) => b.addEventListener("click", () => {
-    const q = qs[Number(b.dataset.i)]; cvPlay(Math.max(0, q.start - 0.3), q.end + 0.3);
+    const q = qs[Number(b.dataset.i)]; cvPlayRange(q.start, q.end);   // 10-15 1015-5：以前寫死前後 0.3 秒，改照開關
   }));
   document.querySelectorAll(".rv-outgo").forEach((b) => b.addEventListener("click", () => {
     const q = qs[Number(b.dataset.i)];
@@ -459,10 +496,11 @@ function rvGenNoteHtml(it) {
 function rvGenBoxHtml(it) {
   const g = it["生成範圍"];
   if (!g) return "";
+  // 10-15 1015-5：「播這一段」改「聽這一段」；「回到預設」跟名字卡一樣改次要樣式、放在起訖欄下面
   return `<div class="rv-edrow"><b>會換掉的範圍</b><span class="rv-meta">${esc(RV_GEN_SRC[g["來源"]] || "")}</span>
-      <button class="ghost small" id="rv-genplay">播這一段</button>
-      ${g["來源"] !== "學員整句" ? `<button class="ghost small" id="rv-genreset">回到預設（學員那一整句）</button>` : ""}</div>
+      <button class="ghost small" id="rv-genplay">聽這一段</button></div>
     ${rvTimeRows("gs", [["0", "起點", g.start], ["1", "終點", g.end]])}
+    ${g["來源"] !== "學員整句" ? `<div class="rv-edrow"><button class="linkish rv-reset" id="rv-genreset">回到預設（學員那一整句）</button></div>` : ""}
     <p class="rv-meta">照你填的時間存，不會自動對齊。這段時間整段換成學員的生成聲音，裡面老師的聲音不保留。</p>`;
 }
 
@@ -541,7 +579,7 @@ function rvBodyHtml(it) {
 function rvBindBody(it) {
   const w = it["整句"];
   const pr = document.getElementById("rv-playrange");
-  if (pr && w) pr.addEventListener("click", () => { cvPlay(w.start, w.end); });
+  if (pr && w) pr.addEventListener("click", () => { cvPlayRange(w.start, w.end); });
   const rr = document.getElementById("rv-rangereset");
   if (rr) rr.addEventListener("click", async () => {
     await cvPost("/api/review/name", { id: it.id, "整句起訖": null }); await cvReload();
@@ -582,7 +620,7 @@ function rvSpotsHtml(it) {
 
 function rvBindSpots(it) {
   document.querySelectorAll(".rv-segplay[data-e]").forEach((b) => b.addEventListener("click", () => {
-    cvPlay(Math.max(0, Number(b.dataset.t) - 0.5), Number(b.dataset.e) + 0.3);
+    cvPlayRange(Number(b.dataset.t), Number(b.dataset.e));   // 10-15 1015-5：以前寫死前 0.5、後 0.3 秒，改照開關
   }));
 }
 
@@ -772,7 +810,7 @@ function rvBindMore(it) {
         await rvSaveOverlap(it, { "學員起訖": [cur[0], cur[1]] });
         await cvReload();
       });
-      q("rv-genplay")?.addEventListener("click", () => { cvPlay(g.start, g.end); });
+      q("rv-genplay")?.addEventListener("click", () => { cvPlayRange(g.start, g.end); });
       q("rv-genreset")?.addEventListener("click", async () => {
         if (!confirm("會換掉的範圍回到預設（學員那一整句）？")) return;
         await rvSaveOverlap(it, { "回到預設範圍": true });
@@ -798,7 +836,7 @@ function rvBindMore(it) {
         rvBindMore(it);
       });
       q("rv-sideplay").addEventListener("click", () => {
-        cvPlay(Math.min(it["老師起訖"][0], it["學員起訖"][0]), Math.max(it["老師起訖"][1], it["學員起訖"][1]));
+        cvPlayRange(Math.min(it["老師起訖"][0], it["學員起訖"][0]), Math.max(it["老師起訖"][1], it["學員起訖"][1]));
       });
     }
     // 10-01 走查：被別筆涵蓋的重疊沒有這些欄位（以前這裡丟錯，時間軸不會跟著換到這一筆）
@@ -915,7 +953,7 @@ function teRender(ctx) {
       ${teTimeRow(ctx, "b", "終點")}
       ${extra ? `<div class="rv-edrow">${extra}</div>` : ""}
       <p class="rv-meta">${esc(o.hint ? o.hint(st) : "")}</p>
-      <div class="rv-edrow"><button class="ghost" data-te-play>試聽這段</button>
+      <div class="rv-edrow"><button class="ghost" data-te-play>聽這一段</button>
         <button class="primary" data-te-save>${st.busy ? "對齊中…" : o.saveLabel(st)}</button>
         <span class="rv-meta" data-te-dur></span></div>
       <div data-te-res>${teResultHtml(st.result)}</div></section>`;
@@ -939,7 +977,8 @@ function teRender(ctx) {
     if (st[w] == null) return;
     teSet(ctx, w, Math.max(0, Math.round((st[w] + Number(b.dataset.d)) * 100) / 100));
   }));
-  q("[data-te-play]").addEventListener("click", () => { if (teOk(st)) o.play(st.a, st.b); });
+  // 10-15 前後 2 秒開關統一（1015-5）：改時間面板的「聽這一段」照卡片上的開關加前後
+  q("[data-te-play]").addEventListener("click", () => { if (teOk(st)) o.play(...cvPadRange(st.a, st.b)); });
   q("[data-te-save]").addEventListener("click", () => teSave(ctx));
   teRefresh(ctx);
 }
