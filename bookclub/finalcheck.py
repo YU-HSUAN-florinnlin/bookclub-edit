@@ -1996,15 +1996,17 @@ def _same_as_doing(workdir: Path, unit: dict, ctx: dict, logs: dict) -> bool:
 
 
 def _same_as_last(workdir: Path, unit: dict, ctx: dict, logs: dict) -> bool:
-    """這一句現在要念的字、時間格跟上一次生成的一樣嗎（一樣的話重新生成多半是同一個聲音）。讀不到就當作有改。"""
+    """這一句現在要念的字、時間格跟上一次生成的一樣嗎（一樣的話重新生成多半是同一個聲音）。讀不到就當作有改。
+    10-15 C1 實跑修正（1015-7）：時間格容忍用 `tts.REDO_SLOT_TOLERANCE_S`（0.5 秒；計畫重算後常漂 0.1 秒）；這裡的結果
+    （`沒改`）由 `note_versions` 記進 `_重新生成版本.json`（`換一種念法`），生成時 `tts.redo_avoid` 照它，不再另外判一次。"""
+    from bookclub import tts
+
     role = unit["角色"]
     last = _last_rec(workdir, unit, logs)
     now = next((x for x in ctx.get(role, []) if x.get("id") == unit["id"]), None)
     if not last or not now:
         return False
-    same_slot = all(abs(a - b) <= 0.05 for a, b in zip(now["slot"], last.get("slot") or [None, None]) if a is not None and b is not None) \
-        and len(last.get("slot") or []) == 2
-    return same_slot and (now.get("text") or "") == (last.get("text") or "")
+    return tts.same_slot(now.get("slot"), last.get("slot")) and (now.get("text") or "") == (last.get("text") or "")
 
 
 def _role_paths(workdir: Path, role: str) -> tuple[Path, Path]:
@@ -2020,7 +2022,8 @@ def redo_folder(stamp: str) -> str:
     return f"{REDO_FILE_DIR}_{stamp.replace(':', '').replace('-', '')}"
 
 
-def note_versions(workdir: Path, role: str, ids: list[str], stamp: str, reasons: dict | None = None) -> dict[str, dict]:
+def note_versions(workdir: Path, role: str, ids: list[str], stamp: str, reasons: dict | None = None,
+                  same: dict | None = None) -> dict[str, dict]:
     """10-02 第四批：清掉之前，把這幾句現在的版本記進生成資料夾的 `_重新生成版本.json`（`tts.REDO_VERSIONS`）：
     - 以前的版本：加一筆（第幾版、選定的種子、試過的種子、每一次的結果、聲音檔搬去哪個資料夾、退回原因）
     - 避開：上一版的文字、範圍跟再上一版一樣的話，接著累加；不一樣就從上一版用過的重新算
@@ -2051,6 +2054,10 @@ def note_versions(workdir: Path, role: str, ids: list[str], stamp: str, reasons:
         avoid = sorted(keep | {int(a["種子"]) for a in tries})
         data[i] = {"text": r.get("text"), "生成用文字": r.get("生成用文字", r.get("text")), "slot": r.get("slot"),
                    "避開": avoid, "以前的版本": olds}
+        if same is not None and i in same:
+            # 10-15 C1 實跑修正（1015-7）：第 4 步排重做時判的「文字和範圍都沒改」（`redo_list` 的 沒改）——生成時照這個換念法
+            data[i]["換一種念法"] = bool(same[i])
+            data[i]["換一種念法依據"] = "第 4 步排重做時：要念的字一樣、時間格差 0.5 秒以內"
         out[i] = {"第幾版": n + 1}
     if out:
         od.mkdir(parents=True, exist_ok=True)
@@ -2157,12 +2164,15 @@ def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = 
     stamp = _now()
     by_role: dict[str, list[str]] = {}
     reasons: dict[tuple, str] = {}
+    same: dict[tuple, bool] = {}   # 10-15 C1 實跑修正：每一句「文字和範圍都沒改」（同一句在好幾項裡：都沒改才算）
     for e in plan:
         for u in e["生成"]:
             by_role.setdefault(u["角色"], []).append(u["id"])
             reasons.setdefault((u["角色"], u["id"]), e.get("原因") or "")
+            same[(u["角色"], u["id"])] = same.get((u["角色"], u["id"]), True) and bool(e.get("沒改"))
     # 10-02 第四批：清掉之前先記下現在的版本；文字和範圍都沒改的，重新生成時換一種念法（避開用過的種子）
-    vers = {role: note_versions(workdir, role, ids, stamp, {i: reasons.get((role, i), "") for i in ids})
+    vers = {role: note_versions(workdir, role, ids, stamp, {i: reasons.get((role, i), "") for i in ids},
+                                {i: same[(role, i)] for i in ids})
             for role, ids in by_role.items()}
     for e in plan:
         ns = [vers.get(u["角色"], {}).get(u["id"], {}).get("第幾版") for u in e["生成"]]

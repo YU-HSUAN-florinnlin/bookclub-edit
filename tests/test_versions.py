@@ -525,6 +525,34 @@ def test_api_cancel_redo_on_latest_page_without_version():
         httpd.server_close()
 
 
+def test_redo_avoid_follows_plan_judgment_despite_slot_drift():
+    """10-15 C1 實跑修正（1015-7）：跨版本卡按「聲音不像」、計畫重算後時間格漂 0.1 秒——第 4 步判「沒改」，
+    `_重新生成版本.json` 那一句記 `換一種念法: true`，生成時 `tts.redo_avoid` 照它避開用過的種子（以前判成改了、又選回 42）。"""
+    from bookclub import tts
+    from bookclub import workdir as wd
+
+    w = _three_versions()
+    _gen_logs(w)
+    lp, od = fc._role_paths(w, "學員")
+    rec = wd.read_json(lp)
+    for r in rec["句子"]:   # 上一次生成的時間格比現在的計畫早 0.1 秒（升級的舊工作區常見）
+        if r["id"] == "T005_01":
+            r["slot"] = [r["slot"][0] - 0.1, r["slot"][1]]
+            r["嘗試"] = [{"種子": 42}]
+    wd.write_json(lp, rec)
+    t5 = _by(finalcards.build(w)["跨版本卡片"], "學員段落:T005")
+    tn._quiet(finalcards.decide, w, t5["id"], needs.RETURNED, ["聲音不像、不自然"], "", version=1)
+    e = next(x for x in tn._quiet(fc.redo_plan, w) if x.get("卡號") == t5["卡號"])
+    assert e["沒改"] is True
+    tn._quiet(fc.prepare_redo, w, log=lambda s: None)
+    entry = json.loads((od / "_重新生成版本.json").read_text(encoding="utf-8"))["T005_01"]
+    assert entry["換一種念法"] is True and entry["避開"] == [42]
+    now = next(x for x in fc._redo_ctx(w)["學員"] if x["id"] == "T005_01")
+    assert abs(entry["slot"][0] - now["slot"][0]) > tts.SLOT_TOLERANCE_S   # 真的漂了（舊判法會說改了）
+    assert tts.redo_avoid(entry, now) == [42]
+    assert tts.redo_avoid(entry, {**now, "text": "改過的字"}) == []
+
+
 def test_windows_copy_asks_when_not_latest():
     """10-15 第3段審查修正（建議，宇軒定前暫定）：複製到 Windows 拿的最終成品不是最新一版 → 先問一次；確定才複製。"""
     from bookclub import fileio

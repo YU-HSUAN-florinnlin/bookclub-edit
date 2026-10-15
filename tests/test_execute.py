@@ -820,12 +820,18 @@ def test_redo_unchanged_regenerates_with_next_seed_and_keeps_old_versions():
         d = finalcheck.page_data(w)
         got = d["紀錄"][0]["重做過"]
         assert got["第幾版"] == rnd and got["換一種念法"] and got["做法"] == "重新生成"   # 第 5 步看得出是第幾版
-    # 文字或範圍改了：照原本的規則（不避開，從 42 開始）
+    # 文字改了：照原本的規則（不避開，從 42 開始）
     entry = wd.read_json(od / tts.REDO_VERSIONS)[target["id"]]
     assert entry["避開"] == [1, 42, 2026]                                          # 第 4 版生成時避開的（前三版用過的）
+    # 10-15 C1 實跑修正（1015-7）：第 4 步排重做時判的「沒改」記進 entry（換一種念法），生成時照它、不再用時間格重判
+    assert entry["換一種念法"] is True
     assert tts.redo_avoid(entry, {**prep(target), "text": "改過的字"}) == []
-    assert tts.redo_avoid(entry, {**prep(target), "slot": [target["slot"][0] + 0.5, target["slot"][1]]}) == []
+    assert tts.redo_avoid(entry, {**prep(target), "slot": [target["slot"][0] + 0.1, target["slot"][1]]}) == [1, 42, 2026]
     assert tts.redo_avoid(entry, prep(target)) == [1, 42, 2026]
+    assert tts.redo_avoid({**entry, "換一種念法": False}, prep(target)) == []      # 排重做時判成範圍改了
+    old = {k: v for k, v in entry.items() if k not in ("換一種念法", "換一種念法依據")}   # 舊的 entry（沒有旗標）
+    assert tts.redo_avoid(old, {**prep(target), "slot": [target["slot"][0] + 0.1, target["slot"][1]]}) == [1, 42, 2026]
+    assert tts.redo_avoid(old, {**prep(target), "slot": [target["slot"][0] + 1.0, target["slot"][1]]}) == []
 
 
 def test_redo_stopped_midway_finishes_on_next_run():
