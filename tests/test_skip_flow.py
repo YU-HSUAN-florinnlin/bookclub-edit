@@ -379,13 +379,14 @@ def test_web_step5_badges_tab_and_attention():
         go1: fcAttentionGo(att["列"][0]), go2: fcAttentionGo(att["列"][1]), old: fcAttentionHtml({{"有紀錄": false, "列": []}}, kinds, []),
         noAtt: fcTabList(cards, 0, undefined).map((t) => t.id),
         unsearched: fcAttentionHtml({{"有紀錄": true, "列": [], "名冊外沒找": true}}, kinds, []) }}));""")
-    assert got["ids"] == ["全部", "還沒看完", "刪除段落", "不修改", "需留意"]          # 需留意在最後、不修改旁邊（最右邊）
+    # 10-15 宇軒驗證回饋六：「還沒看完」分頁拿掉
+    assert got["ids"] == ["全部", "刪除段落", "不修改", "需留意"]          # 需留意在最後、不修改旁邊（最右邊）
     h = got["html"]
     assert h.index("fc-att-red") < h.index("聲音不像老師") and "這 1 處會照原聲念出本名" in h and got["n"] == 2
     assert h.count("fc-a-play") == 3 and "還留著 2 秒原聲（其餘被別筆處理蓋到），2 段" in h and "還留著 1 秒原聲" in h and "總檢查有 5 列沒處理" in h
     assert got["go1"]["key"] == "名字:4" and got["go1"]["back"] == "step5"
     assert got["go2"]["key"] is None and got["go2"]["edit"] == {"類型": "學員發言", "start": 2, "end": 3}
-    assert "舊版工具組裝的" in got["old"] and got["noAtt"] == ["全部", "還沒看完", "刪除段落"]
+    assert "舊版工具組裝的" in got["old"] and got["noAtt"] == ["全部", "刪除段落"]
     assert "名冊外的名字這次沒有找" in got["unsearched"] and "沒有要留意的地方" in got["unsearched"]
 
 

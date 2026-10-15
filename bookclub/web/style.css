@@ -818,4 +818,6 @@ details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合�
 .rv-list li.fc-faded { opacity: .45; }
 /* 10-15 宇軒驗證回饋五：「已通過（沿用上一版）」只刷淡文字、綠色標籤保留 */
 .rv-list li.fc-faded-ok > :not(.st) { opacity: .45; }
-.fc-cross { margin-top: 4px; }
+/* 10-15 宇軒驗證回饋六：下面「已通過的」那一區（以前是「上一版還沒看的」）；上面清單的跨版本卡在時間格下面加小字「第 N 版」 */
+.fc-passed { margin-top: 4px; }
+.rv-list .tm .fc-vtag { display: block; font-size: 12px; color: var(--muted); font-weight: normal; }

@@ -1029,6 +1029,8 @@ def decide_version(workdir: str | Path, n: int, card: str, result: str | None, o
     if result not in (PASSED, RETURNED, None):
         raise ValueError("只能選：通過、退回")
     if result == RETURNED:
+        # 10-15 宇軒驗證回饋六：畫面上舊版、跨版本卡的「要修改」改走 `mark_outside_redo`（finalcards.decide 分流，不會走到這裡）；
+        # 這一層照舊擋（那一版的狀態列記退回仍會無聲失效）。
         # 10-15 第3段審查修正（必修 1，宇軒定前暫定）：舊版只能通過——舊版上退回，第 4 步看不到（舊檔只認最新那一份處理紀錄），
         # 組裝後等重做被清、歷史寫「重做進第 N 版」卻沒有重新生成。31 號設計 §5.1 按卡片重做做完（第 4 段）再開放
         raise ValueError("要退回請回到最新一版")
@@ -1439,6 +1441,7 @@ def set_reason(workdir: str | Path, card: str, options: list[str] | None, extra:
 
 def mark_outside_redo(workdir: str | Path, card: str, options: list[str] | None, extra: str = "") -> bool:
     """10-15 宇軒驗證回饋四：「已通過（沿用上一版）」（範圍外、這一版沒處理到）的卡在最新版按「要修改」記的原因。
+    10-15 宇軒驗證回饋六：跨版本卡、看舊版時的任何卡按「要修改」也走這裡（finalcards.decide 帶 version 的退回）。
     這一版沒有它的狀態列（`set_reason` 記不了），記在卡片的 `等重做`：{起因: 改了, 時間, 退回原因: {選項, 補充}}——
     畫面變「要重做」（已改，等重做）、算進「重做這幾張」；下次組裝 `build_version` 清掉，而且新版不沿用之前的通過
     （指紋沒變也要重新看）。已經等重做（例如先在選單裡改了字）就補上原因。回傳有沒有寫。"""

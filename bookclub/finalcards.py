@@ -512,6 +512,12 @@ def version_page(workdir: str | Path, n: int, page: dict | None, *, running: boo
             old = _older_row(st, k, n)
             oc["上一版已通過"] = bool(old and old[1].get("狀態") == needs.PASSED)
             cards.append(oc)
+    for oc in cards:
+        # 10-15 宇軒驗證回饋六：舊版上按過「要修改」（或在最新版按過、範圍外的）的卡——原因記在卡片的等重做（needs.mark_outside_redo），
+        # 這一版的狀態列不動；畫面照卡片現在的樣子標「要重做」、帶上次的原因（再按「要修改」預填）
+        pend = st.cards[oc["卡號"]].get("等重做") or {}
+        if pend.get("起因") == needs.WHY_EDITED and pend.get("退回原因") is not None:
+            oc.update({"狀態": EDITED, "退回原因": pend["退回原因"], "沿用自": None, "這一版沒處理到": False, "範圍外改了": True})
     cards.sort(key=_sort_key)
     for c in cards:
         c["共用"], c["連帶自"] = [], []
@@ -606,13 +612,21 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
     回寫舊檔這張卡對到的每一筆（`finalcheck.decide_many`），新紀錄由舊檔存檔後重算（雙寫照第 1 段），退回再補上選項。
     10-15 第5步2.0 第3段：version＝在第幾版上按的（舊版、或「上一版還沒看的」那一區）。不是最新處理紀錄那一版 → 記在那一版
     （`needs.decide_version`，不寫舊檔）；回傳 {ok, 卡片: 那一版的這張卡}，畫面整頁重新整理。
-    10-15 第3段審查修正（必修 1）：舊版、上一版還沒看的那一區只能通過／取消，退回回 ValueError「要退回請回到最新一版」。"""
+    10-15 宇軒驗證回饋六（第 3 段審查「必修 1」結案拿掉）：舊版、跨版本卡（version 不是最新那一版）按「要修改」（退回）→
+    原因記在卡片自己的等重做（`needs.mark_outside_redo`，跟回饋四「已通過（沿用上一版）」同一條路），不寫進任何版本的成品檢查紀錄；
+    卡片在最新版變「已改，等重做」、下次「重做這幾張」包含它。通過、取消照舊記在那一版（`needs.decide_version`）。"""
     if result not in (needs.PASSED, needs.RETURNED, None):
         raise ValueError("只能選：通過、退回")
     workdir = Path(workdir)
     if version is not None and int(version) != current_version(workdir):
         if not needs.healthy(workdir):
             raise ValueError("新紀錄現在不能用，只能在最新一版判斷")
+        if result == needs.RETURNED:
+            # 10-15 宇軒驗證回饋六：舊版、跨版本卡也能按「要修改」——原因記在卡片的等重做（不動那一版的狀態列、不寫成品檢查檔）
+            needs.mark_outside_redo(workdir, str(card_id), options, extra)
+            part = build(workdir)
+            after = next((x for x in part["卡片"] + part["跨版本卡片"] if str(x["id"]) == str(card_id)), None)
+            return {"ok": True, "卡片": after, "統計": part["統計"], "版本號": int(version), "跳過": [], "共用卡片": []}
         row = needs.decide_version(workdir, int(version), str(card_id), result, options, extra)
         st = needs.load(workdir)
         return {"ok": True, "卡片": _version_card(workdir, st, str(card_id), int(version), row, {}), "版本號": int(version)}

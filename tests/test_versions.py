@@ -163,12 +163,13 @@ def test_outside_passed_card_can_be_fixed_on_latest():
     tn._quiet(finalcards.edited, w, "名字:1")
     c = _by(finalcards.build(w)["卡片"], "名字:1")
     assert c["狀態"] == finalcards.EDITED and c["退回原因"] == {"選項": ["念錯字"], "補充": ""}
-    # 舊版畫面上它照樣是第 1 版通過、不能退回
-    try:
-        finalcards.decide(w, n1["id"], needs.RETURNED, ["念錯字"], "", version=1)
-        raise AssertionError("舊版不能退回")
-    except ValueError as e:
-        assert str(e) == "要退回請回到最新一版"
+    # 10-15 宇軒驗證回饋六：舊版畫面上也能按「要修改」——原因換掉、記在卡片的等重做；第 1 版的狀態列不動（還是通過）
+    r = finalcards.decide(w, n1["id"], needs.RETURNED, ["長度或停頓怪"], "尾巴", version=1)
+    assert r["卡片"]["狀態"] == finalcards.EDITED and r["卡片"]["退回原因"] == {"選項": ["長度或停頓怪"], "補充": "尾巴"}
+    st = needs.load(w)
+    assert st.states[(n1["卡號"], 1)]["狀態"] == needs.PASSED and (n1["卡號"], 2) not in st.states
+    o1 = _by(finalcards.version_page(w, 1, None)["卡片"], "名字:1")   # 舊版畫面：照卡片現在的樣子標要重做、帶原因（預填）
+    assert o1["狀態"] == finalcards.EDITED and o1["退回原因"]["補充"] == "尾巴" and o1["範圍外改了"]
     # 整支重做：等重做清掉、新版不沿用第 1 版的通過（指紋沒變也要重新看）；別張通過的照樣沿用
     _assemble(w, _t(3), tn._records())
     st = needs.load(w)
@@ -187,36 +188,49 @@ def test_old_version_page_and_decide_and_watch():
     cards = pg["卡片"]
     assert _by(cards, "名字:1")["狀態"] == needs.PASSED and _by(cards, "學員段落:T005")["狀態"] == needs.NOT_SEEN
     assert not any(c["這一版沒處理到"] for c in cards)   # 第 1 版是整支
-    # 10-15 第3段審查修正（必修 1）：舊版只能通過——退回被擋，那一版、卡片、成品檢查檔都不動
     t5 = _by(cards, "學員段落:T005")
-    before = json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True)
-    try:
-        finalcards.decide(w, t5["id"], needs.RETURNED, ["念錯字"], "x", version=1)
-        raise AssertionError("舊版不能退回")
-    except ValueError as e:
-        assert str(e) == "要退回請回到最新一版"
-    st = needs.load(w)
-    assert st.states[(t5["卡號"], 1)]["狀態"] == needs.NOT_SEEN and not st.cards[t5["卡號"]].get("等重做")
-    assert json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True) == before
-    # 通過、取消照樣可以
+    # 通過、取消照樣可以（記在那一版）
     assert finalcards.decide(w, t5["id"], needs.PASSED, version=1)["卡片"]["狀態"] == needs.PASSED
     assert finalcards.decide(w, t5["id"], None, version=1)["卡片"]["狀態"] == needs.NOT_SEEN
+    # 10-15 宇軒驗證回饋六（第 3 段審查「必修 1」結案拿掉）：舊版也能按「要修改」——原因記在卡片的等重做；
+    # 那一版的狀態列、成品檢查檔都不動；最新版上它變「已改，等重做」、算進要重做
+    before = json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True)
+    r = finalcards.decide(w, t5["id"], needs.RETURNED, ["念錯字"], "x", version=1)
+    assert r["ok"] and r["卡片"]["狀態"] == finalcards.EDITED and r["卡片"]["退回原因"] == {"選項": ["念錯字"], "補充": "x"}
+    st = needs.load(w)
+    assert st.states[(t5["卡號"], 1)]["狀態"] == needs.NOT_SEEN
+    pend = st.cards[t5["卡號"]]["等重做"]
+    assert pend["起因"] == needs.WHY_EDITED and pend["退回原因"] == {"選項": ["念錯字"], "補充": "x"} and not pend.get("版本號")
+    assert json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True) == before
+    part = finalcards.build(w)
+    assert not any(c["id"] == t5["id"] for c in part["跨版本卡片"]) and part["統計"]["要重做"] == 1
+    o5 = _by(finalcards.version_page(w, 1, None)["卡片"], "學員段落:T005")
+    assert o5["狀態"] == finalcards.EDITED and o5["退回原因"]["補充"] == "x"
     # 舊版上看過的：記在那一版自己的一份
     tn._quiet(finalcards.version_watched, w, 1, [[1.0, 2.0]])   # 假影片量不出長度：不截
     tn._quiet(finalcards.version_watched, w, 1, [[1.5, 3.0]])
     assert needs.watched(w, 1) == [[1.0, 3.0]] and needs.watched(w, 2) == []
 
 
-def test_old_version_return_blocked_and_assembly_history():
-    """10-15 第3段審查修正（必修 1）：上一版還沒看的那一區（跨版本卡）退回也擋；之前留下的舊版退回（等重做帶版本號），
-    之後的組裝沒有真的重做它（指紋跟退回那一版一樣）→ 等重做留著、歷史不寫「重做進第 N 版」；真的換了聲音才清。"""
+def test_cross_card_fix_and_old_return_assembly_history():
+    """10-15 宇軒驗證回饋六：跨版本卡（上一版還沒看完的）按「要修改」→ 原因記在卡片的等重做（不寫成品檢查檔、那一版狀態列不動），
+    最新版變「已改，等重做」；needs 層 `decide_version` 的退回照舊擋。
+    10-15 第3段審查修正（必修 1）：之前留下的舊版退回（等重做帶版本號），之後的組裝沒有真的重做它（指紋跟退回那一版一樣）
+    → 等重做留著、歷史不寫「重做進第 N 版」；真的換了聲音才清。"""
     w = _three_versions()
     t5 = _by(finalcards.build(w)["跨版本卡片"], "學員段落:T005")
-    try:
-        finalcards.decide(w, t5["id"], needs.RETURNED, version=1)
-        raise AssertionError("跨版本卡不能退回")
-    except ValueError as e:
-        assert "最新一版" in str(e)
+    before = json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True)
+    r = finalcards.decide(w, t5["id"], needs.RETURNED, ["聲音不像、不自然"], "太快", version=1)
+    assert r["ok"] and r["卡片"]["狀態"] == finalcards.EDITED and r["卡片"]["範圍外改了"]
+    assert json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True) == before
+    st = needs.load(w)
+    assert st.states[(t5["卡號"], 1)]["狀態"] == needs.NOT_SEEN and (t5["卡號"], 2) not in st.states
+    assert st.cards[t5["卡號"]]["等重做"]["退回原因"] == {"選項": ["聲音不像、不自然"], "補充": "太快"}
+    c = _by(finalcards.build(w)["卡片"], "學員段落:T005")
+    assert c["狀態"] == finalcards.EDITED and c["退回原因"]["補充"] == "太快"
+    # 再按一次換原因
+    finalcards.decide(w, t5["id"], needs.RETURNED, ["念錯字"], "", version=1)
+    assert needs.load(w).cards[t5["卡號"]]["等重做"]["退回原因"] == {"選項": ["念錯字"], "補充": ""}
     try:
         needs.decide_version(w, 1, t5["卡號"], needs.RETURNED)
         raise AssertionError("needs 層也擋")
@@ -455,6 +469,13 @@ def test_api_versions():
         t5 = _by(o["卡片"], "學員段落:T005")
         r = tn._quiet(_post, base, "/api/final/card", {"id": t5["id"], "結果": "通過", "版本": 1})
         assert r["卡片"]["狀態"] == needs.PASSED
+        # 10-15 宇軒驗證回饋六：舊版上按「要修改」（退回＋版本）不被擋——原因記在卡片的等重做，不寫成品檢查檔
+        before = json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True)
+        n1 = _by(o["卡片"], "名字:1")
+        r = tn._quiet(_post, base, "/api/final/card", {"id": n1["id"], "結果": "退回", "選項": ["聲音不像、不自然"], "補充": "", "版本": 1})
+        assert r["ok"] and r["卡片"]["狀態"] == finalcards.EDITED
+        assert json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True) == before
+        assert needs.load(w).cards[n1["卡號"]]["等重做"]["退回原因"]["選項"] == ["聲音不像、不自然"]
         assert tn._quiet(_get, base, "/api/final?版本=2")["看的是舊版"] is False   # 最新那一版＝一般畫面
         s = tn._quiet(_get, base, "/api/state")
         assert s["開發者"] is False

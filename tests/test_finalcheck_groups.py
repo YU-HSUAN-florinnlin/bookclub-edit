@@ -288,9 +288,10 @@ def test_web_lower_wiring():
     assert 'class="rv-filters fc-tabs"' in lower and "fcTabSet(b.dataset.tab)" in lower
     assert 'id="fc-only"' in lower and "fcShown()" in lower
     assert 'const FC_TAB_KEY = "fc-tab"' in FCJS and "localStorage.getItem(FC_TAB_KEY)" in FCJS
-    shown = _fn("fcShown")
-    assert "fcTab()" in shown and "fcOnlyLook()" in shown
-    assert "fcShown()" in _fn("fcStep") and "fcStepPick(" in _fn("fcStep")
+    # 10-15 宇軒驗證回饋六：兩個清單（fcLists）；上一張／下一張走上面清單接下面清單（fcNavList）
+    shown = _fn("fcLists")
+    assert "fcTab()" in shown and "fcOnlyLook()" in shown and "fcLists().todo" in _fn("fcShown")
+    assert "fcNavList()" in _fn("fcStep") and "fcStepPick(" in _fn("fcStep")
     assert "fcTabSet(FC_TAB_KEEP)" in _fn("renderFinal")
     assert "fcPlaySpan(" in lower and "rvJump({ key: u[\"第3步\"] || null, back: \"step5\", backKey: u[\"鍵\"]" in lower
     assert 'id="fc-list"' in lower and 'id="fc-ulist"' in _fn("fcKeepTabHtml") and "fcSpanTick(v.currentTime)" in FCJS
