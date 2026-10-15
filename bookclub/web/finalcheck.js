@@ -157,8 +157,11 @@ function fcStatusLine(d) {
 }
 
 // 卡片要的第 3 步那張卡（沒有＝待釐清、沒登記的變動，或第 3 步資料讀不到）
+// 10-15 修正：不看卡片的 `有第3步卡片`——那個欄位只在整頁資料（GET /api/final，finalcards._step3_part）裡有，按通過／取消後
+// fcDecide 用後端回傳的卡（finalcards.decide，沒有這個欄位）換掉舊卡，以前就變「原本：（找不到原句）」。前端別依賴它，
+// 直接用 第3步鍵 在整頁資料的第 3 步項目裡找（找不到才是 null）
 function fcItemOf(c) {
-  if (!c || !c["第3步鍵"] || !c["有第3步卡片"]) return null;
+  if (!c || !c["第3步鍵"]) return null;
   return ((fc.data["第3步"] || {})["項目"] || []).find((x) => rvKey(x) === c["第3步鍵"]) || null;
 }
 const FC_KIND_NAME = { "待釐清": "不確定是哪一種", "沒登記的變動": "聲音變了但沒有紀錄" };
@@ -786,7 +789,7 @@ function fcRenderRight() {
   document.getElementById("fc-pass").addEventListener("click", () => fcDecide(c, c["狀態"] === FC_ST.OK ? null : FC_ST.OK));
   document.getElementById("fc-fix").addEventListener("click", () => fcToggleFix());
   const undo = document.getElementById("fc-back-undo");   // 10-15 要修改合併（1015-4）：要重做的卡的「取消要重做」放外面
-  if (undo) undo.addEventListener("click", () => fcDecide(c, null));
+  if (undo) undo.addEventListener("click", () => fcDecide(c, null, [], "", true));   // 10-15 修正：明說是取消要重做（後端沒有要重做就擋，不會變成取消通過）
   document.getElementById("fc-prev").addEventListener("click", () => fcStep(-1));
   document.getElementById("fc-next").addEventListener("click", () => fcStep(1));
   if (open) fcFixBind(c, it);
@@ -1021,13 +1024,14 @@ async function fcFixConfirm(c, it) {
   }
 }
 
-async function fcDecide(c, result, picks = [], extra = "") {
+async function fcDecide(c, result, picks = [], extra = "", cancelRedo = false) {
   fc.nextData = null;   // 10-15 第2段審查二修正：判斷之後不能再用之前留的整頁資料
   let res;
   // 10-15 第5步2.0 第3段：在哪一版上按的（舊版、跨版本卡記在那一版；整頁重新整理）
   const ver = c["跨版本"] || fcOld() ? c["版本號"] : null;
   try {
-    res = await apiPost("/api/final/card", { id: c.id, "結果": result, "選項": picks, "補充": extra, ...(ver ? { "版本": ver } : {}) });
+    res = await apiPost("/api/final/card", { id: c.id, "結果": result, "選項": picks, "補充": extra, ...(ver ? { "版本": ver } : {}),
+      ...(cancelRedo ? { "取消要重做": true } : {}) });
   } catch (e) { alert(e.message); return; }
   fcFixReset();
   // 10-15 宇軒驗證回饋二：通過後留在這張（跟第 3 步一樣不自動跳下一張）。10-15 總檢查修正（1015-7）：等重做那條路的卡
@@ -1393,7 +1397,7 @@ function fcAttentionHtml(att, kinds, flat) {
   const rows = att["列"] || [];
   if (!att["有紀錄"]) return `<p class="rv-meta">這支成品是舊版工具組裝的，當時沒有記下第 4 步略過了哪幾列。重新組裝一次（第 4 步「只重新組裝」）之後這裡才會列。</p>`;
   const head = `<p class="rv-warnline">這一頁會顯示學員本名，截圖或分享螢幕時請注意。</p>
-    <p class="rv-meta">第 4 步開始執行時「開始前總檢查」沒處理（預設略過）的地方，扣掉被學員重念、名字換掉、剪掉、消音蓋到的部分，只列成品裡還留著原聲的。不用按通過、不擋輸出；想確認就按「跳過去聽」，要改就「回第 3 步改」，改完要重新組裝。</p>
+    <p class="rv-meta">目前成品裡還留著原聲的部分，不會擋輸出，但請多留意此部分；想確認就按「跳過去聽」，要改就「回第 3 步改」，改完要重新組裝。</p>
     ${att["名冊外沒找"] ? `<p class="fc-export-names"><b>⚠️ 名冊外的名字這次沒有找（人名清單沒跑成功）：成品裡可能有沒換掉的名字。</b>到第 1 步按「重新分析（做完的會跳過）」補跑，再回第 3 步 ③ 決定、重新組裝。</p>` : ""}
     ${att["第4步沒處理"] != null ? `<p class="rv-meta">這次執行時總檢查有 ${att["第4步沒處理"]} 列沒處理（含請看一眼），其中 ${rows.length} 處成品裡還留著原聲。</p>` : ""}`;
   if (!rows.length) return `${head}<p>沒有要留意的地方。</p>`;

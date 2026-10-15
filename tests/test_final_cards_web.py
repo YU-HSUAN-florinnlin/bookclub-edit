@@ -325,7 +325,9 @@ def _run_page(scenarios: list[dict], data: dict | None = None) -> dict:
            "async function pick(v) { const l = H.listeners.filter((x) => x.el.className === 'fc-fix-opt' && x.el.value === v && x.type === 'change').pop();"
            " if (!l) throw new Error('沒有選項 ' + v); await l.fn({target: l.el}); }\n"
            "function opts() { return [...document.querySelectorAll('.fc-fix-opt')].map((x) => x.value); }\n"
-           "function posts() { return H.log.filter((x) => x[0] === 'POST'); }\n")
+           "function posts() { return H.log.filter((x) => x[0] === 'POST'); }\n"
+           # 10-15 修正：後端 finalcards.decide 回傳的卡沒有 `有第3步卡片`（只在整頁資料裡有）——假回傳照真的形狀拿掉
+           "function bare(k, patch) { const x = {...k, ...(patch || {})}; delete x['有第3步卡片']; return x; }\n")
     d = Path(tempfile.mkdtemp())
     (d / "spec.json").write_text(json.dumps({"前置": pre, "情境": scenarios}, ensure_ascii=False), encoding="utf-8")
     r = subprocess.run([NODE, str(HARNESS), ",".join(files), str(d / "spec.json")], capture_output=True, text=True, check=True)
@@ -394,11 +396,11 @@ def test_page_renders_and_buttons_post_right_things():
           return {first, right, open: fc.fix.open, log: posts(), state: fcCards().find((c) => c["第3步鍵"] === "學員段落:T005")["狀態"]};"""},
         {"名稱": "通過不跳", "程式": """
           const k = card("名字:1");
-          H.api['/api/final/card'] = {'卡片': {...k, '狀態': '通過'}, '統計': DATA['卡片統計']};
+          H.api['/api/final/card'] = {'卡片': bare(k, {'狀態': '通過'}), '統計': DATA['卡片統計']};
           await open("名字:1"); await last("fc-pass");
           const r = {cur: fc.cur === k.id, right: document.getElementById("fc-right").innerHTML,
                      lower: document.getElementById("fc-lower").innerHTML, tl: document.getElementById("fc-tl").innerHTML, id: k.id};
-          H.api['/api/final/card'] = {'卡片': {...k, '狀態': '還沒看'}, '統計': DATA['卡片統計']};
+          H.api['/api/final/card'] = {'卡片': bare(k, {'狀態': '還沒看'}), '統計': DATA['卡片統計']};
           await last("fc-pass"); r.cur2 = fc.cur === k.id; r.log = posts(); r.right2 = document.getElementById("fc-right").innerHTML;
           return r;"""},
         {"名稱": "跳到", "程式": """
@@ -542,6 +544,9 @@ def test_page_renders_and_buttons_post_right_things():
     assert ps["cur"] is True and "✓ 已通過（再按取消）" in ps["right"] and 'aria-pressed="true"' in ps["right"]
     assert re.search(rf'data-id="{re.escape(ps["id"])}" class="cur done', ps["lower"]) and "fc-ok" in ps["tl"]
     assert ps["cur2"] is True and ps["log"][-1][2]["結果"] is None and "✓ 已通過" not in ps["right2"] and ">通過<kbd>" in ps["right2"]
+    assert "取消要重做" not in ps["log"][-1][2]   # 取消通過不帶「取消要重做」
+    for k in ("right", "right2"):   # 10-15 修正：換成後端回傳的卡之後照樣找得到第 3 步卡片（小標、那一行字不變）
+        assert 'class="rv-chip name"' in ps[k] and "fc-ov" not in ps[k] and "剛剛Amy分享得很好" in ps[k], ps[k][:800]
     gt = got["跳到"]
     assert "錯誤" not in gt, gt
     assert 'id="fc-goto"' in gt["left"] and 'placeholder="跳到 43:15"' in gt["left"]
@@ -564,7 +569,7 @@ def test_page_renders_and_buttons_post_right_things():
     assert "這一張重做只會重新放一次，聲音不會變；要改內容請選下面其他項" in nv["right"]
     un = got["取消要重做"]
     assert "取消要重做" in un["right"] and ">要重做<" in un["right"] and "原因：第二格念錯" in un["right"]
-    assert un["log"][0][1] == "/api/final/card" and un["log"][0][2]["結果"] is None
+    assert un["log"][0][1] == "/api/final/card" and un["log"][0][2]["結果"] is None and un["log"][0][2]["取消要重做"] is True
     u = got["新增不確定"]
     assert "我不確定是哪一種，先記下來" in u["io"]
     posts = [x for x in u["log"] if x[0] == "POST"]
@@ -1105,7 +1110,7 @@ def test_1015_7_page():
     assert "錯誤" not in u, u
     assert 'id="fc-back-undo"' in u["right"] and "取消要重做" in u["right"]
     # B4：等重做那條路的卡取消要重做：結果 null、不帶版本（後端清掉等重做）
-    assert u["log"] == [["POST", "/api/final/card", {"id": "P03", "結果": None, "選項": [], "補充": ""}]], u["log"]
+    assert u["log"] == [["POST", "/api/final/card", {"id": "P03", "結果": None, "選項": [], "補充": "", "取消要重做": True}]], u["log"]
     r = got["刪掉的卡"]["right"]
     assert re.search(r'id="fc-fix"[^>]*disabled title="這張卡已刪掉，沒有可以重做的"', r), r[:800]
     # B8：影片在所有卡之後、目前這張不在清單：往後退到上面清單最後一張（以前是下面清單最後一張 P09）
@@ -1145,6 +1150,78 @@ def test_1015_7_name_spots_pad_switch():
     a, b, c = got
     assert 'id="rv-pad"' in a and "第 2 處" in a
     assert 'id="rv-pad"' not in b and 'id="rv-pad"' not in c
+
+
+def test_original_text_survives_decide_with_real_backend_reply():
+    """10-15 修正：按「通過」「取消通過」「取消要重做」後，畫面用後端回傳的卡（finalcards.decide 真的回傳，沒有 `有第3步卡片`）
+    換掉舊卡——「原本：」照樣顯示原句、不出現「（找不到原句）」；「取消要重做」送 `取消要重做: true`。"""
+    if not NODE:
+        return
+    import test_needs as tn
+
+    from bookclub import finalcards, needs
+
+    data, w = _api_final()
+    by = {c.get("第3步鍵"): c for c in data["卡片"]}
+    t3, n1 = by["學員段落:T003"], by["名字:1"]
+    assert t3["狀態"] == needs.RETURNED
+
+    def real(card_id, result, **kw):
+        r = tn._quiet(finalcards.decide, w, card_id, result, **kw)
+        return json.loads(json.dumps(r, ensure_ascii=False, default=str))
+
+    undo = real(t3["id"], None, cancel_redo=True)   # 真的後端：取消要重做（旗標不擋合法的退回卡）
+    ok = real(n1["id"], needs.PASSED)
+    back = real(n1["id"], None)
+    for r in (undo, ok, back):
+        assert r["ok"] and r["卡片"] and "有第3步卡片" not in r["卡片"], r
+    assert undo["卡片"]["狀態"] == needs.NOT_SEEN and ok["卡片"]["狀態"] == needs.PASSED and back["卡片"]["狀態"] == needs.NOT_SEEN
+    try:   # 已經不是要重做了：再送一次取消要重做要擋（不會變成取消通過）
+        tn._quiet(finalcards.decide, w, n1["id"], None, cancel_redo=True)
+        raise AssertionError("沒有要重做的不能取消要重做")
+    except ValueError as e:
+        assert "沒有要重做" in str(e)
+    # 假工作區的卡沒有要念的字（畫面只出一行）：整頁資料與回傳的卡都補一樣的要念的字，才會出「原本：」「改成：」兩行
+    for c in (t3, n1, undo["卡片"], ok["卡片"], back["卡片"]):
+        c["要念的字"] = ["改成的字"]
+    replies = json.dumps({"undo": undo, "ok": ok, "back": back}, ensure_ascii=False)
+    got = _run_page([
+        {"名稱": "取消要重做", "程式": f"const R = {replies};" + """
+          H.api['/api/final/card'] = R.undo; await open("學員段落:T003"); const before = document.getElementById("fc-right").innerHTML;
+          await last("fc-back-undo");
+          return {before, after: document.getElementById("fc-right").innerHTML, log: posts(),
+                  has: "有第3步卡片" in fcCards().find((c) => c["第3步鍵"] === "學員段落:T003"),
+                  state: fcCards().find((c) => c["第3步鍵"] === "學員段落:T003")["狀態"]};"""},
+        {"名稱": "通過再取消", "程式": f"const R = {replies};" + """
+          H.api['/api/final/card'] = R.ok; await open("名字:1"); await last("fc-pass");
+          const a = document.getElementById("fc-right").innerHTML;
+          H.api['/api/final/card'] = R.back; await last("fc-pass");
+          return {a, b: document.getElementById("fc-right").innerHTML, log: posts()};"""},
+    ], data=data)
+    u = got["取消要重做"]
+    assert "錯誤" not in u, u
+    assert u["has"] is False and u["state"] == "還沒看"   # 換成後端回傳的卡了
+    assert u["log"] == [["POST", "/api/final/card", {"id": t3["id"], "結果": None, "選項": [], "補充": "", "取消要重做": True}]], u["log"]
+    assert "原本：" in u["before"] and "找不到原句" not in u["before"]
+    assert "原本：" in u["after"] and "找不到原句" not in u["after"], u["after"][:800]
+    assert re.search(r"原本：</span>([^<]+)<", u["before"]).group(1) == re.search(r"原本：</span>([^<]+)<", u["after"]).group(1)
+    p = got["通過再取消"]
+    assert "錯誤" not in p, p
+    assert "✓ 已通過（再按取消）" in p["a"] and ">通過<kbd>" in p["b"]
+    assert [x[2]["結果"] for x in p["log"]] == ["通過", None] and all("取消要重做" not in x[2] for x in p["log"])
+    for k in ("a", "b"):
+        assert "原本：" in p[k] and "找不到原句" not in p[k], p[k][:800]
+
+
+def test_attention_head_text():
+    """10-15 宇軒定：第 5 步「⚠️ 需留意」最上面的說明改短；紅字那句保留。"""
+    if not NODE:
+        return
+    got = _node(_ESC + _fn(FCJS, "fcAttentionHtml") + """
+      console.log(JSON.stringify(fcAttentionHtml({"有紀錄": true, "列": []}, [], [])));""")
+    assert "目前成品裡還留著原聲的部分，不會擋輸出，但請多留意此部分；想確認就按「跳過去聽」，要改就「回第 3 步改」，改完要重新組裝。" in got
+    assert "這一頁會顯示學員本名，截圖或分享螢幕時請注意。" in got
+    assert "開始前總檢查" not in got and "『" not in got
 
 
 def test_fill_defaults_pure():

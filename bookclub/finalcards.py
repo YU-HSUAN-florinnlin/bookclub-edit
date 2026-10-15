@@ -734,7 +734,9 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
             if card is not None and needs.outside_reason(card) is not None:
                 needs.clear_outside_redo(workdir, kno)
                 return _outside_reply(workdir, card_id, version, index)
-            if cancel_redo and not (own and c["狀態"] == needs.RETURNED):
+            # 10-15 修正（前端開始送 取消要重做）：只看這張卡現在是不是要重做（退回）——不再要求 own，
+            # 這一版有狀態列但對不到處理紀錄的退回卡照舊能取消（沒送旗標時本來就照下面的正常路取消）
+            if cancel_redo and not (c is not None and c["狀態"] == needs.RETURNED):
                 raise ValueError("這張卡沒有要重做")
         elif old_view:
             row = needs.decide_version(workdir, int(version), kno, result, options, extra)
