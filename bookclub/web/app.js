@@ -582,11 +582,11 @@ async function renderExecuteBody() {
       <div id="execAwake">${awakeLine(d)}</div>
       <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
     </div>
-    ${redo.length ? `<h2>第 5 步要重做的（${redo.length} 張）</h2>
+    ${redo.length || d["重做中"] ? `<h2>第 5 步要重做的（${redo.length} 張）</h2>
       <div class="card"><p class="muted">按「開始執行」或下面這顆，會只重做這幾張：要重新生成的那幾句先清掉、重新生成（其他做好的不重做），最後重新組裝。
         要念的字和範圍都沒改的，會換一種念法重新生成，每按一次「要修改」換一次，不會回到用過的念法；上一版的聲音留著備份。
         做完到第 5 步，這幾張會回到「還沒看」、標「重做過」。${d["重做中"] ? "<b>上次重做還沒做完</b>，再按一次會接著做。" : ""}</p>
-      <p><button id="btnRedo" ${execBlocked ? "disabled" : ""}>只重做這幾張（${redo.length} 張）</button>
+      <p><button id="btnRedo" ${execBlocked ? "disabled" : ""}>${redo.length ? `只重做這幾張（${redo.length} 張）` : "接著做上次沒做完的重做"}</button>
         ${dev ? `<button id="btnReassemble" class="secondary" ${execBlocked ? "disabled" : ""}>只重新組裝（不重新生成）</button>` : ""}
         ${execBlocked && !running ? `<span class="muted">要先能按「開始執行」（見上面）</span>` : ""}</p>
       ${dev ? `<p class="muted small">「只重新組裝」：生成的聲音不動（不重新生成、不換念法），只照現在的做法重新放回去、輸出新的成品；
@@ -783,13 +783,16 @@ function execRedoRows(d) {
     return d["要重做"].map((it) => {
       const m = /^K0*(\d+)$/.exec(String(it["卡號"] || ""));
       return { kind: it["類型"] || "", name: m ? `#${m[1]}` : String(it["卡號"] || ""), when: Array.isArray(it["原片"]) ? `原片 ${fmtRange(it["原片"])}` : "",
-        why: why(it["原因"]), range: "", how: it["說明"] || "" };
+        why: why(it["原因"]), range: execRangeText(it["改範圍"]), how: it["說明"] || "" };
     });
   }
   return (d["退回清單"] || []).map((it) => ({ kind: it["類型"] || "", name: (it["覆核名稱"] || []).join("、") || "—",
     when: Array.isArray(it["原片"]) ? `原片 ${fmtRange(it["原片"])}` : "", why: why(it["原因"]),
-    range: it["改範圍"] ? `範圍改了${it["改範圍"]["原本"] ? `：${fmtRange(it["改範圍"]["原本"])} → ${fmtRange(it["改範圍"]["改成"])}` : ""}（存在第 3 步〈${it["改範圍"]["名稱"] || ""}〉）` : "",
-    how: it["說明"] || "" }));
+    range: execRangeText(it["改範圍"]), how: it["說明"] || "" }));
+}
+// 第 4 步清單「範圍改了」那一行（審查建議 8：要重做、舊的退回清單共用）
+function execRangeText(r) {
+  return r ? `範圍改了${r["原本"] ? `：${fmtRange(r["原本"])} → ${fmtRange(r["改成"])}` : ""}（存在第 3 步〈${r["名稱"] || ""}〉）` : "";
 }
 
 function fmtRange(r) {

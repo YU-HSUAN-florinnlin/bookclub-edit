@@ -122,8 +122,11 @@ function fcLeftCount(d) {
   if (typeof st["還要確認"] === "number") return st["還要確認"];
   return fcSplitLists(((d && d["卡片"]) || []).concat((d && d["跨版本卡片"]) || [])).todo.length;
 }
-// 10-15 總檢查修正（1015-7）：（純函式）舊版畫面上幾張要重做：最新版要重做的（卡片 最新版要重做）＋那一版自己是要重做的
+// 10-15 總檢查修正（1015-7）：（純函式）舊版畫面上幾張要重做。審查建議 6：用後端的 卡片統計.要重做（needs.redo_cards 的張數，
+// 跟最新版「重做這幾張（N 張）」同一個數）；沒有（後端還沒給）才照卡片算
 function fcOldRedoCount(d) {
+  const n = ((d && d["卡片統計"]) || {})["要重做"];
+  if (typeof n === "number") return n;
   return ((d && d["卡片"]) || []).filter((c) => c["最新版要重做"] || [FC_ST.BACK, FC_ST.EDITED].includes(c["狀態"])).length;
 }
 
@@ -370,8 +373,12 @@ async function fcMarkEdited(c, key = null, isNew = false) {
 
 function fcRecountLocal() {
   const cards = fcCards();
+  // 審查建議 4：「要重做」不自己算（會把沿用卡算進去、漏跨版本卡）——保留後端的（needs.redo_cards 張數）；
+  // 這次改出了要重做的卡、後端數還是 0 時至少算 1 張（頂端才寫得出「改過的還沒重做」），重新整理後又是後端的
+  const prev = (fc.data["卡片統計"] || {})["要重做"] || 0;
+  const any = cards.some((c) => [FC_ST.BACK, FC_ST.EDITED].includes(c["狀態"]));
   fc.data["卡片統計"] = { ...(fc.data["卡片統計"] || {}), "全部": cards.length,
-    "還沒看": cards.filter((c) => c["狀態"] === FC_ST.TODO).length, "要重做": cards.filter((c) => FC_REDO.includes(c["狀態"])).length };
+    "還沒看": cards.filter((c) => c["狀態"] === FC_ST.TODO).length, "要重做": Math.max(prev, any ? 1 : 0) };
   // 10-15 總檢查修正（1015-7）：後端算的「還要確認」「已通過的」已經不準，拿掉讓前端照兩個清單算（重新整理後又是後端的）
   delete fc.data["卡片統計"]["還要確認"];
   delete fc.data["卡片統計"]["已通過的"];
@@ -814,10 +821,12 @@ function fcFixOff(c, old) {
   return c["不能修改原因"] || "這張卡已刪掉，沒有可以重做的";
 }
 // 10-15 總檢查修正（1015-7）：（純函式）這張卡外面要不要放「取消要重做」（按了送 /api/final/card 結果 null）：
-// 要重做的卡（這一版的退回）；最新版上走等重做那條路、有記原因的卡（c["範圍外改了"]＝跨版本卡、沿用卡按過「要修改」，後端清掉等重做）。
-// 舊版畫面上不放等重做那條路的（在舊版送 null＝取消那一版的通過；要撤回到最新版按）；刪掉／併入的不放
+// 審查修正 3c：看後端的 c["可取消要重做"]（舊版頁、跨版本卡＝那一版是退回；最新版頁＝最新版退回、或卡片的等重做有原因——
+// 不論是不是 範圍外改了：只重新組裝之後變成最新版自己的卡、第 3 步選定不修改的舊卡也撤得掉）；沒有這個欄位照舊判斷。
+// 刪掉／併入的不放
 function fcCanUndo(c, old) {
   if (!c || fcNoFix(c)) return false;
+  if (typeof c["可取消要重做"] === "boolean") return c["可取消要重做"];
   if (c["狀態"] === FC_ST.BACK) return true;
   return !old && c["狀態"] === FC_ST.EDITED && !!c["範圍外改了"] && !!c["退回原因"];
 }
@@ -1023,7 +1032,8 @@ async function fcDecide(c, result, picks = [], extra = "") {
   fcFixReset();
   // 10-15 宇軒驗證回饋二：通過後留在這張（跟第 3 步一樣不自動跳下一張）。10-15 總檢查修正（1015-7）：等重做那條路的卡
   // （c["範圍外改了"]）取消要重做之後可能搬回跨版本卡、或回到「已通過（沿用上一版）」→ 整頁重新整理
-  if (ver || c["範圍外改了"]) { await fcReload(); return; }
+  // 審查修正 3c：取消的是卡片等重做的原因（已改、等重做的卡）→ 卡片可能回到沿用、跨版本卡，也整頁重新整理
+  if (ver || c["範圍外改了"] || (result === null && c["狀態"] === FC_ST.EDITED)) { await fcReload(); return; }
   const i = fcCards().findIndex((x) => x.id === c.id);
   if (res["卡片"] && i >= 0) fc.data["卡片"][i] = res["卡片"];
   else if (i >= 0) fc.data["卡片"].splice(i, 1);   // 整片退回的待釐清卡通過＝拿掉

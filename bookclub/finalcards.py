@@ -93,12 +93,16 @@ def passed_ok(c: dict) -> bool:
 
 
 def mark_flags(cards: list[dict], cross: list[dict] | None = None, redo: dict | None = None,
-               old_page: bool = False) -> None:
+               old_page: bool = False, reasons: set | None = None) -> None:
     """10-15 總檢查修正（1015-7）：每張卡畫面要的布林（改 cards）——`已通過的`（A3，下面清單）、`不能修改`／`不能修改原因`
     （A5：刪掉、併入的卡）、`最新版要重做`（A6：舊版頁上，最新一版要重做的原因 {選項, 補充}；最新版頁＝None）。
-    redo＝{卡號: needs.redo_cards 的一筆}。"""
+    redo＝{卡號: needs.redo_cards 的一筆}；reasons＝卡片的等重做有原因（等重做那條路）的卡號。
+    審查修正 3c：`可取消要重做`（畫面「取消要重做」看這個）——舊版頁、跨版本卡：那一版是退回；最新版頁：最新一版是退回、
+    或卡片的等重做有原因（不論現在是不是最新一版自己的卡）。"""
     for c in list(cards) + list(cross or []):
         c["已通過的"] = passed_ok(c)
+        own_back = c["狀態"] == needs.RETURNED
+        c["可取消要重做"] = bool(own_back or (not old_page and not c.get("跨版本") and c.get("卡號") in (reasons or ())))
         gone = bool(c.get("刪掉了"))
         c["不能修改"] = gone
         c["不能修改原因"] = DELETED_NO_FIX if gone else ""
@@ -452,9 +456,15 @@ def build(workdir: str | Path, *, log: dict | None = None, check: dict | None = 
     for c in cross:
         c["共用"], c["連帶自"], c["跨版本"] = [], [], True   # 跨版本：狀態、成品時間是那一版的（畫面試聽播那一版的成品）
     redo = _redo_map(workdir, log) if src == SRC_NEW else None
-    mark_flags(cards, cross, redo)
+    mark_flags(cards, cross, redo, reasons=_reason_cards(workdir) if src == SRC_NEW else None)
     return {"來源": src, "卡片": cards, "統計": summary(cards, cross, len(redo) if redo is not None else None),
             "跨版本卡片": cross}
+
+
+def _reason_cards(workdir: Path) -> set[str]:
+    """卡片的等重做有原因（`needs.mark_outside_redo` 記的）的卡號。"""
+    st = needs.load(workdir)
+    return {k for k, c in st.cards.items() if needs.outside_reason(c) is not None}
 
 
 def _redo_map(workdir: Path, log: dict | None = None) -> dict:
@@ -682,9 +692,11 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
       - 其他（跨版本卡、沿用卡、舊版自己才有的、最新一版之後才有的）→ 卡片的等重做（`needs.mark_outside_redo`），
         第 4 步照卡片重做（`finalcheck.card_redo_items`）
       - 刪掉、併入的卡 → 擋下（「這張卡已刪掉，沒有可以重做的」）
-    - 取消（None）：走等重做那條路記了原因的卡 → 清掉等重做（`needs.clear_outside_redo`，A2）；看舊版時，最新一版自己的卡
-      在最新一版是退回、那一版不是通過（或 cancel_redo）→ 最新一版的取消要重做；其他照舊（那一版的取消通過）。
-      cancel_redo＝畫面明說是「取消要重做」（同一張卡在那一版通過、最新版又要重做時分得清）
+    - 取消（None）（審查修正 7）：看舊版（含跨版本卡）→ 一律撤那一版顯示的那個狀態（那一版退回→撤那一版的退回、通過→取消通過，
+      `needs.decide_version`；那一版當時最新時退回、之後沒重做的等重做一起清）；最新一版的退回只在最新版頁撤。
+      最新版頁：卡片的等重做有原因（等重做那條路，不論現在是不是最新一版自己的卡）→ 清掉（`needs.clear_outside_redo`，A2）；
+      其他照舊（成品檢查檔取消）。cancel_redo＝畫面明說是「取消要重做」：沒有可以取消的要重做就擋下
+    - 正常路的「要修改」（最新一版自己的卡）：卡片的等重做如果有原因（之前走等重做那條路記的）就收掉，兩條路不同時存在（審查修正 3b）
     - 通過：看舊版 → 記在那一版（`needs.decide_version`）；最新版照舊"""
     if result not in (needs.PASSED, needs.RETURNED, None):
         raise ValueError("只能選：通過、退回")
@@ -715,20 +727,15 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
                 needs.mark_outside_redo(workdir, kno, options, extra)
                 return _outside_reply(workdir, card_id, version, index)
         elif result is None:
-            if card is not None and needs.outside_reason(card) is not None and (old_view or cancel_redo or not own):
+            if old_view:
+                row = needs.decide_version(workdir, int(version), kno, None)
+                return {"ok": True, "卡片": _version_card(workdir, needs.load(workdir), kno, int(version), row, {}),
+                        "版本號": int(version)}
+            if card is not None and needs.outside_reason(card) is not None:
                 needs.clear_outside_redo(workdir, kno)
                 return _outside_reply(workdir, card_id, version, index)
-            if old_view or cancel_redo:
-                vrow = st.states.get((kno, int(version))) if old_view else None
-                latest_back = own and c["狀態"] == needs.RETURNED
-                if latest_back and (cancel_redo or not vrow or vrow.get("狀態") != needs.PASSED):
-                    pass   # 最新一版自己的卡：最新一版的取消要重做（下面正常路）
-                elif cancel_redo:
-                    raise ValueError("這張卡沒有要重做")
-                else:
-                    row = needs.decide_version(workdir, int(version), kno, None)
-                    return {"ok": True, "卡片": _version_card(workdir, needs.load(workdir), kno, int(version), row, {}),
-                            "版本號": int(version)}
+            if cancel_redo and not (own and c["狀態"] == needs.RETURNED):
+                raise ValueError("這張卡沒有要重做")
         elif old_view:
             row = needs.decide_version(workdir, int(version), kno, result, options, extra)
             return {"ok": True, "卡片": _version_card(workdir, needs.load(workdir), kno, int(version), row, {}),
@@ -757,6 +764,7 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
     if result == needs.RETURNED and c.get("卡號"):
         try:
             needs.set_reason(workdir, c["卡號"], options, extra)
+            needs.clear_outside_redo(workdir, c["卡號"])   # 審查修正 3b：原因只留最新一版狀態列這一份
         except Exception as e:  # noqa: BLE001 — 新紀錄出錯不擋第 5 步（舊檔已經寫好）
             needs.note_error(workdir, "第5步存檔", e)
     if result is None and c.get("卡號") and c.get("版本號"):

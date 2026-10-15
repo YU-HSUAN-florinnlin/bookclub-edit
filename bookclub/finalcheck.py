@@ -2118,8 +2118,8 @@ def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = 
                  log=print, reassemble_only: bool = False) -> dict | None:
     """第 4 步開始之前：把退回的那幾句清掉（見 clear_generated），記在 `覆核/成品檢查.json` 的 `重做中`。沒有退回的回傳 None。
 
-    reassemble_only（10-03 第八批 #23）：「只重新組裝」——退回的那幾筆一樣記進 `重做中`（組裝做完照 `finish_redo`
-    回到還沒看），但**不清生成、不記新版本、不換種子**（跳過 `note_versions`、`clear_generated`），每一筆標 `只重新組裝`。
+    reassemble_only（10-03 第八批 #23）：「只重新組裝」——退回的那幾筆一樣記進 `重做中`（10-15 1015-7：組裝做完照
+    `finish_redo` 還是退回／要重做，只重新組裝不算重做），但**不清生成、不記新版本、不換種子**（跳過 `note_versions`、`clear_generated`），每一筆標 `只重新組裝`。
     給「生成的聲音沒問題、要改的是組裝」用（例如接縫做法改了）。"""
     workdir = Path(workdir)
     plan = redo_plan(workdir, a, b)
@@ -2140,7 +2140,7 @@ def prepare_redo(workdir: str | Path, a: float | None = None, b: float | None = 
             have = {e["鍵"] for e in plan}
             check["重做中"] = {"時間": stamp, "項目": [e for e in old.get("項目", []) if e["鍵"] not in have] + plan}
             _save(workdir, check)
-        log(f"[AI 執行] 第 5 步退回的 {len(plan)} 筆只重新組裝：生成的聲音不動，組裝做完回到第 5 步「還沒看」")
+        log(f"[AI 執行] 第 5 步要重做的 {len(plan)} 筆只重新組裝：生成的聲音不動，組裝做完第 5 步還是「要重做」")
         return {"項目": plan, "清掉": {}, REASSEMBLE_ONLY: True}
     # 10-02 第五批：上次重做到一半停下來（停止、記憶體或硬碟門檻、失敗）的那幾筆，清過了、版本也記過了：
     # 不再清一次（不然已經生成好、還沒寫回紀錄的那一句會被當成沒做，已經寫回的會變成「以前的版本」又跳一版）。
@@ -2213,13 +2213,31 @@ def redo_pending(workdir: str | Path, a: float | None = None, b: float | None = 
 
 
 def finish_redo(workdir: str | Path) -> dict | None:
-    """組裝做完之後：`重做中` 的那幾筆在第 5 步回到「還沒看」，記成 `重做過`（第 5 步看得出是重做過的新版本）。"""
+    """組裝做完之後：`重做中` 的那幾筆在第 5 步回到「還沒看」，記成 `重做過`（第 5 步看得出是重做過的新版本）。
+    10-15 總檢查修正（1015-7，審查建議 5）：「只重新組裝」的那幾筆不算重做——成品檢查檔照樣是退回（第 5 步還是「要重做」，
+    跟等重做那條路一樣留著）：逐筆退回換成新處理紀錄的指紋（重新組裝後內容指紋可能變了）、整片退回／沒登記的變動不拿掉、
+    看過區段不扣、不記進 `重做過`。"""
     workdir = Path(workdir)
     with _lock:
+        raw = load_check(workdir)
         log, check = _current(workdir)
         doing = check.pop("重做中", None)
         if not doing:
             return None
+        only = [e for e in doing["項目"] if e.get(REASSEMBLE_ONLY)]
+        recs_now = {record_key(r): r for r in (log or {}).get("紀錄", [])}
+        for e in only:
+            k = e["鍵"]
+            if e.get("來源") == "逐筆" and k in recs_now:
+                row = dict((raw.get("逐筆") or {}).get(k) or {"結果": REDO, "原因": e.get("原因", "")})
+                row.update({"結果": REDO, "指紋": content_print(recs_now[k]), "更新時間": _now()})
+                check["逐筆"][k] = row
+        doing = {**doing, "項目": [e for e in doing["項目"] if not e.get(REASSEMBLE_ONLY)]}
+        if not doing["項目"]:
+            check.pop("送回AI重做", None)
+            _save(workdir, check)
+            return {"時間": _now(), "處理紀錄產生時間": (log or {}).get("產生時間"), "項目": only, REASSEMBLE_ONLY: True,
+                    "還是要重做": True}
         keys = {e["鍵"] for e in doing["項目"]}
         for e in doing["項目"]:
             check["逐筆"].pop(e["鍵"], None)
@@ -2241,8 +2259,7 @@ def finish_redo(workdir: str | Path) -> dict | None:
         if holes:
             _set_watched(check, subtract_ranges(check["看過區段"], holes), plist)
         check.pop("送回AI重做", None)
-        check["重做過"] = {"時間": _now(), "處理紀錄產生時間": (log or {}).get("產生時間"), "項目": doing["項目"],
-                        **({REASSEMBLE_ONLY: True} if any(e.get(REASSEMBLE_ONLY) for e in doing["項目"]) else {})}
+        check["重做過"] = {"時間": _now(), "處理紀錄產生時間": (log or {}).get("產生時間"), "項目": doing["項目"]}
         _save(workdir, check)
     return check["重做過"]
 

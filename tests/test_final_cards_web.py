@@ -1023,7 +1023,7 @@ def test_feedback6_done_line_and_gone_tab():
 def test_1015_7_pure():
     if not NODE:
         return
-    got = _node(_PURE + _fn(APPJS, "fmtRange") + _fn(APPJS, "execRedoRows") + """
+    got = _node(_PURE + _fn(APPJS, "fmtRange") + _fn(APPJS, "execRedoRows") + _fn(APPJS, "execRangeText") + """
       const cross = Array.from({length: 40}, (_, i) => ({"id": "X" + i, "狀態": "還沒看", "跨版本": true, "原片": [i, i + 1]}));
       const out = Array.from({length: 10}, (_, i) => ({"id": "P" + i, "狀態": "還沒生成", "這一版沒處理到": true, "上一版已通過": true}));
       const z = {"全部": 0, "還沒看": 0, "要重做": 0, "退回": 0, "已改": 0, "通過": 0};
@@ -1033,7 +1033,7 @@ def test_1015_7_pure():
         left: [fcLeftCount({"卡片": out, "跨版本卡片": cross, "卡片統計": z}), fcLeftCount({"卡片統計": {"還要確認": 7}, "卡片": out})],
         st: [fcStatusLine({"卡片": out, "跨版本卡片": cross, "卡片統計": z}).text,
              fcStatusLine({"看的是舊版": true, "卡片": [{"狀態": "通過", "最新版要重做": red}, {"狀態": "退回"}, {"狀態": "還沒看"}],
-                           "卡片統計": {"要重做": 0, "還要確認": 2}, "AI執行中": true}).text,
+                           "卡片統計": {"要重做": 2, "還要確認": 2}, "AI執行中": true}).text,   // 審查建議 6：張數用後端的 要重做
              fcStatusLine({"看的是舊版": true, "卡片": [{"狀態": "還沒看"}], "卡片統計": {"還要確認": 1}}).text],
         passed: [fcIsPassed({"狀態": "還沒看", "已通過的": true}), fcIsPassed({"狀態": "通過", "已通過的": false}), fcIsPassed({"狀態": "通過"})],
         // B8：照時間找不到 → 往後退到上面清單最後一張
@@ -1069,9 +1069,10 @@ def test_1015_7_page():
         return
     d = _shape_6()
     red = {"選項": ["聲音不像、不自然"], "補充": ""}
-    # 已通過的＝後端 finalcards.passed_ok 會給的值（範圍外改了 → false；複製來的卡原本是 true）
+    # 已通過的、可取消要重做＝後端 finalcards.mark_flags 會給的值（等重做有原因 → 已通過的 false、可取消要重做 true；
+    # 複製來的卡原本是 true／false）
     d["卡片"][3].update({"狀態": "已改，等重做", "這一版沒處理到": False, "上一版已通過": None, "範圍外改了": True, "退回原因": red,
-                       "已通過的": False})
+                       "已通過的": False, "可取消要重做": True})
     d["卡片"][4].update({"不能修改": True, "不能修改原因": "這張卡已刪掉，沒有可以重做的"})
     got = _run_page([
         {"名稱": "一開啟", "程式": """
@@ -1115,6 +1116,7 @@ def test_1015_7_page():
     t5 = next(c for c in old["卡片"] if c.get("第3步鍵") == "學員段落:T005")
     t5["可重新生成"] = True
     t5["最新版要重做"] = {"選項": ["聲音不像、不自然"], "補充": "太快"}
+    old["卡片統計"]["要重做"] = 1   # 後端照 needs.redo_cards 算（有最新版要重做的卡就至少 1 張；審查建議 6 頂端用這個數）
     o = _run_page([{"名稱": "舊版", "程式": """
           await renderFinal(); const top = document.getElementById("fc-status").innerHTML;
           const t5 = DATA["卡片"].find((c) => c["第3步鍵"] === "學員段落:T005");

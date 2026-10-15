@@ -1812,7 +1812,7 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
     組裝做完，那幾筆在第 5 步回到「還沒看」、標「重做過」（`finalcheck.finish_redo`）。
 
     reassemble_only（10-03 第八批 #23）：「只重新組裝」——退回的那幾筆記進重做中，但不清生成、不換念法
-    （`prepare_redo(reassemble_only=True)`），只跑「組裝」這一步；組裝做完一樣回到還沒看、標「重做過（只重新組裝）」。
+    （`prepare_redo(reassemble_only=True)`），只跑「組裝」這一步；10-15 1015-7：組裝做完那幾筆還是「要重做」（不算重做）。
     沒有退回的也照樣重新組裝一次。
 
     10-01：每一步、每一個聲線各自開一支程式跑（`_part_runners`，見上面「每一步、每一個聲線各自一支程式跑」）；
@@ -1986,8 +1986,10 @@ def run_execute(workdir: str | Path, *, start: float | None = None, end: float |
             if key == "組裝" and redoing:
                 try:
                     back = finalcheck.finish_redo(workdir)
-                    if back:
-                        log(f"[AI 執行] 第 5 步退回的 {len(back['項目'])} 筆重做好了：到第 5 步重新看這幾筆")
+                    if back and back.get("還是要重做"):
+                        log(f"[AI 執行] 只重新組裝了，第 5 步要重做的 {len(back['項目'])} 筆聲音沒換，還是「要重做」")
+                    elif back:
+                        log(f"[AI 執行] 第 5 步要重做的 {len(back['項目'])} 筆重做好了：到第 5 步重新看這幾筆")
                 except Exception as e:  # noqa: BLE001 — 收尾失敗不算這次執行失敗（第 5 步照樣看得到新成品）
                     log(f"[AI 執行] ⚠️ 第 5 步退回的那幾筆沒標成「重做過」：{e}")
         prog["結束時間"] = _now()
@@ -2094,8 +2096,10 @@ def status(workdir: str | Path) -> dict:
 
 def redo_cards_view(workdir: Path, redo: list[dict] | None = None) -> list[dict]:
     """10-15 總檢查修正（1015-7）：第 4 步「要重做的（N 張）」——新紀錄能用時照 `needs.redo_cards`（第 4、5 步同一份）；
-    不能用（還沒升級、同步出錯）照舊的退回清單（redo：`finalcheck.redo_list` 的項目），一筆當一張。"""
-    from bookclub import needs, proclog
+    不能用（還沒升級、同步出錯）照舊的退回清單（redo：`finalcheck.redo_list` 的項目），一筆當一張。
+    審查建議 8：每筆另帶 `說明`（按下去會怎麼重做）、`改範圍`——照舊的退回清單那一筆（對到這張卡的；照卡片重做的看卡號），
+    沒有對到的（改了、還沒生成：照一般流程生成）說明空的。"""
+    from bookclub import finalcheck, needs, proclog
 
     empty = {"選項": [], "補充": ""}
     try:
@@ -2103,13 +2107,24 @@ def redo_cards_view(workdir: Path, redo: list[dict] | None = None) -> list[dict]
             st = needs.load(workdir)
             v = st.latest_version()
             hist = needs.read_history(workdir) if v is not None and v.get("其他卡指紋") is None else None
+            index = finalcheck._index(workdir) if redo else {}
+            how: dict[str, dict] = {}
+            for it in redo or []:
+                for k in ([it["卡號"]] if it.get("卡號") else needs._card_of_redo(st, it, index)):
+                    h = how.setdefault(k, {"說明": [], "改範圍": None})
+                    if it.get("說明") and it["說明"] not in h["說明"]:
+                        h["說明"].append(it["說明"])
+                    h["改範圍"] = h["改範圍"] or it.get("改範圍")
             return [{"卡號": r["卡號"], "編號": r["編號"], "類型": r["類型"], "第3步鍵": r["第3步鍵"], "原片": r["原片"],
-                     "原因": r["原因"] or dict(empty), "起因": r["起因"]}
+                     "原因": r["原因"] or dict(empty), "起因": r["起因"],
+                     "說明": "；".join((how.get(r["卡號"]) or {}).get("說明") or []),
+                     "改範圍": (how.get(r["卡號"]) or {}).get("改範圍")}
                     for r in needs.redo_cards(st, proclog.load(workdir), hist)]
     except Exception:  # noqa: BLE001 — 新紀錄讀不到：照舊的退回清單
         pass
     return [{"卡號": None, "編號": None, "類型": it.get("類型"), "第3步鍵": None, "原片": it.get("原片"),
-             "原因": {"選項": [], "補充": it.get("原因") or ""}, "起因": needs.REDO_RETURNED} for it in redo or []]
+             "原因": {"選項": [], "補充": it.get("原因") or ""}, "起因": needs.REDO_RETURNED,
+             "說明": it.get("說明") or "", "改範圍": it.get("改範圍")} for it in redo or []]
 
 
 def _safe_products(workdir: Path) -> list[str]:

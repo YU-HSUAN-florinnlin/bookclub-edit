@@ -671,7 +671,8 @@ def test_redo_returned_regenerates_only_returned_then_step5_unseen():
 
 def test_reassemble_only_keeps_generation_then_step5_unseen():
     """10-03 第八批 #23：第 4 步「只重新組裝」：退回的那幾筆記進重做中，但不清生成紀錄、快取、聲音檔，不記新版本、
-    不換種子；只跑組裝這一步；組裝做完回到第 5 步還沒看、標「重做過（只重新組裝）」。"""
+    不換種子；只跑組裝這一步。10-15 總檢查修正（1015-7，審查建議 5）：只重新組裝不算重做——組裝做完那幾筆照樣是退回
+    （第 5 步「要重做」，原因留著），不標「重做過」。"""
     from bookclub import finalcheck, proclog
 
     w = _fresh()
@@ -704,9 +705,9 @@ def test_reassemble_only_keeps_generation_then_step5_unseen():
     assert wd.read_json(students.log_path(w)) == stu_log                      # 生成紀錄（含種子）沒動
     assert not (od / tts.REDO_VERSIONS).exists()                              # 沒記新版本
     chk = wd.read_json(finalcheck.check_path(w))
-    assert k1 not in chk["逐筆"] and "重做中" not in chk and chk["重做過"]["只重新組裝"] is True
-    got = {r["鍵"]: r["重做過"] for r in finalcheck.page_data(w)["紀錄"]}
-    assert got[k1]["做法"] == "只重新組裝" and got[k1]["標籤"] == "重做過（只重新組裝）" and got[k1]["原因"] == "開頭有雜音"
+    assert chk["逐筆"][k1]["結果"] == "退回重做" and chk["逐筆"][k1]["原因"] == "開頭有雜音" and "重做中" not in chk
+    assert "重做過" not in chk
+    assert [it["鍵"] for it in finalcheck.redo_list(w)["項目"]] == [k1]   # 下次「重做這幾張」照樣有它
     # 沒有退回的時候按「只重新組裝」：照樣重新組裝一次（組裝做過了也不跳過）
     ran.clear()
     prog = execute.run_execute(w, runners=runners, checks=checks, skip_precheck=True, redo_returned=True,
