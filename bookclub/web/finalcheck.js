@@ -585,9 +585,30 @@ function fcCardTextHtml(c, it) {
   const said = (c["要念的字"] || []).join("　");
   if (!said) return `<p class="fc-cardtext">${esc(fcWho(fcPreview(c, it)))}</p>`;
   const orig = fcOrigText(it);
+  // 10-15 宇軒驗證回饋：超過 2 行各自收合只顯示前 2 行，右邊「展開 ▾」（超過才出現，見 fcClampSetup）；「原本」「改成」各自開關
+  const line = (k, lab, body) => `<div class="fc-line"><p class="fc-clamp" data-fc-line="${k}"><span class="fc-lab">${lab}</span>${body}</p>`
+    + `<button type="button" class="fc-more" data-fc-more="${k}" aria-expanded="false" hidden>展開 ▾</button></div>`;
   return `<div class="fc-cardtext fc-lines">
-        <p><span class="fc-lab">原本：</span>${orig ? esc(fcWho(orig)) : '<span class="rv-meta">（找不到原句）</span>'}</p>
-        <p><span class="fc-lab">改成：</span>${esc(fcWho(said))}</p></div>`;
+        ${line("orig", "原本：", orig ? esc(fcWho(orig)) : '<span class="rv-meta">（找不到原句）</span>')}
+        ${line("said", "改成：", esc(fcWho(said)))}</div>`;
+}
+// 10-15 宇軒驗證回饋：畫完卡片後量一次——字超過 2 行（scrollHeight > clientHeight）才露出「展開 ▾」；
+// 按了整段打開、字改「收起 ▴」，再按收回。重畫卡片時一律回到收合。
+function fcClampSetup(box) {
+  if (!box) return;
+  box.querySelectorAll(".fc-clamp").forEach((p) => {
+    const btn = box.querySelector(`[data-fc-more="${p.dataset.fcLine}"]`);
+    if (!btn) return;
+    const over = p.scrollHeight > p.clientHeight + 1;
+    btn.hidden = !over;
+    if (!over) return;
+    btn.addEventListener("click", () => {
+      const open = !p.classList.contains("open");
+      p.classList.toggle("open", open);
+      btn.textContent = open ? "收起 ▴" : "展開 ▾";
+      btn.setAttribute("aria-expanded", String(open));
+    });
+  });
 }
 
 function fcRenderRight() {
@@ -636,6 +657,7 @@ function fcRenderRight() {
   document.getElementById("fc-prev").addEventListener("click", () => fcStep(-1));
   document.getElementById("fc-next").addEventListener("click", () => fcStep(1));
   if (open) fcFixBind(c, it);
+  fcClampSetup(box);
 }
 
 // ---------- 10-15 要修改合併（1015-4）：「退回」「改」合成一顆「要修改」 ----------

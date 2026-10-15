@@ -485,6 +485,46 @@ def test_card_two_lines():
     assert got["ov"] == "嗯／我覺得"
 
 
+def test_card_lines_clamp_toggle():
+    """10-15 宇軒驗證回饋：「原本」「改成」超過 2 行各自收合，按「展開 ▾」才看全部；不到 2 行不出現展開鈕；重畫回到收合。"""
+    if not NODE:
+        return
+    got = _run_page([{"名稱": "收合", "程式": """
+      card("學員段落:T005")["要念的字"] = ["很長的改成文字"];
+      await renderFinal();
+      const c = fcCards().find((x) => x["第3步鍵"] === "學員段落:T005");
+      if (!c) return {none: true};
+      H.listeners.length = 0; fcSelect(c.id, false);
+      const box = document.getElementById("fc-right");
+      const html = box.innerHTML;
+      const btn = (k) => box.querySelector(`[data-fc-more="${k}"]`);
+      const line = (k) => box.querySelector(`[data-fc-line="${k}"]`);
+      const short0 = [btn("orig").hidden, btn("said").hidden];          // 假瀏覽器 scrollHeight 沒設＝沒超過
+      line("orig").scrollHeight = 300; line("orig").clientHeight = 54;   // 「原本」超過 2 行、「改成」沒有
+      line("said").scrollHeight = 54; line("said").clientHeight = 54;
+      H.listeners.length = 0; fcClampSetup(box);
+      const after = [btn("orig").hidden, btn("said").hidden];
+      const n = H.listeners.filter((l) => l.el.dataset.fcMore).length;
+      const tgl = () => H.listeners.find((l) => l.el.dataset.fcMore === "orig").fn({});
+      tgl(); const opened = [line("orig").classList.contains("open"), btn("orig").textContent, btn("orig").getAttribute("aria-expanded"),
+                             line("said").classList.contains("open")];
+      tgl(); const closed = [line("orig").classList.contains("open"), btn("orig").textContent, btn("orig").getAttribute("aria-expanded")];
+      tgl(); fcRenderRight();
+      return {html, short0, after, n, opened, closed, reset: [box.querySelector('[data-fc-line="orig"]').classList.contains("open"),
+              box.querySelector('[data-fc-more="orig"]').hidden]};"""}])["收合"]
+    assert "錯誤" not in got and not got.get("none"), got
+    h = got["html"]
+    assert h.count('class="fc-clamp"') == 2 and 'data-fc-line="orig"' in h and 'data-fc-line="said"' in h
+    assert h.count('class="fc-more"') == 2 and "展開 ▾" in h
+    assert got["short0"] == [True, True]                 # 沒超過 2 行：沒有展開鈕
+    assert got["after"] == [False, True] and got["n"] == 1   # 只有超過的那一行有、各自獨立
+    assert got["opened"] == [True, "收起 ▴", "true", False]
+    assert got["closed"] == [False, "展開 ▾", "false"]
+    assert got["reset"] == [False, True]                 # 重畫卡片回到收合
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "-webkit-line-clamp: 2" in css and re.search(r"\.fc-more \{[^}]*font-size: 1[4-9]px", css)
+
+
 # ---------- 10-15 第5步2.0 第3段：版本 ----------
 
 def test_versions_pure():

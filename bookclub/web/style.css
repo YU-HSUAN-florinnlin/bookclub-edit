@@ -773,6 +773,12 @@ details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合�
 /* 10-15 宇軒驗證回饋：AI 重新生成的卡列兩行「原本：」「改成：」；字不縮、不模糊（以前 .fc-preview 撞到舊預覽的霧化樣式） */
 .fc-card .fc-lines p { margin: 0 0 4px; }
 .fc-card .fc-lab { font-weight: 600; margin-right: 4px; }
+/* 10-15 宇軒驗證回饋：「原本」「改成」超過 2 行各自收合（只顯示前 2 行）；右邊「展開 ▾」字 15px、可點區域至少 40px 高 */
+.fc-card .fc-line { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 4px; }
+.fc-card .fc-line .fc-clamp { flex: 1; min-width: 0; margin: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.fc-card .fc-line .fc-clamp.open { display: block; -webkit-line-clamp: unset; line-clamp: none; overflow: visible; }
+.fc-card .fc-more { flex: none; min-height: 40px; min-width: 72px; padding: 6px 12px; font-size: 15px; border: 1px solid var(--rv-line); border-radius: 8px; background: var(--bg-soft); color: var(--fg); cursor: pointer; }
+.fc-card .fc-more:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
 /* 10-15 宇軒驗證回饋：「前後多 2 秒」iOS 樣式滑動開關（44×24；關＝灰底圓鈕在左、開＝綠底圓鈕在右）；checkbox 藏起來、label 畫軌道與圓鈕 */
 .fc-pad { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; margin-left: 10px; cursor: pointer; user-select: none; }
 .fc-pad input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none; }
