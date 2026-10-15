@@ -527,7 +527,7 @@ async function renderExecuteBody() {
   const prog = d["進度"] || {};
   const rows = execStepRows(d);
   const running = d.running;
-  const redo = d["退回清單"] || [];
+  const redo = execRedoRows(d);   // 10-15 總檢查修正（1015-7）：讀後端的 要重做（needs.redo_cards），沒有時讀舊的 退回清單
   const execBlocked = running || !pre["可以開始"];   // 10-08 宇軒（流程簡化）：總檢查預設先略過，不擋
   // 10-15 第5步2.0 第3段（31 號設計 §5.3）：範圍「從／到」與「只重新組裝」只有開發者設定（settings.toml `developer = true`）才顯示；
   // 老師的畫面一律整支、照卡片重做（伺服器沒開開發者設定時收到範圍也不理）
@@ -582,19 +582,19 @@ async function renderExecuteBody() {
       <div id="execAwake">${awakeLine(d)}</div>
       <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
     </div>
-    ${redo.length ? `<h2>第 5 步退回重做的（${redo.length} 筆）</h2>
-      <div class="card"><p class="muted">按「開始執行」或下面這顆，會只重做退回的這幾筆：要重新生成的那幾句先清掉、重新生成（其他做好的不重做），最後重新組裝。
-        要念的字和範圍都沒改的，會換一種念法重新生成，每退回一次換一次，不會回到用過的念法；上一版的聲音留著備份。
-        做完到第 5 步，這幾筆會回到「還沒看」、標「重做過」。${d["重做中"] ? "<b>上次重做還沒做完</b>，再按一次會接著做。" : ""}</p>
-      <p><button id="btnRedo" ${execBlocked ? "disabled" : ""}>只重做退回的這幾筆（${redo.length} 筆）</button>
+    ${redo.length ? `<h2>第 5 步要重做的（${redo.length} 張）</h2>
+      <div class="card"><p class="muted">按「開始執行」或下面這顆，會只重做這幾張：要重新生成的那幾句先清掉、重新生成（其他做好的不重做），最後重新組裝。
+        要念的字和範圍都沒改的，會換一種念法重新生成，每按一次「要修改」換一次，不會回到用過的念法；上一版的聲音留著備份。
+        做完到第 5 步，這幾張會回到「還沒看」、標「重做過」。${d["重做中"] ? "<b>上次重做還沒做完</b>，再按一次會接著做。" : ""}</p>
+      <p><button id="btnRedo" ${execBlocked ? "disabled" : ""}>只重做這幾張（${redo.length} 張）</button>
         ${dev ? `<button id="btnReassemble" class="secondary" ${execBlocked ? "disabled" : ""}>只重新組裝（不重新生成）</button>` : ""}
         ${execBlocked && !running ? `<span class="muted">要先能按「開始執行」（見上面）</span>` : ""}</p>
       ${dev ? `<p class="muted small">「只重新組裝」：生成的聲音不動（不重新生成、不換念法），只照現在的做法重新放回去、輸出新的成品；
-        退回的這幾筆一樣回到第 5 步「還沒看」、標「重做過（只重新組裝）」。聲音本身沒問題、要改的是接起來的地方時用這顆。</p>` : ""}
-      <table class="kv">${redo.map((it, i) => `<tr><td>${esc(typeof fcKind === "function" ? fcKind(it["類型"]) : it["類型"])}　${esc((it["覆核名稱"] || []).join("、") || "—")}
-        ${typeof fcBoth === "function" && (it["原片"] || it["成品"]) ? `<div class="muted">${esc(fcBoth(it))}</div>` : ""}</td>
-        <td>${esc(it["原因"])}${it["改範圍"] ? `<div class="muted">範圍改了${it["改範圍"]["原本"] ? `：${esc(fmtRange(it["改範圍"]["原本"]))} → ${esc(fmtRange(it["改範圍"]["改成"]))}` : ""}（存在第 3 步〈${esc(it["改範圍"]["名稱"] || "")}〉）</div>` : ""}
-          <div class="muted">按下去會：${esc(it["說明"] || "")}</div></td></tr>`).join("")}</table></div>` : ""}`;
+        會多一個版本，舊的成品檔不動。只換了接起來的地方、聲音本身沒問題時用這顆；要重做的卡沒有真的重新生成，第 5 步照樣是「要重做」。</p>` : ""}
+      <table class="kv">${redo.map((it) => `<tr><td>${esc(it.kind)}${it.name ? `　${esc(it.name)}` : ""}
+        ${it.when ? `<div class="muted">${esc(it.when)}</div>` : ""}</td>
+        <td>${esc(it.why)}${it.range ? `<div class="muted">${esc(it.range)}</div>` : ""}
+          ${it.how ? `<div class="muted">按下去會：${esc(it.how)}</div>` : ""}</td></tr>`).join("")}</table></div>` : ""}`;
   bindFinalCheck(renderExecuteBody);
   if (execGoCheck || execBackRow) {
     const key = execBackRow;
@@ -612,26 +612,28 @@ async function renderExecuteBody() {
     const note = document.getElementById("exMethodNote");
     if (note) note.textContent = exMethod.value === "sw" ? "（Mac、Windows 都一樣）" : "（進階設定改的）";
   });
-  const redoBtn = document.getElementById("btnRedo");   // 10-01 第三批：只重做退回的（整支影片的範圍）
+  const redoBtn = document.getElementById("btnRedo");   // 10-01 第三批：只重做第 5 步要重做的（整支影片的範圍）
   if (redoBtn) redoBtn.addEventListener("click", async () => {
-    if (!confirm(`只重做第 5 步退回的 ${redo.length} 筆，再重新組裝？\n要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。`)) return;
+    if (!confirm(`只重做第 5 步要重做的 ${redo.length} 張，再重新組裝？\n要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。`)) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value] }, { quiet: true }); }
     catch (e) { alert(`無法開始：${e.message}`); return; }
     await renderExecuteBody();
   });
   const reBtn = document.getElementById("btnReassemble");   // 10-03 第八批 #23：只重新組裝（整支影片的範圍）
   if (reBtn) reBtn.addEventListener("click", async () => {
-    if (!confirm(`只重新組裝？\n生成的聲音不動、不重新生成，照現在的做法重新放回去。\n第 5 步退回的 ${redo.length} 筆組裝做完會回到「還沒看」。`)) return;
+    // 10-15 總檢查修正（1015-7）：只重新組裝不會重新生成，等重做的卡留著（後端 build_version 只清真的重做的）——不再說「回到還沒看」
+    if (!confirm(`只重新組裝？\n生成的聲音不動、不重新生成，照現在的做法重新放回去。\n會多一個版本，舊的成品檔不動；第 5 步要重做的 ${redo.length} 張沒有重新生成，還是「要重做」。`)) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value], "只重新組裝": true }, { quiet: true }); }
     catch (e) { alert(`無法開始：${e.message}`); return; }
     await renderExecuteBody();
   });
   const reAllBtn = document.getElementById("btnReassembleAll");   // 10-05 #97：沒有退回時的只重新組裝（整支影片的範圍）
   if (reAllBtn) reAllBtn.addEventListener("click", async () => {
+    // 10-15 總檢查修正（1015-7）：0.2.2b1 起每次組裝都是一個新版本（舊的成品檔不蓋掉）、之前的通過沿用
     if (!confirm(["只重新組裝（不重新生成）？", "",
       "・生成好的聲音都不動，不會重新生成。",
-      "・用現在的程式把整支影片重新組裝一次，現在的成品會被新的蓋掉（檔名沿用）。",
-      "・第 5 步：內容沒變的那幾筆，之前按的通過／退回保留；內容變了的（例如接縫、停格的做法改了）回到「還沒看」，那附近看過的部分也要重看。",
+      "・會多一個版本，舊的成品檔不動；之前的通過沿用。",
+      "・第 5 步：內容變了的（例如接縫、停格的做法改了）回到「還沒看」，那附近看過的部分也要重看。",
       `・${SHOW_EXEC_ETA ? `整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘，` : ""}跑的時候第 3 步不能修改。`].join("\n"))) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value], "只重新組裝": true }, { quiet: true }); }
     catch (e) { alert(`無法開始：${e.message}`); return; }
@@ -766,6 +768,28 @@ function execStatsHtml(d) {
   return `<p class="exec-total">全部 <b>${done}</b>／${total} 筆完成（${pct(done, total)}%）</p>
     <table class="kv exec-stats"><thead><tr><th style="text-align:left">類型</th><th style="text-align:right">完成／總數</th><th></th></tr></thead>
     <tbody>${body}</tbody></table>`;
+}
+
+// 10-15 總檢查修正（1015-7）：（純函式）第 4 步「第 5 步要重做的（N 張）」那一區每一列：{kind, name, when, why, range, how}。
+// 後端有 要重做（needs.redo_cards，每筆 {卡號, 類型, 原片: [s, e], 原因: {選項, 補充}}）就用它——N 跟第 5 步「重做這幾張（N 張）」
+// 同一份清單；沒有（後端還沒給）時照舊讀 退回清單（{類型, 覆核名稱, 原片, 原因（字串）, 改範圍, 說明}）
+function execRedoRows(d) {
+  const why = (w) => {
+    if (!w || typeof w !== "object") return String(w || "");
+    const opts = (w["選項"] || []).join("、"), extra = String(w["補充"] || "").trim();
+    return opts && extra ? `${opts}：${extra}` : opts || extra || "（沒寫原因）";
+  };
+  if (Array.isArray(d["要重做"])) {
+    return d["要重做"].map((it) => {
+      const m = /^K0*(\d+)$/.exec(String(it["卡號"] || ""));
+      return { kind: it["類型"] || "", name: m ? `#${m[1]}` : String(it["卡號"] || ""), when: Array.isArray(it["原片"]) ? `原片 ${fmtRange(it["原片"])}` : "",
+        why: why(it["原因"]), range: "", how: it["說明"] || "" };
+    });
+  }
+  return (d["退回清單"] || []).map((it) => ({ kind: it["類型"] || "", name: (it["覆核名稱"] || []).join("、") || "—",
+    when: Array.isArray(it["原片"]) ? `原片 ${fmtRange(it["原片"])}` : "", why: why(it["原因"]),
+    range: it["改範圍"] ? `範圍改了${it["改範圍"]["原本"] ? `：${fmtRange(it["改範圍"]["原本"])} → ${fmtRange(it["改範圍"]["改成"])}` : ""}（存在第 3 步〈${it["改範圍"]["名稱"] || ""}〉）` : "",
+    how: it["說明"] || "" }));
 }
 
 function fmtRange(r) {

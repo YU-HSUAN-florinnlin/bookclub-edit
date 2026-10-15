@@ -615,8 +615,9 @@ function rvRenderCard() {
   const when = it["類型"] === "名字" && w0 && !it["老師整段"]   // 10-01：名字卡片寫重念範圍（不再只寫名字那 0.3 秒）
     ? `重念範圍 ${rvFmt(w0.start, 1)}–${rvFmt(w0.end, 1)}（名字在 ${rvFmt(it.start, 1)}）` : `${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)}`;
   const lack = it["還缺"] ? `<p class="rv-warnline rv-lack">還缺：${esc(it["還缺"])}。${it["已確認"] ? "（之前按過通過，但補好之前第 4 步不能開始）" : ""}按「改做法」補好。</p>` : "";
-  // 10-01 第三批 5：第 5 步退回的，卡片上寫原因（重做完就消失）
-  const back = it["第5步退回"] ? `<p class="rv-warnline rv-back5">第 5 步退回：${esc(it["第5步退回"].join("；"))}</p>` : "";
+  // 10-01 第三批 5：第 5 步要重做的，卡片上寫原因（重做完就消失）。10-15 總檢查修正（1015-7）：字改「第 5 步要重做」
+  // （資料欄位 第5步退回 照舊；後端改讀 needs.redo_cards，跨版本卡、沿用卡按的也看得到）
+  const back = it["第5步退回"] ? `<p class="rv-warnline rv-back5">第 5 步要重做：${esc(it["第5步退回"].join("；"))}</p>` : "";
   const coverNote = back + lack + rvEdgeHtml(it) + (it["涵蓋消失"] ? `<p class="rv-warnline">原本由〈${esc(it["涵蓋消失"]["名稱"] || it["涵蓋消失"].id)}〉涵蓋，現在沒有了（那一筆改了時間、做法或被還原），請重新看。</p>`
     : it["涵蓋待通過"] ? `<p class="rv-note">這一處整個落在〈${esc(it["涵蓋待通過"]["名稱"])}〉裡；那一筆通過之後，這一處就自動算處理好。</p>` : "");
   box.innerHTML = `
@@ -803,7 +804,7 @@ function rvRenderList() {
     return `<li class="${key === rv.cur ? "cur" : ""} ${rvDone(it) ? "done" : ""}" data-key="${esc(key)}" tabindex="-1">
       <span class="tm">${esc(rvFmt(it.start))}</span>
       <span class="ty">${rvChip(it)}</span>
-      <span class="tx">${rvIdTag(it)}${(it["段落外"] || []).some((q) => !q["答案"]) ? `<span class="rv-tag warn">段落外面有幾秒還沒回答</span>` : ""}${it["第5步退回"] ? `<span class="rv-tag warn" title="${esc(it["第5步退回"].join("；"))}">第 5 步退回</span>` : ""}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}${esc(rvPreview(it))}</span>
+      <span class="tx">${rvIdTag(it)}${(it["段落外"] || []).some((q) => !q["答案"]) ? `<span class="rv-tag warn">段落外面有幾秒還沒回答</span>` : ""}${it["第5步退回"] ? `<span class="rv-tag warn" title="${esc(it["第5步退回"].join("；"))}">第 5 步要重做</span>` : ""}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}${esc(rvPreview(it))}</span>
       <span class="sg">${esc(sug)}</span>
       ${st}</li>`;
   }).join("");

@@ -6,19 +6,22 @@
  *     右邊「目前這張卡」：第 3 步那張卡＋狀態標籤＋「原本 ▶」「現在 ▶」＋通過／要修改／上一張／下一張
  *     （10-15 要修改合併（1015-4）：「退回」「改」合成一顆「要修改」，見 fcFixHtml）
  *   → 下面：卡片清單（第 3 步的分頁；最右邊收「第 3 步選定不修改」「⚠️ 需留意」）。10-15 宇軒驗證回饋六：清單分兩個——
- *     上面「還要確認的」（這一版還沒看完的＋之前版本還沒看完的跨版本卡，照原片時間排）、下面「已通過的」；「還沒看完」分頁拿掉。
- *   「＋在這裡新增修改」「重做這幾張（N 張）」（有退回或改過才出現）：10-15 宇軒驗證回饋，搬到左邊「看過 P%」那一行下面。
+ *     上面「還要確認的」（這一版還沒看完的＋之前版本還沒看完的跨版本卡，照原片時間排）、下面「已通過的」；第 5 步自己多的那個分頁拿掉。
+ *   「＋在這裡新增修改」「重做這幾張（N 張）」（有要重做的卡才出現）：10-15 宇軒驗證回饋，搬到左邊「看過 P%」那一行下面。
  * 卡片的內容、「要修改」帶出的修改控制區是第 3 步的卡片元件（cards.js），走第 3 步原本的 API；改完那張卡「已改，等重做」。
  * 「重做這幾張」：第 4 步開始執行、跳到第 4 步；跑完自動跳回第 5 步（31 號設計 §9 問題 2 定案）。
  * 10-15 宇軒驗證回饋二（1015-4 補充）：卡片行為盡量跟第 3 步一樣——標題列原片時間範圍（成品時間小字）、影片下「跳到」框、
  *   通過後按鈕「✓ 已通過（再按取消）」且不自動跳下一張；「裡面有老師的聲音」＝「其他」（整個修改選單）；要重做的卡可以再按
  *   「要修改」、帶入上次的原因與補充，改了再「確定」覆蓋成最新；「取消」改名「收起」（只收合、不撤回）。
  * 10-15 第5步2.0 第3段（版本，31 號設計 §6.5–6.7）：有兩版以上，頂端多「看哪一版」選單（fc.ver＝看哪一版，null＝最新）；
- *   舊版：卡片照那一版的判斷、沒處理到的變淡；可以按通過（記在那一版）、可以輸出那一版；不能新增、不能重做。
- *   10-15 宇軒驗證回饋六：「要修改」所有卡都能按——跨版本卡、這一版沒處理到的卡、看舊版時的任何卡，原因記在卡片自己的等重做
- *   （後端 needs.mark_outside_redo，不寫進任何版本的成品檢查紀錄），卡片變「要重做」。
+ *   舊版：卡片照那一版的判斷、那一版沒做的卡變淡；可以按通過（記在那一版）、可以輸出那一版；不能新增、不能重做（到最新版按）。
+ *   10-15 宇軒驗證回饋六：「要修改」所有卡都能按（不論狀態、跨版本、看哪一版）。
+ *   10-15 總檢查修正（1015-7）：原因記在哪由後端分流——最新版有它狀態列的卡（不論在哪一版畫面按）走最新版正常路（成品檢查退回）；
+ *   其他（跨版本卡、沿用卡、舊版才有的卡）記在卡片自己的等重做（needs.mark_outside_redo），第 4 步「重做這幾張」也收它。
+ *   數字（還要確認幾張、已通過幾張）、每張卡是不是「已通過的」「不能修改」用後端給的（卡片統計.還要確認／已通過的、卡片 已通過的／不能修改），
+ *   沒有時前端自己算（過渡）。舊版畫面上最新版要重做的卡另寫小字「最新版：要重做（原因）」（卡片 最新版要重做）。
  *   最新版上面清單多了跨版本卡（範圍組裝時那一版範圍外、舊版還沒看完的卡，時間格下小字「第 N 版」）；重做過的卡多「上一版 ▶」。
- * 資料：GET /api/final（?版本=N 看舊版；卡片、狀態、第 3 步資料）；存檔：/api/final/card（通過／退回，回寫舊檔每一筆）、/api/final/edited、
+ * 資料：GET /api/final（?版本=N 看舊版；卡片、狀態、第 3 步資料）；存檔：/api/final/card（通過／要修改的原因／取消，後端分流）、/api/final/edited、
  * /api/final/watched、/api/final/export（bookclub/finalcards.py、finalcheck.py）。依賴 app.js 的 apiGet／apiPost／esc／contentEl。 */
 
 // 09-29 宇軒：2 倍速以下播過的才算「看過」（快轉看完不算有人完整看過）
@@ -55,15 +58,13 @@ const FC_TODO = [FC_ST.TODO, FC_ST.BACK, FC_ST.EDITED, FC_ST.NOT_MADE];   // 還
 const FC_REDO = [FC_ST.BACK, FC_ST.EDITED, FC_ST.NOT_MADE];               // 「重做這幾張」算的
 const FC_REDO_LABEL = "要重做";   // 10-15 要修改合併（1015-4）：退回、已改，等重做的標籤字
 
-// 10-15 宇軒驗證回饋三：範圍外的卡（資料欄位「這一版沒處理到」）給老師看的字
-// 10-15 宇軒驗證回饋四：「上一版已通過」改成「已通過（沿用上一版）」、顏色跟「通過 ✓」同一個綠色系（cls ok）
+// 範圍外的卡（資料欄位 c["這一版沒處理到"]）給老師看的字：之前的版本通過過＝「已通過（沿用上一版）」、綠色系（cls ok，
+// 10-15 宇軒驗證回饋三、四）；舊版畫面上之前沒通過過的＝「這一版沒做這張」
 const FC_OUT_PASSED = "已通過（沿用上一版）", FC_OUT_PASSED_NOTE = "這版沒改到這裡，不用再看";
 const FC_OUT_NONE = "這一版沒做這張", FC_OUT_NONE_NOTE = "這一版的成品沒有處理這一張";
 // 卡片標籤：{text, cls, small: [小字]}（31 號設計 §6.3）
 function fcCardLabel(c) {
-  // 10-15 第5步2.0 第3段（§6.6）：這一版沒處理到（開發者用範圍組裝時範圍外的卡）——變淡、不能按通過
-  // 10-15 宇軒驗證回饋三：「這一版沒處理到」看不懂 → 改標「上一版已通過」＋小字「這版沒改到這裡，不用再看」
-  // （資料欄位名稱不變）。舊版畫面上、之前的版本沒通過過的（之後才有的卡等）→「這一版沒做這張」
+  // 範圍外的卡（c["這一版沒處理到"]，開發者用範圍組裝時）：不能按通過；標籤見上面 FC_OUT_*（31 號設計 §6.6 修訂三～六）
   if (c["這一版沒處理到"]) {
     return c["上一版已通過"] === false ? { text: FC_OUT_NONE, cls: "made", small: [FC_OUT_NONE_NOTE] }
       : { text: FC_OUT_PASSED, cls: "ok", small: [FC_OUT_PASSED_NOTE] };
@@ -98,11 +99,12 @@ function fcWhyLine(c) {
   return why && why !== FC_NO_REASON ? `原因：${why}` : FC_NO_REASON_SHOW;
 }
 
-// 10-15 第2段審查修正（必修 1）：連帶退回的卡那一行（純函式）：「跟 #N 共用，那張還是退回」
+// 10-15 第2段審查修正（必修 1）：連帶要重做的卡那一行（純函式）：「跟 #N 共用，那張還是要重做」
+// 10-15 總檢查修正（1015-7）：給老師看的字一律「要重做」，不說「退回」
 function fcSharedLine(c) {
   const from = c["連帶自"] || [];
   if (!from.length) return "";
-  return `跟 ${from.map((x) => (x["編號"] ? `#${x["編號"]}` : "另一張卡")).join("、")} 共用，那張還是退回`;
+  return `跟 ${from.map((x) => (x["編號"] ? `#${x["編號"]}` : "另一張卡")).join("、")} 共用，那張還是要重做`;
 }
 
 // 「重做這幾張」那顆按鈕（純函式）：{show, n}。10-15 第2段審查修正（必修 3）：舊檔模式（新紀錄不能用）按「改」記不到
@@ -113,19 +115,40 @@ function fcRedoCount(d) {
   return { show: d["卡片來源"] === "舊檔" && !d["AI執行中"], n: 0 };
 }
 
+// 10-15 總檢查修正（1015-7）：（純函式）還要確認幾張＝上面「還要確認的」清單（不分頁、不篩「只看要仔細聽的」）。
+// 有後端的 卡片統計.還要確認 就用它（finalcards.summary，含跨版本卡）；沒有（後端還沒給、舊工作區）照前端兩個清單算
+function fcLeftCount(d) {
+  const st = (d && d["卡片統計"]) || {};
+  if (typeof st["還要確認"] === "number") return st["還要確認"];
+  return fcSplitLists(((d && d["卡片"]) || []).concat((d && d["跨版本卡片"]) || [])).todo.length;
+}
+// 10-15 總檢查修正（1015-7）：（純函式）舊版畫面上幾張要重做：最新版要重做的（卡片 最新版要重做）＋那一版自己是要重做的
+function fcOldRedoCount(d) {
+  return ((d && d["卡片"]) || []).filter((c) => c["最新版要重做"] || [FC_ST.BACK, FC_ST.EDITED].includes(c["狀態"])).length;
+}
+
 // 頂端那一句（純函式，31 號設計 §6.8：只顯示一句，照優先順序選）。回傳 {text, cls, go}（go＝點了切到哪一頁）
 // 10-15 第2段審查修正（必修 3）：d["舊檔改過"]＝舊檔模式這次畫面按「改」改過（記不到卡片上，畫面自己記著）→ 當作要重做
+// 10-15 總檢查修正（1015-7）：「還有 N 張沒看」的 N＝還要確認幾張（fcLeftCount，含跨版本卡；以前只算這一版的還沒看，
+// 最新版只有跨版本卡時頂端錯寫「全部看完了」）。看舊版（d["看的是舊版"]）：不提「重做這幾張」那幾句，有要重做的卡寫
+// 「有 N 張要重做（到最新版按『重做這幾張』）」（N＝fcOldRedoCount；以前舊版硬把要重做設 0）
 function fcStatusLine(d) {
   const st0 = d["卡片統計"] || {};
   const st = d["舊檔改過"] && !st0["要重做"] ? { ...st0, "要重做": 1 } : st0;
   const names = ((d["需留意"] || {})["列"] || []).filter((r) => r["名字"]).length;
   const run = (d["上次執行"] || {})["狀態"];
   const out = d["輸出成品"];
+  const left = fcLeftCount(d);
   if (names) return { text: `⚠️ 這 ${names} 處會照原聲念出本名`, cls: "fc-st-name", go: "需留意" };
-  if (d["AI執行中"]) return { text: "正在重做…", cls: "" };
-  if (st["要重做"] && ["停止", "失敗", "中斷"].includes(run)) return { text: "上次重做沒做完：按『重做這幾張』繼續", cls: "fc-st-redo" };
-  if (st["要重做"]) return { text: "改過的還沒重做：按下面『重做這幾張』", cls: "fc-st-redo" };
-  if (st["還沒看"]) return { text: `還有 ${st["還沒看"]} 張沒看`, cls: "" };
+  if (d["看的是舊版"]) {
+    const n = fcOldRedoCount(d);
+    if (n) return { text: `有 ${n} 張要重做（到最新版按『重做這幾張』）`, cls: "fc-st-redo" };
+  } else {
+    if (d["AI執行中"]) return { text: "正在重做…", cls: "" };
+    if (st["要重做"] && ["停止", "失敗", "中斷"].includes(run)) return { text: "上次重做沒做完：按『重做這幾張』繼續", cls: "fc-st-redo" };
+    if (st["要重做"]) return { text: "改過的還沒重做：按下面『重做這幾張』", cls: "fc-st-redo" };
+  }
+  if (left) return { text: `還有 ${left} 張沒看`, cls: "" };
   if (out && !d["輸出成品過期"]) return { text: `已輸出（${fcShortStamp(out["時間"])}）`, cls: "fc-st-done" };
   return { text: "全部看完了，可以輸出", cls: "fc-st-done" };
 }
@@ -145,8 +168,8 @@ function fcChip(c, it) {
 function fcPreview(c, it) { return it ? rvPreview(it) : c["說明"] || ""; }
 
 // ---------- 分頁（純函式）：沿用第 3 步的分頁名稱 ----------
-// 10-15 宇軒驗證回饋六：「還沒看完」分頁拿掉（上面「還要確認的」清單就是它）；各分頁的卡＝這一版的卡＋之前版本還沒看完的卡（跨版本卡），
-// 兩個清單（還要確認的／已通過的）都照分頁篩
+// 10-15 宇軒驗證回饋六：第 5 步自己多的那個分頁拿掉（上面「還要確認的」清單就是它）；各分頁的卡＝這一版的卡＋之前版本還沒看完的卡
+// （跨版本卡），兩個清單（還要確認的／已通過的）都照分頁篩
 
 const FC_TAB_ALL = "全部", FC_TAB_KEEP = "不修改", FC_TAB_ATT = "需留意", FC_TAB_OTHER = "其他";
 const FC_TAB_GONE = ["還沒看完"];   // 10-15 宇軒驗證回饋六：拿掉的分頁（記住的是它就回到「全部」）
@@ -166,8 +189,11 @@ function fcTabList(cards, keepN, att, cross) {
   return tabs;
 }
 // 10-15 宇軒驗證回饋六：（純函式）這張卡算不算「已通過的」（下面那個清單）：這一版通過的＋已通過（沿用上一版）
+// 10-15 總檢查修正（1015-7）：後端有給每張卡 已通過的（布林，finalcards）就用它；沒有時照前端算（過渡）
 function fcIsPassed(c) {
-  return !!c && !c["跨版本"] && (c["狀態"] === FC_ST.OK || (!!c["這一版沒處理到"] && c["上一版已通過"] !== false));
+  if (!c) return false;
+  if (typeof c["已通過的"] === "boolean") return c["已通過的"];
+  return !c["跨版本"] && (c["狀態"] === FC_ST.OK || (!!c["這一版沒處理到"] && c["上一版已通過"] !== false));
 }
 // （純函式）兩個清單：{todo: 還要確認的, passed: 已通過的}，各自照原片時間排（沒有原片時間的排最後）
 function fcSplitLists(cards) {
@@ -177,7 +203,7 @@ function fcSplitLists(cards) {
 }
 function fcPickTab(tabs, want) { return tabs.some((t) => t.id === want) ? want : FC_TAB_ALL; }
 const FC_TAB_KEY = "fc-tab";
-// 10-15 宇軒驗證回饋六：記住的是拿掉的「還沒看完」→ 回到「全部」
+// 10-15 宇軒驗證回饋六：記住的是拿掉的那個分頁（FC_TAB_GONE）→ 回到「全部」
 function fcTabGet() { let v; try { v = localStorage.getItem(FC_TAB_KEY) || FC_TAB_ALL; } catch (e) { v = FC_TAB_ALL; } return FC_TAB_GONE.includes(v) ? FC_TAB_ALL : v; }
 function fcTabSet(id) { try { localStorage.setItem(FC_TAB_KEY, id); } catch (e) { /* 存不了也沒關係 */ } }
 const FC_ONLY_KEY = "fc-only-look";
@@ -185,14 +211,15 @@ function fcOnlyLook() { try { return localStorage.getItem(FC_ONLY_KEY) === "1"; 
 function fcSetOnlyLook(on) { try { localStorage.setItem(FC_ONLY_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係 */ } }
 
 function fcCards() { return (fc.data && fc.data["卡片"]) || []; }
-function fcCross() { return (fc.data && fc.data["跨版本卡片"]) || []; }   // 之前版本還沒看完的（第 N 版）
-function fcCard(id) { return fcCards().find((c) => c.id === id) || fcCross().find((c) => c.id === id); }
-function fcTabs() { return fcTabList(fcCards(), (fc.data["不修改"] || []).length, fc.data["需留意"], fcCross()); }
+// 之前版本還沒看完的卡（跨版本卡，清單時間格下小字「第 N 版」）。10-15 總檢查修正（1015-7）：改名（舊名列在作廢清單）
+function fcCrossCards() { return (fc.data && fc.data["跨版本卡片"]) || []; }
+function fcCard(id) { return fcCards().find((c) => c.id === id) || fcCrossCards().find((c) => c.id === id); }
+function fcTabs() { return fcTabList(fcCards(), (fc.data["不修改"] || []).length, fc.data["需留意"], fcCrossCards()); }
 function fcTab() { return fcPickTab(fcTabs(), fcTabGet()); }
 // 10-15 宇軒驗證回饋六：目前這一頁的兩個清單——上面「還要確認的」（開了「只看要仔細聽的」再篩一次）、下面「已通過的」
 function fcLists() {
   const t = fcTabs().find((x) => x.id === fcTab());
-  const sp = fcSplitLists(t && !t["清單外"] ? t.cards : fcCards().concat(fcCross()));
+  const sp = fcSplitLists(t && !t["清單外"] ? t.cards : fcCards().concat(fcCrossCards()));
   return { todo: fcOnlyLook() ? sp.todo.filter((c) => c["要人聽"]) : sp.todo, passed: sp.passed };
 }
 function fcShown() { return fcLists().todo; }
@@ -201,7 +228,9 @@ function fcNavList() { const l = fcLists(); return l.todo.concat(l.passed); }
 
 // （純函式）上一張／下一張：目前這張在清單裡就照順序（到頭／到尾停在原地）；不在（影片播到別頁的那張）就照成品時間找——
 // 10-15 宇軒驗證回饋六：只拿這一版的卡比（跨版本卡的成品時間是舊版的）；清單照原片時間排、不一定照成品時間，所以找最近的那一張
-function fcStepPick(list, curId, t, dir) {
+// 10-15 總檢查修正（1015-7）：todoN＝上面清單有幾張（list 的前 todoN 張）。照時間找不到（影片在所有卡之後／之前）時，
+// 往後退到「上面清單」最後一張（以前退到 list 最後一張＝下面清單的最後一張，一按就跳過整個還要確認的）、往前退到第一張
+function fcStepPick(list, curId, t, dir, todoN = null) {
   if (!list.length) return null;
   const i = list.findIndex((x) => x.id === curId);
   if (i >= 0) return list[Math.max(0, Math.min(list.length - 1, i + dir))].id;
@@ -213,7 +242,8 @@ function fcStepPick(list, curId, t, dir) {
     if (dir > 0 && a > t + 0.05 && (!best || a < at(best))) best = x;
     if (dir < 0 && a < t - 0.05 && (!best || a >= at(best))) best = x;
   }
-  return (best || (dir > 0 ? list[list.length - 1] : list[0])).id;
+  const lastTodo = todoN != null && todoN > 0 ? list[Math.min(todoN, list.length) - 1] : list[list.length - 1];
+  return (best || (dir > 0 ? lastTodo : list[0])).id;
 }
 
 // ---------- 時間換算（純函式，跟後端 finalcheck.from_output_time／to_output_time 一樣） ----------
@@ -244,7 +274,7 @@ function fcOutTime(t, plist) {   // 原片時間 → 成品時間（剪掉的地
 }
 
 // （純函式）卡片試聽怎麼播：現在＝成品影片本身前後多 2 秒；原本＝原片聲音前後多 2 秒（影片同步靜音播，成品裡沒有的不動）
-// 10-15 第5步2.0 第3段：「上一版」＝上一個有這張卡的版本的成品那一段聲音（/api/final/vclip）；上一版還沒看的卡（跨版本）的
+// 10-15 第5步2.0 第3段：「上一版」＝上一個有這張卡的版本的成品那一段聲音（/api/final/vclip）；跨版本卡的
 // 「現在」也是播那一版的成品聲音（畫面上的影片是這一版的，時間對不上），「原本」只放原聲
 // 10-15 宇軒驗證回饋：pad＝前後多播幾秒（開關開著＝FC_AB_CONTEXT，關著＝0；不給＝FC_AB_CONTEXT，跟以前一樣）。
 // 只有一個時間點（剪掉、停格的接點，沒有長度）的照樣前後各 2 秒，不然什麼都聽不到
@@ -328,6 +358,7 @@ async function fcMarkEdited(c, key = null, isNew = false) {
     if (fc.data && fc.data["卡片來源"] === "舊檔") { fc.legacyEdited = true; fcRenderTop(); fcRenderLower(); }
     if (r["記了"] && c && !key) {
       c["狀態"] = FC_ST.EDITED;
+      if (typeof c["已通過的"] === "boolean") c["已通過的"] = false;   // 10-15 總檢查修正（1015-7）：改了就搬到上面清單
       fcRecountLocal();
       fcRenderStateBox();
       fcRenderTop();
@@ -341,6 +372,9 @@ function fcRecountLocal() {
   const cards = fcCards();
   fc.data["卡片統計"] = { ...(fc.data["卡片統計"] || {}), "全部": cards.length,
     "還沒看": cards.filter((c) => c["狀態"] === FC_ST.TODO).length, "要重做": cards.filter((c) => FC_REDO.includes(c["狀態"])).length };
+  // 10-15 總檢查修正（1015-7）：後端算的「還要確認」「已通過的」已經不準，拿掉讓前端照兩個清單算（重新整理後又是後端的）
+  delete fc.data["卡片統計"]["還要確認"];
+  delete fc.data["卡片統計"]["已通過的"];
 }
 
 // ---------------------------------------------------------------------------
@@ -351,8 +385,8 @@ function fcRecountLocal() {
 
 function fcUrl() { return fc.ver ? `/api/final?版本=${encodeURIComponent(fc.ver)}` : "/api/final"; }
 function fcOld() { return !!(fc.data && fc.data["看的是舊版"]); }
-// （純函式）能不能按通過／取消通過。10-15 宇軒驗證回饋六：第 3 段審查「必修 1」（舊版、上一版還沒看的那一區只能通過不能退回）
-// 結案拿掉——要修改改成原因記在卡片的等重做，所有卡都能按（見 fcCanFix、fcFixVer）；fcCanReturn 一起拿掉
+// （純函式）能不能按通過／取消通過：還沒生成、已改等重做、範圍外（沿用上一版）的卡不能。
+// 10-15 宇軒驗證回饋六：「要修改」另外判斷（fcCanFix），所有卡都能按
 function fcCanJudge(c) {
   return !!c && ![FC_ST.NOT_MADE, FC_ST.EDITED].includes(c["狀態"]) && !c["這一版沒處理到"];
 }
@@ -451,7 +485,7 @@ async function renderFinal() {
   Object.assign(fc, { seen: [], seg: null, sentRanges: "", ab: null, ed: { open: false }, pend: [], fixEd: null,
     legacyEdited: false, nextData: null });
   fcFixReset();
-  if (!fc.cur || !fcCard(fc.cur)) fc.cur = (fcCards().find((c) => c["狀態"] === FC_ST.TODO) || fcCards()[0] || {}).id || null;
+  if (!fc.cur || !fcCard(fc.cur)) fc.cur = fcFirstId();
   document.getElementById("fc-export").addEventListener("click", fcExport);
   fcBindVersionMenu();
   fileOutInit(document.getElementById("fc-fileout"));   // 10-07：打開成品資料夾、複製到 Windows
@@ -490,9 +524,13 @@ async function fcReload() {
   fc.nextData = null;
   // 10-15 第2段審查修正（建議，效能）：剛存檔、/api/final/edited 回傳的整頁資料（幾秒內）直接用
   fc.data = fcFillDefaults(pre && !fc.ver && Date.now() - pre.at < 5000 ? pre.data : await apiGet(fcUrl()));
-  if (fc.cur && !fcCard(fc.cur)) fc.cur = (fcCards().find((c) => c["狀態"] === FC_ST.TODO) || fcCards()[0] || {}).id || null;
+  if (fc.cur && !fcCard(fc.cur)) fc.cur = fcFirstId();
   fcRenderAll();
 }
+
+// 10-15 總檢查修正（1015-7）：一開啟、切版本、目前這張不見了，預設黃底＝上一張／下一張走的順序的第一張（上面「還要確認的」第一張；
+// 上面空了就是「已通過的」第一張）。以前是「這一版第一張還沒看的」，最新版只有跨版本卡、沿用卡時落在「已通過的」第一張
+function fcFirstId() { return (fcNavList()[0] || fcCards()[0] || {}).id || null; }
 
 function fcRenderAll() {
   fcRenderTop();
@@ -506,10 +544,8 @@ function fcRenderAll() {
 function fcRenderTop() {
   const box = document.getElementById("fc-status");
   if (!box) return;
-  // 10-15 第5步2.0 第3段：看舊版時不提「重做」（舊版上不能重做；退回的算沒看完）
-  const st0 = fc.data["卡片統計"] || {};
-  const view = fcOld() ? { ...fc.data, "AI執行中": false, "卡片統計": { ...st0, "要重做": 0, "還沒看": (st0["還沒看"] || 0) + (st0["退回"] || 0) } } : fc.data;
-  const s = fcStatusLine({ ...view, "舊檔改過": !!fc.legacyEdited && fc.data["卡片來源"] === "舊檔" });
+  // 10-15 總檢查修正（1015-7）：舊版不再把要重做硬設 0（fcStatusLine 看 看的是舊版 自己換句子）；張數用後端的「還要確認」
+  const s = fcStatusLine({ ...fc.data, "舊檔改過": !!fc.legacyEdited && fc.data["卡片來源"] === "舊檔" });
   // §4.4 修訂：新紀錄不能用時退回讀舊檔，提示一句（小字，不搶頂端那一句）。
   // 10-15 第2段審查修正（暫定，等宇軒）：只在開發者設定開著時顯示（老師看不懂、也不用做什麼）
   const old = fc.data["卡片來源"] === "舊檔" && fc.data["開發者"] ? `<span class="rv-meta fc-oldsrc">（先照舊的紀錄顯示）</span>` : "";
@@ -614,14 +650,24 @@ function fcMoveHead() {
 
 // ---------- 右邊：目前這張卡 ----------
 
+// 10-15 總檢查修正（1015-7）：（純函式）舊版畫面上、最新版要重做的卡底下那一行小字：「最新版：要重做（原因）」；沒有＝空字串。
+// 那一版自己的標籤照那一版（後端 version_page 不再把它蓋成要重做，卡片多 最新版要重做: {選項, 補充}）
+function fcLatestRedoLine(c) {
+  const w = c && c["最新版要重做"];
+  if (!w) return "";
+  const why = fcReasonText(w);
+  return why && why !== FC_NO_REASON ? `最新版：要重做（${why}）` : "最新版：要重做";
+}
+
 function fcStateBoxHtml(c) {
   const lab = fcCardLabel(c);
   const back = c["狀態"] === FC_ST.BACK;
   const shared = back ? fcSharedLine(c) : "";
   // 10-15 要修改合併（1015-4）：已改的卡有記原因（要修改先記原因再改）也列原因那一行
   const why = back || (c["狀態"] === FC_ST.EDITED && c["退回原因"]);
+  const latest = fcLatestRedoLine(c);
   return `<span class="fc-tag fc-tag-${lab.cls}"${c["這一版沒處理到"] ? ` title="${esc(lab.small.join("；"))}"` : ""}>${esc(lab.text)}</span>${lab.small.map((x) => ` <span class="rv-meta">${esc(x)}</span>`).join("")}
-    ${why ? `<p class="rv-warnline fc-why">${esc(fcWhyLine(c))}</p>` : ""}${shared ? `<p class="rv-warnline fc-shared">${esc(shared)}</p>` : ""}`;
+    ${why ? `<p class="rv-warnline fc-why">${esc(fcWhyLine(c))}</p>` : ""}${shared ? `<p class="rv-warnline fc-shared">${esc(shared)}</p>` : ""}${latest ? `<p class="rv-meta fc-latest-redo">${esc(latest)}</p>` : ""}`;
 }
 
 function fcRenderStateBox() {
@@ -697,12 +743,12 @@ function fcRenderRight() {
   // 10-15 宇軒驗證回饋二：這張可能已不在這一頁——照全部算第幾張
   // 10-15 宇軒驗證回饋六：照上一張／下一張走的順序（上面清單接下面清單）算
   const nav = fcNavList();
-  const list = nav.some((x) => x.id === c.id) ? nav : fcCards().concat(fcCross());
+  const list = nav.some((x) => x.id === c.id) ? nav : fcCards().concat(fcCrossCards());
   const idx = list.findIndex((x) => x.id === c.id);
   const canJudge = fcCanJudge(c);
-  const canFix = fcCanFix(c, fcOld());   // 10-15 宇軒驗證回饋六：所有卡都能按
+  const canFix = fcCanFix(c, fcOld());   // 10-15 宇軒驗證回饋六：所有卡都能按（10-15 總檢查修正（1015-7）：刪掉／併入的卡除外）
   const abPrev = fcCardAbPlan(c, "上一版");
-  const back = c["狀態"] === FC_ST.BACK;
+  const back = fcCanUndo(c, fcOld());   // 10-15 總檢查修正（1015-7）：等重做那條路的卡也有「取消要重做」
   const abNow = fcCardAbPlan(c, "現在"), abOrig = fcCardAbPlan(c, "原本");
   const open = fc.fix.open && canFix;
   // 選了「念錯字」「其他」：下面列出第 3 步卡片的字（可以改），上面那兩行就不重複列
@@ -732,7 +778,7 @@ function fcRenderRight() {
   cvBindPad("fc-pad");   // 10-15 1015-5：這張卡唯一的一顆；「要修改」裡的「聽這一段」也照它
   document.getElementById("fc-pass").addEventListener("click", () => fcDecide(c, c["狀態"] === FC_ST.OK ? null : FC_ST.OK));
   document.getElementById("fc-fix").addEventListener("click", () => fcToggleFix());
-  const undo = document.getElementById("fc-back-undo");   // 10-15 要修改合併（1015-4）：以前那顆改名「取消要重做」，退回的卡一律放外面
+  const undo = document.getElementById("fc-back-undo");   // 10-15 要修改合併（1015-4）：要重做的卡的「取消要重做」放外面
   if (undo) undo.addEventListener("click", () => fcDecide(c, null));
   document.getElementById("fc-prev").addEventListener("click", () => fcStep(-1));
   document.getElementById("fc-next").addEventListener("click", () => fcStep(1));
@@ -753,17 +799,30 @@ const FC_FIX_NO_VOICE = "這一張重做只會重新放一次，聲音不會變�
 function fcFixReset() { fc.fix = { open: false, card: null, pick: null, extra: "", busy: false, err: "" }; }
 
 // （純函式）這張卡可不可以按「要修改」
-// 10-15 宇軒驗證回饋四：「已通過（沿用上一版）」（這一版沒處理到）的卡在最新版可以按——發現改得不好還是要能送修改需求
-// 10-15 宇軒驗證回饋六：不論狀態、跨版本、看哪一版，有卡就能按（old 不再用，留著參數不改呼叫的地方）
+// 10-15 宇軒驗證回饋四、六：不論狀態、跨版本、看哪一版，有卡就能按（old 不再用，留著參數不改呼叫的地方）
+// 10-15 總檢查修正（1015-7）：刪掉／併入的卡不能按（沒有可以重做的；後端 decide 也擋）。後端給 不能修改（布林）就照它；
+// 沒給時看 刪掉了（過渡）
+function fcNoFix(c) {
+  return !!c && (typeof c["不能修改"] === "boolean" ? c["不能修改"] : !!c["刪掉了"]);
+}
 function fcCanFix(c, old) {
-  return !!c;
+  return !!c && !fcNoFix(c);
 }
-// （純函式）「要修改」停用時滑過的字（只有沒卡時）
+// （純函式）「要修改」停用時滑過的字：沒卡時「先選一張卡」；刪掉／併入的卡照後端給的 不能修改原因
 function fcFixOff(c, old) {
-  return "先選一張卡";
+  if (!c) return "先選一張卡";
+  return c["不能修改原因"] || "這張卡已刪掉，沒有可以重做的";
 }
-// 10-15 宇軒驗證回饋六：（純函式）記原因時帶的「版本」——跨版本卡、看舊版時的任何卡帶那張卡的版本號（後端走 needs.mark_outside_redo：
-// 原因記在卡片自己的等重做、不寫進任何版本的成品檢查紀錄）；最新版這一版的卡不帶（正常路）
+// 10-15 總檢查修正（1015-7）：（純函式）這張卡外面要不要放「取消要重做」（按了送 /api/final/card 結果 null）：
+// 要重做的卡（這一版的退回）；最新版上走等重做那條路、有記原因的卡（c["範圍外改了"]＝跨版本卡、沿用卡按過「要修改」，後端清掉等重做）。
+// 舊版畫面上不放等重做那條路的（在舊版送 null＝取消那一版的通過；要撤回到最新版按）；刪掉／併入的不放
+function fcCanUndo(c, old) {
+  if (!c || fcNoFix(c)) return false;
+  if (c["狀態"] === FC_ST.BACK) return true;
+  return !old && c["狀態"] === FC_ST.EDITED && !!c["範圍外改了"] && !!c["退回原因"];
+}
+// 10-15 宇軒驗證回饋六：（純函式）記原因時帶的「版本」——跨版本卡、看舊版時的任何卡帶那張卡的版本號；最新版這一版的卡不帶（正常路）。
+// 10-15 總檢查修正（1015-7）：帶了版本由後端分流（最新版有它狀態列的卡照樣走最新版正常路，其他記在卡片的等重做）
 function fcFixVer(c, old) {
   return c && (c["跨版本"] || old) && c["版本號"] != null ? c["版本號"] : null;
 }
@@ -774,7 +833,7 @@ function fcFixOptions(c, opts) {
 }
 // （純函式）確定時要不要記原因（送 /api/final/card 退回）：還沒生成的卡（新增的、這一版之後才出現的）成品裡沒有，記不了
 // 已改的卡要還在這一版成品裡（有對到處理紀錄）才記得了（後端 finalcards.decide 同一條規則）
-// 10-15 宇軒驗證回饋四：範圍外的卡（這一版沒處理到、或已經按過「要修改」的「範圍外改了」）原因記在卡片的等重做（後端 needs.mark_outside_redo）
+// 10-15 宇軒驗證回饋四：範圍外的卡（c["這一版沒處理到"]、或已經按過「要修改」的 c["範圍外改了"]）原因記在卡片的等重做（後端分流）
 // 10-15 宇軒驗證回饋六：跨版本卡、看舊版時的任何卡也是（old＝在看舊版）
 function fcFixRecords(c, old) {
   if (c && (c["這一版沒處理到"] || c["範圍外改了"] || c["跨版本"] || old)) return true;
@@ -784,8 +843,9 @@ function fcFixCanEdit(it) { return !!it && !(fc.data && fc.data["AI執行中"]);
 
 // 10-15 宇軒驗證回饋二：（純函式）已經是「要重做」的卡再按「要修改」，帶入上次記的原因：{pick, extra}
 // （改過的字、範圍本來就存進第 3 步的資料，控制區照現在的值畫；這裡只補「哪裡出問題」與補充）
+// 10-15 總檢查修正（1015-7）：舊版畫面上最新版要重做的卡（c["最新版要重做"]），預填它的原因
 function fcFixPrefill(c, opts) {
-  const why = c && [FC_ST.BACK, FC_ST.EDITED].includes(c["狀態"]) ? c["退回原因"] : null;
+  const why = c && c["最新版要重做"] ? c["最新版要重做"] : c && [FC_ST.BACK, FC_ST.EDITED].includes(c["狀態"]) ? c["退回原因"] : null;
   if (!why) return { pick: null, extra: "" };
   const pick = (why["選項"] || []).find((o) => (opts || FC_FIX_OPTS).includes(o)) || null;
   return { pick, extra: String(why["補充"] || "") };
@@ -955,13 +1015,15 @@ async function fcFixConfirm(c, it) {
 async function fcDecide(c, result, picks = [], extra = "") {
   fc.nextData = null;   // 10-15 第2段審查二修正：判斷之後不能再用之前留的整頁資料
   let res;
-  // 10-15 第5步2.0 第3段：在哪一版上按的（舊版、上一版還沒看的那一區記在那一版；整頁重新整理）
+  // 10-15 第5步2.0 第3段：在哪一版上按的（舊版、跨版本卡記在那一版；整頁重新整理）
   const ver = c["跨版本"] || fcOld() ? c["版本號"] : null;
   try {
     res = await apiPost("/api/final/card", { id: c.id, "結果": result, "選項": picks, "補充": extra, ...(ver ? { "版本": ver } : {}) });
   } catch (e) { alert(e.message); return; }
   fcFixReset();
-  if (ver) { await fcReload(); return; }   // 10-15 宇軒驗證回饋二：通過後留在這張（跟第 3 步一樣不自動跳下一張）
+  // 10-15 宇軒驗證回饋二：通過後留在這張（跟第 3 步一樣不自動跳下一張）。10-15 總檢查修正（1015-7）：等重做那條路的卡
+  // （c["範圍外改了"]）取消要重做之後可能搬回跨版本卡、或回到「已通過（沿用上一版）」→ 整頁重新整理
+  if (ver || c["範圍外改了"]) { await fcReload(); return; }
   const i = fcCards().findIndex((x) => x.id === c.id);
   if (res["卡片"] && i >= 0) fc.data["卡片"][i] = res["卡片"];
   else if (i >= 0) fc.data["卡片"].splice(i, 1);   // 整片退回的待釐清卡通過＝拿掉
@@ -971,7 +1033,7 @@ async function fcDecide(c, result, picks = [], extra = "") {
   if (res["狀態"]) fc.data["狀態"] = res["狀態"];
   // 10-15 宇軒驗證回饋二：通過後留在這張、按鈕變「✓ 已通過（再按取消）」（第 3 步 rvPass 也不跳）；下一張自己按或影片播過去自動換。
   // 只有這張卡不在了（整片退回的待釐清卡通過＝拿掉）才換到第一張
-  if (!res["卡片"]) fc.cur = (fcCards()[0] || {}).id || null;
+  if (!res["卡片"]) fc.cur = fcFirstId();   // 10-15 總檢查修正（1015-7）：上面清單第一張
   fcRenderTop(); fcRenderRight(); fcRenderTimeline(); fcRenderLower();
 }
 
@@ -986,8 +1048,9 @@ function fcSelect(id, seek = true) {
 }
 
 // 10-15 宇軒驗證回饋六：走上面清單接下面清單（fcNavList）；到頭／到尾停在原地；跨版本卡影片不跳（成品時間是舊版的，跟點清單一樣）
+// 10-15 總檢查修正（1015-7）：照時間找不到時往後退到上面清單最後一張（fcStepPick 的 todoN）
 function fcStep(dir) {
-  const k = fcStepPick(fcNavList(), fc.cur, fc.video ? fc.video.currentTime : 0, dir);
+  const k = fcStepPick(fcNavList(), fc.cur, fc.video ? fc.video.currentTime : 0, dir, fcLists().todo.length);
   if (k && k !== fc.cur) fcSelect(k, !(fcCard(k) || {})["跨版本"]);
 }
 
@@ -1080,7 +1143,8 @@ const FC_ED_CTX = {
       if (ed.kind === FC_UNSURE) return `<label>補充（可不填）<input id="fc-ed-note" value="${esc(ed.extraNote || "")}"></label>`;
       return "";
     },
-    hint: (ed) => (ed.kind === FC_UNSURE ? "先記在起點這個時間、標成退回；之後再決定怎麼改" : rvRuleHint(ed.kind, ed.whole, !!ed.id)),
+    // 10-15 總檢查修正（1015-7）：給老師看的字「標成退回」→「標成要重做」
+    hint: (ed) => (ed.kind === FC_UNSURE ? "先記在起點這個時間、標成要重做；之後再決定怎麼改" : rvRuleHint(ed.kind, ed.whole, !!ed.id)),
     now: () => FC_CARD_CTX.videoTime(),
     nowLabel: "用影片目前位置",
     play: (a, b) => fcPlaySource(a, b),
@@ -1164,9 +1228,12 @@ function fcRenderLower() {
     const shown = fcShown();
     const lookN = sp.todo.filter((c) => c["要人聽"]).length;
     const done = !sp.todo.length && sp.passed.length;
-    const empty = sp.todo.length ? "沒有要仔細聽的卡片" : fcCards().length || fcCross().length ? "這一頁沒有卡片" : "這一版沒有任何修改";
+    // 10-15 總檢查修正（1015-7）：「只看要仔細聽的」開著時勾選框一律顯示（以前沒有要仔細聽的卡就整個不見、關不掉，清單看起來是空的）；
+    // 篩完是空的寫一句、勾選框留著可以關
+    const only = fcOnlyLook();
+    const empty = sp.todo.length ? "沒有要仔細聽的卡片（取消勾選就看得到全部）" : fcCards().length || fcCrossCards().length ? "這一頁沒有卡片" : "這一版沒有任何修改";
     body = `<h3 class="fc-sub">還要確認的</h3>
-      ${lookN ? `<label class="nowrap fc-only"><input type="checkbox" id="fc-only" ${fcOnlyLook() ? "checked" : ""}> 只看要仔細聽的（${lookN} 張）</label>` : ""}
+      ${lookN || only ? `<label class="nowrap fc-only"><input type="checkbox" id="fc-only" ${only ? "checked" : ""}> 只看要仔細聽的（${lookN} 張）</label>` : ""}
       ${done ? `<p class="fc-tabdone rv-meta">這一頁看完了</p>` : ""}
       <ol class="rv-list" id="fc-list">${shown.map(fcRowHtml).join("") || (done ? "" : `<li class="empty">${empty}</li>`)}</ol>
       ${fcPassedHtml(sp.passed)}`;
@@ -1207,7 +1274,7 @@ function fcRenderActBar() {
   if (fc.ed.open) fcRenderIO();
 }
 
-// 10-15 宇軒驗證回饋六：下面「已通過的」那一區（以前這裡是「上一版還沒看的（第 N 版）」，跨版本卡搬到上面清單）；沒有就是空字串
+// 10-15 宇軒驗證回饋六：下面「已通過的」那一區（跨版本卡在上面清單）；沒有就是空字串
 function fcPassedHtml(passed) {
   if (!passed || !passed.length) return "";
   return `<h3 class="fc-sub">已通過的</h3>
@@ -1443,7 +1510,8 @@ function fcExportAsk(gaps, win, left = 0) {
   const block = g["擋下"] || [], redo = g["退回清單"] || [];
   if (block.length) return { blocked: true, title: "還不能輸出", names: [], details: [`${block.join("；")}。處理好之後再按一次「輸出成品」。`] };
   const details = [...(g["說明"] || [])];
-  if (redo.length) details.push(`有 ${redo.length} 筆退回重做還沒重做，輸出的是重做之前的樣子：` + redo.map((x) => `${x["成品秒"] != null ? "成品" : "原片"} ${x["成品秒"] != null ? fcFmt(x["成品秒"]) : x["原片秒"] != null ? fcFmt(x["原片秒"]) : "—"}${x["原因"] ? " " + x["原因"] : ""}`).join("；"));
+  // 10-15 總檢查修正（1015-7）：給老師看的字「退回重做還沒重做」→「要重做還沒重做」（資料欄位 退回清單 照舊）
+  if (redo.length) details.push(`有 ${redo.length} 筆要重做還沒重做，輸出的是重做之前的樣子：` + redo.map((x) => `${x["成品秒"] != null ? "成品" : "原片"} ${x["成品秒"] != null ? fcFmt(x["成品秒"]) : x["原片秒"] != null ? fcFmt(x["原片秒"]) : "—"}${x["原因"] ? " " + x["原因"] : ""}`).join("；"));
   if (g["需留意說明"]) details.push(`${g["需留意說明"]}（「⚠️ 需留意」那一頁）`);
   details.push(...(g["提醒"] || []));
   details.push("輸出的是現在這一支成品，會另外存一支新的，舊的不會被蓋掉。");
@@ -1453,8 +1521,8 @@ function fcExportAsk(gaps, win, left = 0) {
 
 function fcConfirmExport(gaps, win) {
   return new Promise((resolve) => {
-    const st = fc.data["卡片統計"] || {};
-    const a = fcExportAsk(gaps, win, (st["還沒看"] || 0) + (st["要重做"] || 0));
+    // 10-15 總檢查修正（1015-7）：「還有 N 張」＝還要確認幾張（後端 卡片統計.還要確認，含跨版本卡；以前是還沒看＋要重做，漏了跨版本卡）
+    const a = fcExportAsk(gaps, win, fcLeftCount(fc.data));
     const dlg = document.createElement("dialog");
     dlg.className = "rv-confirm";
     dlg.setAttribute("aria-labelledby", "fc-export-title");
@@ -1483,7 +1551,7 @@ document.addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   const c = fc.cur && fcCard(fc.cur);
   if (e.key === " ") { e.preventDefault(); fc.video.paused ? fc.video.play().catch(() => {}) : fc.video.pause(); }
-  else if (e.key === "Enter" && e.target.tagName !== "BUTTON" && fcCanJudge(c)) {   // Enter＝通過（舊版也可以）；退回一律走按鈕
+  else if (e.key === "Enter" && e.target.tagName !== "BUTTON" && fcCanJudge(c)) {   // Enter＝通過（舊版也可以）；要修改一律走按鈕（E）
     e.preventDefault(); fcDecide(c, c["狀態"] === FC_ST.OK ? null : FC_ST.OK);
   }
   else if (k === "e") { e.preventDefault(); fcToggleFix(); }   // 10-15 要修改合併（1015-4）：E＝開「要修改」

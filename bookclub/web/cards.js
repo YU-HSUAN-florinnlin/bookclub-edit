@@ -614,8 +614,11 @@ function rvSpotsHtml(it) {
     ? `<p class="rv-warnline">這一句的 ${spots.length} 處以前分開決定過，做法不一樣：${esc(split.map((x) => `${rvFmt(x.start, 1)} ${x.tags && x.tags.length ? x.tags.join("、") : rvHowLabel(x["做法"])}${x["已確認"] ? "（已通過）" : "（還沒通過）"}`).join("；"))}。
         現在照各自的決定處理；在這張卡上按「通過」，就全部改成這張卡的做法。</p>`
     : `<p class="rv-meta">這張卡的決定套用到每一處：整句換掉是整句念一次、每一處都換成代號；只換名字、直接消音是每一處各自處理。</p>`;
+  // 10-15 總檢查修正（1015-7）：名字卡沒有 整句（沒有重念範圍那一列）時這張卡沒有「前後多 2 秒」開關，但「第 N 處」照開關播——
+  // 這裡補一顆（第 3 步；第 5 步卡片上已經有一顆）。有 整句 的照舊放在重念範圍那一列，一張卡還是只有一顆
+  const pad = !it["整句"] && !(cv.ctx && cv.ctx.mode === "第5步") ? cvPadHtml("rv-pad") : "";
   return `<p class="rv-meta">這一句裡有 ${spots.length} 處（同一個代號，合成這一張）：</p>
-    <div class="rv-field rv-row">${btns}</div>${note}`;
+    <div class="rv-field rv-row">${btns}${pad}</div>${note}`;
 }
 
 function rvBindSpots(it) {

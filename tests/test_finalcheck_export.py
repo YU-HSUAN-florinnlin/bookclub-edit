@@ -208,7 +208,7 @@ def test_web_blocked_dialog_has_no_export_button():
     assert b["blocked"] and b["title"] == "還不能輸出" and "標字版" in b["details"][0] and len(b["details"]) == 1
     assert not r["blocked"] and r["title"] == "還有 2 張沒看完，確定要輸出嗎？"
     d = "\n".join(r["details"])
-    assert "有 2 筆退回重做還沒重做" in d and "成品 9 第二句念錯" in d and "原片 30 x" in d and "重做之前的版本" in d
+    assert "有 2 筆要重做還沒重做" in d and "成品 9 第二句念錯" in d and "原片 30 x" in d and "重做之前的版本" in d
     dlg = _fn("fcConfirmExport")
     assert "a.blocked ?" in dlg and 'id="fc-export-yes"' in dlg and "知道了" in dlg and "<summary>詳細</summary>" in dlg
 
