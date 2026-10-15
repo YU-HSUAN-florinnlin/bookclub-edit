@@ -1497,7 +1497,7 @@ def decide_many(workdir: str | Path, keys: list[str], result: str | None, reason
                 sharers: dict[str, list[str]] | None = None) -> dict:
     """10-15 第5步2.0 第2段：第 5 步按「一張卡」通過／退回，回寫舊檔這張卡對到的每一筆（一次存檔）。
     keys：處理紀錄的鍵（這張卡在這一版對到的每一筆）；unlogged：沒登記的變動的鍵；flags：對到這張卡的整片退回 id
-    （卡片通過或取消退回時拿掉；再退回一次時換成新的原因）。
+    （卡片通過或取消要重做時拿掉；再退回一次時換成新的原因）。
     result：PASS／REDO／None（改回還沒看）。退回原因每一筆都寫同一句（第 1 段審查同意的反向規則：任一筆退回＝退回，
     所以卡片退回＝每一筆都退回、原因同一份；卡片通過＝每一筆都通過）。檢查的是舊成品時不能按（同 `decide_record`）。
     10-15 第2段審查修正（必修 1）：一筆處理紀錄可以對到好幾張卡（名字＋疊到它的重疊卡⋯）。owner＝按的這張卡（`finalcards.owner_key`），

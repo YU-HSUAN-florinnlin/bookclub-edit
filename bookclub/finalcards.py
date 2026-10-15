@@ -30,7 +30,7 @@ SRC_NEW, SRC_OLD = "新紀錄", "舊檔"
 EDITED = "已改，等重做"
 OLD_LABEL = "舊紀錄"   # 升級、組裝時對不到卡片的「待釐清」卡（31 號設計 §4.3：畫面標小字「舊紀錄」）
 STEP3_KINDS = needs.STEP3_TYPES
-# 卡片狀態（畫面上的標籤）：照這個順序算「還沒看完」
+# 卡片狀態（畫面上的標籤）：照這個順序算「還要確認」
 STATES = (needs.NOT_MADE, needs.NOT_SEEN, needs.PASSED, needs.RETURNED, EDITED)
 TODO_STATES = (needs.NOT_SEEN, needs.RETURNED, EDITED, needs.NOT_MADE)
 REDO_STATES = (needs.RETURNED, EDITED, needs.NOT_MADE)   # 「重做這幾張」算的
@@ -84,7 +84,7 @@ DELETED_NO_FIX = "這張卡已刪掉，沒有可以重做的"     # 10-15 總檢
 
 def passed_ok(c: dict) -> bool:
     """（純函式）10-15 總檢查修正（1015-7，A3）：這張卡放下面「已通過的」——這一版通過的，或「已通過（沿用上一版）」
-    （這一版沒處理到、之前最近那一版通過、沒按過「要修改」）。跨版本卡一律不是。"""
+    （範圍外 `這一版沒處理到`、之前最近那一版通過、沒按過「要修改」）。跨版本卡一律不是。"""
     if c.get("跨版本"):
         return False
     if c["狀態"] == needs.PASSED:
@@ -683,7 +683,7 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
         第 4 步照卡片重做（`finalcheck.card_redo_items`）
       - 刪掉、併入的卡 → 擋下（「這張卡已刪掉，沒有可以重做的」）
     - 取消（None）：走等重做那條路記了原因的卡 → 清掉等重做（`needs.clear_outside_redo`，A2）；看舊版時，最新一版自己的卡
-      在最新一版是退回、那一版不是通過（或 cancel_redo）→ 最新一版的取消退回；其他照舊（那一版的取消通過）。
+      在最新一版是退回、那一版不是通過（或 cancel_redo）→ 最新一版的取消要重做；其他照舊（那一版的取消通過）。
       cancel_redo＝畫面明說是「取消要重做」（同一張卡在那一版通過、最新版又要重做時分得清）
     - 通過：看舊版 → 記在那一版（`needs.decide_version`）；最新版照舊"""
     if result not in (needs.PASSED, needs.RETURNED, None):
@@ -722,7 +722,7 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
                 vrow = st.states.get((kno, int(version))) if old_view else None
                 latest_back = own and c["狀態"] == needs.RETURNED
                 if latest_back and (cancel_redo or not vrow or vrow.get("狀態") != needs.PASSED):
-                    pass   # 最新一版自己的卡：最新一版的取消退回（下面正常路）
+                    pass   # 最新一版自己的卡：最新一版的取消要重做（下面正常路）
                 elif cancel_redo:
                     raise ValueError("這張卡沒有要重做")
                 else:

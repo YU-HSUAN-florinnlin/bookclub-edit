@@ -413,7 +413,7 @@ def gen_rows(workdir: str | Path) -> list[dict]:
 
 
 def card_state(st: Store, card: str, version: int) -> str:
-    """這張卡在這一版的狀態；這一版沒有它的列＝還沒生成（這一版沒處理到、或範圍外）。"""
+    """這張卡在這一版的狀態；這一版沒有它的列＝還沒生成（範圍外，資料欄位 `這一版沒處理到`）。"""
     return (st.states.get((card, version)) or {}).get("狀態") or NOT_MADE
 
 
@@ -1043,7 +1043,7 @@ def add_export(workdir: str | Path, n: int, rec: dict) -> None:
 def decide_version(workdir: str | Path, n: int, card: str, result: str | None, options: list[str] | None = None,
                    extra: str = "") -> dict:
     """10-15 第5步2.0 第3段（31 號設計 §6.5）：在舊版（不是最新處理紀錄那一版）上按通過／取消——記在那一版的成品狀態，
-    不寫成品檢查檔（舊檔只認得最新那一份處理紀錄）。這一版沒處理到這張卡（沒有狀態列）不能判斷。回傳那一列。
+    不寫成品檢查檔（舊檔只認得最新那一份處理紀錄）。那一版沒有這張卡（範圍外，沒有狀態列）不能判斷。回傳那一列。
     10-15 總檢查修正（1015-7，A8）：退回（要修改）不記在那一版的狀態列（第 4 步看不到、會無聲失效），改記在卡片的等重做
     （`mark_outside_redo`），那一版的狀態列不動；回傳那一列（沒有列＝空的）。畫面由 `finalcards.decide` 分流，一般不會走到這裡。"""
     w = Path(workdir)
@@ -1408,7 +1408,7 @@ def apply_check(st: Store, v: dict, check: dict, index: dict, now: str, *, src_u
             st.log(now, k, step, "等重做", None, {"起因": want[k]["起因"]})
         elif (k not in want and cur and cur.get("起因") == WHY_RETURNED and not cur.get("版本號")
               and ((k, n) in st.states or _in_range(c, v))):
-            # 10-15 第5步2.0 第3段：這一版沒處理到（範圍外）的卡不清——退回的是別的範圍那一版，這一版的成品檢查檔看不到它；
+            # 10-15 第5步2.0 第3段：範圍外（`這一版沒處理到`）的卡不清——退回的是別的範圍那一版，這一版的成品檢查檔看不到它；
             # 在舊版上退回的（帶 `版本號`）由那一版的判斷或之後組裝的新版本清（`decide_version`、`build_version`）
             c["等重做"] = None
             c["更新時間"] = now
@@ -1455,7 +1455,7 @@ def set_reason(workdir: str | Path, card: str, options: list[str] | None, extra:
 
 
 def mark_outside_redo(workdir: str | Path, card: str, options: list[str] | None, extra: str = "") -> bool:
-    """10-15 宇軒驗證回饋四：「已通過（沿用上一版）」（範圍外、這一版沒處理到）的卡在最新版按「要修改」記的原因。
+    """10-15 宇軒驗證回饋四：「已通過（沿用上一版）」（範圍外，`這一版沒處理到`）的卡在最新版按「要修改」記的原因。
     10-15 宇軒驗證回饋六：跨版本卡、看舊版時的任何卡按「要修改」也走這裡（finalcards.decide 帶 version 的退回）。
     這一版沒有它的狀態列（`set_reason` 記不了），記在卡片的 `等重做`：{起因: 改了, 時間, 退回原因: {選項, 補充}}——
     畫面變「要重做」（已改，等重做）、算進「重做這幾張」；下次組裝 `build_version` 清掉，而且新版不沿用之前的通過

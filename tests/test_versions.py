@@ -498,6 +498,33 @@ def test_api_versions():
         httpd.server_close()
 
 
+def test_api_cancel_redo_on_latest_page_without_version():
+    """1015-7 合併收尾：前端「取消要重做」的送法——最新版頁面 `POST /api/final/card {id, 結果: null, 選項: [], 補充: ""}`
+    （不帶版本、不帶「取消要重做」），用在 `範圍外改了`＋有退回原因的卡 → 清掉等重做（不是回「這張是上一版通過的…」）。"""
+    w = _three_versions()
+    httpd, base = _serve(w)
+    try:
+        n1 = _by(tn._quiet(_get, base, "/api/final")["卡片"], "名字:1")
+        r = tn._quiet(_post, base, "/api/final/card", {"id": n1["id"], "結果": "退回", "選項": ["聲音不像、不自然"], "補充": "快"})
+        assert r["卡片"]["範圍外改了"] and r["卡片"]["退回原因"]["補充"] == "快" and r["統計"]["要重做"] == 1
+        r = tn._quiet(_post, base, "/api/final/card", {"id": n1["id"], "結果": None, "選項": [], "補充": ""})
+        assert r["ok"] and r["統計"]["要重做"] == 0, r
+        c = r["卡片"]
+        assert c["這一版沒處理到"] and not c["範圍外改了"] and c["已通過的"] and c["退回原因"] is None
+        assert not needs.load(w).cards[n1["卡號"]].get("等重做")
+        d = tn._quiet(_get, base, "/api/final")
+        assert d["卡片統計"]["要重做"] == 0 and _by(d["卡片"], "名字:1")["已通過的"]
+        # 沒有等重做的時候照舊擋（通過、取消都不是這一版做的）
+        try:
+            tn._quiet(_post, base, "/api/final/card", {"id": n1["id"], "結果": None, "選項": [], "補充": ""})
+            raise AssertionError("沒有要重做的範圍外卡，取消照舊擋")
+        except urllib.error.HTTPError as e:
+            assert "上一版通過的" in json.loads(e.read().decode("utf-8"))["error"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_windows_copy_asks_when_not_latest():
     """10-15 第3段審查修正（建議，宇軒定前暫定）：複製到 Windows 拿的最終成品不是最新一版 → 先問一次；確定才複製。"""
     from bookclub import fileio

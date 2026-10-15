@@ -453,8 +453,11 @@ def test_page_renders_and_buttons_post_right_things():
           await open("學員段落:T005"); await FC_CARD_CTX.post("/api/turns/save", {id: "T005", "說話者": "老師"}); await FC_CARD_CTX.reload();
           return {log: H.log, state: fcCards().find((c) => c["第3步鍵"] === "學員段落:T005")["狀態"]};"""},
         {"名稱": "舊檔模式", "程式": """
-          const old = JSON.parse(JSON.stringify(DATA)); old["卡片來源"] = "舊檔"; old["卡片統計"] = {"還沒看": 0, "要重做": 0};
-          old["卡片"].forEach((c) => { c["狀態"] = "通過"; });
+          // 10-15 總檢查修正（1015-7）：照後端舊檔模式真的會給的樣子（finalcards.build：沒有跨版本卡、每張卡的 已通過的 跟狀態一致、
+          // 卡片統計 帶 還要確認）——以前只改狀態，後端算好的 已通過的 還是 false，畫面照它算成「還有 N 張沒看」
+          const old = JSON.parse(JSON.stringify(DATA)); old["卡片來源"] = "舊檔"; old["跨版本卡片"] = [];
+          old["卡片"].forEach((c) => { c["狀態"] = "通過"; c["已通過的"] = true; });
+          old["卡片統計"] = {"還沒看": 0, "要重做": 0, "已通過的": old["卡片"].length, "還要確認": 0};
           H.apiGetData['/api/final'] = old; H.api['/api/final/edited'] = {'記了': false};
           await renderFinal();
           const before = {status: document.getElementById("fc-status").innerHTML, lower: document.getElementById("fc-actbar").innerHTML};
@@ -1066,7 +1069,9 @@ def test_1015_7_page():
         return
     d = _shape_6()
     red = {"選項": ["聲音不像、不自然"], "補充": ""}
-    d["卡片"][3].update({"狀態": "已改，等重做", "這一版沒處理到": False, "上一版已通過": None, "範圍外改了": True, "退回原因": red})
+    # 已通過的＝後端 finalcards.passed_ok 會給的值（範圍外改了 → false；複製來的卡原本是 true）
+    d["卡片"][3].update({"狀態": "已改，等重做", "這一版沒處理到": False, "上一版已通過": None, "範圍外改了": True, "退回原因": red,
+                       "已通過的": False})
     d["卡片"][4].update({"不能修改": True, "不能修改原因": "這張卡已刪掉，沒有可以重做的"})
     got = _run_page([
         {"名稱": "一開啟", "程式": """
