@@ -57,7 +57,8 @@ _PURE = (_ESC + _const(FCJS, "FC_AB_CONTEXT") + _const(FCJS, "FC_ST") + _const(F
          + _const(FCJS, "FC_NO_REASON") + _fn(FCJS, "fcWhyLine") + _fn(FCJS, "fcSharedLine") + _fn(FCJS, "fcRedoCount")
          + _const(FCJS, "FC_NOTE_FIELDS") + _fn(FCJS, "fcNoteOnly")
          + _fn(FCJS, "fcTabList") + _fn(FCJS, "fcPickTab") + _fn(FCJS, "fcStepPick") + _fn(FCJS, "fcNextUnseen")
-         + _fn(FCJS, "fcSrcTime") + _fn(FCJS, "fcOutTime") + _fn(FCJS, "fcVclip") + _fn(FCJS, "fcCardAbPlan")
+         + _fn(FCJS, "fcSrcTime") + _fn(FCJS, "fcOutTime") + _fn(FCJS, "fcPadOf") + _fn(FCJS, "fcVclip") + _fn(FCJS, "fcCardAbPlan")
+         + _fn(FCJS, "fcOrigText") + _fn(FCJS, "fcCardTextHtml")
          + _fn(FCJS, "fcVersionText") + _fn(FCJS, "fcVersionMenuHtml") + _fn(FCJS, "fcCanJudge") + _fn(FCJS, "fcCanReturn"))
 
 
@@ -158,7 +159,9 @@ def test_time_mapping_matches_backend_and_ab_plan():
         back: {json.dumps(pts)}.map((t) => fcOutTime(t, P)).map((o) => fcSrcTime(o, P)),
         now: fcCardAbPlan({{"原片": [100, 104], "成品": [80, 85]}}, "現在"), orig: fcCardAbPlan({{"原片": [100, 104], "成品": [80, 85]}}, "原本"),
         cut1: fcCardAbPlan({{"原片": [200, 210], "成品": null}}, "現在"), cut2: fcCardAbPlan({{"原片": [200, 210], "成品": null}}, "原本"),
-        noSrc: fcCardAbPlan({{"原片": null, "成品": [1, 2]}}, "原本")}}));""")
+        noSrc: fcCardAbPlan({{"原片": null, "成品": [1, 2]}}, "原本"),
+        now0: fcCardAbPlan({{"原片": [100, 104], "成品": [80, 85]}}, "現在", 0), orig0: fcCardAbPlan({{"原片": [100, 104], "成品": [80, 85]}}, "原本", 0),
+        pt0: fcCardAbPlan({{"原片": [100, 104], "成品": [80, 80]}}, "現在", 0)}}));""")
     want = [round(fc.to_output_time(t, plist), 3) for t in pts]
     assert [round(x, 3) for x in got["out"]] == want, (got["out"], want)
     assert got["cut"] is None and got["none"] == 5
@@ -166,6 +169,10 @@ def test_time_mapping_matches_backend_and_ab_plan():
     assert got["now"] == {"video": {"from": 78, "to": 87, "muted": False}, "audio": None}
     assert got["orig"]["video"] == {"from": 78, "to": 86, "muted": True} and got["orig"]["audio"] == "/api/audio?start=98.00&end=106.00"
     assert got["cut1"] is None and got["cut2"]["video"] is None and got["noSrc"] is None
+    # 10-15 宇軒驗證回饋：「前後多聽 2 秒」開關關著（pad＝0）只播修改的那一段；只有一個時間點的照樣前後 2 秒
+    assert got["now0"] == {"video": {"from": 80, "to": 85, "muted": False}, "audio": None}
+    assert got["orig0"]["video"] == {"from": 80, "to": 84, "muted": True} and got["orig0"]["audio"] == "/api/audio?start=100.00&end=104.00"
+    assert got["pt0"]["video"] == {"from": 78, "to": 82, "muted": False}
 
 
 def test_fileio_which_line_and_redo_return():
@@ -256,6 +263,7 @@ def test_page_renders_and_buttons_post_right_things():
           await renderFinal();
           return {status: document.getElementById("fc-status").innerHTML, right: document.getElementById("fc-right").innerHTML,
                   lower: document.getElementById("fc-lower").innerHTML, tl: document.getElementById("fc-tl").innerHTML,
+                  bar: document.getElementById("fc-actbar").innerHTML, left: contentEl.innerHTML,
                   n: DATA["卡片"].length, src: DATA["卡片來源"]};"""},
         {"名稱": "通過", "程式": """
           await open("名字:1"); await click("fc-pass"); return H.log;"""},
@@ -300,7 +308,7 @@ def test_page_renders_and_buttons_post_right_things():
           old["卡片"].forEach((c) => { c["狀態"] = "通過"; });
           H.apiGetData['/api/final'] = old; H.api['/api/final/edited'] = {'記了': false};
           await renderFinal();
-          const before = {status: document.getElementById("fc-status").innerHTML, lower: document.getElementById("fc-lower").innerHTML};
+          const before = {status: document.getElementById("fc-status").innerHTML, lower: document.getElementById("fc-actbar").innerHTML};
           await open("學員段落:T005"); await FC_CARD_CTX.post("/api/turns/save", {id: "T005", "校對稿": "x"});
           const after = document.getElementById("fc-status").innerHTML;
           old["開發者"] = true; await renderFinal();
@@ -315,7 +323,12 @@ def test_page_renders_and_buttons_post_right_things():
     assert "改過的還沒重做" in v["status"]                                   # T003 退回了 → 要重做
     assert "原本 ▶" in v["right"] and "現在 ▶" in v["right"] and 'id="fc-pass"' in v["right"] and "第 1／" in v["right"]
     assert re.search(r'class="idtag"[^>]*>#\d+<', v["right"])                 # #103：每張卡顯示 #編號
-    assert "重做這幾張（1 張）" in v["lower"] and "＋在這裡新增修改" in v["lower"] and 'data-tab="還沒看完"' in v["lower"]
+    # 10-15 宇軒驗證回饋：兩顆按鈕搬到時間軸下面、「看過 P%」之下（以前在清單底下 fc-lower）
+    assert "重做這幾張（1 張）" in v["bar"] and "＋在這裡新增修改" in v["bar"] and 'data-tab="還沒看完"' in v["lower"]
+    assert "重做這幾張" not in v["lower"] and "＋在這裡新增修改" not in v["lower"]
+    assert v["left"].index("fc-seenpct") < v["left"].index('id="fc-actbar"') < v["left"].index('id="fc-io"')
+    assert 'id="fc-pad"' in v["right"] and "前後多聽 2 秒" in v["right"] and 'id="fc-pad" checked' not in v["right"]   # 開關預設關
+    assert "fc-preview" not in v["right"]   # 舊預覽的霧化樣式不能套到卡片的字
     assert "fc-back" in v["tl"] and "fc-todo" in v["tl"]
     posts = [x for x in got["通過"] if x[0] == "POST"]
     assert posts[0][1] == "/api/final/card" and posts[0][2]["結果"] == "通過" and posts[0][2]["id"].startswith("K")
@@ -359,6 +372,27 @@ def test_page_renders_and_buttons_post_right_things():
 
 
 
+def test_card_two_lines():
+    # 10-15 宇軒驗證回饋：AI 重新生成的卡列「原本：」「改成：」兩行；沒改字兩行一樣照列；沒有要念的字照舊一行摘要
+    if not NODE:
+        return
+    got = _node(_PURE + """
+      const fcWho = (s) => s; function fcPreview() { return "摘要"; }
+      const stu = {"類型": "學員段落", "原文": "我跟小美說", "校對稿": "我跟小美說"};
+      const nm = {"類型": "名字", "整句": {"原文": "剛剛小美分享得很好"}};
+      console.log(JSON.stringify({
+        two: fcCardTextHtml({"要念的字": ["我跟Amy說"]}, stu), same: fcCardTextHtml({"要念的字": ["我跟小美說"]}, stu),
+        name: fcCardTextHtml({"要念的字": ["剛剛Amy分享得很好"]}, nm), none: fcCardTextHtml({"要念的字": []}, stu),
+        noItem: fcCardTextHtml({"要念的字": ["老師的字"]}, null),
+        ov: fcOrigText({"類型": "重疊", "老師整句": null, "老師文字": "嗯", "學員文字": "我覺得"}) }));""")
+    assert "原本：</span>我跟小美說" in got["two"] and "改成：</span>我跟Amy說" in got["two"]
+    assert got["same"].count("我跟小美說") == 2
+    assert "原本：</span>剛剛小美分享得很好" in got["name"] and "改成：</span>剛剛Amy分享得很好" in got["name"]
+    assert got["none"] == '<p class="fc-cardtext">摘要</p>'
+    assert "找不到原句" in got["noItem"] and "改成：</span>老師的字" in got["noItem"]
+    assert got["ov"] == "嗯／我覺得"
+
+
 # ---------- 10-15 第5步2.0 第3段：版本 ----------
 
 def test_versions_pure():
@@ -368,7 +402,7 @@ def test_versions_pure():
       const L = [{"版本號": 3, "時間": "2026-10-15T14:20:00", "標記": "0-97", "最新": true}, {"版本號": 2, "時間": "2026-10-15T10:05:00", "標記": "0-3", "最新": false}];
       console.log(JSON.stringify({
         text: [fcVersionText(L[0], false), fcVersionText(L[1], false), fcVersionText(L[1], true)],
-        one: fcVersionMenuHtml({"版本清單": [L[0]]}),
+        one: fcVersionMenuHtml({"版本清單": [L[0]]}), none: fcVersionMenuHtml({"版本清單": []}),
         menu: fcVersionMenuHtml({"版本清單": L, "目前版本": 2}),
         dev: fcVersionMenuHtml({"版本清單": L, "目前版本": 2, "開發者": true, "看的是舊版": true}),
         devNew: fcVersionMenuHtml({"版本清單": L, "目前版本": 3, "開發者": true, "看的是舊版": false}),
@@ -383,7 +417,8 @@ def test_versions_pure():
               fcCanReturn({"狀態": "還沒生成"}, false)],
         judge: [fcCanJudge({"狀態": "還沒看"}), fcCanJudge({"狀態": "還沒看", "跨版本": true}), fcCanJudge({"狀態": "通過", "這一版沒處理到": true}), fcCanJudge(null)] }));""")
     assert got["text"] == ["第 3 版　10/15 14:20（最新）", "第 2 版　10/15 10:05", "第 2 版　10/15 10:05　0-3"]
-    assert got["one"] == ""                                    # 只有一版：不出現選單
+    # 10-15 宇軒驗證回饋：只有一版也出現選單（只有一項）；一版都沒有才不出現（以前只有一版是空字串）
+    assert "看哪一版" in got["one"] and got["one"].count("<option") == 1 and got["none"] == ""
     assert "看哪一版" in got["menu"] and 'value="2" selected' in got["menu"] and "以這一版為基礎再組裝" not in got["menu"]
     assert "0-97" not in got["menu"] and "0-97" in got["dev"]   # 範圍標記只有開發者看得到
     assert "以這一版為基礎再組裝" in got["dev"] and "以這一版為基礎再組裝" not in got["devNew"]
@@ -452,7 +487,7 @@ def test_version_page_renders():
           await click("fc-pass");
           const log = H.log.slice(); H.log.length = 0;
           await fcExport();
-          return {right, lower: document.getElementById("fc-lower").innerHTML, video: document.getElementById("fc-video").getAttribute("src"),
+          return {right, lower: document.getElementById("fc-lower").innerHTML + document.getElementById("fc-actbar").innerHTML, video: document.getElementById("fc-video").getAttribute("src"),
                   log, exp: H.log};"""}], data=old)
     o = got["舊版"]
     assert "錯誤" not in o, o

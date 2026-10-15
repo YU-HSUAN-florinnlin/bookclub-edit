@@ -53,6 +53,13 @@ def test_cards_from_needs_and_legacy_agree():
     assert t3["退回原因"]["補充"] == "第二格念錯" and t3["可重新生成"] and t3["編號"] == int(t3["卡號"][1:])
     assert _by(cards, "名字:1")["狀態"] == needs.PASSED and _by(cards, "學員段落:T005")["狀態"] == needs.NOT_SEEN
     assert _by(cards, "刪除段落:S1")["可重新生成"] is False   # 剪掉：重做只會重新放一次
+    # 10-15 宇軒驗證回饋：AI 重新生成的卡帶「要念的字」（處理紀錄的「文字」，卡片上「改成：」那一行）；剪掉的沒有
+    # （假處理紀錄沒有「文字」，這裡另外用合成紀錄驗 _rec_info）
+    assert isinstance(t3["要念的字"], list) and _by(cards, "刪除段落:S1")["要念的字"] == []
+    info = finalcards._rec_info([{"類型": "學員重念", "文字": "第一格"}, {"類型": "學員重念", "文字": "第二格"},
+                                 {"類型": "學員重念", "文字": "第一格"}, {"類型": "名字消音", "文字": "不算"},
+                                 {"類型": "換聲音", "文字": " "}, {"類型": "名字整句換掉", "文字": "剛剛Amy分享"}])
+    assert info["要念的字"] == ["第一格", "第二格", "剛剛Amy分享"]
     kinds = sorted(c["類型"] for c in cards)
     assert needs.UNLOGGED in kinds and needs.UNCLEAR in kinds   # 沒登記的變動、對不到卡片的停格
     # 退回讀舊檔：同一份判斷，卡片狀態一樣

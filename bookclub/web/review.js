@@ -215,6 +215,8 @@ function rvToggleDrawer(id, btn) {
 
 // 10-07 宇軒：「代號對照」抽屜——檢查後面內容的時候隨時叫得出來：上半 本名 → 代號 → 哪幾位學員 N → 來源；
 // 下半 全部代號分女男，標已用（給了誰）／未用。資料是 GET /api/review 的「代號對照」（後端 epcodes.code_table，只讀）
+// 10-15 宇軒驗證回饋（「視覺上太花、太繁複」）：本名後面的「也寫成⋯⋯」不顯示；「來源」整欄變灰；
+// 已用的代號只寫給了誰（拿掉「已用」兩個字），未用的代號連框框一起變淡——最明顯的是已經配出去的名字
 function rvRenderCodeMap() {
   const el = document.getElementById("rv-codes");
   if (!el) return;
@@ -222,17 +224,17 @@ function rvRenderCodeMap() {
   const rows = t["對照"] || [];
   const stuNo = (n) => n.replace(/^學員(\d+)$/, "學員 $1");
   const body = rows.length ? rows.map((r) => `<tr>
-      <td><b>${esc(r["本名"])}</b>${(r["其他寫法"] || []).length ? `<span class="rv-meta">（也寫成 ${esc(r["其他寫法"].join("、"))}）</span>` : ""}</td>
+      <td><b>${esc(r["本名"])}</b></td>
       <td>${r["代號"] ? `<b>${esc(r["代號"])}</b>` : '<span class="rv-warnline">還沒代號</span>'}${r["自動配未改過"] ? ' <span class="rv-tag" title="程式自動配的，人還沒改過">自動配</span>' : ""}</td>
       <td>${esc((r["學員"] || []).map(stuNo).join("、") || "—")}</td>
-      <td>${esc(r["來源"] || "—")}${r["性別"] ? `<span class="rv-meta">・${esc(r["性別"])}（${esc(r["性別依據"] || "")}）</span>` : ""}</td></tr>`).join("")
+      <td class="rv-cm-src">${esc(r["來源"] || "—")}${r["性別"] ? `・${esc(r["性別"])}（${esc(r["性別依據"] || "")}）` : ""}</td></tr>`).join("")
     : '<tr><td colspan="4" class="rv-meta">還沒有人有代號：先在「開始前 4 件事」② 選學員是誰。</td></tr>';
   const noReal = t["還沒選本名"] || [];
   const pool = t["名單"] || {};
-  const chips = (list) => list.map((e) => `<span class="rv-codechip${e["給了"].length ? " used" : ""}">${esc(e["代號"])}
-      <span class="rv-meta">${e["給了"].length ? `已用（${esc(e["給了"].join("、"))}）` : "未用"}</span>${(e["撞名"] || []).length ? `<span class="rv-warnline">撞名：${esc(e["撞名"].join("、"))}</span>` : ""}</span>`).join("");
+  const chips = (list) => list.map((e) => `<span class="rv-codechip${e["給了"].length ? " used" : " unused"}">${esc(e["代號"])}
+      ${e["給了"].length ? `<span class="rv-cm-who">${esc(e["給了"].join("、"))}</span>` : '<span class="rv-meta">未用</span>'}${(e["撞名"] || []).length ? `<span class="rv-warnline">撞名：${esc(e["撞名"].join("、"))}</span>` : ""}</span>`).join("");
   el.innerHTML = `<p class="rv-warnline">截圖或分享螢幕時，這裡會露出本名。用完再按一次「代號對照」收起來。</p>
-    <table class="rv-codemap"><thead><tr><th>本名</th><th>代號</th><th>學員</th><th>來源</th></tr></thead><tbody>${body}</tbody></table>
+    <table class="rv-codemap"><thead><tr><th>本名</th><th>代號</th><th>學員</th><th class="rv-cm-src">來源</th></tr></thead><tbody>${body}</tbody></table>
     ${noReal.length ? `<p class="rv-meta">還沒選本名：${esc(noReal.map(stuNo).join("、"))}</p>` : ""}
     <h3>全部代號</h3>
     ${[["女", "女生名單"], ["男", "男生名單"], ["其他", "自己打的、舊的"]].filter(([k]) => (pool[k] || []).length)

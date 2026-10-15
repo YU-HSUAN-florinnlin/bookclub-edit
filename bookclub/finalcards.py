@@ -52,11 +52,21 @@ def _span(rows: list, field: str) -> list | None:
     return [round(min(a), 3), round(max(b), 3)] if a else None
 
 
+# 10-15 宇軒驗證回饋：AI 重新生成聲音的紀錄類型（學員重念、名字整句換掉、換聲音、學員名字換代號）——卡片上列「原本／改成」兩行
+GEN_TEXT_KINDS = ("學員重念", "名字整句換掉", "換聲音", "學員名字換代號")
+
+
 def _rec_info(recs: list[dict]) -> dict:
     """一張卡對到的處理紀錄 → 畫面要的幾個小欄位。"""
+    said: list[str] = []
+    for r in recs:   # 10-15 宇軒驗證回饋：要念的字＝處理紀錄的「文字」（標字版的「餵給模型的文字」），同一張卡幾筆照順序、重複的不列
+        t = str(r.get("文字") or "").strip()
+        if r.get("類型") in GEN_TEXT_KINDS and t and t not in said:
+            said.append(t)
     return {"要人聽": any(fc.needs_look(r) for r in recs),
             # 有生成檔＝退回會換一種念法重新生成；沒有（剪掉、消音、停格、空隙）＝重做只會重新放一次（31 號設計 §6.4）
-            "可重新生成": any(fc.gen_id(r) or r.get("檔案") for r in recs)}
+            "可重新生成": any(fc.gen_id(r) or r.get("檔案") for r in recs),
+            "要念的字": said}
 
 
 def legacy_state(results: list[str | None]) -> str:
@@ -311,13 +321,13 @@ def _from_old(workdir: Path, log: dict | None, check: dict, index: dict, flags_t
                     "退回原因": {"選項": [], "補充": (un_dec.get(uk) or {}).get("原因", "")} if state == needs.RETURNED else None,
                     "沿用自": None, "原片": u["原片"], "成品": [t, t] if t is not None else None, "紀錄鍵": [], "未登記鍵": [uk],
                     "整片退回": [], "第幾版": None, "舊紀錄": False, "說明": "聲音變了但沒有紀錄：聽一下，正常就按通過",
-                    "要人聽": False, "可重新生成": False, "刪掉了": False, "第3步改過": False})
+                    "要人聽": False, "可重新生成": False, "要念的字": [], "刪掉了": False, "第3步改過": False})
     for x in check.get("整片退回") or []:
         out.append({"id": f"整片:{x['id']}", "卡號": None, "編號": None, "類型": needs.UNCLEAR, "第3步鍵": None,
                     "狀態": needs.RETURNED, "退回原因": {"選項": [], "補充": x.get("原因", "")}, "沿用自": None,
                     "原片": [x.get("原片秒"), x.get("原片秒")], "成品": [x.get("成品秒"), x.get("成品秒")], "紀錄鍵": [],
                     "未登記鍵": [], "整片退回": [x["id"]], "第幾版": None, "舊紀錄": False,
-                    "說明": flags_text.get(x["id"]) or "不確定是哪一種", "要人聽": False, "可重新生成": False, "刪掉了": False, "第3步改過": False})
+                    "說明": flags_text.get(x["id"]) or "不確定是哪一種", "要人聽": False, "可重新生成": False, "要念的字": [], "刪掉了": False, "第3步改過": False})
     return out
 
 
