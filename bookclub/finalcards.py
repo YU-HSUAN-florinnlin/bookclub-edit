@@ -219,7 +219,8 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
                 state, step3_changed = EDITED, True
         uk = un_of.get(k)
         info = _rec_info(recs)
-        why = (row or {}).get("退回原因") if state == needs.RETURNED else None
+        # 10-15 要修改合併（1015-4）：「要修改」先記原因（退回）再套用修改（已改，等重做）——已改的卡照樣帶這一版記的原因
+        why = (row or {}).get("退回原因") if state == needs.RETURNED or (state == EDITED and (row or {}).get("狀態") == needs.RETURNED) else None
         note = ""
         if c["類型"] == needs.UNLOGGED:
             note = "聲音變了但沒有紀錄：聽一下，正常就按通過"
@@ -600,7 +601,10 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
         raise KeyError(f"沒有這張卡：{card_id}")
     if c.get("這一版沒處理到"):
         raise ValueError("這一版沒處理到這張卡，不能判斷")
-    if c["狀態"] in (needs.NOT_MADE, EDITED):
+    # 10-15 要修改合併（1015-4）：「要修改」的改字、改範圍存檔之後（卡片已經「已改，等重做」）還要記原因——
+    # 已改的卡只要還在這一版成品裡（有對到處理紀錄），可以退回（記原因）；通過照舊不行
+    in_product = c["狀態"] == EDITED and result == needs.RETURNED and bool(c.get("紀錄鍵"))
+    if c["狀態"] in (needs.NOT_MADE, EDITED) and not in_product:
         raise ValueError("這張卡還沒做進成品（改過或新增的）：按「重做這幾張」做好之後再看")
     text = needs.reason_text(options, extra) if result == needs.RETURNED else ""
     old = {needs.PASSED: fc.PASS, needs.RETURNED: fc.REDO, None: None}[result]

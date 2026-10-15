@@ -1,15 +1,16 @@
 "use strict";
 
 /* 第 5 步「成品檢查」（10-15 第5步2.0 第2段：改成用第 3 步的卡片，31 號設計 §6）。
- * 版面：頂端「5 成品檢查」＋一句狀態＋「輸出成品」
- *   → 左邊成品影片＋時間軸（時間軸上的點＝卡片，照狀態上色：還沒看／通過／退回）＋「看過 P%」；
- *     右邊「目前這張卡」：第 3 步那張卡＋狀態標籤＋「原本 ▶」「現在 ▶」＋通過／退回／改
+ * 版面：頂端「5 成品檢查」＋「看哪一版」＋「輸出成品」，一句狀態另起一行在標題下面（10-15 要修改合併（1015-4）順手）
+ *   → 左邊成品影片＋時間軸（時間軸上的點＝卡片，照狀態上色：還沒看／通過／要重做）＋「看過 P%」；
+ *     右邊「目前這張卡」：第 3 步那張卡＋狀態標籤＋「原本 ▶」「現在 ▶」＋通過／要修改／上一張／下一張
+ *     （10-15 要修改合併（1015-4）：「退回」「改」合成一顆「要修改」，見 fcFixHtml）
  *   → 下面：卡片清單（第 3 步的分頁＋「還沒看完」；最右邊收「第 3 步選定不修改」「⚠️ 需留意」）。
  *   「＋在這裡新增修改」「重做這幾張（N 張）」（有退回或改過才出現）：10-15 宇軒驗證回饋，搬到左邊「看過 P%」那一行下面。
- * 卡片的內容、「改」裡面的東西是第 3 步的卡片元件（cards.js），走第 3 步原本的 API；改完那張卡「已改，等重做」。
+ * 卡片的內容、「要修改」帶出的修改控制區是第 3 步的卡片元件（cards.js），走第 3 步原本的 API；改完那張卡「已改，等重做」。
  * 「重做這幾張」：第 4 步開始執行、跳到第 4 步；跑完自動跳回第 5 步（31 號設計 §9 問題 2 定案）。
  * 10-15 第5步2.0 第3段（版本，31 號設計 §6.5–6.7）：有兩版以上，頂端多「看哪一版」選單（fc.ver＝看哪一版，null＝最新）；
- *   舊版：卡片照那一版的判斷、沒處理到的變淡；可以按通過（記在那一版）、可以輸出那一版；不能退回（10-15 第3段審查修正）、不能改、不能新增、不能重做。
+ *   舊版：卡片照那一版的判斷、沒處理到的變淡；可以按通過（記在那一版）、可以輸出那一版；「要修改」停用（10-15 要修改合併（1015-4））、不能新增、不能重做。
  *   最新版下面多「上一版還沒看的（第 N 版）」那一區（範圍組裝時那一版範圍外、舊版還沒看完的卡）；重做過的卡多「上一版 ▶」。
  * 資料：GET /api/final（?版本=N 看舊版；卡片、狀態、第 3 步資料）；存檔：/api/final/card（通過／退回，回寫舊檔每一筆）、/api/final/edited、
  * /api/final/watched、/api/final/export（bookclub/finalcards.py、finalcheck.py）。依賴 app.js 的 apiGet／apiPost／esc／contentEl。 */
@@ -24,7 +25,9 @@ function fcSetAbPad(on) { try { localStorage.setItem(FC_PAD_KEY, on ? "1" : "0")
 
 let fcBackKey = null;   // 從第 3 步按「回第 5 步成品檢查」回來時，回到出發的那張卡（或「第 3 步選定不修改」那一列）
 const fc = { ver: null, data: null, video: null, audio: null, cur: null, seen: [], seg: null, sentRanges: "", timer: null, lastT: 0,
-  ab: null, span: null, redoOpen: false, editOpen: false, picks: [], ed: { open: false } };
+  ab: null, span: null, ed: { open: false }, pend: [],
+  // 10-15 要修改合併（1015-4）：「要修改」那一塊（open＝開著、card＝哪一張、pick＝哪裡出問題、extra＝補充）
+  fix: { open: false, card: null, pick: null, extra: "", busy: false, err: "" }, fixEd: null };
 
 function fcFmt(t, d = 1) { return typeof rvFmt === "function" ? rvFmt(t, d) : String(t); }
 function fcSpan(r2) {
@@ -46,6 +49,7 @@ function fcShortStamp(iso) {
 const FC_ST = { NOT_MADE: "還沒生成", TODO: "還沒看", OK: "通過", BACK: "退回", EDITED: "已改，等重做" };
 const FC_TODO = [FC_ST.TODO, FC_ST.BACK, FC_ST.EDITED, FC_ST.NOT_MADE];   // 「還沒看完」那一頁
 const FC_REDO = [FC_ST.BACK, FC_ST.EDITED, FC_ST.NOT_MADE];               // 「重做這幾張」算的
+const FC_REDO_LABEL = "要重做";   // 10-15 要修改合併（1015-4）：退回、已改，等重做的標籤字
 
 // 卡片標籤：{text, cls, small: [小字]}（31 號設計 §6.3）
 function fcCardLabel(c) {
@@ -57,9 +61,11 @@ function fcCardLabel(c) {
   if (c["第幾版"]) small.push(`第 ${c["第幾版"]} 版`);
   if (c["舊紀錄"]) small.push("舊紀錄");
   if (c["狀態"] === FC_ST.BACK && (c["連帶自"] || []).length) small.push("連帶");   // 10-15 第2段審查修正（必修 1）
-  if (c["狀態"] === FC_ST.EDITED && c["第3步改過"]) small.push("在第 3 步改過");     // 10-15 第2段審查修正（第 6 條）
+  if (c["狀態"] === FC_ST.EDITED) small.push(c["第3步改過"] ? "在第 3 步改過" : "已改");   // 10-15 第2段審查修正（第 6 條）
   const cls = { [FC_ST.NOT_MADE]: "made", [FC_ST.TODO]: "todo", [FC_ST.OK]: "ok", [FC_ST.BACK]: "back", [FC_ST.EDITED]: "edited" }[c["狀態"]] || "todo";
-  return { text: c["狀態"] === FC_ST.OK ? "通過 ✓" : c["狀態"], cls, small };
+  // 10-15 要修改合併（1015-4）：退回、已改，等重做對老師一律寫「要重做」（已改的小字「已改」；原因在底下一行）
+  const text = c["狀態"] === FC_ST.OK ? "通過 ✓" : [FC_ST.BACK, FC_ST.EDITED].includes(c["狀態"]) ? FC_REDO_LABEL : c["狀態"];
+  return { text, cls, small };
 }
 
 // 退回原因那一行（選項＋補充）
@@ -72,10 +78,11 @@ function fcReasonText(why) {
 
 // 10-15 第2段審查修正：退回沒選原因也沒補充（後端舊檔那一格寫的就是這一句）
 const FC_NO_REASON = "退回（沒寫原因）";
-// 退回那張卡底下那一行（純函式）：有原因＝「原因：…」；沒寫原因＝「退回（沒寫原因）」
+// 退回那張卡底下那一行（純函式）：有原因＝「原因：…」；沒寫原因＝「要重做（沒寫原因）」（10-15 要修改合併（1015-4）：標籤字改「要重做」）
+const FC_NO_REASON_SHOW = "要重做（沒寫原因）";
 function fcWhyLine(c) {
   const why = fcReasonText(c["退回原因"]);
-  return why && why !== FC_NO_REASON ? `原因：${why}` : FC_NO_REASON;
+  return why && why !== FC_NO_REASON ? `原因：${why}` : FC_NO_REASON_SHOW;
 }
 
 // 10-15 第2段審查修正（必修 1）：連帶退回的卡那一行（純函式）：「跟 #N 共用，那張還是退回」
@@ -252,7 +259,7 @@ const FC_CARD_CTX = {
   mode: "第5步",
   data: () => (fc.data && fc.data["第3步"]) || {},
   reload: () => fcReload(),
-  post: (url, body, opts) => fcStep3Post(url, body, opts),
+  post: (url, body, opts) => fcTrackPost(fcStep3Post(url, body, opts)),   // 10-15 要修改合併（1015-4）：「確定」先等存完
   play: (a, stop) => fcPlaySource(a, stop),
   videoTime: () => (fc.video ? Math.round(fcSrcTime(fc.video.currentTime) * 100) / 100 : null),
   seek: (t) => { const o = fcOutTime(t); if (o != null) fcSeek(Math.max(0, o - 2)); },
@@ -261,8 +268,9 @@ const FC_CARD_CTX = {
   prefill: (kind, a, b, who, note) => fcOpenEditor(null, [a, b], { kind, who, note }),
   askOutside: null,
   refreshSug: () => {},
-  moreOpen: () => fc.editOpen,
-  toggleMore: () => fcToggleEdit(),
+  // 10-15 要修改合併（1015-4）：第 3 步的「改做法」那一塊＝「要修改」選「其他」帶出的整個選單
+  moreOpen: () => fc.fix.open && fc.fix.pick === FC_FIX_OTHER,
+  toggleMore: () => fcOpenFix(FC_FIX_OTHER),
   rerender: () => fcRenderRight(),
 };
 
@@ -277,7 +285,8 @@ function fcNoteOnly(body) {
 async function fcStep3Post(url, body, opts) {
   fc.nextData = null;   // 這次存檔之前留的整頁資料不能再用
   const r = await apiPost(url, body, opts);
-  const adding = fc.ed.open && !fc.ed.id && url === "/api/review/manual";
+  // 10-15 要修改合併（1015-4）：帶 id 的是改範圍（「要修改」裡的改範圍），不是新增
+  const adding = fc.ed.open && !fc.ed.id && url === "/api/review/manual" && !(body && body.id);
   const c = fcCard(fc.cur);
   if (!adding && c && c["第3步鍵"] && !String(url).startsWith("/api/final/") && !fcNoteOnly(body)) await fcMarkEdited(c);
   return r;
@@ -379,9 +388,9 @@ async function renderFinal() {
       <header class="rv-bar">
         <h1>5　成品檢查</h1>
         <div class="fc-vers">${fcVersionMenuHtml(d)}</div>
-        <div class="fc-status" id="fc-status" role="status"></div>
         <div class="rv-bar-btns"><button class="primary" id="fc-export" ${d["影片清掉了"] ? "disabled" : ""}>輸出成品</button></div>
       </header>
+      <div class="fc-status" id="fc-status" role="status"></div>
       <div class="fo-box" id="fc-fileout"></div>
       <section class="rv-upper">
         <div class="rv-left">
@@ -390,7 +399,7 @@ async function renderFinal() {
           <div class="rv-timebar"><span class="rv-clock"><b id="fc-clock">0:00</b> ／ ${esc(fcFmt(d["成品長度"], 0))}</span>
             <select id="fc-rate" aria-label="播放速度"><option value="1">1 倍速</option><option value="1.25">1.25 倍速</option><option value="1.5">1.5 倍速</option><option value="2">2 倍速</option></select></div>
           <div class="rv-tl fc-tl" id="fc-tl" title="點一下或拖拉，跳到那個時間"></div>
-          <div class="rv-legend"><span><i class="sw fc-todo"></i>還沒看</span><span><i class="sw fc-ok"></i>通過</span><span><i class="sw fc-back"></i>退回</span></div>
+          <div class="rv-legend"><span><i class="sw fc-todo"></i>還沒看</span><span><i class="sw fc-ok"></i>通過</span><span><i class="sw fc-back"></i>要重做</span></div>
           <p class="rv-meta fc-seenpct">看過 <b id="fc-pct">0</b>%</p>
           <div class="fc-actbar" id="fc-actbar"></div>
           <div class="rv-io" id="fc-io"></div>
@@ -402,8 +411,9 @@ async function renderFinal() {
     </div>`;
   fc.video = document.getElementById("fc-video");
   fc.audio = document.getElementById("fc-audio");
-  Object.assign(fc, { seen: [], seg: null, sentRanges: "", ab: null, redoOpen: false, editOpen: false, ed: { open: false },
+  Object.assign(fc, { seen: [], seg: null, sentRanges: "", ab: null, ed: { open: false }, pend: [], fixEd: null,
     legacyEdited: false, nextData: null });
+  fcFixReset();
   if (!fc.cur || !fcCard(fc.cur)) fc.cur = (fcCards().find((c) => c["狀態"] === FC_ST.TODO) || fcCards()[0] || {}).id || null;
   document.getElementById("fc-export").addEventListener("click", fcExport);
   fcBindVersionMenu();
@@ -492,10 +502,10 @@ function fcBindVideo() {
   v.addEventListener("ratechange", () => fcEndSeg());
 }
 
-function fcFollow(t) {   // 影片照常播、跨過某張卡的起點，右邊換到那張（改、退回開著、試聽中不換）
+function fcFollow(t) {   // 影片照常播、跨過某張卡的起點，右邊換到那張（「要修改」開著、試聽中不換）
   const prev = fc.lastT;
   fc.lastT = t;
-  if (fc.redoOpen || fc.editOpen || fc.ab || t < prev || t - prev > 2) return;
+  if (fc.fix.open || fc.ab || t < prev || t - prev > 2) return;
   const hit = fcCards().filter((c) => c["成品"] && c["成品"][0] != null && c["成品"][0] > prev && c["成品"][0] <= t).pop();
   if (hit && hit.id !== fc.cur) { fc.cur = hit.id; fcRenderRight(); fcRenderTimeline(); fcMarkRow(); }
 }
@@ -547,8 +557,10 @@ function fcStateBoxHtml(c) {
   const lab = fcCardLabel(c);
   const back = c["狀態"] === FC_ST.BACK;
   const shared = back ? fcSharedLine(c) : "";
+  // 10-15 要修改合併（1015-4）：已改的卡有記原因（要修改先記原因再改）也列原因那一行
+  const why = back || (c["狀態"] === FC_ST.EDITED && c["退回原因"]);
   return `<span class="fc-tag fc-tag-${lab.cls}">${esc(lab.text)}</span>${lab.small.map((x) => ` <span class="rv-meta">${esc(x)}</span>`).join("")}
-    ${back ? `<p class="rv-warnline fc-why">${esc(fcWhyLine(c))}</p>` : ""}${shared ? `<p class="rv-warnline fc-shared">${esc(shared)}</p>` : ""}`;
+    ${why ? `<p class="rv-warnline fc-why">${esc(fcWhyLine(c))}</p>` : ""}${shared ? `<p class="rv-warnline fc-shared">${esc(shared)}</p>` : ""}`;
 }
 
 function fcRenderStateBox() {
@@ -583,23 +595,23 @@ function fcRenderRight() {
   if (!box) return;
   const c = fc.cur && fcCard(fc.cur);
   if (!c) { box.innerHTML = `<div class="rv-card empty"><p>這一版沒有任何修改</p></div>`; return; }
+  if (fc.fix.open && fc.fix.card !== c.id) fcFixReset();   // 換了一張卡（重新整理後那張不在了）：收起「要修改」
   const it = fcItemOf(c);
   const list = c["跨版本"] ? fcCross() : fcShown().length ? fcShown() : fcCards();
   const idx = list.findIndex((x) => x.id === c.id);
-  const busy = !!fc.data["AI執行中"];
   const canJudge = fcCanJudge(c);
-  const canReturn = fcCanReturn(c, fcOld());   // 10-15 第3段審查修正：舊版、跨版本卡退回按鈕灰的
-  const canEdit = it && !fcOld();   // 10-15 第5步2.0 第3段：舊版上不能改（改的是第 3 步現在的檔，回最新一版改）
+  const canFix = fcCanFix(c, fcOld());   // 10-15 要修改合併（1015-4）：舊版、跨版本卡整顆停用
   const abPrev = fcCardAbPlan(c, "上一版");
   const back = c["狀態"] === FC_ST.BACK;
-  const opts = fc.data["退回原因選項"] || [];
-  const picked = back ? ((c["退回原因"] || {})["選項"] || []) : fc.picks;
   const abNow = fcCardAbPlan(c, "現在"), abOrig = fcCardAbPlan(c, "原本");
+  const open = fc.fix.open && canFix;
+  // 選了「念錯字」「其他」：下面列出第 3 步卡片的字（可以改），上面那兩行就不重複列
+  const bodyShown = open && [FC_FIX_TEXT, FC_FIX_OTHER].includes(fc.fix.pick) && fcFixCanEdit(it);
   box.innerHTML = `<article class="rv-card fc-card" data-id="${esc(c.id)}">
       <header>${fcChip(c, it)}${c["編號"] ? `<span class="idtag" title="跟 AI 助手溝通用的編號">#${esc(String(c["編號"]))}</span>` : ""}
         <span class="rv-count">第 ${idx + 1}／${list.length} 張</span></header>
       <div class="rv-statebox" id="fc-statebox">${fcStateBoxHtml(c)}</div>
-      ${fc.editOpen ? "" : fcCardTextHtml(c, it)}
+      ${bodyShown ? "" : fcCardTextHtml(c, it)}
       <div class="rv-row fc-ab">
         <button class="ghost small" data-ab="原本" ${abOrig ? "" : "disabled"}>原本 ▶</button>
         <button class="ghost small" data-ab="現在" ${abNow ? "" : "disabled"}>現在 ▶</button>${abPrev ? `
@@ -607,45 +619,149 @@ function fcRenderRight() {
         <label class="fc-pad"><input type="checkbox" role="switch" id="fc-pad" aria-label="試聽前後多 2 秒" ${fcAbPad() ? "checked" : ""}><span class="fc-switch" aria-hidden="true"></span>前後多 2 秒</label></div>
       <div class="rv-actions">
         <button class="${c["狀態"] === FC_ST.OK ? "primary on" : "primary"}" id="fc-pass" aria-pressed="${c["狀態"] === FC_ST.OK}" ${canJudge ? "" : "disabled"}>通過<kbd>Enter</kbd></button>
-        <button class="ghost${back ? " on" : ""}" id="fc-redo" aria-pressed="${back}" aria-expanded="${fc.redoOpen}" ${canReturn ? "" : `disabled title="要退回請回到最新一版"`}>退回</button>${back && !canReturn ? `
-        <button class="ghost small" id="fc-back-undo">取消退回</button>` : ""}
-        ${canEdit ? `<button class="ghost${fc.editOpen ? " on" : ""}" id="fc-edit" aria-expanded="${fc.editOpen}" ${busy ? "disabled title=\"正在重做，做完才能改\"" : ""}>改<kbd>E</kbd></button>` : ""}
+        <button class="ghost${open ? " on" : ""}" id="fc-fix" aria-expanded="${open}" ${canFix ? "" : `disabled title="${esc(fcFixOff(c, fcOld()))}"`}>要修改<kbd>E</kbd></button>${back ? `
+        <button class="ghost small" id="fc-back-undo">取消要重做</button>` : ""}
         <span class="spacer"></span>
         <button class="ghost" id="fc-prev">上一張</button><button class="ghost" id="fc-next">下一張</button>
       </div>
-      <div class="rv-more" id="fc-redobox" ${fc.redoOpen && canReturn ? "" : "hidden"}>
-        ${c["可重新生成"] ? "" : `<p class="rv-warnline">這一張重做只會重新放一次，聲音不會變；要改內容請按『改』</p>`}
-        <p><b>為什麼退回？</b></p>
-        <div class="rv-field rv-choices">${opts.map((o) => `<label class="rv-check"><input type="checkbox" class="fc-why-opt" value="${esc(o)}" ${picked.includes(o) ? "checked" : ""}> ${esc(o)}</label>`).join("")}</div>
-        <label class="rv-field">補充（可不填）<input id="fc-why-extra" value="${esc(back ? (c["退回原因"] || {})["補充"] || "" : "")}"></label>
-        <div class="rv-row"><button class="primary small" id="fc-redo-go">確定退回</button><button class="ghost small" id="fc-redo-cancel">取消</button>
-          ${back ? `<button class="ghost small" id="fc-redo-undo">取消退回</button>` : ""}</div>
-      </div>
-      ${canEdit && fc.editOpen ? `<div class="fc-editbox" id="fc-editbox">
-        <div class="rv-body">${rvEdgeHtml(it)}${rvBodyHtml(it)}${rvAlignLine(it)}</div>
-        <div class="rv-actions">${cvToolBtnsHtml(it, true)}</div>
-        <div class="rv-more" id="rv-more">${rvMoreHtml(it)}</div>
-      </div>` : ""}
+      ${open ? `<div class="rv-more fc-fixbox" id="fc-fixbox">${fcFixHtml(c, it)}</div>` : ""}
     </article>`;
   box.querySelectorAll("[data-ab]").forEach((b) => b.addEventListener("click", () => fcPlayAB(c, b.dataset.ab)));
   const pad = document.getElementById("fc-pad");
   if (pad) pad.addEventListener("change", () => fcSetAbPad(pad.checked));
   document.getElementById("fc-pass").addEventListener("click", () => fcDecide(c, c["狀態"] === FC_ST.OK ? null : FC_ST.OK));
-  document.getElementById("fc-redo").addEventListener("click", () => fcToggleRedo());
-  const edit = document.getElementById("fc-edit");
-  if (edit) edit.addEventListener("click", () => fcToggleEdit());
-  document.getElementById("fc-redo-cancel").addEventListener("click", () => { fc.redoOpen = false; fcRenderRight(); });
-  document.getElementById("fc-redo-go").addEventListener("click", () => {
-    const sel = [...document.querySelectorAll(".fc-why-opt:checked")].map((x) => x.value);
-    fcDecide(c, FC_ST.BACK, sel, document.getElementById("fc-why-extra").value);
-  });
-  const undo = document.getElementById("fc-redo-undo");
+  document.getElementById("fc-fix").addEventListener("click", () => fcToggleFix());
+  const undo = document.getElementById("fc-back-undo");   // 10-15 要修改合併（1015-4）：以前那顆改名「取消要重做」，退回的卡一律放外面
   if (undo) undo.addEventListener("click", () => fcDecide(c, null));
-  const undo2 = document.getElementById("fc-back-undo");   // 10-15 第3段審查修正：舊版上以前退回過的，退回框打不開，取消放外面
-  if (undo2) undo2.addEventListener("click", () => fcDecide(c, null));
   document.getElementById("fc-prev").addEventListener("click", () => fcStep(-1));
   document.getElementById("fc-next").addEventListener("click", () => fcStep(1));
-  if (canEdit && fc.editOpen) {   // 「改」裡面是第 3 步的卡片元件（第 3 步原本的 API）
+  if (open) fcFixBind(c, it);
+}
+
+// ---------- 10-15 要修改合併（1015-4）：「退回」「改」合成一顆「要修改」 ----------
+// 按「要修改」→「哪裡出問題？」單選（念錯字／聲音不像、不自然／長度或停頓怪／裡面有老師的聲音／其他）→ 選了直接帶出對應的修改控制區
+// （不另外按儲存）→「確定」：記原因（/api/final/card 退回＋選項＋補充）＋套用修改（第 3 步原本的 API，fcStep3Post 記「已改，等重做」）。
+// 「只想換一種念法」就是「聲音不像、不自然」那條（只記原因、等重做）。
+
+const FC_FIX_TEXT = "念錯字", FC_FIX_VOICE = "聲音不像、不自然", FC_FIX_RANGE = "長度或停頓怪", FC_FIX_TEACHER = "裡面有老師的聲音", FC_FIX_OTHER = "其他";
+const FC_FIX_OPTS = [FC_FIX_TEXT, FC_FIX_VOICE, FC_FIX_RANGE, FC_FIX_TEACHER, FC_FIX_OTHER];
+const FC_FIX_NO_VOICE = "這一張重做只會重新放一次，聲音不會變；要改內容請選下面其他項";
+function fcFixReset() { fc.fix = { open: false, card: null, pick: null, extra: "", busy: false, err: "" }; }
+
+// （純函式）這張卡可不可以按「要修改」：舊版、上一版還沒看的那一區、這一版沒處理到的不行
+function fcCanFix(c, old) {
+  return !!c && !old && !c["跨版本"] && !c["這一版沒處理到"];
+}
+// （純函式）「要修改」停用時滑過的字
+function fcFixOff(c, old) {
+  if (c && c["這一版沒處理到"] && !old && !c["跨版本"]) return "這一版沒處理到這一張";
+  return "要修改請回到最新一版";
+}
+// （純函式）「哪裡出問題？」列哪幾項：沒有聲音可以重新生成的卡（剪掉、消音、還沒生成…）不列「聲音不像、不自然」
+function fcFixOptions(c, opts) {
+  const list = (opts && opts.length ? opts : FC_FIX_OPTS).filter((o) => FC_FIX_OPTS.includes(o));
+  return c && c["可重新生成"] ? list : list.filter((o) => o !== FC_FIX_VOICE);
+}
+// （純函式）確定時要不要記原因（送 /api/final/card 退回）：還沒生成的卡（新增的、這一版之後才出現的）成品裡沒有，記不了
+// 已改的卡要還在這一版成品裡（有對到處理紀錄）才記得了（後端 finalcards.decide 同一條規則）
+function fcFixRecords(c) {
+  return !!c && c["狀態"] !== FC_ST.NOT_MADE && !(c["狀態"] === FC_ST.EDITED && !(c["紀錄鍵"] || []).length);
+}
+function fcFixCanEdit(it) { return !!it && !(fc.data && fc.data["AI執行中"]); }
+
+function fcToggleFix() {
+  const c = fc.cur && fcCard(fc.cur);
+  if (!fc.fix.open && !fcCanFix(c, fcOld())) return;
+  if (fc.fix.open) fcFixReset();
+  else fc.fix = { open: true, card: c.id, pick: null, extra: "", busy: false, err: "" };
+  fcRenderRight();
+  const box = document.getElementById("fc-fixbox");
+  if (box) box.scrollIntoView({ block: "nearest" });
+}
+// 「改」裡的東西要打開「其他」那一塊時（例如重疊卡按「改時間」）
+function fcOpenFix(pick) {
+  const c = fc.cur && fcCard(fc.cur);
+  if (!fcCanFix(c, fcOld())) return;
+  fc.fix = { open: true, card: c.id, pick, extra: fc.fix.extra || "", busy: false, err: "" };
+  fcRenderRight();
+}
+
+// 沒有可以直接改的東西時那一行
+function fcFixCantHtml(it) {
+  if (it && fc.data["AI執行中"]) return `<p class="rv-meta">正在重做，做完才能改；按「確定」先記下原因</p>`;
+  return `<p class="rv-meta">這一張沒有可以直接改的地方；按「確定」會記下原因、等重做</p>`;
+}
+
+// 選了哪一項之後帶出的修改控制區（每一項一塊）
+function fcFixBranchHtml(c, it, pick) {
+  const can = fcFixCanEdit(it);
+  if (pick === FC_FIX_VOICE) return `<p>會換一種念法重新生成</p>`;
+  if (pick === FC_FIX_TEXT) {
+    if (!can) return fcFixCantHtml(it);
+    const body = rvBodyHtml(it);
+    const hasBox = /id="rv-(text|namesay)"/.test(body);
+    return `<div class="rv-body">${body}</div>${hasBox ? `<p class="rv-meta">改好要念的字，再按「確定」</p>`
+      : `<p class="rv-meta">這一種卡沒有字可以改；按「確定」會記下原因、等重做</p>`}`;
+  }
+  if (pick === FC_FIX_RANGE) {
+    if (!can) return fcFixCantHtml(it);
+    if (!RV_ITEM_KIND[it["類型"]]) return `<p class="rv-meta">這一種卡不能改範圍；按「確定」會記下原因、等重做</p>`;
+    return `${rvEdgeHtml(it)}<div id="fc-fix-range"></div><p class="rv-meta">改好起點、終點，再按「確定」</p>`;
+  }
+  if (pick === FC_FIX_TEACHER) {
+    if (!can) return fcFixCantHtml(it);
+    // #226 選字做好前：學員段落整段改回老師原聲（第 3 步的「這段其實是老師」）；只有一部分是老師要先切開
+    if (it["類型"] !== "學員段落") return `<p class="rv-meta">這一張不能直接改回老師的原聲；按「確定」會記下原因，請在補充寫哪裡是老師的聲音</p>`;
+    return `<p>按「確定」：${esc(rvFmt(it.start, 1))}–${esc(rvFmt(it.end, 1))} 這一段整段改回老師的原聲，不重念</p>
+      <p class="rv-meta">只有一部分是老師的話，改選「其他」→「從游標處切開」</p>`;
+  }
+  if (!can) return fcFixCantHtml(it);   // 其他：整個第 3 步的「改」選單
+  return `<div class="rv-body">${rvEdgeHtml(it)}${rvBodyHtml(it)}${rvAlignLine(it)}</div>
+      <div class="rv-actions">${cvToolBtnsHtml(it, true)}</div>
+      <div class="rv-more" id="rv-more">${rvMoreHtml(it)}</div>`;
+}
+
+function fcFixHtml(c, it) {
+  const f = fc.fix;
+  const opts = fcFixOptions(c, fc.data["退回原因選項"]);
+  if (!f.pick) {
+    return `<p><b>哪裡出問題？</b></p>
+      ${c["可重新生成"] ? "" : `<p class="rv-warnline">${esc(FC_FIX_NO_VOICE)}</p>`}
+      <div class="rv-field rv-choices fc-fixopts">${opts.map((o) => `<label class="rv-radio"><input type="radio" name="fc-fix-opt" class="fc-fix-opt" value="${esc(o)}"> ${esc(o)}</label>`).join("")}</div>
+      <div class="rv-row"><button class="ghost small" id="fc-fix-cancel">取消</button></div>`;
+  }
+  return `<p class="fc-fixpick">哪裡出問題：<b>${esc(f.pick)}</b> <button class="ghost small" id="fc-fix-repick">改選</button></p>
+      ${fcFixBranchHtml(c, it, f.pick)}
+      <label class="rv-field">補充（可不填）<input id="fc-fix-extra" value="${esc(f.extra || "")}"></label>
+      ${f.err ? `<p class="rv-warnline">${esc(f.err)}</p>` : ""}
+      ${fcFixRecords(c) ? "" : `<p class="rv-meta">這一張還沒做進成品，按「確定」只會套用修改</p>`}
+      <div class="rv-row"><button class="primary small" id="fc-fix-go" ${f.busy ? "disabled" : ""}>${f.busy ? "存檔中…" : "確定"}</button>
+        <button class="ghost small" id="fc-fix-cancel">取消</button></div>`;
+}
+
+function fcFixBind(c, it) {
+  const f = fc.fix;
+  document.querySelectorAll(".fc-fix-opt").forEach((r) => r.addEventListener("change", () => {
+    f.pick = r.value; f.err = "";
+    if (f.pick === FC_FIX_RANGE && it) fcFixRangeInit(it);
+    fcRenderRight();
+  }));
+  const cancel = document.getElementById("fc-fix-cancel");
+  if (cancel) cancel.addEventListener("click", () => { fcFixReset(); fcRenderRight(); });
+  const repick = document.getElementById("fc-fix-repick");
+  if (repick) repick.addEventListener("click", () => { f.pick = null; f.err = ""; fcRenderRight(); });
+  const extra = document.getElementById("fc-fix-extra");
+  if (extra) extra.addEventListener("input", () => { f.extra = extra.value; });
+  const go = document.getElementById("fc-fix-go");
+  if (go) go.addEventListener("click", () => fcFixConfirm(c, it));
+  if (!f.pick || !fcFixCanEdit(it)) return;
+  // 帶出的控制區：第 3 步卡片元件原本的綁定（存檔走 FC_CARD_CTX.post＝fcStep3Post）
+  if (f.pick === FC_FIX_TEXT) { rvBindBody(it); rvBindOutQ(it); }
+  else if (f.pick === FC_FIX_RANGE && RV_ITEM_KIND[it["類型"]]) {
+    if (!fc.fixEd || fc.fixEd.id !== it.id) fcFixRangeInit(it);
+    cvBindPlayShrink(it);
+    teRender(FC_FIX_RANGE_CTX);
+  } else if (f.pick === FC_FIX_OTHER) {
     cvBindTools(it);
     cvBindPlayShrink(it);
     rvBindBody(it);
@@ -654,22 +770,65 @@ function fcRenderRight() {
   }
 }
 
-function fcToggleRedo() {
-  const c = fc.cur && fcCard(fc.cur);
-  if (!fc.redoOpen && !fcCanReturn(c, fcOld())) return;   // 10-15 第3段審查修正：舊版、跨版本卡不開退回
-  fc.redoOpen = !fc.redoOpen;
-  if (fc.redoOpen) fc.editOpen = false;
-  fcRenderRight();
+// 「長度或停頓怪」的改範圍：第 3 步的起訖編輯器（teRender），放在卡片裡；自己的「儲存修改」藏起來，存檔跟著「確定」
+function fcFixRangeInit(it) {
+  fc.fixEd = { kind: RV_ITEM_KIND[it["類型"]], id: it.id, a: it.start, b: it.end, a0: it.start, b0: it.end,
+    whole: !!it["老師整段"], result: null, busy: false, label: `${(RV_TYPE[it["類型"]] || {}).label || it["類型"]} ${rvFmt(it.start)}` };
+}
+const FC_FIX_RANGE_CTX = {
+  host: "fc-fix-range", get st() { return fc.fixEd; }, o: {
+    aria: "改範圍",
+    head: (ed) => `<b>改範圍：${esc(ed.label || "")}</b>`,
+    hint: (ed) => rvRuleHint(ed.kind, ed.whole, true),
+    now: () => FC_CARD_CTX.videoTime(),
+    nowLabel: "用影片目前位置",
+    play: (a, b) => fcPlaySource(a, b),
+    api: "/api/review/manual",
+    body: (ed) => ({ "類型": ed.kind, start: ed.a, end: ed.b, id: ed.id }),
+    toResult: (r) => ({ ...r["對齊結果"], "新增": false }),
+    saved: async (r, res) => { fc.fixEd.result = res; fc.fixEd.saved = true; },
+    saveLabel: () => "儲存修改",
+  },
+};
+
+// 存檔中的第 3 步存檔（例如改字框失去焦點時存的）：按「確定」先等它們存完
+function fcTrackPost(p) {
+  fc.pend.push(p);
+  const done = () => { fc.pend = fc.pend.filter((x) => x !== p); };
+  p.then(done, done);
+  return p;
 }
 
-function fcToggleEdit() {
-  const c = fc.cur && fcCard(fc.cur);
-  if (!c || !fcItemOf(c) || fc.data["AI執行中"] || fcOld()) return;
-  fc.editOpen = !fc.editOpen;
-  if (fc.editOpen) fc.redoOpen = false;
+// 「確定」：等改字存完 → 記原因（退回＋選項＋補充）→ 套用這一項的修改（改範圍、改回老師原聲）→ 重新整理，卡片收合成「要重做」
+async function fcFixConfirm(c, it) {
+  const f = fc.fix;
+  if (!f.pick || f.busy) return;
+  const ed = f.pick === FC_FIX_RANGE && fcFixCanEdit(it) && RV_ITEM_KIND[it["類型"]] ? fc.fixEd : null;
+  const moved = ed && (ed.a !== ed.a0 || ed.b !== ed.b0);
+  if (moved && !teOk(ed)) { f.err = "起點、終點都填好（終點晚於起點）才能存"; fcRenderRight(); return; }
+  f.busy = true; f.err = "";
   fcRenderRight();
-  const box = document.getElementById("fc-editbox");
-  if (box) box.scrollIntoView({ block: "nearest" });
+  try {
+    await Promise.allSettled(fc.pend.slice());
+    if (f.pick === FC_FIX_TEXT && fcFixCanEdit(it)) await rvSaveTurnText(it);   // 改字框還沒存（沒失去焦點）就存
+    if (fcFixRecords(c)) {
+      fc.nextData = null;   // 記原因之後不能再用之前留的整頁資料
+      await apiPost("/api/final/card", { id: c.id, "結果": FC_ST.BACK, "選項": [f.pick], "補充": f.extra || "" });
+    }
+    let reloaded = false;
+    if (moved) {
+      await teSave(FC_FIX_RANGE_CTX);
+      if (ed.result && ed.result.error) throw new Error(ed.result.error);
+    } else if (f.pick === FC_FIX_TEACHER && fcFixCanEdit(it) && it["類型"] === "學員段落") {
+      fcFixReset();   // cvToTeacher 會重新整理；這張卡可能換成「改成老師」那一張
+      await cvToTeacher(it);
+      reloaded = true;
+    }
+    fcFixReset();
+    if (!reloaded) await fcReload();
+  } catch (e) {
+    if (fc.fix.open) { f.busy = false; f.err = e.message; fcRenderRight(); } else alert(e.message);
+  }
 }
 
 async function fcDecide(c, result, picks = [], extra = "") {
@@ -681,8 +840,7 @@ async function fcDecide(c, result, picks = [], extra = "") {
   try {
     res = await apiPost("/api/final/card", { id: c.id, "結果": result, "選項": picks, "補充": extra, ...(ver ? { "版本": ver } : {}) });
   } catch (e) { alert(e.message); return; }
-  fc.redoOpen = false;
-  fc.picks = [];
+  fcFixReset();
   if (ver) {
     const list = c["跨版本"] ? fcCross() : fcCards();
     const next = result === FC_ST.OK ? fcNextUnseen(list, c.id) : null;
@@ -708,8 +866,7 @@ async function fcDecide(c, result, picks = [], extra = "") {
 
 function fcSelect(id, seek = true) {
   fc.cur = id;
-  fc.redoOpen = false;
-  fc.editOpen = false;
+  fcFixReset();
   const c = fcCard(id);
   if (seek && c && c["成品"] && c["成品"][0] != null) fcSeek(Math.max(0, c["成品"][0] - 2));
   fcRenderRight();
@@ -1185,7 +1342,7 @@ function fcConfirmExport(gaps, win) {
   });
 }
 
-// ---------- 快捷鍵（照第 3 步：Enter 通過、E 改；空白鍵播放；↑↓ 上一張下一張；J／L 前後 5 秒） ----------
+// ---------- 快捷鍵（照第 3 步：Enter 通過、E 要修改；空白鍵播放；↑↓ 上一張下一張；J／L 前後 5 秒） ----------
 
 document.addEventListener("keydown", (e) => {
   if (currentRouteId() !== "step5" || !fc.video) return;
@@ -1198,7 +1355,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "Enter" && e.target.tagName !== "BUTTON" && fcCanJudge(c)) {   // Enter＝通過（舊版也可以）；退回一律走按鈕
     e.preventDefault(); fcDecide(c, c["狀態"] === FC_ST.OK ? null : FC_ST.OK);
   }
-  else if (k === "e") { e.preventDefault(); fcToggleEdit(); }
+  else if (k === "e") { e.preventDefault(); fcToggleFix(); }   // 10-15 要修改合併（1015-4）：E＝開「要修改」
   else if (k === "j") fcSeek(fc.video.currentTime - 5);
   else if (k === "l") fcSeek(fc.video.currentTime + 5);
   else if (e.key === "ArrowDown") { e.preventDefault(); fcStep(1); }

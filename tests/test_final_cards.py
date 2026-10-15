@@ -305,6 +305,47 @@ def test_step3_edit_shows_edited_until_redone():
     assert c2["狀態"] == needs.NOT_SEEN and not c2["第3步改過"]
 
 
+def test_fix_records_reason_on_edited_card():
+    """10-15 要修改合併（1015-4）：「要修改」先改字（已改，等重做）再按「確定」記原因——已改的卡還在這一版成品裡就可以退回記原因，
+    畫面照樣是「已改，等重做」、帶著原因；通過照舊不行。先記原因再改（改範圍、改回老師）也一樣帶著原因。還沒生成的卡記不了。"""
+    from bookclub import turns as _turns
+
+    assert "裡面有老師的聲音" in needs.REASON_OPTIONS and needs.REASON_OPTIONS[-1] == "其他"
+    assert needs.reason_text(["裡面有老師的聲音"], "第二句") == "裡面有老師的聲音：第二句"
+    w, log = _ready()
+    _turns.save_turn(w, "T005", {"校對稿": "改過的字"})
+    finalcards.edited(w, "學員段落:T005")
+    c = _by(finalcards.build(w)["卡片"], "學員段落:T005")
+    assert c["狀態"] == finalcards.EDITED
+    r = tn._quiet(finalcards.decide, w, c["id"], needs.RETURNED, ["念錯字"], "第三個字")
+    c2 = r["卡片"]
+    assert c2["狀態"] == finalcards.EDITED and c2["退回原因"] == {"選項": ["念錯字"], "補充": "第三個字"}
+    assert r["統計"]["要重做"] >= 1
+    try:
+        tn._quiet(finalcards.decide, w, c["id"], needs.PASSED)
+        raise AssertionError("已改的不能按通過")
+    except ValueError:
+        pass
+    # 先記原因再改（「確定」的改範圍、改回老師原聲走這個順序）
+    w, log = _ready()
+    c = _by(finalcards.build(w)["卡片"], "學員段落:T005")
+    tn._quiet(finalcards.decide, w, c["id"], needs.RETURNED, ["長度或停頓怪"], "")
+    finalcards.edited(w, "學員段落:T005")
+    c3 = _by(finalcards.build(w)["卡片"], "學員段落:T005")
+    assert c3["狀態"] in (needs.RETURNED, finalcards.EDITED) and c3["退回原因"] == {"選項": ["長度或停頓怪"], "補充": ""}
+    # 還沒生成（成品裡沒有）的卡：記不了原因
+    fake = {**c3, "狀態": needs.NOT_MADE}
+    try:
+        orig = finalcards.build
+        finalcards.build = lambda *a, **k: {**orig(*a, **k), "卡片": [fake]}
+        tn._quiet(finalcards.decide, w, c3["id"], needs.RETURNED, ["其他"], "")
+        raise AssertionError("還沒生成的不能記原因")
+    except ValueError:
+        pass
+    finally:
+        finalcards.build = orig
+
+
 def test_developer_setting():
     """「先照舊的紀錄顯示」只在開發者設定顯示：settings.toml 最上層 `developer = true`；沒有設定檔＝沒開。"""
     import os

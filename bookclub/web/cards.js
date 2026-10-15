@@ -40,7 +40,7 @@ function cvAskOutside(before) { if (cv.ctx.askOutside) cv.ctx.askOutside(before)
 function cvRefreshSug() { if (cv.ctx.refreshSug) cv.ctx.refreshSug(); }
 
 // ---------------------------------------------------------------------------
-// 卡片上的工具按鈕（第 3 步在「通過、改做法」後面；第 5 步收在「改」裡面）
+// 卡片上的工具按鈕（第 3 步在「通過、改做法」後面；第 5 步收在「要修改」→「其他」裡面，10-15 要修改合併（1015-4））
 // ---------------------------------------------------------------------------
 
 // step5：第 5 步的字（10-15：學員段落的「這段其實是老師」寫成「裡面有老師的聲音」；這一段先做成整段改回老師原聲，
@@ -82,17 +82,10 @@ function cvBindTools(it) {
   if (isT) isT.addEventListener("click", async () => {
     // 09-29 宇軒：聲音辨識把老師判成學員時，一鍵改回老師（只有一部分是老師：先用「改做法」裡的「從游標處切開」）
     // 10-15：第 5 步的按鈕叫「改」（不是「改做法」）；整段改回老師原聲，選字（#226）之後做
+    // 10-15 要修改合併（1015-4）：第 5 步這顆在「要修改」→「其他」裡，切開也在同一塊
     const where = cv.ctx.mode === "第5步" ? "在下面按「從游標處切開」" : "先按「改做法」→「從游標處切開」";
     if (!confirm(`把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 這一段改成老師？\n改了之後這段不會重念，也會補找這段裡老師提到的名字。\n只有一部分是老師的話，${where}。`)) return;
-    await rvSaveTurnText(it);
-    const res = await cvPost("/api/turns/save", { id: it.id, "說話者": "老師" });
-    if (res["補找到的老師名字"]) alert(`這段裡補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
-    await cvReload();
-    if (res["改成老師重念"]) {   // 09-30：沒有逐字稿句子的段落，沒辦法自動找名字 → 改成一筆「老師這一段用 AI 聲音重念」
-      alert("這一段沒有逐字稿句子，沒辦法自動找名字：已經改成「老師這一段用 AI 聲音重念」，請確認要念的字。\n不用重念的話，按「不用改，保留老師原聲」。");
-      const key = `名字:${res["改成老師重念"]}`;
-      if (cvItem(key)) cvSelect(key, { seek: false });
-    }
+    await cvToTeacher(it);
   });
   const uncut = document.getElementById("rv-uncut");   // 10-01 2-4：「通過＝剪掉」產生的剪掉片段，在原本那一段取消
   if (uncut) uncut.addEventListener("click", async () => {
@@ -117,6 +110,21 @@ function cvBindTools(it) {
   });
   const del = document.getElementById("rv-del");
   if (del) del.addEventListener("click", () => rvDeleteManual(it));
+}
+
+// 學員段落整段改成老師（存檔、重新整理、補找到名字的提醒）。10-15 要修改合併（1015-4）：從按鈕抽出來，
+// 第 5 步「要修改」選「裡面有老師的聲音」按「確定」也走這裡（第 5 步不另外跳確認視窗：選項本身就是確認）
+async function cvToTeacher(it) {
+  await rvSaveTurnText(it);
+  const res = await cvPost("/api/turns/save", { id: it.id, "說話者": "老師" });
+  if (res["補找到的老師名字"]) alert(`這段裡補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
+  await cvReload();
+  if (res["改成老師重念"]) {   // 09-30：沒有逐字稿句子的段落，沒辦法自動找名字 → 改成一筆「老師這一段用 AI 聲音重念」
+    alert("這一段沒有逐字稿句子，沒辦法自動找名字：已經改成「老師這一段用 AI 聲音重念」，請確認要念的字。\n不用重念的話，按「不用改，保留老師原聲」。");
+    const key = `名字:${res["改成老師重念"]}`;
+    if (cvItem(key)) cvSelect(key, { seek: false });
+  }
+  return res;
 }
 
 // 「只播這一段」「照建議縮小」
