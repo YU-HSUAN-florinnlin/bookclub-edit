@@ -714,9 +714,9 @@ def test_version_page_renders():
     assert "錯誤" not in v, v
     assert "看哪一版" in v["top"] and "第 2 版" in v["top"] and "（最新）" in v["top"]
     assert "上一版還沒看的（第 1 版）" in v["lower"] and "已通過（沿用上一版）" in v["lower"] and "這一版沒處理到" not in v["lower"]
-    # 10-15 宇軒驗證回饋四：「已通過（沿用上一版）」的列跟通過的一樣（done、綠色標籤 fc-tag-ok），不變淡
+    # 10-15 宇軒驗證回饋四／五：「已通過（沿用上一版）」的列 done＋綠色標籤 fc-tag-ok；文字刷淡用 fc-faded-ok（標籤不淡），不是整列 fc-faded
     row = re.search(r'<li data-id="[^"]*" class="([^"]*)">(?:(?!</li>).)*已通過（沿用上一版）', v["lower"], re.S)
-    assert row and "done" in row.group(1) and "fc-faded" not in row.group(1)
+    assert row and "done" in row.group(1) and "fc-faded-ok" in row.group(1) and " fc-faded " not in row.group(1) + " "
     assert re.search(r'fc-tag-ok"[^>]*>已通過（沿用上一版）', v["lower"])
     # 最新版上「已通過（沿用上一版）」的卡：「要修改」可以按、通過不行；確定 → 記原因（退回＋選項）
     o = got["範圍外"]

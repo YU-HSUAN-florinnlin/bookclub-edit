@@ -1100,9 +1100,10 @@ function fcRenderIO() {
 function fcRowHtml(c) {
   const it = fcItemOf(c);
   const lab = fcCardLabel(c);
-  // 10-15 宇軒驗證回饋四：「已通過（沿用上一版）」的列跟通過的一樣（done、綠色標籤），不再變淡；「這一版沒做這張」照舊變淡
+  // 10-15 宇軒驗證回饋四：「已通過（沿用上一版）」的列跟通過的一樣（done、綠色標籤）；「這一版沒做這張」照舊整列變淡
+  // 10-15 宇軒驗證回饋五：「已通過（沿用上一版）」標籤留綠色，其他文字一樣刷淡（fc-faded-ok），讓注意力放在下面還沒確認的卡
   const outOk = c["這一版沒處理到"] && lab.cls === "ok";
-  return `<li data-id="${esc(c.id)}" class="${c.id === fc.cur ? "cur" : ""} ${c["狀態"] === FC_ST.OK || outOk ? "done" : ""}${c["這一版沒處理到"] && !outOk ? " fc-faded" : ""}">
+  return `<li data-id="${esc(c.id)}" class="${c.id === fc.cur ? "cur" : ""} ${c["狀態"] === FC_ST.OK || outOk ? "done" : ""}${c["這一版沒處理到"] ? (outOk ? " fc-faded-ok" : " fc-faded") : ""}">
       <span class="tm">${c["原片"] && c["原片"][0] != null ? esc(fcFmt(c["原片"][0], 0)) : "—"}</span>
       <span class="ty">${fcChip(c, it)}</span>
       <span class="tx">${c["編號"] ? `<span class="idtag">#${esc(String(c["編號"]))}</span>` : ""}${esc(fcWho(fcPreview(c, it)))}</span>

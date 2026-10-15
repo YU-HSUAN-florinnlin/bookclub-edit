@@ -816,4 +816,6 @@ details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合�
 .fc > .fc-status { margin: -4px 0 12px; }
 .fc-vers select { font-size: 15px; }
 .rv-list li.fc-faded { opacity: .45; }
+/* 10-15 宇軒驗證回饋五：「已通過（沿用上一版）」只刷淡文字、綠色標籤保留 */
+.rv-list li.fc-faded-ok > :not(.st) { opacity: .45; }
 .fc-cross { margin-top: 4px; }
