@@ -53,7 +53,8 @@ const FC_REDO = [FC_ST.BACK, FC_ST.EDITED, FC_ST.NOT_MADE];               // 「
 const FC_REDO_LABEL = "要重做";   // 10-15 要修改合併（1015-4）：退回、已改，等重做的標籤字
 
 // 10-15 宇軒驗證回饋三：範圍外的卡（資料欄位「這一版沒處理到」）給老師看的字
-const FC_OUT_PASSED = "上一版已通過", FC_OUT_PASSED_NOTE = "這版沒改到這裡，不用再看";
+// 10-15 宇軒驗證回饋四：「上一版已通過」改成「已通過（沿用上一版）」、顏色跟「通過 ✓」同一個綠色系（cls ok）
+const FC_OUT_PASSED = "已通過（沿用上一版）", FC_OUT_PASSED_NOTE = "這版沒改到這裡，不用再看";
 const FC_OUT_NONE = "這一版沒做這張", FC_OUT_NONE_NOTE = "這一版的成品沒有處理這一張";
 // 卡片標籤：{text, cls, small: [小字]}（31 號設計 §6.3）
 function fcCardLabel(c) {
@@ -62,7 +63,7 @@ function fcCardLabel(c) {
   // （資料欄位名稱不變）。舊版畫面上、之前的版本沒通過過的（之後才有的卡等）→「這一版沒做這張」
   if (c["這一版沒處理到"]) {
     return c["上一版已通過"] === false ? { text: FC_OUT_NONE, cls: "made", small: [FC_OUT_NONE_NOTE] }
-      : { text: FC_OUT_PASSED, cls: "made", small: [FC_OUT_PASSED_NOTE] };
+      : { text: FC_OUT_PASSED, cls: "ok", small: [FC_OUT_PASSED_NOTE] };
   }
   const small = [];
   if (c["狀態"] === FC_ST.OK && c["沿用自"]) small.push(`沿用第 ${c["沿用自"]} 版`);
@@ -729,13 +730,14 @@ const FC_FIX_FULL = [FC_FIX_TEACHER, FC_FIX_OTHER];
 const FC_FIX_NO_VOICE = "這一張重做只會重新放一次，聲音不會變；要改內容請選下面其他項";
 function fcFixReset() { fc.fix = { open: false, card: null, pick: null, extra: "", busy: false, err: "" }; }
 
-// （純函式）這張卡可不可以按「要修改」：舊版、上一版還沒看的那一區、這一版沒處理到的不行
+// （純函式）這張卡可不可以按「要修改」：舊版、上一版還沒看的那一區不行
+// 10-15 宇軒驗證回饋四：「已通過（沿用上一版）」（這一版沒處理到）的卡在最新版可以按——發現改得不好還是要能送修改需求；
+// 通過、取消仍不給按（不是這一版做的，見 fcCanJudge）；舊版維持整顆停用
 function fcCanFix(c, old) {
-  return !!c && !old && !c["跨版本"] && !c["這一版沒處理到"];
+  return !!c && !old && !c["跨版本"];
 }
 // （純函式）「要修改」停用時滑過的字
 function fcFixOff(c, old) {
-  if (c && c["這一版沒處理到"] && !old && !c["跨版本"]) return "這張是上一版通過的，這一版沒改到這裡";   // 10-15 宇軒驗證回饋三
   return "要修改請回到最新一版";
 }
 // （純函式）「哪裡出問題？」列哪幾項：沒有聲音可以重新生成的卡（剪掉、消音、還沒生成…）不列「聲音不像、不自然」
@@ -745,7 +747,9 @@ function fcFixOptions(c, opts) {
 }
 // （純函式）確定時要不要記原因（送 /api/final/card 退回）：還沒生成的卡（新增的、這一版之後才出現的）成品裡沒有，記不了
 // 已改的卡要還在這一版成品裡（有對到處理紀錄）才記得了（後端 finalcards.decide 同一條規則）
+// 10-15 宇軒驗證回饋四：範圍外的卡（這一版沒處理到、或已經按過「要修改」的「範圍外改了」）原因記在卡片的等重做（後端 needs.mark_outside_redo）
 function fcFixRecords(c) {
+  if (c && (c["這一版沒處理到"] || c["範圍外改了"])) return true;
   return !!c && c["狀態"] !== FC_ST.NOT_MADE && !(c["狀態"] === FC_ST.EDITED && !(c["紀錄鍵"] || []).length);
 }
 function fcFixCanEdit(it) { return !!it && !(fc.data && fc.data["AI執行中"]); }
@@ -1096,7 +1100,9 @@ function fcRenderIO() {
 function fcRowHtml(c) {
   const it = fcItemOf(c);
   const lab = fcCardLabel(c);
-  return `<li data-id="${esc(c.id)}" class="${c.id === fc.cur ? "cur" : ""} ${c["狀態"] === FC_ST.OK ? "done" : ""}${c["這一版沒處理到"] ? " fc-faded" : ""}">
+  // 10-15 宇軒驗證回饋四：「已通過（沿用上一版）」的列跟通過的一樣（done、綠色標籤），不再變淡；「這一版沒做這張」照舊變淡
+  const outOk = c["這一版沒處理到"] && lab.cls === "ok";
+  return `<li data-id="${esc(c.id)}" class="${c.id === fc.cur ? "cur" : ""} ${c["狀態"] === FC_ST.OK || outOk ? "done" : ""}${c["這一版沒處理到"] && !outOk ? " fc-faded" : ""}">
       <span class="tm">${c["原片"] && c["原片"][0] != null ? esc(fcFmt(c["原片"][0], 0)) : "—"}</span>
       <span class="ty">${fcChip(c, it)}</span>
       <span class="tx">${c["編號"] ? `<span class="idtag">#${esc(String(c["編號"]))}</span>` : ""}${esc(fcWho(fcPreview(c, it)))}</span>

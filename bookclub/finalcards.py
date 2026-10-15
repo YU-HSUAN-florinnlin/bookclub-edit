@@ -136,8 +136,8 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
     """新紀錄 → 卡片。對不到這一版處理紀錄（版本表裡沒有這一份）＝None（呼叫的地方改讀舊檔）。
     10-15 第5步2.0 第3段：
     - 這一版範圍外（開發者用範圍組裝）、之前的版本處理過的卡：舊版還沒看／退回的 → 放進 cross（畫面「上一版還沒看的（第 N 版）」，
-      狀態、成品時間照那一版）；其他 → 「這一版沒處理到」（變淡、不能按通過、不算進要重做；畫面標「上一版已通過」，
-      10-15 宇軒驗證回饋三）
+      狀態、成品時間照那一版）；其他 → 「這一版沒處理到」（不能按通過、不算進要重做；畫面標「已通過（沿用上一版）」，
+      10-15 宇軒驗證回饋三、四）。10-15 宇軒驗證回饋四：在最新版按「要修改」之後（等重做，起因改了）→ 已改，等重做＋「範圍外改了」
     - 第 3 步選定不修改、之後在第 3 步改成要處理的 → 已改，等重做（小字「在第 3 步改過」）
     - 重做過的卡帶「上一版」（上一版 ▶ 試聽）"""
     st = needs.load(workdir)
@@ -173,6 +173,7 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
     out = []
     videos: dict = {}
     hist: list | None = None
+    vlogs: dict[int, dict] = {}   # 10-15 宇軒驗證回饋四：之前版本的處理紀錄（範圍外的卡用，同一版只讀一次）
     if v is not None and v.get("其他卡指紋") is None:
         hist = needs.read_history(workdir)   # 舊的版本沒記其他卡指紋：看歷史（只有這種版本才讀）
     for k in sorted(st.cards, key=needs._card_num):
@@ -184,8 +185,13 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
         outside = False
         prev_ok = None   # 10-15 宇軒驗證回饋三：範圍外的卡，之前最近那一版是不是通過（畫面標「上一版已通過」）
         turned_on = False
+        older = None     # 10-15 宇軒驗證回饋四：範圍外的卡，之前最近一個有它的版本（版本號, 狀態列）——念的字、能不能重新生成照那一版
+        out_edit = False   # 10-15 宇軒驗證回饋四：範圍外、在最新版按「要修改」的卡（已改，等重做）
         if pend.get("起因") == needs.WHY_EDITED:
             state = EDITED
+            if not row and v is not None and str(c.get("建立時間") or "") <= vtime and not needs._in_range(c, v):
+                older = _older_row(st, k, vn)
+                out_edit = older is not None
         elif not row and v is not None and str(c.get("建立時間") or "") <= vtime and not needs._in_range(c, v):
             # 10-15 第5步2.0 第3段：這一版範圍外
             old = _older_row(st, k, vn)
@@ -195,7 +201,7 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
             if orow.get("狀態") in (needs.NOT_SEEN, needs.RETURNED) and c["狀態"] == needs.ALIVE and cross is not None:
                 cross.append(_version_card(workdir, st, k, m, orow, videos))
                 continue
-            state, outside = needs.NOT_MADE, True
+            state, outside, older = needs.NOT_MADE, True, old
             prev_ok = orow.get("狀態") == needs.PASSED
         elif not row and v is not None and str(c.get("建立時間") or "") <= vtime and c["狀態"] == needs.ALIVE \
                 and _step3_turned_on(st, k, c, v, hist):
@@ -222,8 +228,16 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
                 state, step3_changed = EDITED, True
         uk = un_of.get(k)
         info = _rec_info(recs)
+        if older and not recs:
+            # 10-15 宇軒驗證回饋四：範圍外的卡在最新版可以按「要修改」——要念的字、能不能換一種念法照之前有它的那一版的處理紀錄
+            m, orow = older
+            if m not in vlogs:
+                vlogs[m] = {fc.record_key(r): r for r in _version_log(workdir, st.versions.get(m)).get("紀錄") or []}
+            info = _rec_info([vlogs[m][x] for x in orow.get("紀錄鍵") or [] if x in vlogs[m]])
         # 10-15 要修改合併（1015-4）：「要修改」先記原因（退回）再套用修改（已改，等重做）——已改的卡照樣帶這一版記的原因
         why = (row or {}).get("退回原因") if state == needs.RETURNED or (state == EDITED and (row or {}).get("狀態") == needs.RETURNED) else None
+        if state == EDITED and not why and pend.get("退回原因"):
+            why = pend["退回原因"]   # 10-15 宇軒驗證回饋四：範圍外的卡按「要修改」記的原因（這一版沒有它的狀態列，記在等重做）
         note = ""
         if c["類型"] == needs.UNLOGGED:
             note = "聲音變了但沒有紀錄：聽一下，正常就按通過"
@@ -241,7 +255,7 @@ def _from_needs(workdir: Path, log: dict | None, check: dict, flags_text: dict, 
             "第幾版": gen_round.get(k) if gen_round.get(k, 1) > 1 else None,
             "舊紀錄": c.get("來源") in (needs.SRC_UPGRADE, needs.SRC_ASSEMBLE), "說明": note, **info,
             "刪掉了": c["狀態"] != needs.ALIVE, "第3步改過": step3_changed or turned_on,
-            "這一版沒處理到": outside, "上一版已通過": prev_ok, "版本號": vn,
+            "這一版沒處理到": outside, "上一版已通過": prev_ok, "範圍外改了": out_edit, "版本號": vn,
             "上一版": _prev_take(workdir, st, k, vn, videos) if vn and row else None,
         })
     return out
@@ -607,8 +621,16 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
     c = next((x for x in cards if str(x["id"]) == str(card_id)), None)
     if c is None:
         raise KeyError(f"沒有這張卡：{card_id}")
-    if c.get("這一版沒處理到"):
-        raise ValueError("這張是上一版通過的，這一版沒改，不用再判斷")   # 10-15 宇軒驗證回饋三
+    if c.get("這一版沒處理到") or c.get("範圍外改了"):
+        # 10-15 宇軒驗證回饋四：「已通過（沿用上一版）」的卡在最新版可以按「要修改」（發現改得不好還是要能送修改）——
+        # 這一版沒有它的狀態列、成品檢查檔也沒有它，原因記在卡片的等重做（起因：改了），畫面變「要重做」，
+        # 下次「重做這幾張」整支重做會包含它（`needs.build_version` 清掉、新版不沿用通過）。通過、取消仍不行（不是這一版做的）
+        if result != needs.RETURNED or not c.get("卡號"):
+            raise ValueError("這張是上一版通過的，這一版沒改，不用再判斷")   # 10-15 宇軒驗證回饋三
+        needs.mark_outside_redo(workdir, c["卡號"], options, extra)
+        part = build(workdir, index=index)
+        after = next((x for x in part["卡片"] if str(x["id"]) == str(card_id)), None)
+        return {"ok": True, "卡片": after, "統計": part["統計"], "狀態": part.get("狀態"), "跳過": [], "共用卡片": []}
     # 10-15 要修改合併（1015-4）：「要修改」的改字、改範圍存檔之後（卡片已經「已改，等重做」）還要記原因——
     # 已改的卡只要還在這一版成品裡（有對到處理紀錄），可以退回（記原因）；通過照舊不行
     in_product = c["狀態"] == EDITED and result == needs.RETURNED and bool(c.get("紀錄鍵"))

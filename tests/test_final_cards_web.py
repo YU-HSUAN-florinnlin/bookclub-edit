@@ -141,12 +141,15 @@ def test_fix_pure():
         off: [fcFixOff({}, true), fcFixOff({"跨版本": true}, false), fcFixOff({"這一版沒處理到": true}, false)],
         opts: [fcFixOptions({"可重新生成": true}, all), fcFixOptions({"可重新生成": false}, all), fcFixOptions({"可重新生成": true}, [])],
         rec: [fcFixRecords({"狀態": "還沒看"}), fcFixRecords({"狀態": "還沒生成"}), fcFixRecords({"狀態": "已改，等重做", "紀錄鍵": ["a"]}),
-              fcFixRecords({"狀態": "已改，等重做", "紀錄鍵": []}), fcFixRecords({"狀態": "退回"})]}));""")
-    assert got["can"] == [True, False, False, False, True, False]
-    assert got["off"] == ["要修改請回到最新一版", "要修改請回到最新一版", "這張是上一版通過的，這一版沒改到這裡"]
+              fcFixRecords({"狀態": "已改，等重做", "紀錄鍵": []}), fcFixRecords({"狀態": "退回"}),
+              fcFixRecords({"狀態": "還沒生成", "這一版沒處理到": true}), fcFixRecords({"狀態": "已改，等重做", "紀錄鍵": [], "範圍外改了": true})],
+        outOld: fcCanFix({"狀態": "還沒生成", "這一版沒處理到": true}, true)}));""")
+    # 10-15 宇軒驗證回饋四：「已通過（沿用上一版）」（這一版沒處理到）在最新版可以按「要修改」；舊版仍停用
+    assert got["can"] == [True, False, False, True, True, False] and got["outOld"] is False
+    assert got["off"] == ["要修改請回到最新一版"] * 3
     assert got["opts"][0] == ["念錯字", "聲音不像、不自然", "長度或停頓怪", "裡面有老師的聲音", "其他"] == got["opts"][2]
     assert got["opts"][1] == ["念錯字", "長度或停頓怪", "裡面有老師的聲音", "其他"]
-    assert got["rec"] == [True, False, True, False, True]
+    assert got["rec"] == [True, False, True, False, True, True, True]   # 範圍外的：原因記在卡片的等重做
 
 
 def test_tabs_step_and_next():
@@ -647,8 +650,9 @@ def test_versions_pure():
     assert "看哪一版" in got["menu"] and 'value="2" selected' in got["menu"] and "以這一版為基礎再組裝" not in got["menu"]
     assert "0-97" not in got["menu"] and "0-97" in got["dev"]   # 範圍標記只有開發者看得到
     assert "以這一版為基礎再組裝" in got["dev"] and "以這一版為基礎再組裝" not in got["devNew"]
-    # 10-15 宇軒驗證回饋三：「這一版沒處理到」改標「上一版已通過」＋小字；之前沒通過過的（舊版畫面）標「這一版沒做這張」
-    assert got["lab"] == got["labPass"] == {"text": "上一版已通過", "cls": "made", "small": ["這版沒改到這裡，不用再看"]}
+    # 10-15 宇軒驗證回饋三：「這一版沒處理到」改標＋小字；之前沒通過過的（舊版畫面）標「這一版沒做這張」
+    # 10-15 宇軒驗證回饋四：改成「已通過（沿用上一版）」、跟「通過 ✓」同一個綠色系（cls ok）
+    assert got["lab"] == got["labPass"] == {"text": "已通過（沿用上一版）", "cls": "ok", "small": ["這版沒改到這裡，不用再看"]}
     assert got["labNone"] == {"text": "這一版沒做這張", "cls": "made", "small": ["這一版的成品沒有處理這一張"]}
     assert got["prev"] == {"video": None, "audio": "/api/final/vclip?版本=2&start=68.00&end=77.00"} and got["noPrev"] is None
     assert got["crossNow"]["audio"].startswith("/api/final/vclip?版本=1&") and got["crossNow"]["video"] is None
@@ -690,6 +694,16 @@ def test_version_page_renders():
           const opened = fc.fix.open || !!document.getElementById("fc-fixbox");
           await click("fc-pass");
           return {top: contentEl.innerHTML, lower: document.getElementById("fc-lower").innerHTML, right, opened, log: H.log};"""},
+        {"名稱": "範圍外", "程式": """
+          await renderFinal();
+          const n1 = DATA["卡片"].find((c) => c["第3步鍵"] === "名字:1");
+          H.listeners.length = 0; H.log.length = 0; fcSelect(n1.id, false);
+          const before = document.getElementById("fc-right").innerHTML;
+          await last("fc-fix"); const right = document.getElementById("fc-right").innerHTML; const o = opts();
+          await pick("聲音不像、不自然"); const picked = document.getElementById("fc-right").innerHTML;
+          document.getElementById("fc-fix-extra").value = "太快"; await last("fc-fix-extra", "input");
+          await last("fc-fix-go");
+          return {id: n1.id, before, right, opts: o, picked, log: H.log};"""},
         {"名稱": "換版", "程式": """
           await renderFinal(); H.log.length = 0;
           const sel = document.getElementById("fc-ver"); sel.value = "1";
@@ -699,7 +713,17 @@ def test_version_page_renders():
     v = got["最新"]
     assert "錯誤" not in v, v
     assert "看哪一版" in v["top"] and "第 2 版" in v["top"] and "（最新）" in v["top"]
-    assert "上一版還沒看的（第 1 版）" in v["lower"] and "上一版已通過" in v["lower"] and "這一版沒處理到" not in v["lower"] and "fc-faded" in v["lower"]
+    assert "上一版還沒看的（第 1 版）" in v["lower"] and "已通過（沿用上一版）" in v["lower"] and "這一版沒處理到" not in v["lower"]
+    # 10-15 宇軒驗證回饋四：「已通過（沿用上一版）」的列跟通過的一樣（done、綠色標籤 fc-tag-ok），不變淡
+    row = re.search(r'<li data-id="[^"]*" class="([^"]*)">(?:(?!</li>).)*已通過（沿用上一版）', v["lower"], re.S)
+    assert row and "done" in row.group(1) and "fc-faded" not in row.group(1)
+    assert re.search(r'fc-tag-ok"[^>]*>已通過（沿用上一版）', v["lower"])
+    # 最新版上「已通過（沿用上一版）」的卡：「要修改」可以按、通過不行；確定 → 記原因（退回＋選項）
+    o = got["範圍外"]
+    assert "錯誤" not in o, o
+    assert re.search(r'id="fc-pass"[^>]*disabled', o["before"]) and not re.search(r'id="fc-fix"[^>]*disabled', o["before"])
+    assert "哪裡出問題" in o["right"] and "聲音不像、不自然" in o["opts"] and "這一張還沒做進成品" not in o["picked"]
+    assert [x for x in o["log"] if x[0] == "POST"] == [["POST", "/api/final/card", {"id": o["id"], "結果": "退回", "選項": ["聲音不像、不自然"], "補充": "太快"}]]
     assert "現在 ▶" in v["right"]
     assert re.search(r'id="fc-fix"[^>]*disabled title="要修改請回到最新一版"', v["right"]) and not v["opened"]
     posts = [x for x in v["log"] if x[0] == "POST"]

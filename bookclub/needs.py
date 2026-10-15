@@ -832,6 +832,7 @@ def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *,
     # 10-15 第2段審查修正（建議）：只清「改」的時間早於這份處理紀錄產生時間的（處理紀錄產生之後才改的，這一版沒有做進去）
     # 10-15 第5步2.0 第3段：在舊版上退回的（等重做帶 `版本號`）——這一版有它、而且是退回之後才組的，就是重做進來了
     made = _ts(log.get("產生時間"))
+    no_carry: set[str] = set()   # 10-15 宇軒驗證回饋四：範圍外按「要修改」記了原因的卡——重做進這一版後不沿用之前的通過
     for k in sorted(st.cards, key=_card_num):
         c = st.cards[k]
         pend = c.get("等重做") or {}
@@ -844,6 +845,8 @@ def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *,
             at = (st.versions.get(int(pend["版本號"])) or {}).get("卡片指紋") or {}
             redone = at.get(k) != prints[k]
         if (pend.get("起因") == WHY_EDITED and later) or redone:
+            if pend.get("退回原因") is not None:
+                no_carry.add(k)
             c["等重做"] = None
             c["更新時間"] = now
             st.log(now, k, step, f"重做進第{n}版", {"起因": pend.get("起因")}, None)
@@ -854,6 +857,7 @@ def build_version(st: Store, workdir: Path, log: dict, index: dict, now: str, *,
         src_v = carry_source(st, c, n, base)
         ps = src_v[1] if src_v else None
         carry = bool(ps and ps.get("狀態") == PASSED and (st.versions[src_v[0]].get("卡片指紋") or {}).get(c) == prints[c])
+        carry = carry and c not in no_carry   # 10-15 宇軒驗證回饋四：老師說要修改的，重做後要重新看
         st.states[(c, n)] = {"卡號": c, "版本號": n, "成品": row["成品時間"].get(c), "狀態": PASSED if carry else NOT_SEEN,
                              "退回原因": None, "沿用自": (ps.get("沿用自") or src_v[0]) if carry else None,
                              "沿用來源": src_v[0] if carry else None,
@@ -1429,6 +1433,33 @@ def set_reason(workdir: str | Path, card: str, options: list[str] | None, extra:
             return False
         row["退回原因"] = want
         row["更新時間"] = _now()
+        save(w, st)
+    return True
+
+
+def mark_outside_redo(workdir: str | Path, card: str, options: list[str] | None, extra: str = "") -> bool:
+    """10-15 宇軒驗證回饋四：「已通過（沿用上一版）」（範圍外、這一版沒處理到）的卡在最新版按「要修改」記的原因。
+    這一版沒有它的狀態列（`set_reason` 記不了），記在卡片的 `等重做`：{起因: 改了, 時間, 退回原因: {選項, 補充}}——
+    畫面變「要重做」（已改，等重做）、算進「重做這幾張」；下次組裝 `build_version` 清掉，而且新版不沿用之前的通過
+    （指紋沒變也要重新看）。已經等重做（例如先在選單裡改了字）就補上原因。回傳有沒有寫。"""
+    w = Path(workdir)
+    if not exists(w):
+        return False
+    why = {"選項": [o for o in REASON_OPTIONS if o in (options or [])], "補充": str(extra or "").strip()}
+    with _locked(w):
+        st = load(w)
+        c = st.cards.get(card)
+        if c is None:
+            raise KeyError(f"沒有這張卡：{card}")
+        cur = c.get("等重做") or {}
+        if cur.get("起因") == WHY_EDITED and cur.get("退回原因") == why:
+            return False
+        now = _now()
+        new = {"起因": WHY_EDITED, "時間": now, "退回原因": why}
+        c["等重做"] = new
+        c["更新時間"] = now
+        # 歷史不放退回原因文字（工作區格式：歷史只放編號、狀態、欄位名）
+        st.log(now, card, 5, "等重做", {"起因": cur["起因"]} if cur.get("起因") else None, {"起因": WHY_EDITED, "範圍外": True})
         save(w, st)
     return True
 
