@@ -1032,7 +1032,7 @@ def decide_version(workdir: str | Path, n: int, card: str, result: str | None, o
         st = load(w)
         row = st.states.get((card, int(n)))
         if row is None:
-            raise ValueError("這一版沒處理到這張卡，不能判斷")
+            raise ValueError("這一版沒有這張卡，不能判斷")   # 10-15 宇軒驗證回饋三：舊版上（不一定是上一版通過的）
         now = _now()
         c = st.cards.get(card) or {}
         new = NOT_SEEN if result is None else result

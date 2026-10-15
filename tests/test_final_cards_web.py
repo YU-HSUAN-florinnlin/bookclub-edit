@@ -56,6 +56,7 @@ _PURE = (_ESC + _const(FCJS, "FC_AB_CONTEXT") + _const(FCJS, "FC_ST") + _const(F
          + _const(FCJS, "FC_FIX_TEXT") + _const(FCJS, "FC_FIX_OPTS")
          + _fn(FCJS, "fcCanFix") + _fn(FCJS, "fcFixOff") + _fn(FCJS, "fcFixOptions") + _fn(FCJS, "fcFixRecords")
          + _const(FCJS, "FC_TAB_ALL") + _const(FCJS, "FC_TYPE_TABS")
+         + _const(FCJS, "FC_OUT_PASSED") + _const(FCJS, "FC_OUT_NONE")
          + _fn(FCJS, "fcShortStamp") + _fn(FCJS, "fcCardLabel") + _fn(FCJS, "fcReasonText") + _fn(FCJS, "fcStatusLine")
          + _const(FCJS, "FC_NO_REASON") + _fn(FCJS, "fcWhyLine") + _fn(FCJS, "fcSharedLine") + _fn(FCJS, "fcRedoCount")
          + _const(FCJS, "FC_NOTE_FIELDS") + _fn(FCJS, "fcNoteOnly")
@@ -142,7 +143,7 @@ def test_fix_pure():
         rec: [fcFixRecords({"狀態": "還沒看"}), fcFixRecords({"狀態": "還沒生成"}), fcFixRecords({"狀態": "已改，等重做", "紀錄鍵": ["a"]}),
               fcFixRecords({"狀態": "已改，等重做", "紀錄鍵": []}), fcFixRecords({"狀態": "退回"})]}));""")
     assert got["can"] == [True, False, False, False, True, False]
-    assert got["off"] == ["要修改請回到最新一版", "要修改請回到最新一版", "這一版沒處理到這一張"]
+    assert got["off"] == ["要修改請回到最新一版", "要修改請回到最新一版", "這張是上一版通過的，這一版沒改到這裡"]
     assert got["opts"][0] == ["念錯字", "聲音不像、不自然", "長度或停頓怪", "裡面有老師的聲音", "其他"] == got["opts"][2]
     assert got["opts"][1] == ["念錯字", "長度或停頓怪", "裡面有老師的聲音", "其他"]
     assert got["rec"] == [True, False, True, False, True]
@@ -629,6 +630,8 @@ def test_versions_pure():
         dev: fcVersionMenuHtml({"版本清單": L, "目前版本": 2, "開發者": true, "看的是舊版": true}),
         devNew: fcVersionMenuHtml({"版本清單": L, "目前版本": 3, "開發者": true, "看的是舊版": false}),
         lab: fcCardLabel({"狀態": "還沒生成", "這一版沒處理到": true}),
+        labPass: fcCardLabel({"狀態": "還沒生成", "這一版沒處理到": true, "上一版已通過": true}),
+        labNone: fcCardLabel({"狀態": "還沒生成", "這一版沒處理到": true, "上一版已通過": false}),
         prev: fcCardAbPlan({"原片": [100, 104], "成品": [80, 85], "上一版": {"版本號": 2, "成品": [70, 75]}}, "上一版"),
         noPrev: fcCardAbPlan({"原片": [100, 104], "成品": [80, 85], "上一版": null}, "上一版"),
         crossNow: fcCardAbPlan({"原片": [100, 104], "成品": [80, 85], "跨版本": true, "版本號": 1}, "現在"),
@@ -644,7 +647,9 @@ def test_versions_pure():
     assert "看哪一版" in got["menu"] and 'value="2" selected' in got["menu"] and "以這一版為基礎再組裝" not in got["menu"]
     assert "0-97" not in got["menu"] and "0-97" in got["dev"]   # 範圍標記只有開發者看得到
     assert "以這一版為基礎再組裝" in got["dev"] and "以這一版為基礎再組裝" not in got["devNew"]
-    assert got["lab"] == {"text": "這一版沒處理到", "cls": "made", "small": []}
+    # 10-15 宇軒驗證回饋三：「這一版沒處理到」改標「上一版已通過」＋小字；之前沒通過過的（舊版畫面）標「這一版沒做這張」
+    assert got["lab"] == got["labPass"] == {"text": "上一版已通過", "cls": "made", "small": ["這版沒改到這裡，不用再看"]}
+    assert got["labNone"] == {"text": "這一版沒做這張", "cls": "made", "small": ["這一版的成品沒有處理這一張"]}
     assert got["prev"] == {"video": None, "audio": "/api/final/vclip?版本=2&start=68.00&end=77.00"} and got["noPrev"] is None
     assert got["crossNow"]["audio"].startswith("/api/final/vclip?版本=1&") and got["crossNow"]["video"] is None
     assert got["crossOrig"]["video"] is None and got["crossOrig"]["audio"].startswith("/api/audio?")
@@ -694,7 +699,7 @@ def test_version_page_renders():
     v = got["最新"]
     assert "錯誤" not in v, v
     assert "看哪一版" in v["top"] and "第 2 版" in v["top"] and "（最新）" in v["top"]
-    assert "上一版還沒看的（第 1 版）" in v["lower"] and "這一版沒處理到" in v["lower"] and "fc-faded" in v["lower"]
+    assert "上一版還沒看的（第 1 版）" in v["lower"] and "上一版已通過" in v["lower"] and "這一版沒處理到" not in v["lower"] and "fc-faded" in v["lower"]
     assert "現在 ▶" in v["right"]
     assert re.search(r'id="fc-fix"[^>]*disabled title="要修改請回到最新一版"', v["right"]) and not v["opened"]
     posts = [x for x in v["log"] if x[0] == "POST"]
@@ -759,6 +764,89 @@ def test_pad_switch_shared_step5():
     assert off["src"] == f"/api/audio?start={a:.2f}&end={b:.2f}", off["src"]
     assert on["src"] == f"/api/audio?start={max(0, a - 2):.2f}&end={b + 2:.2f}", on["src"]
     assert off["stored"] == "1" and on["stored"] == "0"   # 撥開關寫回同一個鍵
+
+
+# ---------- 10-15 宇軒驗證回饋三：「載入失敗：flat.push is not a function」 ----------
+
+def _web_globals() -> dict[str, list[str]]:
+    """網頁 js 的最上層函式、常數名稱 → 在哪幾支檔案（同一個網頁共用全域，同名會互相蓋掉）。"""
+    seen: dict[str, list[str]] = {}
+    for f in sorted(WEB.glob("*.js")):
+        src = f.read_text(encoding="utf-8")
+        names = re.findall(r"^(?:async )?function ([\w$]+)", src, re.M)
+        for m in re.finditer(r"^(?:const|let|var) (.+?);?$", src, re.M):
+            # 一行宣告好幾個（const A = 1, B = 2;）：只抓等號前、頂層逗號後的名稱
+            names += re.findall(r"(?:^|,\s*)([A-Za-z_$][\w$]*)\s*=", m.group(1))[:1] + re.findall(r",\s*([A-Z_$][A-Z0-9_$]*)\s*=", m.group(1))
+        for n in set(names):
+            seen.setdefault(n, []).append(f.name)
+    return seen
+
+
+def test_web_globals_unique():
+    """根本原因：app.js 第 4 步「開始前總檢查」的 fcKeepHtml(r, i) 跟 finalcheck.js「第 3 步選定不修改」那一頁的 fcKeepHtml(flat)
+    同名；finalcheck.js 最後載入、蓋掉第 4 步那一支，第 4 步畫「一定要處理」時把那一列物件當 flat → flat.push is not a function。"""
+    dup = {k: v for k, v in _web_globals().items() if len(v) > 1}
+    assert not dup, f"網頁 js 的全域名稱重複（會互相蓋掉）：{dup}"
+    assert "fcKeepHtml" in _web_globals() and _web_globals()["fcKeepHtml"] == ["app.js"]
+
+
+def test_step4_keep_buttons_with_finalcheck_loaded():
+    """第 4 步「一定要處理」的按鈕：app.js 的 fcKeepHtml 之後再載入整支 finalcheck.js，還是第 4 步那一支（不丟錯）。"""
+    if not NODE:
+        return
+    fc_fns = "".join(m.group(0) for m in re.finditer(r"^(async )?function [\w$]+\(.*?^\}\n", FCJS, re.S | re.M))
+    code = (_ESC + _fn(APPJS, "fcKeepHtml") + fc_fns   # finalcheck.js 的函式全部在後面宣告（跟網頁載入順序一樣）
+            + """;console.log(JSON.stringify([fcKeepHtml({"可以按照目前設定做": true, key: "k1"}, 0),
+                 fcKeepHtml({"回第3步補": true, "照目前設定做不開放原因": "x"}, 1)]));""")
+    got = _node(code)
+    assert 'data-fckeep="k1"' in got[0] and 'data-fcback="1"' in got[1]
+
+
+def test_every_tab_every_version_renders():
+    """各版本（最新、舊版、缺欄位的版本頁）× 各分頁（含停在「第 3 步選定不修改」「需留意」再切版本）都畫得出來、不丟錯。"""
+    if not NODE:
+        return
+    latest, old = _version_data(), _version_data(old=True)
+    base, _w = _api_final()
+    # 照 8799 複本第 3 版（範圍 0-3）那一份的樣子：卡片 10 張、跨版本 40 張、需留意沒有（null）
+    v3 = json.loads(json.dumps(latest))
+    v3["需留意"], v3["不修改"] = None, []
+    # 更舊的回應：那幾個欄位整個沒有
+    bare = json.loads(json.dumps(old))
+    for k in ("不修改", "不修改類型", "需留意", "需留意類型", "跨版本卡片", "看過區段"):
+        bare.pop(k, None)
+    weird = json.loads(json.dumps(old))
+    weird["不修改"], weird["需留意"] = {}, {"有紀錄": True, "列": None}
+    tabs = ["全部", "還沒看完", "不修改", "需留意", "名字", "學員段落", "其他", "不存在的分頁"]
+    sc = """%s LS.store["fc-tab"] = TAB;
+          await renderFinal();
+          const lower = document.getElementById("fc-lower").innerHTML;
+          return {lower, err: H.log.filter((x) => x[0] === "錯誤")};"""
+    for name, data in (("最新", latest), ("舊版", old), ("第3版樣子", v3), ("缺欄位", bare), ("怪欄位", weird), ("有不修改需留意", base)):
+        got = _run_page([{"名稱": t, "程式": f"const TAB = {json.dumps(t, ensure_ascii=False)};" + sc % _LS.replace("\n", " ")}
+                         for t in tabs], data=data)
+        for t in tabs:
+            v = got[t]
+            assert isinstance(v, dict) and "錯誤" not in v and not v["err"], (name, t, v)
+            assert 'class="rv-filters fc-tabs"' in v["lower"], (name, t)
+            has_keep = bool((data.get("不修改") or []) if isinstance(data.get("不修改"), list) else False)
+            if t == "不修改" and not has_keep:
+                assert "這一版沒有「第 3 步選定不修改」這一頁" in v["lower"], (name, v["lower"][:300])
+            if t == "需留意" and not data.get("需留意"):
+                assert "這一版沒有「需留意」這一頁" in v["lower"], (name, v["lower"][:300])
+    keep = _run_page([{"名稱": "k", "程式": "const TAB = '不修改';" + sc % _LS.replace("\n", " ")}], data=base)["k"]
+    if base.get("不修改"):
+        assert 'id="fc-ulist"' in keep["lower"] and "這一版沒有" not in keep["lower"]
+
+
+def test_fill_defaults_pure():
+    if not NODE:
+        return
+    got = _node(_const(FCJS, "FC_LIST_FIELDS") + _fn(FCJS, "fcFillDefaults") + """
+      console.log(JSON.stringify([fcFillDefaults({"不修改": null, "需留意": {"有紀錄": true}}), fcFillDefaults(null)]));""")
+    a, b = got
+    assert a["不修改"] == [] and a["跨版本卡片"] == [] and a["需留意"] == {"有紀錄": True, "列": []}
+    assert b["卡片"] == [] and b["需留意"] is None and b["卡片統計"] == {}
 
 
 if __name__ == "__main__":

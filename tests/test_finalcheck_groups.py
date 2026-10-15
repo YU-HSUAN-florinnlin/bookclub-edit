@@ -293,7 +293,7 @@ def test_web_lower_wiring():
     assert "fcShown()" in _fn("fcStep") and "fcStepPick(" in _fn("fcStep")
     assert "fcTabSet(FC_TAB_KEEP)" in _fn("renderFinal")
     assert "fcPlaySpan(" in lower and "rvJump({ key: u[\"第3步\"] || null, back: \"step5\", backKey: u[\"鍵\"]" in lower
-    assert 'id="fc-list"' in lower and 'id="fc-ulist"' in _fn("fcKeepHtml") and "fcSpanTick(v.currentTime)" in FCJS
+    assert 'id="fc-list"' in lower and 'id="fc-ulist"' in _fn("fcKeepTabHtml") and "fcSpanTick(v.currentTime)" in FCJS
     assert FCJS.count("fileOutInit(") >= 1 and 'id="fc-fileout"' in FCJS   # 10-07 加的檔案進出照留
 
 

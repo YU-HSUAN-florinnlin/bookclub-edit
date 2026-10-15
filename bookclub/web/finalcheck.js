@@ -52,10 +52,18 @@ const FC_TODO = [FC_ST.TODO, FC_ST.BACK, FC_ST.EDITED, FC_ST.NOT_MADE];   // 「
 const FC_REDO = [FC_ST.BACK, FC_ST.EDITED, FC_ST.NOT_MADE];               // 「重做這幾張」算的
 const FC_REDO_LABEL = "要重做";   // 10-15 要修改合併（1015-4）：退回、已改，等重做的標籤字
 
+// 10-15 宇軒驗證回饋三：範圍外的卡（資料欄位「這一版沒處理到」）給老師看的字
+const FC_OUT_PASSED = "上一版已通過", FC_OUT_PASSED_NOTE = "這版沒改到這裡，不用再看";
+const FC_OUT_NONE = "這一版沒做這張", FC_OUT_NONE_NOTE = "這一版的成品沒有處理這一張";
 // 卡片標籤：{text, cls, small: [小字]}（31 號設計 §6.3）
 function fcCardLabel(c) {
   // 10-15 第5步2.0 第3段（§6.6）：這一版沒處理到（開發者用範圍組裝時範圍外的卡）——變淡、不能按通過
-  if (c["這一版沒處理到"]) return { text: "這一版沒處理到", cls: "made", small: [] };
+  // 10-15 宇軒驗證回饋三：「這一版沒處理到」看不懂 → 改標「上一版已通過」＋小字「這版沒改到這裡，不用再看」
+  // （資料欄位名稱不變）。舊版畫面上、之前的版本沒通過過的（之後才有的卡等）→「這一版沒做這張」
+  if (c["這一版沒處理到"]) {
+    return c["上一版已通過"] === false ? { text: FC_OUT_NONE, cls: "made", small: [FC_OUT_NONE_NOTE] }
+      : { text: FC_OUT_PASSED, cls: "made", small: [FC_OUT_PASSED_NOTE] };
+  }
   const small = [];
   if (c["狀態"] === FC_ST.OK && c["沿用自"]) small.push(`沿用第 ${c["沿用自"]} 版`);
   if (c["要人聽"] && c["狀態"] !== FC_ST.OK) small.push("請仔細聽");
@@ -365,11 +373,23 @@ async function fcRebase(btn) {
   location.hash = "#step4";
 }
 
+// 10-15 宇軒驗證回饋三：整頁資料缺欄位時補預設值（舊版頁面、舊工作區少給的清單一律當空的；需留意沒有＝null，不出那一頁）
+const FC_LIST_FIELDS = ["卡片", "跨版本卡片", "不修改", "不修改類型", "需留意類型", "看過區段", "版本清單", "退回原因選項", "片段"];
+function fcFillDefaults(d) {
+  d = d && typeof d === "object" ? d : {};
+  for (const k of FC_LIST_FIELDS) if (!Array.isArray(d[k])) d[k] = [];
+  if (!d["需留意"] || typeof d["需留意"] !== "object") d["需留意"] = null;
+  else if (!Array.isArray(d["需留意"]["列"])) d["需留意"] = { ...d["需留意"], "列": [] };
+  if (!d["卡片統計"] || typeof d["卡片統計"] !== "object") d["卡片統計"] = {};
+  if (!d["狀態"] || typeof d["狀態"] !== "object") d["狀態"] = {};
+  return d;
+}
+
 async function renderFinal() {
   cvUse(FC_CARD_CTX);
   contentEl.innerHTML = "<p>載入中…</p>";
-  try { fc.data = await apiGet(fcUrl()); }
-  catch (e) { if (!fc.ver) throw e; fc.ver = null; fc.data = await apiGet(fcUrl()); }   // 那一版不在了：回最新
+  try { fc.data = fcFillDefaults(await apiGet(fcUrl())); }
+  catch (e) { if (!fc.ver) throw e; fc.ver = null; fc.data = fcFillDefaults(await apiGet(fcUrl())); }   // 那一版不在了：回最新
   contentEl.classList.add("wide");
   const d = fc.data;
   if (!d["看的是舊版"] && (!d["有處理紀錄"] || !d["成品影片"])) {   // 31 號設計 §6.8：一句話＋連結（霧化預覽拿掉）
@@ -447,7 +467,7 @@ async function fcReload() {
   const pre = fc.nextData;
   fc.nextData = null;
   // 10-15 第2段審查修正（建議，效能）：剛存檔、/api/final/edited 回傳的整頁資料（幾秒內）直接用
-  fc.data = pre && !fc.ver && Date.now() - pre.at < 5000 ? pre.data : await apiGet(fcUrl());
+  fc.data = fcFillDefaults(pre && !fc.ver && Date.now() - pre.at < 5000 ? pre.data : await apiGet(fcUrl()));
   if (fc.cur && !fcCard(fc.cur)) fc.cur = (fcCards().find((c) => c["狀態"] === FC_ST.TODO) || fcCards()[0] || {}).id || null;
   fcRenderAll();
 }
@@ -578,7 +598,7 @@ function fcStateBoxHtml(c) {
   const shared = back ? fcSharedLine(c) : "";
   // 10-15 要修改合併（1015-4）：已改的卡有記原因（要修改先記原因再改）也列原因那一行
   const why = back || (c["狀態"] === FC_ST.EDITED && c["退回原因"]);
-  return `<span class="fc-tag fc-tag-${lab.cls}">${esc(lab.text)}</span>${lab.small.map((x) => ` <span class="rv-meta">${esc(x)}</span>`).join("")}
+  return `<span class="fc-tag fc-tag-${lab.cls}"${c["這一版沒處理到"] ? ` title="${esc(lab.small.join("；"))}"` : ""}>${esc(lab.text)}</span>${lab.small.map((x) => ` <span class="rv-meta">${esc(x)}</span>`).join("")}
     ${why ? `<p class="rv-warnline fc-why">${esc(fcWhyLine(c))}</p>` : ""}${shared ? `<p class="rv-warnline fc-shared">${esc(shared)}</p>` : ""}`;
 }
 
@@ -715,7 +735,7 @@ function fcCanFix(c, old) {
 }
 // （純函式）「要修改」停用時滑過的字
 function fcFixOff(c, old) {
-  if (c && c["這一版沒處理到"] && !old && !c["跨版本"]) return "這一版沒處理到這一張";
+  if (c && c["這一版沒處理到"] && !old && !c["跨版本"]) return "這張是上一版通過的，這一版沒改到這裡";   // 10-15 宇軒驗證回饋三
   return "要修改請回到最新一版";
 }
 // （純函式）「哪裡出問題？」列哪幾項：沒有聲音可以重新生成的卡（剪掉、消音、還沒生成…）不列「聲音不像、不自然」
@@ -1080,22 +1100,26 @@ function fcRowHtml(c) {
       <span class="tm">${c["原片"] && c["原片"][0] != null ? esc(fcFmt(c["原片"][0], 0)) : "—"}</span>
       <span class="ty">${fcChip(c, it)}</span>
       <span class="tx">${c["編號"] ? `<span class="idtag">#${esc(String(c["編號"]))}</span>` : ""}${esc(fcWho(fcPreview(c, it)))}</span>
-      <span class="st fc-tag fc-tag-${lab.cls}">${esc(lab.text)}</span></li>`;
+      <span class="st fc-tag fc-tag-${lab.cls}"${c["這一版沒處理到"] ? ` title="${esc(lab.small.join("；"))}"` : ""}>${esc(lab.text)}</span></li>`;
 }
 
 function fcRenderLower() {
   const lower = document.getElementById("fc-lower");
   if (!lower || !fc.data) return;
   const tabs = fcTabs();
-  const tab = fcPickTab(tabs, fcTabGet());
+  const want = fcTabGet();
+  const tab = fcPickTab(tabs, want);
   const t = tabs.find((x) => x.id === tab);
+  // 10-15 宇軒驗證回饋三：停在「第 3 步選定不修改」「需留意」再切到沒有那一頁的版本（舊版沒有）→ 說一句、先顯示全部（不改記住的分頁）
+  const gone = want !== tab && [FC_TAB_KEEP, FC_TAB_ATT].includes(want)
+    ? `<p class="rv-meta fc-tabgone">這一版沒有「${esc(want === FC_TAB_KEEP ? "第 3 步選定不修改" : "需留意")}」這一頁，先顯示全部。</p>` : "";
   const badge = (x) => (x["清單外"] ? x["筆數"] : x.id === FC_TAB_TODO ? x.cards.length : `${x.cards.filter((c) => c["狀態"] === FC_ST.OK).length}／${x.cards.length}`);
   const nav = `<nav class="rv-filters fc-tabs" aria-label="類型">${tabs.map((x) =>
     `<button class="${x.id === tab ? "on" : ""}${x["清單外"] ? " fc-tab-far" : ""}" data-tab="${esc(x.id)}">${esc(x["名稱"])} <span>${esc(String(badge(x)))}</span></button>`).join("")}</nav>`;
   const flat = [];
   let body;
   if (t.id === FC_TAB_ATT) body = fcAttentionHtml(fc.data["需留意"], fc.data["需留意類型"], flat);
-  else if (t.id === FC_TAB_KEEP) body = fcKeepHtml(flat);
+  else if (t.id === FC_TAB_KEEP) body = fcKeepTabHtml(flat);
   else {
     const shown = fcShown();
     const lookN = t.cards.filter((c) => c["要人聽"]).length;
@@ -1105,7 +1129,7 @@ function fcRenderLower() {
       <ol class="rv-list" id="fc-list">${shown.map(fcRowHtml).join("") || `<li class="empty">${fcCards().length ? "這一頁沒有卡片" : "這一版沒有任何修改"}</li>`}</ol>
       ${fcCrossHtml(fcCross())}`;
   }
-  lower.innerHTML = `${nav}${body}`;
+  lower.innerHTML = `${nav}${gone}${body}`;
   lower.querySelectorAll(".fc-tabs button").forEach((b) => b.addEventListener("click", () => { fcTabSet(b.dataset.tab); fcRenderLower(); }));
   const only = document.getElementById("fc-only");
   if (only) only.addEventListener("change", () => { fcSetOnlyLook(only.checked); fcRenderLower(); });
@@ -1214,8 +1238,11 @@ function fcUnchangedRow(u, i) {
         <button class="ghost small fc-u-go" data-i="${i}">回第 3 步改</button></span></li>`;
 }
 
-function fcKeepHtml(flat) {
-  const uRows = fc.data["不修改"] || [];
+// 10-15 宇軒驗證回饋三：以前叫 fcKeepHtml，跟 app.js 第 4 步「開始前總檢查」的 fcKeepHtml(r, i) 同名——
+// 網頁的 js 共用同一個全域，finalcheck.js 最後載入、把第 4 步那一支蓋掉，第 4 步畫「一定要處理」時把那一列（物件）當成 flat
+// 傳進來 → 「flat.push is not a function」、整頁「載入失敗」。改名分開（tests/test_final_cards_web.py 檢查全域不重名）
+function fcKeepTabHtml(flat) {
+  const uRows = Array.isArray(fc.data["不修改"]) ? fc.data["不修改"] : [];
   return `<p class="rv-meta">第 3 步看過、決定照原聲留著的地方。不用按通過、不擋輸出；想確認就按「跳過去聽」（只播那一段），要改就「回第 3 步改」，改完要重新組裝。</p>
     <p class="rv-warnline">這一頁會顯示學員本名，截圖或分享螢幕時請注意。</p>
     <div class="fc-ugroups" id="fc-ulist">${fcGroupUnchanged(uRows, fc.data["不修改類型"]).map((k) => {

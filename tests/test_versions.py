@@ -113,6 +113,7 @@ def test_cross_version_cards_and_not_processed():
     assert {c["類型"] for c in cross} == {"學員段落", needs.UNCLEAR}   # 第 1 版的停格（待釐清）也帶過來
     n1 = _by(cards, "名字:1")
     assert n1["這一版沒處理到"] and n1["狀態"] == needs.NOT_MADE and n1["成品"] is None
+    assert n1["上一版已通過"] is True   # 10-15 宇軒驗證回饋三：畫面標「上一版已通過」
     assert _by(cards, "學員段落:T003")["版本號"] == 2 and not _by(cards, "學員段落:T003")["這一版沒處理到"]
     assert not any(c.get("第3步鍵") == "學員段落:T007" for c in cards + cross)   # 哪一版都沒處理過的：不列
     st = part["統計"]
@@ -122,7 +123,7 @@ def test_cross_version_cards_and_not_processed():
         finalcards.decide(w, n1["id"], needs.PASSED)
         raise AssertionError("沒處理到的不能按通過")
     except ValueError as e:
-        assert "沒處理到" in str(e)
+        assert "上一版通過的" in str(e)   # 10-15 宇軒驗證回饋三：錯誤訊息改字
     # 在「上一版還沒看的」那一區按通過：記在第 1 版，不寫成品檢查檔
     before = json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True)
     r = finalcards.decide(w, t5["id"], needs.PASSED, version=1)
