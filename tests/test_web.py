@@ -136,7 +136,7 @@ def test_no_promises_of_unbuilt_redo():
     fc = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
     # 10-01 第三批：一鍵只重做做好了；畫面上不再叫人照指令手動重做、也不出現指令
-    assert "手動重做" not in fc and "只重做退回的這幾筆" in app
+    assert "手動重做" not in fc and "只重做這幾張" in app   # 10-15 總檢查修正（1015-7）：「只重做退回的這幾筆」→「只重做這幾張」
     # 10-15 第5步2.0 第2段：第 5 步只有一顆「重做這幾張」（「送回 AI 重做」拿掉）
     assert "重做這幾張" in fc and "送回 AI 重做" not in fc and "/api/final/sendback" not in fc
     assert "bookclub gen" not in app and "<code>${esc(it[\"建議指令\"])}" not in app
@@ -269,7 +269,7 @@ def test_third_batch_1001():
     assert "<b>匿名聲線</b>" not in app and "替代聲音" in app
     assert "聲紋分出來" not in rv and "匿名聲線" not in rv and '"霧化": "聲音霧化"' in rv
     assert "execGoCheck" not in rv and "execGoCheck" in app   # 9：10-08 流程簡化後第 3 步不再帶去第 4 步總檢查（總檢查預設略過）
-    assert "第 5 步退回：" in rv                                                   # 5
+    assert "第 5 步要重做：" in rv                                                   # 5
     assert "現在狀態" in app and "上次執行：" in app                               # 4
     assert "調整時間範圍" not in fcj   # 11：10-15 第 5 步改範圍改用第 3 步卡片的「改時間」（面板拿掉）
     assert "已還原的（" in rv and "刪掉這一筆" in rv and "刪掉的紀錄（" in rv       # 第三批 3

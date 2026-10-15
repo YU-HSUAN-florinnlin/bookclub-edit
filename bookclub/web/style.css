@@ -810,7 +810,7 @@ details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合�
 .rv2 .fc-tabs .fc-tab-far + .fc-tab-far { margin-left: 0; }
 .fc-only { display: inline-block; margin: 0 0 6px; font-size: 14px; }
 
-/* 10-15 第5步2.0 第3段：版本選單、這一版沒處理到（變淡）、上一版還沒看的那一區 */
+/* 10-15 第5步2.0 第3段：版本選單、範圍外的卡（舊版「這一版沒做這張」變淡）。10-15 總檢查修正（1015-7）：註解改成現況 */
 .fc-vers { display: flex; align-items: center; gap: 8px; font-size: 15px; flex: 1; }
 /* 10-15 要修改合併（1015-4）順手：頂端一句另起一行放在標題下方（太長時不跟「看哪一版」擠成三行） */
 .fc > .fc-status { margin: -4px 0 12px; }
@@ -818,6 +818,8 @@ details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合�
 .rv-list li.fc-faded { opacity: .45; }
 /* 10-15 宇軒驗證回饋五：「已通過（沿用上一版）」只刷淡文字、綠色標籤保留 */
 .rv-list li.fc-faded-ok > :not(.st) { opacity: .45; }
-/* 10-15 宇軒驗證回饋六：下面「已通過的」那一區（以前是「上一版還沒看的」）；上面清單的跨版本卡在時間格下面加小字「第 N 版」 */
+/* 10-15 宇軒驗證回饋六：下面「已通過的」那一區；上面清單的跨版本卡在時間格下面加小字「第 N 版」 */
 .fc-passed { margin-top: 4px; }
 .rv-list .tm .fc-vtag { display: block; font-size: 12px; color: var(--muted); font-weight: normal; }
+/* 10-15 總檢查修正（1015-7）：舊版畫面上「最新版：要重做（原因）」小字 */
+.fc-latest-redo { margin: 4px 0 0; }
