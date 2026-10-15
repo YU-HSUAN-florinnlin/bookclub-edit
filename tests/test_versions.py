@@ -137,10 +137,12 @@ def test_cross_version_cards_and_not_processed():
 
 def test_outside_passed_card_can_be_fixed_on_latest():
     """10-15 宇軒驗證回饋四：「已通過（沿用上一版）」（範圍外）的卡在最新版可以按「要修改」——記原因、變「要重做」（已改，等重做），
-    通過／取消仍不行；舊版仍不能退回；下次整支重做清掉等重做，而且新版不沿用之前的通過（要重新看）。"""
+    通過仍不行；舊版也能按（原因一樣記在卡片）。
+    10-15 總檢查修正（1015-7）：舊版畫面照那一版的判斷、另給 `最新版要重做`；沒跑「重做這幾張」就組裝 → 等重做留著；
+    跑了「重做這幾張」再組裝 → 清掉，新版不沿用之前的通過（要重新看）。"""
     w = _three_versions()
     n1 = _by(finalcards.build(w)["卡片"], "名字:1")
-    assert n1["這一版沒處理到"] and not n1["範圍外改了"]
+    assert n1["這一版沒處理到"] and not n1["範圍外改了"] and n1["已通過的"]
     assert n1["可重新生成"], "範圍外的卡能不能換一種念法照之前有它的那一版（才列得出「聲音不像、不自然」）"
     for res in (needs.PASSED, None):
         try:
@@ -150,7 +152,7 @@ def test_outside_passed_card_can_be_fixed_on_latest():
             assert "上一版通過的" in str(e)
     r = finalcards.decide(w, n1["id"], needs.RETURNED, ["聲音不像、不自然"], "太快了")
     c = r["卡片"]
-    assert c["狀態"] == finalcards.EDITED and c["範圍外改了"] and not c["這一版沒處理到"]
+    assert c["狀態"] == finalcards.EDITED and c["範圍外改了"] and not c["這一版沒處理到"] and not c["已通過的"]
     assert c["退回原因"] == {"選項": ["聲音不像、不自然"], "補充": "太快了"}
     assert r["統計"]["要重做"] == 1
     st = needs.load(w)
@@ -168,13 +170,27 @@ def test_outside_passed_card_can_be_fixed_on_latest():
     assert r["卡片"]["狀態"] == finalcards.EDITED and r["卡片"]["退回原因"] == {"選項": ["長度或停頓怪"], "補充": "尾巴"}
     st = needs.load(w)
     assert st.states[(n1["卡號"], 1)]["狀態"] == needs.PASSED and (n1["卡號"], 2) not in st.states
-    o1 = _by(finalcards.version_page(w, 1, None)["卡片"], "名字:1")   # 舊版畫面：照卡片現在的樣子標要重做、帶原因（預填）
-    assert o1["狀態"] == finalcards.EDITED and o1["退回原因"]["補充"] == "尾巴" and o1["範圍外改了"]
-    # 整支重做：等重做清掉、新版不沿用第 1 版的通過（指紋沒變也要重新看）；別張通過的照樣沿用
+    # 10-15 總檢查修正（1015-7，A6）：舊版畫面照那一版的判斷（通過），另給「最新版要重做」（預填用）
+    pg1 = finalcards.version_page(w, 1, None)
+    o1 = _by(pg1["卡片"], "名字:1")
+    assert o1["狀態"] == needs.PASSED and o1["最新版要重做"] == {"選項": ["長度或停頓怪"], "補充": "尾巴"}
+    assert pg1["卡片統計"]["要重做"] == 1
+    # 沒跑「重做這幾張」就組裝（只重新組裝）：聲音沒換，等重做留著、歷史不寫「重做進第 3 版」
     _assemble(w, _t(3), tn._records())
     st = needs.load(w)
+    assert st.cards[n1["卡號"]]["等重做"]["退回原因"]["補充"] == "尾巴"
+    assert not any(h["卡號"] == n1["卡號"] and str(h["動作"]).startswith("重做進第") for h in needs.read_history(w))
+    assert _by(finalcards.build(w)["卡片"], "名字:1")["狀態"] == finalcards.EDITED
+    # 「重做這幾張」：第 4 步拿得到它（照卡片重做），組裝後等重做清掉、新版不沿用第 1 版的通過；別張通過的照樣沿用
+    plan = tn._quiet(fc.redo_plan, w)
+    assert [e["卡號"] for e in plan if e.get("卡號")] == [n1["卡號"]]
+    tn._quiet(fc.prepare_redo, w, log=lambda s: None)
+    _assemble(w, _t(4), tn._records())
+    tn._quiet(fc.finish_redo, w)
+    st = needs.load(w)
     assert not st.cards[n1["卡號"]].get("等重做")
-    assert st.states[(n1["卡號"], 3)]["狀態"] == needs.NOT_SEEN and not st.states[(n1["卡號"], 3)]["沿用自"]
+    assert st.states[(n1["卡號"], 4)]["狀態"] == needs.NOT_SEEN and not st.states[(n1["卡號"], 4)]["沿用自"]
+    assert any(h["卡號"] == n1["卡號"] and h["動作"] == "重做進第4版" for h in needs.read_history(w))
     c3 = _by(finalcards.build(w)["卡片"], "名字:1")
     assert c3["狀態"] == needs.NOT_SEEN and not c3["範圍外改了"] and not c3["這一版沒處理到"]
 
@@ -204,8 +220,8 @@ def test_old_version_page_and_decide_and_watch():
     assert json.dumps(fc.load_check(w), ensure_ascii=False, sort_keys=True) == before
     part = finalcards.build(w)
     assert not any(c["id"] == t5["id"] for c in part["跨版本卡片"]) and part["統計"]["要重做"] == 1
-    o5 = _by(finalcards.version_page(w, 1, None)["卡片"], "學員段落:T005")
-    assert o5["狀態"] == finalcards.EDITED and o5["退回原因"]["補充"] == "x"
+    o5 = _by(finalcards.version_page(w, 1, None)["卡片"], "學員段落:T005")   # 1015-7 A6：那一版的判斷照舊＋最新版要重做
+    assert o5["狀態"] == needs.NOT_SEEN and o5["最新版要重做"] == {"選項": ["念錯字"], "補充": "x"}
     # 舊版上看過的：記在那一版自己的一份
     tn._quiet(finalcards.version_watched, w, 1, [[1.0, 2.0]])   # 假影片量不出長度：不截
     tn._quiet(finalcards.version_watched, w, 1, [[1.5, 3.0]])
@@ -213,8 +229,8 @@ def test_old_version_page_and_decide_and_watch():
 
 
 def test_cross_card_fix_and_old_return_assembly_history():
-    """10-15 宇軒驗證回饋六：跨版本卡（上一版還沒看完的）按「要修改」→ 原因記在卡片的等重做（不寫成品檢查檔、那一版狀態列不動），
-    最新版變「已改，等重做」；needs 層 `decide_version` 的退回照舊擋。
+    """10-15 宇軒驗證回饋六：跨版本卡（之前版本還沒看完的）按「要修改」→ 原因記在卡片的等重做（不寫成品檢查檔、那一版狀態列不動），
+    最新版變「已改，等重做」；needs 層 `decide_version` 的退回也改記在卡片的等重做（1015-7 A8）。
     10-15 第3段審查修正（必修 1）：之前留下的舊版退回（等重做帶版本號），之後的組裝沒有真的重做它（指紋跟退回那一版一樣）
     → 等重做留著、歷史不寫「重做進第 N 版」；真的換了聲音才清。"""
     w = _three_versions()
@@ -231,11 +247,9 @@ def test_cross_card_fix_and_old_return_assembly_history():
     # 再按一次換原因
     finalcards.decide(w, t5["id"], needs.RETURNED, ["念錯字"], "", version=1)
     assert needs.load(w).cards[t5["卡號"]]["等重做"]["退回原因"] == {"選項": ["念錯字"], "補充": ""}
-    try:
-        needs.decide_version(w, 1, t5["卡號"], needs.RETURNED)
-        raise AssertionError("needs 層也擋")
-    except ValueError:
-        pass
+    row = needs.decide_version(w, 1, t5["卡號"], needs.RETURNED, ["其他"], "y")   # 1015-7 A8：不擋，改記卡片的等重做
+    assert row["狀態"] == needs.NOT_SEEN
+    assert needs.load(w).cards[t5["卡號"]]["等重做"]["退回原因"] == {"選項": ["其他"], "補充": "y"}
     # 0.2.2b1 第 3 段原版留下的舊版退回（照當時的寫法造一筆）
     with needs._locked(w):
         st = needs.load(w)
@@ -616,6 +630,201 @@ def test_api_execute_start_base_version_developer_only():
         (config.developer, execute.precheck, execute.run_execute, srv.groq_key_ready) = olds
         httpd.shutdown()
         httpd.server_close()
+
+
+# ---------- 10-15 總檢查修正（1015-7）：要修改的分流、第 4 步拿得到原因、redo_cards 一份清單 ----------
+
+def _gen_logs(w: Path) -> None:
+    """假的生成紀錄（照現在排出來的計畫，每句一個種子、一個聲音檔）：第 4 步才算得出「文字和範圍都沒改＝換一種念法」。"""
+    from bookclub import workdir as wd
+
+    for role, xs in fc._redo_ctx(w).items():
+        if not xs:
+            continue
+        lp, od = fc._role_paths(w, role)
+        od.mkdir(parents=True, exist_ok=True)
+        wd.write_json(lp, {"句子": [{"id": x["id"], "text": x.get("text"), "slot": x["slot"], "嘗試": [{"種子": 7}],
+                                    "選定": 1, "第幾版": 1} for x in xs]})
+        for x in xs:
+            (od / f"{x['id']}.wav").write_bytes(b"wav")
+
+
+def _gen_ids(w: Path, role: str) -> set:
+    from bookclub import workdir as wd
+
+    return {r["id"] for r in (wd.read_json(fc._role_paths(w, role)[0], default=None) or {}).get("句子") or []}
+
+
+def test_outside_fix_reaches_step4_and_clears_only_when_redone():
+    """A1／A10：跨版本卡、沿用卡、舊版畫面上的卡按「聲音不像、不自然」→ 第 4 步 `redo_plan` 有它（照卡片重做、文字沒改＝換一種念法），
+    `prepare_redo` 記版本、清生成句；組裝後等重做清掉、版本 +1、歷史「重做進第 N 版」、新版要重新看。
+    只重新組裝 → 等重做留著、歷史不寫「重做進」。"""
+    cases = [("跨版本卡", "學員段落:T005", 1, "學員", "T005_01"),
+             ("沿用卡（最新版按）", "名字:1", None, "老師", "S001"),
+             ("舊版畫面上按", "名字:1", 1, "老師", "S001")]
+    for name, key, ver, role, sid in cases:
+        for only in (True, False):
+            w = _three_versions()
+            _gen_logs(w)
+            part = finalcards.build(w)
+            c = _by(part["卡片"] + part["跨版本卡片"], key)
+            r = tn._quiet(finalcards.decide, w, c["id"], needs.RETURNED, ["聲音不像、不自然"], name, version=ver)
+            assert r["ok"] and r["統計"]["要重做"] == 1, name
+            k = c["卡號"]
+            st = needs.load(w)
+            assert needs.outside_reason(st.cards[k]) == {"選項": ["聲音不像、不自然"], "補充": name}
+            assert [x["卡號"] for x in needs.redo_cards(st)] == [k]
+            before = json.dumps(fc.load_check(w)["逐筆"], ensure_ascii=False, sort_keys=True)
+            plan = tn._quiet(fc.redo_plan, w)
+            e = next(x for x in plan if x.get("卡號") == k)
+            assert e["鍵"] == f"卡片:{k}" and e["做法"] == "重新生成" and e["沒改"] is True, (name, e)
+            assert [u["id"] for u in e["生成"]] == [sid] and "聲音不像" in e["原因"]
+            tn._quiet(fc.prepare_redo, w, log=lambda s: None, reassemble_only=only)
+            assert json.dumps(fc.load_check(w)["逐筆"], ensure_ascii=False, sort_keys=True) == before   # 不寫成品檢查檔的逐筆
+            if only:
+                assert sid in _gen_ids(w, role) and needs.redo_run_cards(w) == set()
+            else:
+                assert sid not in _gen_ids(w, role) and needs.redo_run_cards(w) == {k}   # 清掉、等一下重新生成
+                vers = json.loads((fc._role_paths(w, role)[1] / "_重新生成版本.json").read_text(encoding="utf-8"))
+                assert vers[sid]["避開"] == [7]   # 換一種念法：避開用過的種子
+            recs = tn._records()
+            if not only:   # 真的重新生成：那一句的聲音檔換了
+                i = next(j for j, x in enumerate(recs) if x.get("檔案") and sid in x["檔案"])
+                recs[i] = {**recs[i], "檔案指紋": f"fp-{sid}-第2版"}
+            _assemble(w, _t(3), recs)
+            tn._quiet(fc.finish_redo, w)
+            st = needs.load(w)
+            assert max(st.versions) == 3
+            hist = [h for h in needs.read_history(w) if h["卡號"] == k and str(h["動作"]).startswith("重做進第")]
+            if only:
+                assert needs.outside_reason(st.cards[k]) is not None and not hist, name   # 聲音沒換：留著
+                assert _by(finalcards.build(w)["卡片"], key)["狀態"] == finalcards.EDITED
+                assert [x["卡號"] for x in needs.redo_cards(st)] == [k]
+            else:
+                assert not st.cards[k].get("等重做") and [h["動作"] for h in hist] == ["重做進第3版"], name
+                assert st.states[(k, 3)]["狀態"] == needs.NOT_SEEN and not st.states[(k, 3)]["沿用自"]
+                assert needs.redo_cards(st) == [] and tn._quiet(fc.redo_plan, w) == []
+
+
+def test_latest_own_card_fixed_on_old_page_goes_normal_way():
+    """分流乙：最新一版自己的卡（最新版有它的狀態列）在舊版畫面按「要修改」→ 走最新版正常路（成品檢查檔退回），
+    第 4 步照舊從成品檢查檔拿到；那一版的狀態列不動、卡片不記等重做。取消撤得掉（cancel_redo；或那一版不是通過）。"""
+    w = _three_versions()
+    for key, cancel_flag in (("學員段落:T003", True), ("刪除段落:S1", False)):
+        o = _by(finalcards.version_page(w, 1, None)["卡片"], key)
+        v1_before = needs.card_state(needs.load(w), o["卡號"], 1)
+        r = tn._quiet(finalcards.decide, w, o["id"], needs.RETURNED, ["聲音不像、不自然"], "乙", version=1)
+        assert r["ok"] and r["版本號"] == 1 and r["卡片"]["狀態"] == needs.RETURNED
+        st = needs.load(w)
+        assert st.states[(o["卡號"], 2)]["狀態"] == needs.RETURNED
+        assert st.states[(o["卡號"], 2)]["退回原因"] == {"選項": ["聲音不像、不自然"], "補充": "乙"}
+        assert needs.card_state(st, o["卡號"], 1) == v1_before and needs.outside_reason(st.cards[o["卡號"]]) is None
+        keys = [e["鍵"] for e in tn._quiet(fc.redo_plan, w)]
+        assert set(_by(finalcards.build(w)["卡片"], key)["紀錄鍵"]) <= set(keys) and not any(k.startswith("卡片:") for k in keys)
+        assert _by(finalcards.version_page(w, 1, None)["卡片"], key)["最新版要重做"]["補充"] == "乙"
+        # 取消：T003 在第 1 版是通過（同一顆鍵也是「取消通過」）→ 畫面帶「取消要重做」；S1 第 1 版沒看 → 照卡片判斷
+        tn._quiet(finalcards.decide, w, o["id"], None, version=1, cancel_redo=cancel_flag)
+        st = needs.load(w)
+        assert st.states[(o["卡號"], 2)]["狀態"] == needs.NOT_SEEN and needs.card_state(st, o["卡號"], 1) == v1_before
+        assert not any(e["鍵"] in o["紀錄鍵"] for e in tn._quiet(fc.redo_plan, w))
+    # T003 在第 1 版通過、最新版沒要重做：沒帶「取消要重做」＝取消第 1 版的通過
+    o = _by(finalcards.version_page(w, 1, None)["卡片"], "學員段落:T003")
+    tn._quiet(finalcards.decide, w, o["id"], None, version=1)
+    assert needs.card_state(needs.load(w), o["卡號"], 1) == needs.NOT_SEEN
+    try:
+        tn._quiet(finalcards.decide, w, o["id"], None, version=1, cancel_redo=True)
+        raise AssertionError("沒有要重做的不能取消要重做")
+    except ValueError as e:
+        assert "沒有要重做" in str(e)
+
+
+def test_cancel_outside_redo():
+    """A2（暫定）：走等重做那條路的卡可以「取消要重做」（結果 None）→ 清掉等重做；先改了字的只拿掉原因（改的字還要做）。"""
+    w = _three_versions()
+    n1 = _by(finalcards.build(w)["卡片"], "名字:1")
+    tn._quiet(finalcards.decide, w, n1["id"], needs.RETURNED, ["聲音不像、不自然"], "")
+    r = tn._quiet(finalcards.decide, w, n1["id"], None)
+    c = r["卡片"]
+    assert c["這一版沒處理到"] and c["已通過的"] and not needs.load(w).cards[n1["卡號"]].get("等重做")
+    assert r["統計"]["要重做"] == 0
+    # 舊版畫面上取消（跨版本卡）
+    t5 = _by(finalcards.build(w)["跨版本卡片"], "學員段落:T005")
+    tn._quiet(finalcards.decide, w, t5["id"], needs.RETURNED, ["念錯字"], "", version=1)
+    tn._quiet(finalcards.decide, w, t5["id"], None, version=1)
+    st = needs.load(w)
+    assert not st.cards[t5["卡號"]].get("等重做") and st.states[(t5["卡號"], 1)]["狀態"] == needs.NOT_SEEN
+    assert any(c["id"] == t5["id"] for c in finalcards.build(w)["跨版本卡片"])
+    # 先在第 3 步改了字（等重做，起因改了）、再記原因 → 取消只拿掉原因
+    tn._quiet(finalcards.edited, w, "名字:1")
+    tn._quiet(finalcards.decide, w, n1["id"], needs.RETURNED, ["念錯字"], "")
+    assert needs.load(w).cards[n1["卡號"]]["等重做"].get("有改")
+    tn._quiet(finalcards.decide, w, n1["id"], None)
+    pend = needs.load(w).cards[n1["卡號"]]["等重做"]
+    assert pend["起因"] == needs.WHY_EDITED and "退回原因" not in pend
+    assert [x["起因"] for x in needs.redo_cards(needs.load(w))] == [needs.REDO_EDITED]
+
+
+def test_counts_to_confirm_and_passed():
+    """A3：整頁資料給 `還要確認`（上面清單）、`已通過的`（下面清單），每張卡 `已通過的`；舊版頁一樣；舊版輸出問的張數照它。"""
+    w = _three_versions()
+    part = finalcards.build(w)
+    cards, cross, stat = part["卡片"], part["跨版本卡片"], part["統計"]
+    ok = [c for c in cards if c["已通過的"]]
+    # T003 指紋沒變、第 1 版通過 → 第 2 版通過（沿用）；名字 1 範圍外 → 已通過（沿用上一版）
+    assert {c["第3步鍵"] for c in ok} == {"名字:1", "學員段落:T003"}
+    assert stat["已通過的"] == 2 and stat["還要確認"] == 2 + len(cross) == 4 and not any(c["已通過的"] for c in cross)
+    assert all(c["不能修改"] is False and c["最新版要重做"] is None for c in cards + cross)
+    pg = finalcards.version_page(w, 1, None)
+    s1 = pg["卡片統計"]
+    assert s1["已通過的"] == sum(1 for c in pg["卡片"] if c["已通過的"]) == 2   # 名字 1、T003（照第 1 版）
+    assert s1["還要確認"] == len(pg["卡片"]) - 2 == 4
+    r = finalcards.export_version(w, 1)
+    assert f"還有 {s1['還要確認']} 張沒看完" in r["還差"]["說明"][0]
+
+
+def test_deleted_card_cannot_fix():
+    """A5：刪掉／併入的卡 `不能修改`，按「要修改」擋下。"""
+    w = _three_versions()
+    t3 = _by(finalcards.build(w)["卡片"], "學員段落:T003")
+    with needs._locked(w):
+        st = needs.load(w)
+        st.cards[t3["卡號"]].update({"狀態": needs.REMOVED, "等重做": {"起因": needs.WHY_EDITED, "時間": _t(2)}})
+        needs.save(w, st)
+    c = _by(finalcards.build(w)["卡片"], "學員段落:T003")
+    assert c["刪掉了"] and c["不能修改"] and c["不能修改原因"] == finalcards.DELETED_NO_FIX
+    for ver in (None, 1):
+        try:
+            tn._quiet(finalcards.decide, w, c["id"], needs.RETURNED, ["其他"], "", version=ver)
+            raise AssertionError("刪掉的卡不能要修改")
+        except ValueError as e:
+            assert str(e) == finalcards.DELETED_NO_FIX
+
+
+def test_old_page_outside_card_uses_other_version_records():
+    """A4：舊版畫面上那一版沒有的卡，能不能換一種念法照最近一個有它的版本（跟最新版一樣）。"""
+    w = _three_versions()
+    _assemble(w, _t(3), [r for r in tn._records() if r["原片"][0] < 75], rng=(0.0, 75.0), tag="0-1")
+    o = _by(finalcards.version_page(w, 2, None)["卡片"], "名字:1")
+    assert o["這一版沒處理到"] and o["可重新生成"]
+
+
+def test_one_redo_list_for_step3_4_5():
+    """A9：第 4 步 `要重做`、第 5 步 `統計.要重做`、第 3 步「第 5 步要重做」都照 `needs.redo_cards`。"""
+    from bookclub import execute
+
+    w = _three_versions()
+    n1 = _by(finalcards.build(w)["卡片"], "名字:1")
+    tn._quiet(finalcards.decide, w, n1["id"], needs.RETURNED, ["聲音不像、不自然"], "快")
+    s1 = _by(finalcards.build(w)["卡片"], "刪除段落:S1")
+    tn._quiet(finalcards.decide, w, s1["id"], needs.RETURNED, ["其他"], "")
+    view = execute.redo_cards_view(w)
+    assert [x["卡號"] for x in view] == [s1["卡號"], n1["卡號"]] == [x["卡號"] for x in needs.redo_cards(needs.load(w))]
+    assert view[1]["原因"] == {"選項": ["聲音不像、不自然"], "補充": "快"} and view[1]["原片"] == [76.3, 76.9]
+    assert finalcards.build(w)["統計"]["要重做"] == len(view)
+    back = fc.returned_by_card(w, fc._index(w))
+    assert back["名字:1"] == ["聲音不像、不自然：快"] and back["刪除段落:S1"] == ["其他"]
+    st = execute.status(w)
+    assert len(st["要重做"]) == 2 and {x.get("卡號") for x in st["退回清單"]} >= {n1["卡號"]}
 
 
 if __name__ == "__main__":
