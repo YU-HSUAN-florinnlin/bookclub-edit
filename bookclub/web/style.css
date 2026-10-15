@@ -563,6 +563,8 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .fc-prod { display: block; margin-bottom: 8px; font-size: 14px; }
 .fc video { width: 100%; aspect-ratio: 16 / 9; max-height: 52vh; background: #000; border-radius: 10px; display: block; }
 .fc-tl { height: 44px; }
+/* 10-15 宇軒驗證回饋二：卡片標題的成品時間小字（原片時間照第 3 步 .rv-when） */
+.fc-outwhen { font-size: 13px; font-variant-numeric: tabular-nums; }
 /* 10-15 宇軒驗證回饋：卡片色塊（還沒看灰、通過綠、退回紅）以時間軸（.track，10–24px）為中心、上下各突出 7px，強調 */
 .fc-tl .fm { position: absolute; top: 3px; height: 28px; min-width: 3px; border-radius: 3px; opacity: .9; }
 .fc-tl .fm.pt { width: 4px; top: 1px; height: 32px; }

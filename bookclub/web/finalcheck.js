@@ -9,6 +9,9 @@
  *   「＋在這裡新增修改」「重做這幾張（N 張）」（有退回或改過才出現）：10-15 宇軒驗證回饋，搬到左邊「看過 P%」那一行下面。
  * 卡片的內容、「要修改」帶出的修改控制區是第 3 步的卡片元件（cards.js），走第 3 步原本的 API；改完那張卡「已改，等重做」。
  * 「重做這幾張」：第 4 步開始執行、跳到第 4 步；跑完自動跳回第 5 步（31 號設計 §9 問題 2 定案）。
+ * 10-15 宇軒驗證回饋二（1015-4 補充）：卡片行為盡量跟第 3 步一樣——標題列原片時間範圍（成品時間小字）、影片下「跳到」框、
+ *   通過後按鈕「✓ 已通過（再按取消）」且不自動跳下一張；「裡面有老師的聲音」＝「其他」（整個修改選單）；要重做的卡可以再按
+ *   「要修改」、帶入上次的原因與補充，改了再「確定」覆蓋成最新；「取消」改名「收起」（只收合、不撤回）。
  * 10-15 第5步2.0 第3段（版本，31 號設計 §6.5–6.7）：有兩版以上，頂端多「看哪一版」選單（fc.ver＝看哪一版，null＝最新）；
  *   舊版：卡片照那一版的判斷、沒處理到的變淡；可以按通過（記在那一版）、可以輸出那一版；「要修改」停用（10-15 要修改合併（1015-4））、不能新增、不能重做。
  *   最新版下面多「上一版還沒看的（第 N 版）」那一區（範圍組裝時那一版範圍外、舊版還沒看完的卡）；重做過的卡多「上一版 ▶」。
@@ -161,7 +164,7 @@ function fcCross() { return (fc.data && fc.data["跨版本卡片"]) || []; }   /
 function fcCard(id) { return fcCards().find((c) => c.id === id) || fcCross().find((c) => c.id === id); }
 function fcTabs() { return fcTabList(fcCards(), (fc.data["不修改"] || []).length, fc.data["需留意"]); }
 function fcTab() { return fcPickTab(fcTabs(), fcTabGet()); }
-// 目前這一頁列出來的卡片（開了「只看要仔細聽的」再篩一次）。上一張／下一張、通過後找下一張只在這裡面走
+// 目前這一頁列出來的卡片（開了「只看要仔細聽的」再篩一次）。上一張／下一張只在這裡面走
 function fcShown() {
   const t = fcTabs().find((x) => x.id === fcTab());
   const list = t && !t["清單外"] ? t.cards : fcCards();
@@ -180,14 +183,6 @@ function fcStepPick(list, curId, t, dir) {
   }
   const p = list.filter((x) => at(x) != null && at(x) < t - 0.05).pop();
   return (p || list[0]).id;
-}
-
-// （純函式）目前這張之後第一張還沒看的；後面都看了才繞回前面找；都看了回傳 null
-function fcNextUnseen(cards, curId) {
-  const ok = (x) => x["狀態"] === FC_ST.TODO && x.id !== curId;
-  const i = cards.findIndex((x) => x.id === curId);
-  const hit = cards.slice(i + 1).find(ok) || cards.slice(0, Math.max(0, i)).find(ok);
-  return hit ? hit.id : null;
 }
 
 // ---------- 時間換算（純函式，跟後端 finalcheck.from_output_time／to_output_time 一樣） ----------
@@ -269,8 +264,8 @@ const FC_CARD_CTX = {
   askOutside: null,
   refreshSug: () => {},
   // 10-15 要修改合併（1015-4）：第 3 步的「改做法」那一塊＝「要修改」選「其他」帶出的整個選單
-  moreOpen: () => fc.fix.open && fc.fix.pick === FC_FIX_OTHER,
-  toggleMore: () => fcOpenFix(FC_FIX_OTHER),
+  moreOpen: () => fc.fix.open && FC_FIX_FULL.includes(fc.fix.pick),   // 10-15 宇軒驗證回饋二：選「裡面有老師的聲音」也算
+  toggleMore: () => fcOpenFix(FC_FIX_FULL.includes(fc.fix.pick) ? fc.fix.pick : FC_FIX_OTHER),
   rerender: () => fcRenderRight(),
 };
 
@@ -397,6 +392,7 @@ async function renderFinal() {
           ${d["影片清掉了"] ? `<p class="rv-warnline">這一版的影片清掉了</p>` : ""}
           <video id="fc-video" controls preload="metadata" ${d["影片網址"] ? `src="${esc(d["影片網址"])}${String(d["影片網址"]).includes("?") ? "&" : "?"}v=${encodeURIComponent(d["成品影片"] + "|" + (d["成品版本"] || ""))}"` : ""}></video>
           <div class="rv-timebar"><span class="rv-clock"><b id="fc-clock">0:00</b> ／ ${esc(fcFmt(d["成品長度"], 0))}</span>
+            <input id="fc-goto" class="rv-goto" placeholder="跳到 43:15" aria-label="跳到原片時間（例如 43:15，按 Enter）">
             <select id="fc-rate" aria-label="播放速度"><option value="1">1 倍速</option><option value="1.25">1.25 倍速</option><option value="1.5">1.5 倍速</option><option value="2">2 倍速</option></select></div>
           <div class="rv-tl fc-tl" id="fc-tl" title="點一下或拖拉，跳到那個時間"></div>
           <div class="rv-legend"><span><i class="sw fc-todo"></i>還沒看</span><span><i class="sw fc-ok"></i>通過</span><span><i class="sw fc-back"></i>要重做</span></div>
@@ -419,6 +415,15 @@ async function renderFinal() {
   fcBindVersionMenu();
   fileOutInit(document.getElementById("fc-fileout"));   // 10-07：打開成品資料夾、複製到 Windows
   document.getElementById("fc-rate").addEventListener("change", (e) => { fc.video.playbackRate = Number(e.target.value); });
+  // 10-15 宇軒驗證回饋二：「跳到」框加回來（照第 3 步：打原片時間按 Enter 跳過去；打錯框變紅）
+  document.getElementById("fc-goto").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.isComposing) return;
+    e.preventDefault();
+    const src = rvParseTime(e.target.value);
+    const t = src == null ? null : fcGotoOut(src);
+    e.target.classList.toggle("bad", t == null);
+    if (t != null) { fcSeek(t); e.target.blur(); }
+  });
   fc.audio.addEventListener("ended", () => { if (fc.ab && fc.ab.which === "原本") fcStopAB(); });
   fcBindVideo();
   fcBindTimeline(document.getElementById("fc-tl"));
@@ -508,6 +513,21 @@ function fcFollow(t) {   // 影片照常播、跨過某張卡的起點，右邊�
   if (fc.fix.open || fc.ab || t < prev || t - prev > 2) return;
   const hit = fcCards().filter((c) => c["成品"] && c["成品"][0] != null && c["成品"][0] > prev && c["成品"][0] <= t).pop();
   if (hit && hit.id !== fc.cur) { fc.cur = hit.id; fcRenderRight(); fcRenderTimeline(); fcMarkRow(); }
+}
+
+// 10-15 宇軒驗證回饋二：（純函式）「跳到」框打的原片時間 → 成品時間。那裡在成品裡剪掉了就跳到下一段留下來的開頭；
+// 比成品最後一段還晚回 null（框變紅）
+function fcGotoOut(t, plist) {
+  if (plist === undefined) plist = fc.data && fc.data["片段"];
+  if (t == null || t < 0) return null;
+  const o = fcOutTime(t, plist);
+  if (o != null || !plist || !plist.length) return o;
+  let acc = 0;
+  for (const p of plist) {
+    if (p.src[0] >= t) return acc;
+    acc += p.src[1] - p.src[0] + p.freeze;
+  }
+  return null;
 }
 
 function fcSeek(t, play = false) {
@@ -611,6 +631,21 @@ function fcClampSetup(box) {
   });
 }
 
+// 10-15 宇軒驗證回饋二：（純函式）卡片標題的時間範圍，照第 3 步卡片標題的寫法（review.js rvRenderCard 的 when：原片時間、
+// 名字卡寫重念範圍）；沒有第 3 步那張卡的照卡片的原片時間。成品時間另外小字（fcOutWhen）
+function fcWhenText(c, it) {
+  if (it) {
+    const w0 = it["整句"];
+    return it["類型"] === "名字" && w0 && !it["老師整段"]
+      ? `重念範圍 ${rvFmt(w0.start, 1)}–${rvFmt(w0.end, 1)}（名字在 ${rvFmt(it.start, 1)}）` : `${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)}`;
+  }
+  return fcSpan(c && c["原片"]);
+}
+function fcOutWhen(c) {
+  const p = c && c["成品"];
+  return p && p[0] != null && !c["跨版本"] ? `成品 ${fcSpan(p)}` : "";
+}
+
 function fcRenderRight() {
   const box = document.getElementById("fc-right");
   if (!box) return;
@@ -618,7 +653,9 @@ function fcRenderRight() {
   if (!c) { box.innerHTML = `<div class="rv-card empty"><p>這一版沒有任何修改</p></div>`; return; }
   if (fc.fix.open && fc.fix.card !== c.id) fcFixReset();   // 換了一張卡（重新整理後那張不在了）：收起「要修改」
   const it = fcItemOf(c);
-  const list = c["跨版本"] ? fcCross() : fcShown().length ? fcShown() : fcCards();
+  // 10-15 宇軒驗證回饋二：通過後不換卡，這張可能已不在這一頁（例如「還沒看完」）——照全部算第幾張
+  const shown = fcShown();
+  const list = c["跨版本"] ? fcCross() : shown.some((x) => x.id === c.id) ? shown : fcCards();
   const idx = list.findIndex((x) => x.id === c.id);
   const canJudge = fcCanJudge(c);
   const canFix = fcCanFix(c, fcOld());   // 10-15 要修改合併（1015-4）：舊版、跨版本卡整顆停用
@@ -627,9 +664,11 @@ function fcRenderRight() {
   const abNow = fcCardAbPlan(c, "現在"), abOrig = fcCardAbPlan(c, "原本");
   const open = fc.fix.open && canFix;
   // 選了「念錯字」「其他」：下面列出第 3 步卡片的字（可以改），上面那兩行就不重複列
-  const bodyShown = open && [FC_FIX_TEXT, FC_FIX_OTHER].includes(fc.fix.pick) && fcFixCanEdit(it);
+  const bodyShown = open && [FC_FIX_TEXT, ...FC_FIX_FULL].includes(fc.fix.pick) && fcFixCanEdit(it);
+  const when = fcWhenText(c, it), outWhen = fcOutWhen(c);
+  const passed = c["狀態"] === FC_ST.OK;
   box.innerHTML = `<article class="rv-card fc-card" data-id="${esc(c.id)}">
-      <header>${fcChip(c, it)}${c["編號"] ? `<span class="idtag" title="跟 AI 助手溝通用的編號">#${esc(String(c["編號"]))}</span>` : ""}
+      <header>${fcChip(c, it)}${when ? `<span class="rv-when">${esc(when)}</span>` : ""}${outWhen ? `<span class="rv-meta fc-outwhen">${esc(outWhen)}</span>` : ""}${c["編號"] ? `<span class="idtag" title="跟 AI 助手溝通用的編號">#${esc(String(c["編號"]))}</span>` : ""}
         <span class="rv-count">第 ${idx + 1}／${list.length} 張</span></header>
       <div class="rv-statebox" id="fc-statebox">${fcStateBoxHtml(c)}</div>
       ${bodyShown ? "" : fcCardTextHtml(c, it)}
@@ -639,7 +678,7 @@ function fcRenderRight() {
         <button class="ghost small" data-ab="上一版">上一版 ▶</button>` : ""}
         <label class="fc-pad"><input type="checkbox" role="switch" id="fc-pad" aria-label="試聽前後多 2 秒" ${fcAbPad() ? "checked" : ""}><span class="fc-switch" aria-hidden="true"></span>前後多 2 秒</label></div>
       <div class="rv-actions">
-        <button class="${c["狀態"] === FC_ST.OK ? "primary on" : "primary"}" id="fc-pass" aria-pressed="${c["狀態"] === FC_ST.OK}" ${canJudge ? "" : "disabled"}>通過<kbd>Enter</kbd></button>
+        <button class="${passed ? "primary on" : "primary"}" id="fc-pass" title="已通過的再按一次會取消" aria-pressed="${passed}" ${canJudge ? "" : "disabled"}>${passed ? "✓ 已通過（再按取消）" : "通過"}<kbd>Enter</kbd></button>
         <button class="ghost${open ? " on" : ""}" id="fc-fix" aria-expanded="${open}" ${canFix ? "" : `disabled title="${esc(fcFixOff(c, fcOld()))}"`}>要修改<kbd>E</kbd></button>${back ? `
         <button class="ghost small" id="fc-back-undo">取消要重做</button>` : ""}
         <span class="spacer"></span>
@@ -667,6 +706,8 @@ function fcRenderRight() {
 
 const FC_FIX_TEXT = "念錯字", FC_FIX_VOICE = "聲音不像、不自然", FC_FIX_RANGE = "長度或停頓怪", FC_FIX_TEACHER = "裡面有老師的聲音", FC_FIX_OTHER = "其他";
 const FC_FIX_OPTS = [FC_FIX_TEXT, FC_FIX_VOICE, FC_FIX_RANGE, FC_FIX_TEACHER, FC_FIX_OTHER];
+// 10-15 宇軒驗證回饋二：「裡面有老師的聲音」跟「其他」一樣帶出整個修改選單（第 3 步的「改做法」＋工具按鈕）＋補充
+const FC_FIX_FULL = [FC_FIX_TEACHER, FC_FIX_OTHER];
 const FC_FIX_NO_VOICE = "這一張重做只會重新放一次，聲音不會變；要改內容請選下面其他項";
 function fcFixReset() { fc.fix = { open: false, card: null, pick: null, extra: "", busy: false, err: "" }; }
 
@@ -691,11 +732,26 @@ function fcFixRecords(c) {
 }
 function fcFixCanEdit(it) { return !!it && !(fc.data && fc.data["AI執行中"]); }
 
+// 10-15 宇軒驗證回饋二：（純函式）已經是「要重做」的卡再按「要修改」，帶入上次記的原因：{pick, extra}
+// （改過的字、範圍本來就存進第 3 步的資料，控制區照現在的值畫；這裡只補「哪裡出問題」與補充）
+function fcFixPrefill(c, opts) {
+  const why = c && [FC_ST.BACK, FC_ST.EDITED].includes(c["狀態"]) ? c["退回原因"] : null;
+  if (!why) return { pick: null, extra: "" };
+  const pick = (why["選項"] || []).find((o) => (opts || FC_FIX_OPTS).includes(o)) || null;
+  return { pick, extra: String(why["補充"] || "") };
+}
+
 function fcToggleFix() {
   const c = fc.cur && fcCard(fc.cur);
   if (!fc.fix.open && !fcCanFix(c, fcOld())) return;
   if (fc.fix.open) fcFixReset();
-  else fc.fix = { open: true, card: c.id, pick: null, extra: "", busy: false, err: "" };
+  else {
+    // 10-15 宇軒驗證回饋二：改完可以持續調整——要重做的卡再按「要修改」照樣打開、帶入上次的選項與補充；
+    // 改範圍的編輯器從現在（上次改好）的起訖重新開始
+    const pre = fcFixPrefill(c, fcFixOptions(c, fc.data["退回原因選項"]));
+    fc.fixEd = null;
+    fc.fix = { open: true, card: c.id, pick: pre.pick, extra: pre.extra, busy: false, err: "" };
+  }
   fcRenderRight();
   const box = document.getElementById("fc-fixbox");
   if (box) box.scrollIntoView({ block: "nearest" });
@@ -730,14 +786,9 @@ function fcFixBranchHtml(c, it, pick) {
     if (!RV_ITEM_KIND[it["類型"]]) return `<p class="rv-meta">這一種卡不能改範圍；按「確定」會記下原因、等重做</p>`;
     return `${rvEdgeHtml(it)}<div id="fc-fix-range"></div><p class="rv-meta">改好起點、終點，再按「確定」</p>`;
   }
-  if (pick === FC_FIX_TEACHER) {
-    if (!can) return fcFixCantHtml(it);
-    // #226 選字做好前：學員段落整段改回老師原聲（第 3 步的「這段其實是老師」）；只有一部分是老師要先切開
-    if (it["類型"] !== "學員段落") return `<p class="rv-meta">這一張不能直接改回老師的原聲；按「確定」會記下原因，請在補充寫哪裡是老師的聲音</p>`;
-    return `<p>按「確定」：${esc(rvFmt(it.start, 1))}–${esc(rvFmt(it.end, 1))} 這一段整段改回老師的原聲，不重念</p>
-      <p class="rv-meta">只有一部分是老師的話，改選「其他」→「從游標處切開」</p>`;
-  }
-  if (!can) return fcFixCantHtml(it);   // 其他：整個第 3 步的「改」選單
+  // 10-15 宇軒驗證回饋二：「裡面有老師的聲音」不再只做「學員段落整段改老師」，跟「其他」一樣帶出整個第 3 步的「改」選單
+  // （整段是老師：勾「這段其實是老師」；只有一部分：「從游標處切開」再勾）
+  if (!can) return fcFixCantHtml(it);   // 裡面有老師的聲音、其他：整個第 3 步的「改」選單
   return `<div class="rv-body">${rvEdgeHtml(it)}${rvBodyHtml(it)}${rvAlignLine(it)}</div>
       <div class="rv-actions">${cvToolBtnsHtml(it, true)}</div>
       <div class="rv-more" id="rv-more">${rvMoreHtml(it)}</div>`;
@@ -750,7 +801,7 @@ function fcFixHtml(c, it) {
     return `<p><b>哪裡出問題？</b></p>
       ${c["可重新生成"] ? "" : `<p class="rv-warnline">${esc(FC_FIX_NO_VOICE)}</p>`}
       <div class="rv-field rv-choices fc-fixopts">${opts.map((o) => `<label class="rv-radio"><input type="radio" name="fc-fix-opt" class="fc-fix-opt" value="${esc(o)}"> ${esc(o)}</label>`).join("")}</div>
-      <div class="rv-row"><button class="ghost small" id="fc-fix-cancel">取消</button></div>`;
+      <div class="rv-row"><button class="ghost small" id="fc-fix-cancel">收起</button></div>`;
   }
   return `<p class="fc-fixpick">哪裡出問題：<b>${esc(f.pick)}</b> <button class="ghost small" id="fc-fix-repick">改選</button></p>
       ${fcFixBranchHtml(c, it, f.pick)}
@@ -758,7 +809,7 @@ function fcFixHtml(c, it) {
       ${f.err ? `<p class="rv-warnline">${esc(f.err)}</p>` : ""}
       ${fcFixRecords(c) ? "" : `<p class="rv-meta">這一張還沒做進成品，按「確定」只會套用修改</p>`}
       <div class="rv-row"><button class="primary small" id="fc-fix-go" ${f.busy ? "disabled" : ""}>${f.busy ? "存檔中…" : "確定"}</button>
-        <button class="ghost small" id="fc-fix-cancel">取消</button></div>`;
+        <button class="ghost small" id="fc-fix-cancel">收起</button></div>`;
 }
 
 function fcFixBind(c, it) {
@@ -768,6 +819,7 @@ function fcFixBind(c, it) {
     if (f.pick === FC_FIX_RANGE && it) fcFixRangeInit(it);
     fcRenderRight();
   }));
+  // 10-15 宇軒驗證回饋二：「取消」改名「收起」——只收合，不撤回（已經存進去的改字、改範圍照留；原因要「確定」才記）
   const cancel = document.getElementById("fc-fix-cancel");
   if (cancel) cancel.addEventListener("click", () => { fcFixReset(); fcRenderRight(); });
   const repick = document.getElementById("fc-fix-repick");
@@ -783,7 +835,7 @@ function fcFixBind(c, it) {
     if (!fc.fixEd || fc.fixEd.id !== it.id) fcFixRangeInit(it);
     cvBindPlayShrink(it);
     teRender(FC_FIX_RANGE_CTX);
-  } else if (f.pick === FC_FIX_OTHER) {
+  } else if (FC_FIX_FULL.includes(f.pick)) {
     cvBindTools(it);
     cvBindPlayShrink(it);
     rvBindBody(it);
@@ -837,17 +889,13 @@ async function fcFixConfirm(c, it) {
       fc.nextData = null;   // 記原因之後不能再用之前留的整頁資料
       await apiPost("/api/final/card", { id: c.id, "結果": FC_ST.BACK, "選項": [f.pick], "補充": f.extra || "" });
     }
-    let reloaded = false;
     if (moved) {
       await teSave(FC_FIX_RANGE_CTX);
       if (ed.result && ed.result.error) throw new Error(ed.result.error);
-    } else if (f.pick === FC_FIX_TEACHER && fcFixCanEdit(it) && it["類型"] === "學員段落") {
-      fcFixReset();   // cvToTeacher 會重新整理；這張卡可能換成「改成老師」那一張
-      await cvToTeacher(it);
-      reloaded = true;
     }
+    // 10-15 宇軒驗證回饋二：「裡面有老師的聲音」的修改在選單裡當場存（跟「其他」一樣），「確定」只記原因
     fcFixReset();
-    if (!reloaded) await fcReload();
+    await fcReload();
   } catch (e) {
     if (fc.fix.open) { f.busy = false; f.err = e.message; fcRenderRight(); } else alert(e.message);
   }
@@ -863,13 +911,7 @@ async function fcDecide(c, result, picks = [], extra = "") {
     res = await apiPost("/api/final/card", { id: c.id, "結果": result, "選項": picks, "補充": extra, ...(ver ? { "版本": ver } : {}) });
   } catch (e) { alert(e.message); return; }
   fcFixReset();
-  if (ver) {
-    const list = c["跨版本"] ? fcCross() : fcCards();
-    const next = result === FC_ST.OK ? fcNextUnseen(list, c.id) : null;
-    await fcReload();
-    if (next && fcCard(next)) fcSelect(next, false);
-    return;
-  }
+  if (ver) { await fcReload(); return; }   // 10-15 宇軒驗證回饋二：通過後留在這張（跟第 3 步一樣不自動跳下一張）
   const i = fcCards().findIndex((x) => x.id === c.id);
   if (res["卡片"] && i >= 0) fc.data["卡片"][i] = res["卡片"];
   else if (i >= 0) fc.data["卡片"].splice(i, 1);   // 整片退回的待釐清卡通過＝拿掉
@@ -877,12 +919,9 @@ async function fcDecide(c, result, picks = [], extra = "") {
   (res["共用卡片"] || []).forEach((m) => { const j = fcCards().findIndex((x) => x.id === m.id); if (j >= 0) fc.data["卡片"][j] = m; });
   fc.data["卡片統計"] = res["統計"] || fc.data["卡片統計"];
   if (res["狀態"]) fc.data["狀態"] = res["狀態"];
-  const skipped = (res["跳過"] || []).length > 0;   // 通過了，可是共用的那一段別張卡還退回著：留在這張，讓老師看到那一行
-  if ((result === FC_ST.OK && !skipped) || !res["卡片"]) {   // 通過了就換下一張還沒看的（影片不跳，照常播）
-    const next = fcNextUnseen(fcShown(), c.id) || fcNextUnseen(fcCards(), c.id);
-    if (next) fc.cur = next;
-    else if (!res["卡片"]) fc.cur = (fcCards()[0] || {}).id || null;
-  }
+  // 10-15 宇軒驗證回饋二：通過後留在這張、按鈕變「✓ 已通過（再按取消）」（第 3 步 rvPass 也不跳）；下一張自己按或影片播過去自動換。
+  // 只有這張卡不在了（整片退回的待釐清卡通過＝拿掉）才換到第一張
+  if (!res["卡片"]) fc.cur = (fcCards()[0] || {}).id || null;
   fcRenderTop(); fcRenderRight(); fcRenderTimeline(); fcRenderLower();
 }
 

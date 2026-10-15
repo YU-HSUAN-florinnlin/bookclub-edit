@@ -59,8 +59,8 @@ _PURE = (_ESC + _const(FCJS, "FC_AB_CONTEXT") + _const(FCJS, "FC_ST") + _const(F
          + _fn(FCJS, "fcShortStamp") + _fn(FCJS, "fcCardLabel") + _fn(FCJS, "fcReasonText") + _fn(FCJS, "fcStatusLine")
          + _const(FCJS, "FC_NO_REASON") + _fn(FCJS, "fcWhyLine") + _fn(FCJS, "fcSharedLine") + _fn(FCJS, "fcRedoCount")
          + _const(FCJS, "FC_NOTE_FIELDS") + _fn(FCJS, "fcNoteOnly")
-         + _fn(FCJS, "fcTabList") + _fn(FCJS, "fcPickTab") + _fn(FCJS, "fcStepPick") + _fn(FCJS, "fcNextUnseen")
-         + _fn(FCJS, "fcSrcTime") + _fn(FCJS, "fcOutTime") + _fn(FCJS, "fcPadOf") + _fn(FCJS, "fcVclip") + _fn(FCJS, "fcCardAbPlan")
+         + _fn(FCJS, "fcTabList") + _fn(FCJS, "fcPickTab") + _fn(FCJS, "fcStepPick") + _fn(FCJS, "fcFixPrefill")
+         + _fn(FCJS, "fcSrcTime") + _fn(FCJS, "fcOutTime") + _fn(FCJS, "fcGotoOut") + _fn(FCJS, "fcPadOf") + _fn(FCJS, "fcVclip") + _fn(FCJS, "fcCardAbPlan")
          + _fn(FCJS, "fcOrigText") + _fn(FCJS, "fcCardTextHtml")
          + _fn(FCJS, "fcVersionText") + _fn(FCJS, "fcVersionMenuHtml") + _fn(FCJS, "fcCanJudge") + _fn(FCJS, "fcCanReturn"))
 
@@ -160,13 +160,19 @@ def test_tabs_step_and_next():
         tabs: T.map((t) => [t.id, t["名稱"], (t.cards || []).map((c) => c.id), t["筆數"] || null]),
         pick: [fcPickTab(T, "名字"), fcPickTab(T, "重疊"), fcPickTab(T, null)],
         step: [fcStepPick(C, "b", 0, 1), fcStepPick(C, "a", 0, -1), fcStepPick(C, "x", 40, 1), fcStepPick(C, "x", 40, -1), fcStepPick([], "x", 0, 1)],
-        next: [fcNextUnseen(C, "b"), fcNextUnseen(C, "d"), fcNextUnseen([{"id": "z", "狀態": "通過"}], "z")] }));""")
+        pre: [fcFixPrefill({"狀態": "退回", "退回原因": {"選項": ["長度或停頓怪"], "補充": "尾巴切太早"}}),
+              fcFixPrefill({"狀態": "已改，等重做", "退回原因": {"選項": ["裡面有老師的聲音"], "補充": ""}}),
+              fcFixPrefill({"狀態": "已改，等重做"}), fcFixPrefill({"狀態": "通過", "退回原因": {"選項": ["其他"], "補充": "x"}}),
+              fcFixPrefill({"狀態": "退回", "退回原因": {"選項": ["聲音不像、不自然"], "補充": "y"}}, ["念錯字", "其他"])] }));""")
     assert got["tabs"] == [["全部", "全部", ["a", "b", "c", "d", "e"], None], ["還沒看完", "還沒看完", ["b", "c", "d", "e"], None],
                            ["學員段落", "學員段落", ["a", "d"], None], ["名字", "名字", ["b"], None], ["刪除段落", "剪掉", ["e"], None],
                            ["其他", "其他", ["c"], None], ["不修改", "第 3 步選定不修改", [], 2], ["需留意", "⚠️ 需留意", [], 1]]
     assert got["pick"] == ["名字", "全部", "全部"]
     assert got["step"] == ["c", "a", "d", "b", None]
-    assert got["next"] == ["d", "b", None]   # 通過後往後找還沒看的；後面沒有才繞回前面
+    # 10-15 宇軒驗證回饋二：通過後不自動跳下一張（跟第 3 步一樣），fcNextUnseen 拿掉、這裡原本那條斷言一起拿掉；
+    # 改測「要重做的卡再按要修改」帶入上次的原因（選項不在這張卡能選的就不帶，補充照帶）
+    assert got["pre"] == [{"pick": "長度或停頓怪", "extra": "尾巴切太早"}, {"pick": "裡面有老師的聲音", "extra": ""},
+                          {"pick": None, "extra": ""}, {"pick": None, "extra": ""}, {"pick": None, "extra": "y"}]
 
 
 def test_time_mapping_matches_backend_and_ab_plan():
@@ -180,6 +186,8 @@ def test_time_mapping_matches_backend_and_ab_plan():
     got = _node(_PURE + f"""
       const P = {json.dumps(plist)};
       console.log(JSON.stringify({{out: {json.dumps(pts)}.map((t) => fcOutTime(t, P)), cut: fcOutTime(14.0, P), none: fcOutTime(5, null),
+        go: [fcGotoOut(12.5, P), fcGotoOut(14.0, P), fcGotoOut(5, P), fcGotoOut(41, P), fcGotoOut(null, P), fcGotoOut(-1, P)],
+        goTo: [fcOutTime(15.0, P), fcOutTime(10.0, P)],
         back: {json.dumps(pts)}.map((t) => fcOutTime(t, P)).map((o) => fcSrcTime(o, P)),
         now: fcCardAbPlan({{"原片": [100, 104], "成品": [80, 85]}}, "現在"), orig: fcCardAbPlan({{"原片": [100, 104], "成品": [80, 85]}}, "原本"),
         cut1: fcCardAbPlan({{"原片": [200, 210], "成品": null}}, "現在"), cut2: fcCardAbPlan({{"原片": [200, 210], "成品": null}}, "原本"),
@@ -189,6 +197,8 @@ def test_time_mapping_matches_backend_and_ab_plan():
     want = [round(fc.to_output_time(t, plist), 3) for t in pts]
     assert [round(x, 3) for x in got["out"]] == want, (got["out"], want)
     assert got["cut"] is None and got["none"] == 5
+    # 10-15 宇軒驗證回饋二：「跳到」框（原片時間）：留著的照換算；剪掉的跳到下一段開頭；片頭之前＝第一段開頭；片尾之後、空的、負的＝null
+    assert got["go"][:3] == [got["out"][1], got["goTo"][0], got["goTo"][1]] and got["go"][3:] == [None, None, None], got["go"]
     assert [round(x, 3) for x in got["back"]] == [round(fc.from_output_time(o, plist), 3) for o in want]
     assert got["now"] == {"video": {"from": 78, "to": 87, "muted": False}, "audio": None}
     assert got["orig"]["video"] == {"from": 78, "to": 86, "muted": True} and got["orig"]["audio"] == "/api/audio?start=98.00&end=106.00"
@@ -324,7 +334,52 @@ def test_page_renders_and_buttons_post_right_things():
         {"名稱": "要修改：裡面有老師的聲音", "程式": """
           await open("學員段落:T005"); await last("fc-fix"); await pick("裡面有老師的聲音");
           const right = document.getElementById("fc-right").innerHTML;
-          await last("fc-fix-go"); return {log: H.log.filter((x) => x[0] === "POST" || x[0] === "confirm"), right, open: fc.fix.open};"""},
+          await last("rv-isteacher"); const mid = H.log.filter((x) => x[0] === "POST" || x[0] === "confirm"); H.log.length = 0;
+          await last("fc-fix-go"); return {mid, log: H.log.filter((x) => x[0] === "POST" || x[0] === "confirm"), right, open: fc.fix.open};"""},
+        {"名稱": "老師聲音等於其他", "程式": """
+          await open("學員段落:T005"); await last("fc-fix"); await pick("裡面有老師的聲音");
+          const t = document.getElementById("fc-right").innerHTML;
+          await last("fc-fix-repick"); await pick("其他");
+          const o = document.getElementById("fc-right").innerHTML;
+          return {t, o, more: FC_CARD_CTX.moreOpen()};"""},
+        {"名稱": "要重做的卡再開", "程式": """
+          const k = card("學員段落:T005"); k["狀態"] = "退回"; k["退回原因"] = {"選項": ["長度或停頓怪"], "補充": "尾巴切太早"};
+          await open("學員段落:T005"); await last("fc-fix");
+          const right = document.getElementById("fc-right").innerHTML; const f = {pick: fc.fix.pick, extra: fc.fix.extra, a: fc.fixEd.a, b: fc.fixEd.b};
+          fc.fixEd.b = fc.fixEd.b + 0.3; await last("fc-fix-go"); const log = posts();
+          const k2 = card("學員段落:T005"); k2["狀態"] = "已改，等重做"; k2["退回原因"] = {"選項": ["念錯字"], "補充": ""};
+          await open("學員段落:T005"); await last("fc-fix");
+          return {right, f, log, right2: document.getElementById("fc-right").innerHTML, pick2: fc.fix.pick,
+                  it: (DATA["第3步"]["項目"].find((x) => x.id === "T005") || {})};"""},
+        {"名稱": "收起不撤回", "程式": """
+          await open("學員段落:T005"); await last("fc-fix"); const first = document.getElementById("fc-right").innerHTML;
+          await pick("念錯字"); const right = document.getElementById("fc-right").innerHTML;
+          document.getElementById("rv-text").value = "改過的字"; await last("rv-text", "blur");
+          await last("fc-fix-cancel");
+          return {first, right, open: fc.fix.open, log: posts(), state: fcCards().find((c) => c["第3步鍵"] === "學員段落:T005")["狀態"]};"""},
+        {"名稱": "通過不跳", "程式": """
+          const k = card("名字:1");
+          H.api['/api/final/card'] = {'卡片': {...k, '狀態': '通過'}, '統計': DATA['卡片統計']};
+          await open("名字:1"); await last("fc-pass");
+          const r = {cur: fc.cur === k.id, right: document.getElementById("fc-right").innerHTML,
+                     lower: document.getElementById("fc-lower").innerHTML, tl: document.getElementById("fc-tl").innerHTML, id: k.id};
+          H.api['/api/final/card'] = {'卡片': {...k, '狀態': '還沒看'}, '統計': DATA['卡片統計']};
+          await last("fc-pass"); r.cur2 = fc.cur === k.id; r.log = posts(); r.right2 = document.getElementById("fc-right").innerHTML;
+          return r;"""},
+        {"名稱": "跳到", "程式": """
+          await renderFinal();
+          const box = document.getElementById("fc-goto"); const left = contentEl.innerHTML;
+          const l = H.listeners.filter((x) => x.el.id === "fc-goto" && x.type === "keydown").pop();
+          box.value = "1:05"; await l.fn({key: "Enter", isComposing: false, target: box, preventDefault() {}});
+          const t1 = fc.video.currentTime, want = fcGotoOut(65);
+          box.value = "亂打"; await l.fn({key: "Enter", isComposing: false, target: box, preventDefault() {}});
+          return {left, t1, want, bad: box.classList.contains("bad"), t2: fc.video.currentTime};"""},
+        {"名稱": "標題時間", "程式": """
+          await open("學員段落:T005"); const a = document.getElementById("fc-right").innerHTML;
+          const it = DATA["第3步"]["項目"].find((x) => x.id === "T005"); const c = card("學員段落:T005");
+          await open("名字:1"); const b = document.getElementById("fc-right").innerHTML;
+          const n = DATA["第3步"]["項目"].find((x) => rvKey(x) === "名字:1");
+          return {a, b, wa: `${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)}`, out: fcOutWhen(c), wb: fcWhenText(card("名字:1"), n)};"""},
         {"名稱": "要修改：其他", "程式": """
           await open("學員段落:T005"); await last("fc-fix"); await pick("其他");
           const right = document.getElementById("fc-right").innerHTML;
@@ -420,9 +475,44 @@ def test_page_renders_and_buttons_post_right_things():
     assert r1["log"][2][2] == {"鍵": "學員段落:T005", "新增": False}   # 改範圍不是新增
     th = got["要修改：裡面有老師的聲音"]
     assert "錯誤" not in th, th
-    assert "整段改回老師的原聲，不重念" in th["right"] and "從游標處切開" in th["right"]
-    assert [x[1] for x in th["log"]] == ["/api/final/card", "/api/turns/save", "/api/final/edited"], th["log"]   # 不另外跳確認視窗
-    assert th["log"][0][2]["選項"] == ["裡面有老師的聲音"] and th["log"][1][2]["說話者"] == "老師"
+    # 10-15 宇軒驗證回饋二：以前選「裡面有老師的聲音」只寫一句「整段改回老師的原聲」、「確定」直接存「說話者：老師」；
+    # 改成跟「其他」一樣帶出整個選單（改回老師在選單裡的按鈕當場存，跟第 3 步一樣先問一次），「確定」只記原因
+    assert "整段改回老師的原聲，不重念" not in th["right"] and "從游標處切開" in th["right"]
+    assert 'id="rv-isteacher"' in th["right"] and 'id="rv-more"' in th["right"] and 'id="rv-text"' in th["right"]
+    assert [x[0] for x in th["mid"]] == ["confirm", "POST", "POST"] and th["mid"][1][1] == "/api/turns/save" and th["mid"][1][2]["說話者"] == "老師"
+    assert th["mid"][2][1] == "/api/final/edited"
+    assert [x[1] for x in th["log"]] == ["/api/final/card"], th["log"]
+    assert th["log"][0][2]["選項"] == ["裡面有老師的聲音"] and th["open"] is False
+    te = got["老師聲音等於其他"]
+    assert "錯誤" not in te, te
+    assert te["t"].replace("<b>裡面有老師的聲音</b>", "<b>其他</b>") == te["o"] and te["more"] is True
+    rd2 = got["要重做的卡再開"]
+    assert "錯誤" not in rd2, rd2
+    assert rd2["f"]["pick"] == "長度或停頓怪" and rd2["f"]["extra"] == "尾巴切太早"          # 帶入上次的原因與補充
+    assert rd2["f"]["a"] == rd2["it"]["start"] and rd2["f"]["b"] == rd2["it"]["end"]      # 範圍從現在的值開始
+    assert 'id="fc-fix-range"' in rd2["right"] and 'value="尾巴切太早"' in rd2["right"] and ">收起</button>" in rd2["right"]
+    assert [x[1] for x in rd2["log"]] == ["/api/final/card", "/api/review/manual", "/api/final/edited"], rd2["log"]
+    assert rd2["log"][0][2]["結果"] == "退回" and rd2["log"][0][2]["選項"] == ["長度或停頓怪"] and rd2["log"][0][2]["補充"] == "尾巴切太早"
+    assert rd2["pick2"] == "念錯字" and 'id="rv-text"' in rd2["right2"]                  # 已改的卡也能再開、帶入原因
+    sq = got["收起不撤回"]
+    assert "錯誤" not in sq, sq
+    assert ">收起</button>" in sq["first"] and ">收起</button>" in sq["right"] and ">取消</button>" not in sq["right"]
+    assert sq["open"] is False and [x[1] for x in sq["log"]] == ["/api/turns/save", "/api/final/edited"]   # 改的字照留、沒記原因
+    assert sq["state"] == "已改，等重做"
+    ps = got["通過不跳"]
+    assert "錯誤" not in ps, ps
+    assert ps["cur"] is True and "✓ 已通過（再按取消）" in ps["right"] and 'aria-pressed="true"' in ps["right"]
+    assert re.search(rf'data-id="{re.escape(ps["id"])}" class="cur done', ps["lower"]) and "fc-ok" in ps["tl"]
+    assert ps["cur2"] is True and ps["log"][-1][2]["結果"] is None and "✓ 已通過" not in ps["right2"] and ">通過<kbd>" in ps["right2"]
+    gt = got["跳到"]
+    assert "錯誤" not in gt, gt
+    assert 'id="fc-goto"' in gt["left"] and 'placeholder="跳到 43:15"' in gt["left"]
+    assert gt["left"].index('id="fc-clock"') < gt["left"].index('id="fc-goto"') < gt["left"].index('id="fc-rate"')   # 在「1 倍速」左邊
+    assert gt["want"] is not None and abs(gt["t1"] - gt["want"]) < 1e-6 and gt["bad"] is True and gt["t2"] == gt["t1"]
+    tt = got["標題時間"]
+    assert "錯誤" not in tt, tt
+    assert f'<span class="rv-when">{tt["wa"]}</span>' in tt["a"] and tt["out"].startswith("成品 ") and tt["out"] in tt["a"]
+    assert f'<span class="rv-when">{tt["wb"]}</span>' in tt["b"]
     o1 = got["要修改：其他"]
     assert "錯誤" not in o1, o1
     assert 'id="rv-isteacher"' in o1["right"] and "裡面有老師的聲音" in o1["right"] and 'id="rv-more"' in o1["right"] and 'id="rv-text"' in o1["right"]
