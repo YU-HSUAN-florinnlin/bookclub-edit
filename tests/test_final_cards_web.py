@@ -327,7 +327,8 @@ def test_page_renders_and_buttons_post_right_things():
     assert "重做這幾張（1 張）" in v["bar"] and "＋在這裡新增修改" in v["bar"] and 'data-tab="還沒看完"' in v["lower"]
     assert "重做這幾張" not in v["lower"] and "＋在這裡新增修改" not in v["lower"]
     assert v["left"].index("fc-seenpct") < v["left"].index('id="fc-actbar"') < v["left"].index('id="fc-io"')
-    assert 'id="fc-pad"' in v["right"] and "前後多聽 2 秒" in v["right"] and 'id="fc-pad" checked' not in v["right"]   # 開關預設關
+    assert 'id="fc-pad"' in v["right"] and "前後多 2 秒" in v["right"] and 'class="fc-switch"' in v["right"] and 'role="switch"' in v["right"]
+    assert not re.search(r'id="fc-pad"[^>]*checked', v["right"])   # 滑動開關預設關
     assert "fc-preview" not in v["right"]   # 舊預覽的霧化樣式不能套到卡片的字
     assert "fc-back" in v["tl"] and "fc-todo" in v["tl"]
     posts = [x for x in got["通過"] if x[0] == "POST"]

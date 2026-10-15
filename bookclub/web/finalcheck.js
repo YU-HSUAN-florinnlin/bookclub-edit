@@ -17,7 +17,7 @@
 // 09-29 宇軒：2 倍速以下播過的才算「看過」（快轉看完不算有人完整看過）
 const FC_MAX_RATE = 2;
 const FC_AB_CONTEXT = 2;   // 試聽前後各多 2 秒（跟後端一樣）
-// 10-15 宇軒驗證回饋：「原本 ▶」「現在 ▶」旁的開關「前後多聽 2 秒」，預設關（只播修改的那一段）；開關記在瀏覽器
+// 10-15 宇軒驗證回饋：「原本 ▶」「現在 ▶」旁的滑動開關「前後多 2 秒」（iOS 樣式），預設關（只播修改的那一段）；開關記在瀏覽器
 const FC_PAD_KEY = "fc-ab-pad";
 function fcAbPad() { try { return localStorage.getItem(FC_PAD_KEY) === "1" ? FC_AB_CONTEXT : 0; } catch (e) { return 0; } }
 function fcSetAbPad(on) { try { localStorage.setItem(FC_PAD_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係 */ } }
@@ -604,7 +604,7 @@ function fcRenderRight() {
         <button class="ghost small" data-ab="原本" ${abOrig ? "" : "disabled"}>原本 ▶</button>
         <button class="ghost small" data-ab="現在" ${abNow ? "" : "disabled"}>現在 ▶</button>${abPrev ? `
         <button class="ghost small" data-ab="上一版">上一版 ▶</button>` : ""}
-        <label class="fc-pad"><input type="checkbox" id="fc-pad" ${fcAbPad() ? "checked" : ""}> 前後多聽 2 秒</label></div>
+        <label class="fc-pad"><input type="checkbox" role="switch" id="fc-pad" aria-label="試聽前後多 2 秒" ${fcAbPad() ? "checked" : ""}><span class="fc-switch" aria-hidden="true"></span>前後多 2 秒</label></div>
       <div class="rv-actions">
         <button class="${c["狀態"] === FC_ST.OK ? "primary on" : "primary"}" id="fc-pass" aria-pressed="${c["狀態"] === FC_ST.OK}" ${canJudge ? "" : "disabled"}>通過<kbd>Enter</kbd></button>
         <button class="ghost${back ? " on" : ""}" id="fc-redo" aria-pressed="${back}" aria-expanded="${fc.redoOpen}" ${canReturn ? "" : `disabled title="要退回請回到最新一版"`}>退回</button>${back && !canReturn ? `
