@@ -399,6 +399,40 @@ def test_old_version_export_asks_when_not_fully_watched():
     assert finalcards.export_version(w, 1, confirm=True)["ok"]
 
 
+def test_old_version_export_warns_not_latest_but_not_blocked():
+    """10-15 宇軒定案：按「輸出成品」時輸出的不是最新版本 → 確認視窗最上面「目前輸出的不是最新版本（這是第 N 版，最新是第 M 版）」，
+    不擋（確定就輸出）；卡都看完、整片看完也要問一次（只為了這一行）。最新版不出現。"""
+    w = _three_versions()
+    r = finalcards.export_version(w, 1)
+    assert r["要確認"] and r["還差"]["不是最新版本"] == "目前輸出的不是最新版本（這是第 1 版，最新是第 2 版）"
+    for (k, n) in list(needs.load(w).states):   # 第 1 版卡都通過、整片看完：只剩「不是最新版本」也要問
+        if n == 1:
+            tn._quiet(finalcards.decide, w, next(c["id"] for c in finalcards.version_page(w, 1, None)["卡片"]
+                                                  if c.get("卡號") == k), needs.PASSED, version=1)
+    assert finalcards.version_page(w, 1, None)["卡片統計"]["還要確認"] == 0
+    orig = finalcards.version_page   # 假工作區的成品量不出長度（看過比例一直是 0）：這裡當作整片看完
+
+    def full(*a, **k):
+        pg = orig(*a, **k)
+        return {**pg, "狀態": {**pg["狀態"], "看過比例": 1.0}}
+
+    finalcards.version_page = full
+    try:
+        r = finalcards.export_version(w, 1)
+    finally:
+        finalcards.version_page = orig
+    assert r["要確認"] and r["還差"]["說明"] == [] and r["還差"]["不是最新版本"].startswith("目前輸出的不是最新版本")
+    r = finalcards.export_version(w, 1, confirm=True)
+    assert r["ok"] and r["版本號"] == 1   # 不擋
+    # 最新版（第 2 版走 export_final）：沒有這一行
+    r = tn._quiet(fc.export_final, w)
+    assert r["要確認"] and r["還差"]["不是最新版本"] == ""
+    assert fc.not_latest_note(w, 2) == "" and fc.not_latest_note(w, None) == ""
+    # 舊檔模式（新紀錄不能用）：不顯示
+    w2 = tn._fresh()
+    assert not needs.exists(w2) and fc.not_latest_note(w2, 1) == ""
+
+
 def test_new_version_keeps_prev_watched():
     """10-15 第3段審查修正（建議）：建新版時，上一版在成品檢查檔的看過區段補進看過.json（升級前看的也留得住）。
     審查二修正：檢查的成品影片要是上一版 `成品檔` 裡的那支，手動換到舊成品（`手動選擇.舊的`）看過的不補。"""

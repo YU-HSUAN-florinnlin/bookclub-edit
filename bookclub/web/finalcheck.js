@@ -1522,7 +1522,9 @@ async function fcExport() {
 function fcExportAsk(gaps, win, left = 0) {
   const g = gaps || {};
   const block = g["擋下"] || [], redo = g["退回清單"] || [];
-  if (block.length) return { blocked: true, title: "還不能輸出", names: [], details: [`${block.join("；")}。處理好之後再按一次「輸出成品」。`] };
+  // 10-15 宇軒定案：要輸出的不是最新版本 → 最上面一行提醒（後端照版本表給的句子；不擋，照常能輸出）
+  const ver = g["不是最新版本"] || "";
+  if (block.length) return { blocked: true, ver, title: "還不能輸出", names: [], details: [`${block.join("；")}。處理好之後再按一次「輸出成品」。`] };
   const details = [...(g["說明"] || [])];
   // 10-15 總檢查修正（1015-7）：給老師看的字「退回重做還沒重做」→「要重做還沒重做」（資料欄位 退回清單 照舊）
   if (redo.length) details.push(`有 ${redo.length} 筆要重做還沒重做，輸出的是重做之前的樣子：` + redo.map((x) => `${x["成品秒"] != null ? "成品" : "原片"} ${x["成品秒"] != null ? fcFmt(x["成品秒"]) : x["原片秒"] != null ? fcFmt(x["原片秒"]) : "—"}${x["原因"] ? " " + x["原因"] : ""}`).join("；"));
@@ -1530,7 +1532,7 @@ function fcExportAsk(gaps, win, left = 0) {
   details.push(...(g["提醒"] || []));
   details.push("輸出的是現在這一支成品，會另外存一支新的，舊的不會被蓋掉。");
   if (win) details.push("成品在 Ubuntu 裡：輸出之後，再按「複製成品到 Windows 的下載資料夾」，才拿得到。");
-  return { blocked: false, title: left ? `還有 ${left} 張沒看完，確定要輸出嗎？` : "確定要輸出嗎？", names: g["名字提醒"] || [], details };
+  return { blocked: false, ver, title: left ? `還有 ${left} 張沒看完，確定要輸出嗎？` : "確定要輸出嗎？", names: g["名字提醒"] || [], details };
 }
 
 function fcConfirmExport(gaps, win) {
@@ -1540,7 +1542,7 @@ function fcConfirmExport(gaps, win) {
     const dlg = document.createElement("dialog");
     dlg.className = "rv-confirm";
     dlg.setAttribute("aria-labelledby", "fc-export-title");
-    dlg.innerHTML = `<h2 id="fc-export-title">${esc(a.title)}</h2>
+    dlg.innerHTML = `${a.ver ? `<p class="fc-export-names fc-export-ver"><b>${esc(a.ver)}</b></p>` : ""}<h2 id="fc-export-title">${esc(a.title)}</h2>
       ${(a.names || []).map((x) => `<p class="fc-export-names"><b>${esc(x)}</b></p>`).join("")}
       ${a.details.length ? `<details class="rv-confirm-more"><summary>詳細</summary>${a.details.map((x) => `<p>${esc(x)}</p>`).join("")}</details>` : ""}
       <div class="rv-confirm-btns">${a.blocked ? `<button class="primary" id="fc-export-no">知道了</button>`

@@ -847,10 +847,12 @@ def export_version(workdir: str | Path, n: int, confirm: bool = False) -> dict:
     stat = page["卡片統計"]
     left = stat["還要確認"]   # 10-15 總檢查修正（1015-7，A3）：跟頂端那一句同一個數（含已改、這一版沒做這張）
     pct = int(page["狀態"]["看過比例"] * 100)
-    if (left or pct < 100) and not confirm:   # 10-15 第3段審查修正（建議）：卡都看完、整片沒看完也先問一次（照 0.2.1b3）
+    # 10-15 宇軒定案：不是最新版本也先問一次，確認視窗最上面寫「目前輸出的不是最新版本（這是第 N 版，最新是第 M 版）」——不擋
+    stale = fc.not_latest_note(workdir, int(n))
+    if (left or pct < 100 or stale) and not confirm:   # 10-15 第3段審查修正（建議）：卡都看完、整片沒看完也先問一次（照 0.2.1b3）
         why = ([f"還有 {left} 張沒看完"] if left else []) + ([f"整片還沒看完（看過 {pct}%）"] if pct < 100 else [])
         return {"ok": False, "要確認": True, "還差": {"說明": why, "擋下": [], "名字提醒": [], "退回清單": [], "提醒": [],
-                                                  "需留意說明": "", "看過百分比": pct}}
+                                                  "需留意說明": "", "看過百分比": pct, "不是最新版本": stale}}
     src = workdir / rel
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     dst = src.with_name(fc.final_name(src.name, stamp))

@@ -1662,6 +1662,28 @@ def version_of(workdir: str | Path, log: dict | None) -> int | None:
         return None
 
 
+NOT_LATEST = "目前輸出的不是最新版本"
+
+
+def not_latest_note(workdir: str | Path, n: int | None) -> str:
+    """10-15 宇軒定案：按「輸出成品」時，要輸出的第 n 版不是最新版本 → 確認視窗最上面那一行（不擋，可能想退回去用前一版輸出）。
+    是最新版、舊檔模式（新紀錄不能用、沒有版本資訊）、n 是 None → 空字串。版本號用修改需求紀錄的版本表，不在前端猜。"""
+    if n is None:
+        return ""
+    try:
+        from bookclub import needs
+
+        if not needs.healthy(workdir):
+            return ""
+        vers = needs.load(workdir).versions
+        top = max(vers) if vers else None
+    except Exception:  # noqa: BLE001 — 讀不到就不提醒（不擋輸出）
+        return ""
+    if top is None or int(n) >= top:
+        return ""
+    return f"{NOT_LATEST}（這是第 {int(n)} 版，最新是第 {top} 版）"
+
+
 def send_back(workdir: str | Path) -> dict:
     """`POST /api/final/sendback`：退回的全部寫進 `送回AI重做`，第 4 步讀這份（`bookclub redo list`）。"""
     workdir = Path(workdir)
@@ -1770,11 +1792,14 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
             gaps.update(attention_gaps(attention_rows(workdir, log)))
         except Exception:  # noqa: BLE001 — 算不出來不擋輸出
             gaps.update(attention_gaps({}))
+        # 10-15 宇軒定案：輸出的這一版不是最新版本 → 確認視窗最上面提醒一行（不擋）
+        gaps["不是最新版本"] = not_latest_note(workdir, version_of(workdir, log))
         if gaps["擋下"]:   # 標字版：確認了也不能輸出
             if confirm:
                 raise ValueError("還不能輸出：" + "；".join(gaps["擋下"]))
             return {"ok": False, "要確認": True, "不能輸出": True, "還差": gaps}
-        if (not st["可以輸出"] or gaps["提醒"] or gaps["名字提醒"] or gaps["需留意名字"] or gaps["名冊外沒找"]) and not confirm:
+        if (not st["可以輸出"] or gaps["提醒"] or gaps["名字提醒"] or gaps["需留意名字"] or gaps["名冊外沒找"]
+                or gaps["不是最新版本"]) and not confirm:
             return {"ok": False, "要確認": True, "還差": gaps}
         src = workdir / check["成品影片"]
         src_print = product_print(src)   # 10-13 審查修正二（順手）：複製前先記指紋，複製途中第 4 步換檔也記得到複製的那份

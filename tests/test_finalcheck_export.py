@@ -144,6 +144,7 @@ def test_name_needs_person_asks_then_exports_with_confirm():
     fc.page_data(w)
     r = fc.export_final(w)
     assert r["要確認"] and not r.get("不能輸出") and r["還差"]["擋下"] == [] and "名字程式沒處理" in r["還差"]["名字提醒"][0]
+    assert r["還差"]["不是最新版本"] == ""            # 10-15：舊檔模式（沒有版本資訊）不提「不是最新版本」
     assert not list((w / "輸出").glob("最終成品_*"))
     r2 = fc.export_final(w, confirm=True)
     assert r2["ok"] and r2["名字提醒"] == 1 and len(list((w / "輸出").glob("最終成品_*"))) == 1
@@ -234,6 +235,21 @@ def test_web_confirm_text():
     assert got["mac"]["title"] == "確定要輸出嗎？" and "整片還沒看完（看過 73%）" in got["mac"]["details"]
     assert not any("Windows" in x for x in got["mac"]["details"]) and any("複製成品到 Windows 的下載資料夾" in x for x in got["win"]["details"])
     assert got["win"]["title"] == "還有 12 張沒看完，確定要輸出嗎？"
+
+
+def test_web_not_latest_line_on_top():
+    """10-15 宇軒定案：後端給 `不是最新版本` → 確認視窗最上面一行（不擋，照樣有輸出鈕）；沒給（最新版、舊檔模式）→ 沒有這一行。"""
+    if not NODE:
+        return
+    g = {"說明": [], "擋下": [], "退回清單": [], "提醒": [], "不是最新版本": "目前輸出的不是最新版本（這是第 2 版，最新是第 4 版）"}
+    got = _node("function fcFmt(t) { return String(t); }\n" + _fn("fcExportAsk") + f"""
+      const g = {json.dumps(g, ensure_ascii=False)};
+      console.log(JSON.stringify([fcExportAsk(g, false, 0), fcExportAsk({{ ...g, "不是最新版本": "" }}, false, 0), fcExportAsk({{}}, false, 0)]));""")
+    old, latest, legacy = got
+    assert old["ver"] == "目前輸出的不是最新版本（這是第 2 版，最新是第 4 版）" and not old["blocked"]
+    assert latest["ver"] == "" and legacy["ver"] == ""
+    dlg = _fn("fcConfirmExport")
+    assert dlg.index("a.ver ?") < dlg.index('id="fc-export-title"')   # 在標題上面
 
 
 def test_web_export_wiring():
