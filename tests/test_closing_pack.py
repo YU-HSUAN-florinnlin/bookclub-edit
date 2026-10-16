@@ -573,6 +573,104 @@ def test_fix_reveal_and_ubuntu_warning():
             httpd.server_close()
 
 
+# ---------- 第 2 段第二輪審查修正 ----------
+
+def test_fix_r2_export_running_blocks_pack():
+    """必修：第 5 步「輸出成品」正在複製最終成品（卡住）時，結案打包不能開始（以前只看「複製到 Windows」）。"""
+    from bookclub import finalcheck as fc
+
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        httpd, base = _serve(w)
+        gate, entered = threading.Event(), threading.Event()
+        orig = fc.export_final
+
+        def stuck(workdir, confirm=False):
+            entered.set()
+            gate.wait(10)
+            return {"ok": True}
+        fc.export_final = stuck
+        th = threading.Thread(target=lambda: _call(base, "/api/final/export", {"確定": True}), daemon=True)
+        try:
+            th.start()
+            assert entered.wait(5)
+            code, r = _call(base, "/api/close/pack", {"位置": "自己選", "路徑": str(loc)})
+            assert code == 400 and "成品正在輸出" in r["error"], r
+            assert "成品正在輸出" in (_call(base, "/api/close/state")[1]["不行的原因"] or "")
+            gate.set()
+            th.join(5)
+            assert _call(base, "/api/close/state")[1]["可以打包"]
+        finally:
+            gate.set()
+            fc.export_final = orig
+            httpd.shutdown()
+            httpd.server_close()
+
+
+def test_fix_r2_resume_uses_recorded_rename_target():
+    """建議 1：同一天第一份已存好；第二份改名成 ` (2)` 後、還沒寫 結案.json 就當掉 → 繼續找的是 ` (2)`，第一份完全沒被動。"""
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        first = _run(w, loc)
+        second = _run(w, loc)
+        one, two = Path(first.folder), Path(second.folder)
+        assert two.name.endswith(" (2)")
+        rec = closing.read_record(w)
+        e = rec["打包"][-1]
+        assert e["改名成"] == str(two)
+        e.update({"核對": "還沒", "資料夾": str(two.with_name(f"第一堂_{DAY}{closing.PACKING_SUFFIX}"))})
+        wd.write_json(closing.record_path(w), rec)
+        before = {str(p): (p.stat().st_size, p.stat().st_mtime_ns) for p in one.rglob("*")}
+        again = _StopAfter(w, loc, resume=True)
+        again.run()
+        assert again.state == "已存好" and Path(again.folder) == two, (again.error, again.folder)
+        assert {str(p): (p.stat().st_size, p.stat().st_mtime_ns) for p in one.rglob("*")} == before
+        assert closing.read_record(w)["打包"][-1]["資料夾"] == str(two)
+
+
+class _BusyRecord(closing.PackJob):
+    """第 5 步邊看邊存：成品檢查.json 在存的時候被改了 times 次。"""
+
+    def __init__(self, *a, times: int = 2, **kw):
+        super().__init__(*a, **kw)
+        self.times = times
+
+    def _copy(self, src, data, tmp):
+        got = super()._copy(src, data, tmp)
+        if src is not None and src.name == "成品檢查.json" and self.times > 0:
+            self.times -= 1
+            time.sleep(0.01)
+            src.write_bytes(src.read_bytes())   # 內容一樣、修改時間變了
+            os.utime(src, ns=(time.time_ns(), time.time_ns() + self.times + 1))
+        return got
+
+
+def test_fix_r2_small_record_changed_retried():
+    """建議 2：小的紀錄檔（成品檢查.json）存的時候被改了 → 重讀重存，最多 3 次；一直變才失敗、訊息照實際原因寫。影片一變就失敗（上面另一條）。"""
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        job = _BusyRecord(w, loc, times=2)
+        job.run()
+        assert job.state == "已存好", job.error
+        job = _BusyRecord(w, loc, times=99)
+        job.run()
+        assert job.state == "失敗" and "成品檢查.json" in job.error and "一直在變" in job.error, job.error
+
+
+def test_fix_r2_dot_files_in_needs_skipped():
+    """建議 3：`修改需求/` 裡用點開頭的檔（`.寫入中`、`.寫入鎖`）不打包。"""
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t))
+        _mk(w / "修改需求" / ".卡片.json.寫入中", b"{}")
+        _mk(w / "修改需求" / "版本" / ".暫存", b"x")
+        names = [it["相對路徑"] for it in closing.pack_items(w)]
+        assert not any(Path(n).name.startswith(".") for n in names), names
+        assert "紀錄/修改需求/卡片.json" in names
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

@@ -935,6 +935,7 @@ class BookclubServer(ThreadingHTTPServer):
         self.pick_token: dict[tuple[str, str], str] = {}   # 每個 (用途, 去處) 最新的那一次選擇（見 accept_pick 上面的說明）
         self.exporting = False                     # 「複製成品到 Windows」正在準備（找下載資料夾）
         self.close_job = None                      # 1015-8：結案打包（closing.PackJob；同時只有一個，佔 pick_lock）
+        self.final_exporting = False               # 第 5 步「輸出成品」正在複製最終成品（跟結案打包互擋，佔 pick_lock）
         try:   # 上次複製到一半伺服器被關掉留下的暫存檔（只清這個工具自己取名的 .*.複製中）
             from bookclub import fileio
 
@@ -1232,6 +1233,8 @@ class BookclubServer(ThreadingHTTPServer):
         if self.run_status_running():
             return "影片分析正在跑，跑完才能結案打包。"
         with self.pick_lock:
+            if self.final_exporting:
+                return "成品正在輸出，等它做完再結案打包。"
             if self.exporting or any(j.purpose == "成品" and j.running for j in self.copy_jobs.values()):
                 return "成品正在複製，複製完才能結案打包。"
             if self.close_job is not None and self.close_job.running:
@@ -1330,6 +1333,8 @@ class BookclubServer(ThreadingHTTPServer):
             raise ValueError(str(e)) from None
         job = closing.PackJob(self.workdir, locp, display=disp, resume=resume, records_only=records_only)
         with self.pick_lock:
+            if self.final_exporting:
+                raise ValueError("成品正在輸出，等它做完再結案打包。")
             if (self.close_job is not None and self.close_job.running) or self.exporting \
                     or any(j.purpose == "成品" and j.running for j in self.copy_jobs.values()):
                 raise ValueError("上一個存檔的工作還沒做完")
@@ -2082,15 +2087,23 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/final/sendback":
                 self._send_json(200, fc.send_back(w))
             elif path == "/api/final/export":
-                if server.close_packing():   # 1015-8 第 2 段審查必修 2：打包在存成品時不輸出（含輸出舊版）
-                    raise Busy("結案打包正在存，等它存完再輸出成品。")
-                ver = body.get("版本")
-                if isinstance(ver, int) and not isinstance(ver, bool) and ver != _current_version(server):
-                    from bookclub import finalcards   # 10-15 第5步2.0 第3段（§6.7）：輸出選中的那一版
+                # 1015-8 第 2 段審查：打包在存時不輸出（含輸出舊版）；輸出時記「正在輸出最終成品」，打包那邊也看這個（雙向互擋）
+                with server.pick_lock:
+                    if server.close_packing():
+                        raise Busy("結案打包正在存，等它存完再輸出成品。")
+                    server.final_exporting = True
+                try:
+                    ver = body.get("版本")
+                    if isinstance(ver, int) and not isinstance(ver, bool) and ver != _current_version(server):
+                        from bookclub import finalcards   # 10-15 第5步2.0 第3段（§6.7）：輸出選中的那一版
 
-                    self._send_json(200, finalcards.export_version(w, ver, confirm=body.get("確定") is True))
-                else:
-                    self._send_json(200, fc.export_final(w, confirm=body.get("確定") is True))   # 10-08：還沒看完要先確認
+                        out = finalcards.export_version(w, ver, confirm=body.get("確定") is True)
+                    else:
+                        out = fc.export_final(w, confirm=body.get("確定") is True)   # 10-08：還沒看完要先確認
+                finally:
+                    with server.pick_lock:
+                        server.final_exporting = False
+                self._send_json(200, out)
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
         elif path == "/api/roomtone":   # 10-02 第六批第五件：第 2 步「這段可以」「換一段」

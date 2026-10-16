@@ -414,6 +414,14 @@ class PackError(Exception):
 
 MISSING_PRODUCT = "找不到最後輸出的成品影片，先到第 5 步重新輸出一次再打包。"
 SOURCE_CHANGED = "存的時候工作區裡的檔案變了（{}），可能剛好又輸出或組裝了一次。等它做完再按一次。"
+SOURCE_BUSY = "紀錄檔「{}」一直在變（第 5 步可能還開著、一直在記看過的地方），先關掉第 5 步那一頁或等一下再按一次。"
+SMALL_RECORD_EXTS = (".json", ".jsonl")
+SMALL_RECORD_BYTES = 5_000_000
+SMALL_RECORD_TRIES = 3
+
+
+class _SourceChanged(Exception):
+    """存一個檔的時候，工作區裡的來源變了（內部用，`_one` 決定要不要重試）。"""
 
 
 def os_message(e: OSError) -> str:
@@ -522,7 +530,7 @@ def pack_items(workdir: str | Path, *, records_only: bool = False, strict: bool 
         for root, _dirs, files in os.walk(needs_dir, followlinks=False):
             for f in sorted(files):
                 p = Path(root) / f
-                if f == ".寫入鎖" or p.is_symlink() or not p.is_file():
+                if f.startswith(".") or p.is_symlink() or not p.is_file():   # .寫入鎖、.寫入中 之類的不打包
                     continue
                 out.append({"相對路徑": str(Path("紀錄") / p.relative_to(w)), "來源": p})
     outdir = w / "輸出"
@@ -558,17 +566,16 @@ def remaining_bytes(items: list[dict], folder: Path | None) -> int:
 
 
 def resume_folder(entry: dict | None) -> Path | None:
-    """上次沒核對完的那一次打包，「繼續」要用的資料夾：記的 `…_打包中` 還在就用它；不在、但同位置去掉 `_打包中` 的
-    同名資料夾在（改名完成、還沒寫 `結案.json` 就當掉）也用它（重新核對）。都沒有＝None。"""
+    """上次沒核對完的那一次打包，「繼續」要用的資料夾：記的 `…_打包中` 還在就用它；不在、但改名前記下的 `改名成`
+    那個資料夾在（改名完成、還沒寫完成就當掉）也用它（重新核對）。都沒有＝None。"""
     if not entry or entry.get("核對") == "通過" or not entry.get("資料夾"):
         return None
     p = Path(entry["資料夾"])
     if p.is_dir() and not p.is_symlink():
         return p
-    if p.name.endswith(PACKING_SUFFIX):
-        alt = p.with_name(p.name.removesuffix(PACKING_SUFFIX))
-        if alt.is_dir() and not alt.is_symlink():
-            return alt
+    alt = Path(entry["改名成"]) if entry.get("改名成") else None   # 只認改名前記下的名字，不用猜
+    if alt is not None and alt.is_dir() and not alt.is_symlink():
+        return alt
     return None
 
 
@@ -751,6 +758,13 @@ class PackJob:
                 raise PackError(f"有 1 個檔存過去不一樣（{f['相對路徑']}），換個位置再試。")
         if folder.name.endswith(PACKING_SUFFIX):
             final = _numbered_dir(folder.with_name(folder.name.removesuffix(PACKING_SUFFIX)))
+            # 第二輪審查建議 1：改名前先把要改成的名字記進 結案.json——改名後、記完成前當掉，「繼續」只認這個名字
+            rec = read_record(w)
+            e2 = self._entry(rec)
+            if e2 is not None:
+                e2["改名成"] = str(final)
+                _write_record(w, rec)
+            entry["改名成"] = str(final)
             os.rename(folder, final)
         else:
             final = folder   # 上次已經改好名、還沒寫 結案.json：重新核對過了，照用
@@ -764,7 +778,24 @@ class PackJob:
         self.state = "已存好"
 
     def _one(self, folder: Path, it: dict) -> dict:
-        """存一個檔、從目的地重讀核對；不一樣刪掉重存一次，第二次還不一樣就停。已經在（繼續）而且對得上的跳過。"""
+        """存一個檔、從目的地重讀核對；不一樣刪掉重存一次，第二次還不一樣就停。已經在（繼續）而且對得上的跳過。
+        第 2 段第二輪審查建議 2：小的紀錄檔（.json／.jsonl，< 5 MB；例如第 5 步邊看邊存的 成品檢查.json）存的時候來源變了
+        → 重讀重存，最多 3 次，還是變才失敗；影片等大檔一變就失敗。"""
+        rel = it["相對路徑"]
+        src = it.get("來源")
+        small = src is not None and src.suffix in SMALL_RECORD_EXTS and src.stat().st_size < SMALL_RECORD_BYTES
+        for n in range(1, (SMALL_RECORD_TRIES if small else 1) + 1):
+            try:
+                return self._one_try(folder, it)
+            except _SourceChanged:
+                if n >= (SMALL_RECORD_TRIES if small else 1):
+                    if small:
+                        raise PackError(SOURCE_BUSY.format(src.name)) from None
+                    raise PackError(SOURCE_CHANGED.format(rel)) from None
+                time.sleep(0.2)
+        raise PackError(SOURCE_CHANGED.format(rel))
+
+    def _one_try(self, folder: Path, it: dict) -> dict:
         rel = it["相對路徑"]
         dst = folder / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -772,6 +803,8 @@ class PackJob:
         if data is None and it.get("來源") is None:
             data = _gen_text(self.workdir, it["產生"])
         src = it.get("來源")
+        if src is not None and not src.is_file():
+            raise _SourceChanged()
         size = len(data) if data is not None else src.stat().st_size
         known = hashlib.sha256(data).hexdigest() if data is not None else None
 
@@ -784,6 +817,7 @@ class PackJob:
             if _sha(dst) == want:
                 return row(want)
         want = known
+
         def stamp():
             st = src.stat()
             return (st.st_size, st.st_mtime_ns, st.st_ino)
@@ -795,7 +829,7 @@ class PackJob:
                 got = self._copy(src, data, tmp)   # 一邊讀來源一邊算 SHA-256
                 # 第 2 段審查必修 2：複製前後來源的大小、修改時間、inode 有變＝存的時候被改了（又輸出、又組裝）
                 if src is not None and (not src.is_file() or stamp() != before or before[0] != size):
-                    raise PackError(SOURCE_CHANGED.format(rel))
+                    raise _SourceChanged()
                 os.replace(tmp, dst)
             finally:
                 if tmp.exists():
@@ -803,7 +837,7 @@ class PackJob:
             if want is None:
                 want = got
             elif got != want:
-                raise PackError(SOURCE_CHANGED.format(rel))
+                raise _SourceChanged()
             if self._fail_hook and self._fail_hook(rel, attempt):
                 with open(dst, "r+b") as f:   # 測試：模擬寫壞一個位元組
                     b = f.read(1)
