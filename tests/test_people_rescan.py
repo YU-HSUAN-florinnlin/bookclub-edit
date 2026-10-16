@@ -293,6 +293,83 @@ def test_old_decisions_file_still_read():
     assert personnames.rescan_status(w) == {"補找中": False, "未通知": 0, "錯誤": None}
 
 
+# ---------- 1016-3 畫面測試：③ 選了「同一人：小美」之後 ----------
+
+def _two(w: Path) -> None:
+    from bookclub import turns as turns_mod
+
+    turns_mod.set_name_code(w, "小美", "艾瑪", add_roster=False)
+    turns_mod.set_name_code(w, "阿明", "湯姆", add_roster=False)
+
+
+def _roster_alts(real: str) -> list[str]:
+    from bookclub import names
+
+    return sorted(r["寫法"] for r in names.load_roster(_DATA / "名冊.csv") if r["canonical"] == real and r["寫法"] != real)
+
+
+def test_same_person_row_stays_in_three():
+    """選了「同一人：小美」的阿德：照樣在 ③ 列出（不是 ② 的學員）、小美那列還在 ②、② 不多出阿德。"""
+    w = _make()
+    _two(w)
+    personnames.decide(w, "阿德", "是上面的學員", same_as="小美")
+    personnames.wait_rescan(w)
+    assert "阿德" in _roster_alts("小美")
+    rows = personnames.mentioned(w, chosen={"小美", "阿明"})
+    ade = next(u for u in rows if u["名字"] == "阿德")
+    assert not ade["② 已決定"], ade
+    assert (ade["做法"], ade["同一人"], ade["代號"], ade["已決定"]) == ("是上面的學員", "小美", "艾瑪", True)
+    two = sorted((u.get("名冊本名") or u["名字"]) for u in rows if u["② 已決定"])
+    assert two == ["小美", "阿明"], two
+    # 小美那列的次數不算進阿德（阿德被提到的地方算在阿德那列）；假資料的手寫候選補找時會多一筆同一句的，照檔案算
+    before = sum(1 for c in wd.read_json(wd.names_path(w))["candidates"] if c["canonical"] == "小美" and c["name"] != "阿德")
+    mei = [u for u in rows if u["② 已決定"] and (u.get("名冊本名") or u["名字"]) == "小美"]
+    assert len(mei) == 1 and mei[0]["名字"] == "小美" and mei[0]["次數"] == before, (mei, before)
+
+
+def test_same_person_can_change_back_and_alias_removed():
+    """改掉「同一人：小美」：只拿掉這次加的其他寫法（名冊原本的「美美」不動）；老師提到阿德的地方跟著換成新的英文名。"""
+    w = _make()
+    _two(w)
+    personnames.decide(w, "阿德", "是上面的學員", same_as="小美")
+    personnames.wait_rescan(w)
+    ade_c = [c for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿德"]
+    assert ade_c and all(c["canonical"] == "小美" for c in ade_c)
+    personnames.decide(w, "阿德", "換成代號", "傑克")
+    personnames.wait_rescan(w)
+    assert _roster_alts("小美") == ["美美"], _roster_alts("小美")
+    from bookclub import names
+
+    assert any(r["寫法"] == "阿德" and r["canonical"] == "阿德" for r in names.load_roster(_DATA / "名冊.csv"))
+    codes = epcodes.episode_codes(w)
+    assert codes.get("阿德") == "傑克" and codes.get("小美") == "艾瑪", codes
+    ade_c = [c for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿德"]
+    assert ade_c and all((c["canonical"], c["代號"]) == ("阿德", "傑克") for c in ade_c), ade_c
+    ade = next(u for u in personnames.mentioned(w, chosen={"小美", "阿明"}) if u["名字"] == "阿德")
+    assert (ade["做法"], ade["代號"], ade["同一人"], ade["② 已決定"]) == ("換成代號", "傑克", None, False)
+    # 再改成「不是名字」：老師提到阿德的地方不算缺英文名
+    personnames.decide(w, "阿強", "是上面的學員", same_as="阿明")
+    personnames.wait_rescan(w)
+    personnames.decide(w, "阿強", "不是名字")
+    assert _roster_alts("阿明") == []
+    assert all(c["canonical"] == "阿強" for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿強")
+    assert "阿強" not in epcodes.missing(w) and "阿明" in epcodes.episode_codes(w)
+
+
+def test_same_person_keeps_roster_alias_that_was_there_before():
+    """名冊本來就把「美美」寫成小美的其他寫法：③ 選了又改掉，名冊照舊。"""
+    w = _make()
+    _two(w)
+    pp = personnames.people_path(w)
+    d = json.loads(pp.read_text(encoding="utf-8"))
+    d["人名"][2]["名字"] = "美美"   # 路人甲 → 美美（名冊上是小美的其他寫法）
+    pp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    personnames.decide(w, "美美", "是上面的學員", same_as="小美")
+    personnames.wait_rescan(w)
+    personnames.decide(w, "美美", "不用處理")
+    assert _roster_alts("小美") == ["美美"]
+
+
 # ---------- 網頁 ----------
 
 NODE = shutil.which("node")
@@ -393,6 +470,81 @@ def test_web_one_dropdown_and_parallel_saves():
     assert out["saving"] == []
     assert out["rows"][:2] == [["阿強", "換成代號", "貝拉", None, True], ["美美", "是上面的學員", "安娜", "小美", True]]
     assert 'value="same:小美" selected' in out["after"] and "存檔中" not in out["after"]
+
+
+_JS_SAME = r"""
+const { makeEnv } = require(process.argv[2]);
+(async () => {
+  const ctx = makeEnv(process.argv[3].split(","), "");
+  const out = await require("vm").runInContext(`(async () => {
+    const row = (o) => Object.assign({id: "P", "其他寫法": [], "是誰": "其他人", "說明": "", "名冊本名": null, "次數": 1, "老師說": 1, "學員說": 0,
+      "第一次": 1, "刪除段落外次數": 1, "都在刪除段落": false, "② 已決定": false, "做法": null, "代號": null, "同一人": null,
+      "自動配": false, "已決定": false}, o);
+    rv.data = {
+      "提到的名字": [
+        row({"名字": "阿德", "名冊本名": "小美", "做法": "是上面的學員", "同一人": "小美", "代號": "艾瑪", "已決定": true}),
+        row({"名字": "小美", "名冊本名": "小美", "② 已決定": true, "做法": "換成代號", "代號": "艾瑪", "已決定": true}),
+        row({"名字": "美美", "名冊本名": "小美", "② 已決定": true, "做法": "換成代號", "代號": "艾瑪", "已決定": true}),
+        row({"名字": "阿明", "名冊本名": "阿明", "② 已決定": true, "做法": "換成代號", "代號": "湯姆", "已決定": true})],
+      "學員": {"學員1": {"本名": "小美"}, "學員2": {"本名": "阿明"}},
+      "這一集代號": {"小美": "艾瑪", "阿明": "湯姆"},
+      "代號分組": {"女": ["艾瑪", "貝拉"], "男": ["湯姆"], "這一集用到的其他代號": []},
+      "代號對照": {"代號給了": {"艾瑪": ["小美"], "湯姆": ["阿明"]}, "撞名": {}},
+    };
+    const html = rvPrepNamesHtml();
+    rv.data["學員"] = {};
+    const noTwo = rvNamePickOpts(row({"名字": "阿強"}));
+    // 背景補找做完時人已經離開第 3 步（畫面上沒有第 3 步的元素）：只更新資料，不重畫、不丟錯
+    H.apiGetData["/api/review"] = {"提到的名字": [], "學員": {}, "人名補找": {"補找中": false, "未通知": 0}};
+    let err = null;
+    try { await rvReload(); } catch (e) { err = String(e); }
+    return {html, noTwo, err, reloaded: Array.isArray(rv.data["提到的名字"]) && rv.data["提到的名字"].length === 0};
+  })()`, ctx);
+  process.stdout.write(JSON.stringify(out));
+})();
+"""
+
+
+def test_web_same_person_row_and_two_summary():
+    """1016-3：③ 選了「同一人：小美」的阿德照樣列、可以改；② 摘要用名冊本名；② 還沒選學員有灰字；離開第 3 步後重抓不丟錯。"""
+    if not NODE:
+        print("（沒有 node，略過）")
+        return
+    d = Path(tempfile.mkdtemp())
+    (d / "t.js").write_text(_JS_SAME, encoding="utf-8")
+    files = ",".join(str(WEB / f) for f in ("cards.js", "review.js") if (WEB / f).is_file())
+    r = subprocess.run([NODE, str(d / "t.js"), str(HARNESS), files], capture_output=True, text=True, check=True)
+    out = json.loads(r.stdout)
+    html = out["html"]
+    # 阿德在 ③ 列出、下拉選單是「同一人：小美（艾瑪）」，可以改成別的
+    assert 'data-unname="阿德"' in html and 'value="same:小美" selected>同一人：小美（艾瑪）' in html, html
+    assert 'value="code:貝拉"' in html and 'value="how:不是名字"' in html
+    # ② 摘要只列 ② 的學員、用名冊本名（同一人的幾種寫法只列一次）
+    assert "② 已經定好的學員（2 個）：小美 → 艾瑪、阿明 → 湯姆<" in html, html
+    # ② 還沒選學員：選單裡一行灰字說明為什麼沒有「同一人」
+    assert "<option disabled>② 還沒選學員</option>" in out["noTwo"] and "same:" not in out["noTwo"], out["noTwo"]
+    assert out["err"] is None and out["reloaded"], out
+
+
+def test_step4_autocode_hint_matches_button():
+    """1016-3：第 4 步說明「按下面『…』」只在下面真的有那顆按鈕時出現、字跟按鈕一樣；沒有時指到 ③ 的按鈕（③ 叫「英文名」）。"""
+    import re
+
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    body = re.search(r"^async function renderExecuteBody\(.*?^\}\n", app, re.S | re.M).group(0)
+    btn = re.search(r'id="btnAutoCode">([^<]+)</button>', body).group(1)
+    assert btn == "幫還沒代號的自動配"
+    m = re.search(r"const autoBtn = (.+?);", body)
+    assert m and m.group(1).strip() == 'pre["缺代號"] && !running', body[:400]
+    assert '${autoBtn ? `<p><button class="secondary" id="btnAutoCode">' in body
+    hint = re.search(r"會出現的名字都要有代號（\$\{autoBtn \? \"(.+?)\" : \"(.+?)\"\}）", body)
+    assert hint, "說明要跟著按鈕有沒有出現換"
+    assert hint.group(1) == f"沒有的按下面「{btn}」"
+    review = (WEB / "review.js").read_text(encoding="utf-8")   # ③ 的按鈕：幫還沒${rvWord()}的自動配，③ 裡 rvWord() 是「英文名」
+    assert "幫還沒${w}的自動配" in review and 'rv.prepTab === "名字" ? "英文名" : "代號"' in review
+    assert hint.group(2) == "沒有的到第 3 步 ③ 按「幫還沒英文名的自動配」"
+    ex = (REPO_ROOT / "bookclub" / "execute.py").read_text(encoding="utf-8")
+    assert "或按第 4 步的「幫還沒代號的自動配」" in ex and "選，或按「幫還沒代號的自動配」" not in ex
 
 
 if __name__ == "__main__":

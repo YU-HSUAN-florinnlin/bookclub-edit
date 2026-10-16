@@ -186,7 +186,7 @@ def precheck(workdir: str | Path) -> dict:
     lack_codes = epcodes.missing(workdir)
     if lack_codes:
         notes.append(f"有 {len(lack_codes)} 個名字這一集還沒有代號（不擋）：沒代號的名字換不了、成品裡照原聲留著。"
-                     "要換的話到第 3 步 ③ 選，或按「幫還沒代號的自動配」")
+                     "要換的話到第 3 步 ③ 選，或按第 4 步的「幫還沒代號的自動配」")
     if wd.read_json(wd.names_path(workdir), default=None):
         from bookclub import nameplan
 

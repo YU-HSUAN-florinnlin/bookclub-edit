@@ -644,17 +644,18 @@ async function renderExecuteBody() {
   // 老師的畫面一律整支、照卡片重做（伺服器沒開開發者設定時收到範圍也不理）
   const dev = !!d["開發者"];
   const ra = dev ? d["只重新組裝"] : null;
+  const autoBtn = pre["缺代號"] && !running;   // 1016-3：「按下面『幫還沒代號的自動配』」只在下面真的有這顆時才這樣寫
   const btn = execBtnState(running, prog, !!d["有成品"]);   // 10-08：按鈕文字照狀態   // 10-05 #97：沒有退回時也能只重新組裝（伺服器算好能不能按）
   contentEl.innerHTML = `
     <h1>4　AI 執行</h1>
     <p class="exec-now" id="execNow"><b>${esc(btn.status)}</b></p>
     <p class="muted">依序跑四步：老師提到名字 → 學員重念 → 保留原聲學員講到名字 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
     <div class="hint">從第 4 步直接開始（例如老師已經自己看完全片、挑好參考聲音）：<b>第 1 步轉文字還是要跑</b>（學員的話要照逐字稿重念，電腦自動）；
-      <b>第 2 步的老師參考音也要選好</b>，會出現的名字都要有代號（沒有的按下面「幫還沒代號的自動配」）。
+      <b>第 2 步的老師參考音也要選好</b>，會出現的名字都要有代號（${autoBtn ? "沒有的按下面「幫還沒代號的自動配」" : "沒有的到第 3 步 ③ 按「幫還沒英文名的自動配」"}）。
       能省掉的是第 3 步逐筆覆核的人工：沒覆核的話，照第 1 步的建議做（名字的那一句老師重念、學員段落全部學員重念、建議剪掉的段落不剪）。
       第 3 步「開始前 4 件事」只有 ② 學員是誰一定要做（沒配代號的學員，AI 重念會念出本名）。</div>
     ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
-    ${pre["缺代號"] && !running ? `<p><button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">從代號名單配（外國人名的中文寫法），之後在第 3 步 ②③ 可以改</span></p>` : ""}
+    ${autoBtn ? `<p><button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">從代號名單配（外國人名的中文寫法），之後在第 3 步 ②③ 可以改</span></p>` : ""}
     <h2>要修改的項目</h2>
     <div class="card" id="execStats">${execStatsHtml(d)}</div>
     ${fc ? finalCheckHtml(fc) : ""}
