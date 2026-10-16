@@ -294,6 +294,10 @@ const RV_RO_ALLOW = ".help-tip-btn, [data-modal-close], #rv-side-x, #rv-prep-btn
 
 function rvReadonly() { return !!(rv.data && rv.data["AI執行中"]); }
 
+// 10-17 畫面測試：已結案（瘦身版）第 3 步所有按鈕灰掉（style.css body.ws-closed-all），只看不改的導覽按鈕例外——
+// 「開始前 4 件事」開關與 ①～④ 分頁、篩選、上一筆下一筆、設定／快捷鍵／代號對照、說明與關閉。播放（聲音清掉了）、匯出（會寫檔）不在內。
+const RV_CLOSED_NAV = ".help-tip-btn, [data-modal-close], #rv-side-x, #rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-prev, #rv-next, .rv-filters [data-f], [data-tab]";
+
 function rvApplyReadonly() {
   const ro = rvReadonly();
   const bar = document.getElementById("rv-busy");
@@ -306,6 +310,8 @@ function rvApplyReadonly() {
   }
   const root = document.querySelector(".rv2");
   if (!root) return;
+  const closed = typeof wsClosed === "function" && wsClosed();
+  if (closed) (document.getElementById("content") || document).querySelectorAll(RV_CLOSED_NAV).forEach((el) => el.classList.add("ws-nav"));
   root.classList.toggle("readonly", ro);
   root.querySelectorAll("#rv-right, #rv-lower, #rv-settings, #rv-io, .rv-bar-btns").forEach((box) => {
     box.querySelectorAll("button, input, select, textarea").forEach((el) => {
@@ -1640,6 +1646,8 @@ function rvStartTimeTracking() {
 
 document.addEventListener("keydown", (e) => {
   if (currentRouteId() !== "step3" || !rv.data) return;
+  // 10-17：已結案只能看紀錄——跟第 5 步一樣，只留 ↑↓ 換卡片（以前 Enter「通過＝剪掉這段」先跳確認、按了確定卻沒反應）
+  if (typeof wsClosed === "function" && wsClosed() && e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   // 09-30 宇軒：中文輸入法選字按的 Enter 不算快捷鍵（以前會被當成「通過」，卡片重畫後游標跑掉，再按 ↓ 就跳到下一筆）
   if (e.isComposing || e.keyCode === 229) return;
   if (document.querySelector("dialog[open]")) return;   // 確認視窗開著時，快捷鍵不作用

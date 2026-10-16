@@ -15,7 +15,7 @@ const vm = require("vm");
 const path = require("path");
 
 function makeEnv(files, setup) {
-  const H = { log: [], listeners: [], els: {}, api: {}, apiGetData: {}, skeleton: new Set(), confirm: true };
+  const H = { log: [], listeners: [], docListeners: [], els: {}, api: {}, apiGetData: {}, skeleton: new Set(), confirm: true };
   const ATTR_RE = /([\w:-]+)(?:\s*=\s*("([^"]*)"|'([^']*)'|[^\s>]+))?/g;
   const unesc = (s) => String(s).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 
@@ -105,7 +105,7 @@ function makeEnv(files, setup) {
     querySelector: (sel) => (/^dialog/.test(sel) ? null : queryAll(uniq(allEls()), sel)[0] || null),
     querySelectorAll: (sel) => queryAll(uniq(allEls()), sel),
     createElement: (tag) => { const el = makeEl(tag, {}, ""); return el; },
-    addEventListener: () => {},
+    addEventListener: (type, fn) => H.docListeners.push({ type, fn }),   // 1017：document 的快捷鍵（keydown）
     body: { appendChild: () => {}, contains: () => true },
     documentElement: {},
     activeElement: null,

@@ -888,6 +888,12 @@ def pack_state(workdir: str | Path) -> dict:
     missing = bool(exp) and not records_only and not any(it.get("成品") for it in items)
     ver = export_version_info(w)
     resumable = resume_folder(last) is not None
+    # 10-17 畫面測試：存好之後又輸出了新的成品（跟 clean_check 同一個判斷）——框裡一打開就寫那一句、清掉鈕灰掉，不用按下去才被擋
+    new_export = None
+    if ok and exp and st == PACKED:
+        saved = {Path(str(f.get("相對路徑") or "")).name for f in ok.get("檔案") or []}
+        if Path(str(exp["檔案"])).name not in saved:
+            new_export = NEW_EXPORT
     if ok:
         ok = {**ok, "資料夾": windows_display(ok.get("資料夾") or ""), "檔案": len(ok.get("檔案") or [])}
     # 第 3 段：框裡那一句的大小、按下去要帶的清單指紋（清理中、已結案不重算：清單是上次記下的）
@@ -904,7 +910,7 @@ def pack_state(workdir: str | Path) -> dict:
             "最後輸出版本": ver["最後輸出版本"], "最新版本": ver["最新版本"],
             "不是最新版": bool(ver["最後輸出版本"] and ver["最新版本"] and ver["最後輸出版本"] != ver["最新版本"]),
             "最近一次": {k: v for k, v in last.items() if k != "檔案"} if last else None, "核對通過的": ok,
-            "成品不在": missing, "可以繼續": resumable, "只有紀錄": records_only}
+            "成品不在": missing, "可以繼續": resumable, "只有紀錄": records_only, "存好後又輸出": new_export}
 
 
 def windows_display(p: Path | str) -> str:

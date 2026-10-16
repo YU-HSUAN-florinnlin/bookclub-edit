@@ -382,13 +382,14 @@ async function renderRoute() {
   stopStatusPoll();
   contentEl.classList.remove("wide");
 
+  // 10-17 畫面測試：已結案的專案從第 1–4 步回總覽，這兩個 class 還在＝總覽的「切換」「選影片」全灰。每一頁畫之前先拿掉
+  document.body.classList.remove("ws-closed", "ws-closed-all");
   try {
     if (id === "overview") return await renderOverview();
     if (id !== "step0" && lastState && lastState["沒有專案"]) {
       contentEl.innerHTML = `<div class="notyet-card">還沒選影片。到 <a href="#overview">總覽</a> 選一支影片，或切換到已有的專案。</div>`;
       return;
     }
-    document.body.classList.remove("ws-closed", "ws-closed-all");
     if (id === "step1") { await renderStep1(); return wsClosedMark(id); }
     if (id === "step2") { await renderStep2(); return wsClosedMark(id); }
     if (id === "step3") { await renderReview(); return wsClosedMark(id); }
