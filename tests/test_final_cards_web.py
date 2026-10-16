@@ -86,7 +86,7 @@ def test_status_line_one_sentence_in_priority():
         fcStatusLine({...base, "卡片統計": {}}),
       ].map((x) => [x.text, x.go || null])));""")
     assert got == [["⚠️ 這 2 處會照原聲念出本名", "需留意"], ["正在重做…", None],
-                   ["上次重做沒做完：按『重做這幾張』繼續", None], ["改過的還沒重做：按下面『重做這幾張』", None],
+                   ["上次重做沒做完：按『重做這幾張』繼續", None], ["改過的還沒重做：按右上角『重做這幾張』", None],
                    ["還有 3 張沒看", None], ["已輸出（10/14 14:20）", None], ["全部看完了，可以輸出", None],
                    ["全部看完了，可以輸出", None]], got
 
@@ -126,7 +126,7 @@ def test_review_fixes_pure():
     assert got["shared"] == ["跟 #12 共用，那張還是要重做", "跟 另一張卡 共用，那張還是要重做", ""]   # 10-15 總檢查修正（1015-7）
     assert got["lab"] == [["連帶"], ["在第 3 步改過"]]
     assert got["redo"] == [{"show": True, "n": 2}, {"show": True, "n": 0}, {"show": False, "n": 0}, {"show": False, "n": 0}]
-    assert got["st"] == ["改過的還沒重做：按下面『重做這幾張』", "全部看完了，可以輸出"]
+    assert got["st"] == ["改過的還沒重做：按右上角『重做這幾張』", "全部看完了，可以輸出"]
     assert got["note"] == [True, True, True, False, False, False]
 
 
@@ -343,7 +343,7 @@ def test_page_renders_and_buttons_post_right_things():
           await renderFinal();
           return {status: document.getElementById("fc-status").innerHTML, right: document.getElementById("fc-right").innerHTML,
                   lower: document.getElementById("fc-lower").innerHTML, tl: document.getElementById("fc-tl").innerHTML,
-                  bar: document.getElementById("fc-actbar").innerHTML, left: contentEl.innerHTML,
+                  bar: document.getElementById("fc-actbar").innerHTML, top: document.getElementById("fc-redo-slot").innerHTML, left: contentEl.innerHTML,
                   n: DATA["卡片"].length, src: DATA["卡片來源"]};"""},
         {"名稱": "通過", "程式": """
           await open("名字:1"); await click("fc-pass"); return H.log;"""},
@@ -462,7 +462,7 @@ def test_page_renders_and_buttons_post_right_things():
           old["卡片統計"] = {"還沒看": 0, "要重做": 0, "已通過的": old["卡片"].length, "還要確認": 0};
           H.apiGetData['/api/final'] = old; H.api['/api/final/edited'] = {'記了': false};
           await renderFinal();
-          const before = {status: document.getElementById("fc-status").innerHTML, lower: document.getElementById("fc-actbar").innerHTML};
+          const before = {status: document.getElementById("fc-status").innerHTML, lower: document.getElementById("fc-actbar").innerHTML + document.getElementById("fc-redo-slot").innerHTML};   // 10-16：重做這幾張在右上角
           await open("學員段落:T005"); await FC_CARD_CTX.post("/api/turns/save", {id: "T005", "校對稿": "x"});
           const after = document.getElementById("fc-status").innerHTML;
           old["開發者"] = true; await renderFinal();
@@ -478,7 +478,8 @@ def test_page_renders_and_buttons_post_right_things():
     assert "原本 ▶" in v["right"] and "現在 ▶" in v["right"] and 'id="fc-pass"' in v["right"] and "第 1／" in v["right"]
     assert re.search(r'class="idtag"[^>]*>#\d+<', v["right"])                 # #103：每張卡顯示 #編號
     # 10-15 宇軒驗證回饋：兩顆按鈕搬到時間軸下面、「看過 P%」之下（以前在清單底下 fc-lower）
-    assert "重做這幾張（1 張）" in v["bar"] and "＋在這裡新增修改" in v["bar"] and 'data-tab="還沒看完"' not in v["lower"] and "還要確認的" in v["lower"]
+    # 10-16 宇軒：「重做這幾張」搬到右上角「輸出成品」左邊；時間軸下面只剩「＋在這裡新增修改」
+    assert "重做這幾張（1 張）" in v["top"] and "重做這幾張" not in v["bar"] and "＋在這裡新增修改" in v["bar"] and 'data-tab="還沒看完"' not in v["lower"] and "還要確認的" in v["lower"]
     assert "重做這幾張" not in v["lower"] and "＋在這裡新增修改" not in v["lower"]
     assert v["left"].index("fc-seenpct") < v["left"].index('id="fc-actbar"') < v["left"].index('id="fc-io"')
     assert 'id="fc-pad"' in v["right"] and "前後多聽 2 秒" in v["right"] and 'class="fc-switch"' in v["right"] and 'role="switch"' in v["right"]
@@ -782,11 +783,12 @@ def test_version_page_renders():
           await last("fc-pass");
           const log = H.log.slice(); H.log.length = 0;
           await fcExport();
-          return {right, lower: document.getElementById("fc-lower").innerHTML + document.getElementById("fc-actbar").innerHTML, video: document.getElementById("fc-video").getAttribute("src"),
+          return {right, lower: document.getElementById("fc-lower").innerHTML + document.getElementById("fc-actbar").innerHTML + document.getElementById("fc-redo-slot").innerHTML, video: document.getElementById("fc-video").getAttribute("src"),
                   log, exp: H.log};"""}], data=old)
     o = got["舊版"]
     assert "錯誤" not in o, o
-    assert "＋在這裡新增修改" not in o["lower"] and "重做這幾張" not in o["lower"]
+    # 10-16 宇軒：重做這幾張一直在右上角，看舊版時變灰按不下去
+    assert "＋在這裡新增修改" not in o["lower"] and 'id="fc-redoall" disabled title="看舊版時不能重做' in o["lower"]
     assert not re.search(r'id="fc-fix"[^>]*disabled', o["right"]) and "回到最新一版" not in o["right"]   # 10-15 宇軒驗證回饋六：舊版也能按
     assert not any(x[0] == "POST" and x[2].get("結果") == "退回" for x in o["log"])
     assert o["video"].startswith("/api/final/video?版本=1&v=")

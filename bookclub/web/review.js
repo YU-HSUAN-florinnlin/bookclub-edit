@@ -106,6 +106,7 @@ async function renderReview() {
     } catch (e) { /* 配不成不擋第 3 步，「幫還沒代號的自動配」照樣能按 */ }
   }
   rv.prepOpen = !rvWhoDone();   // 10-08：② 還沒做才先打開「開始前 4 件事」
+  if (navSubWant) { rv.prepOpen = navSubWant === "prep"; navSubWant = null; }   // 10-16：從左邊子步驟點進來
   const go = rvGoto;
   rvGoto = null;
   rv.goNote = null;
@@ -127,7 +128,9 @@ async function renderReview() {
         </div>
       </header>
       <div class="rv-busy" id="rv-busy" role="status" hidden></div>
-      <div class="rv-drawer" id="rv-keys" hidden>
+      <dialog class="rv-modal" id="rv-modal-keys" aria-labelledby="rv-modal-keys-h">
+        <div class="rv-modal-head"><h2 id="rv-modal-keys-h">快捷鍵</h2><button class="ghost rv-modal-x" data-modal-close aria-label="關閉">✕</button></div>
+        <div class="rv-modal-body" id="rv-keys">
         <dl class="rv-keylist">
           <dt>Enter</dt><dd>通過這一筆（影片照常播、不跳走；文字框裡 Shift＋Enter 換行）</dd>
           <dt>E</dt><dd>改做法（展開全部選項）</dd>
@@ -137,9 +140,18 @@ async function renderReview() {
           <dt>I　O</dt><dd>把目前播放位置填進「新增修改」的起點／終點（面板沒開會自動打開）</dd>
           <dt>Esc</dt><dd>在文字框裡：從頭播這一筆</dd>
         </dl>
-      </div>
-      <div class="rv-drawer" id="rv-settings" hidden></div>
-      <div class="rv-drawer" id="rv-codes" hidden></div>
+        </div>
+        <div class="rv-modal-foot"><button class="primary" data-modal-close>關閉</button></div>
+      </dialog>
+      <dialog class="rv-modal" id="rv-modal-settings" aria-labelledby="rv-modal-settings-h">
+        <div class="rv-modal-head"><h2 id="rv-modal-settings-h">設定</h2><button class="ghost rv-modal-x" data-modal-close aria-label="關閉">✕</button></div>
+        <div class="rv-modal-body" id="rv-settings"></div>
+        <div class="rv-modal-foot"><button class="primary" data-modal-close>關閉</button></div>
+      </dialog>
+      <aside class="rv-side" id="rv-side-codes" aria-labelledby="rv-side-codes-h" hidden>
+        <div class="rv-modal-head"><h2 id="rv-side-codes-h">代號對照</h2><button class="ghost rv-modal-x" id="rv-side-x" aria-label="關閉代號對照">✕</button></div>
+        <div class="rv-side-body" id="rv-codes"></div>
+      </aside>
       <div class="rv-export-msg" id="rv-export-msg"></div>
       <section class="rv-upper">
         <div class="rv-left">
@@ -170,9 +182,16 @@ async function renderReview() {
   });
   document.getElementById("rv-rate").addEventListener("change", (e) => { if (rv.video) rv.video.playbackRate = Number(e.target.value); });
   document.getElementById("rv-prep-btn").addEventListener("click", () => { rv.prepOpen = !rv.prepOpen; rvRenderMain(); });
-  document.getElementById("rv-set-btn").addEventListener("click", (e) => rvToggleDrawer("rv-settings", e.currentTarget));
-  document.getElementById("rv-key-btn").addEventListener("click", (e) => rvToggleDrawer("rv-keys", e.currentTarget));
-  document.getElementById("rv-code-btn").addEventListener("click", (e) => rvToggleDrawer("rv-codes", e.currentTarget));
+  // 10-16 宇軒（乙方案）：設定、快捷鍵改成蓋版視窗（後面模糊，「關閉」收起）；代號對照改成左側側欄（後面照常能操作；放左邊才不會擋住右上角的卡片）
+  document.getElementById("rv-set-btn").addEventListener("click", (e) => rvOpenModal("rv-modal-settings", e.currentTarget));
+  document.getElementById("rv-key-btn").addEventListener("click", (e) => rvOpenModal("rv-modal-keys", e.currentTarget));
+  document.getElementById("rv-code-btn").addEventListener("click", (e) => rvToggleSide(e.currentTarget));
+  document.getElementById("rv-side-x").addEventListener("click", () => rvToggleSide(document.getElementById("rv-code-btn"), false));
+  document.querySelectorAll(".rv-modal").forEach((d) => {
+    d.querySelectorAll("[data-modal-close]").forEach((b) => b.addEventListener("click", () => d.close()));
+    d.addEventListener("click", (e) => { if (e.target === d) d.close(); });   // 點視窗外面（背景）也關
+    d.addEventListener("close", () => { const b = d._opener; if (b) { b.setAttribute("aria-expanded", "false"); b.focus(); } });
+  });
   document.getElementById("rv-export").addEventListener("click", rvExport);
   document.getElementById("rv-go4").addEventListener("click", rvConfirmGo4);
   rvBindTimeline(document.getElementById("rv-tl"));
@@ -205,12 +224,23 @@ function rvRenderGoNote() {
   });
 }
 
-function rvToggleDrawer(id, btn) {
-  const el = document.getElementById(id);
-  el.hidden = !el.hidden;
-  btn.setAttribute("aria-expanded", String(!el.hidden));
-  if (id === "rv-settings" && !el.hidden) rvRenderSettings();
-  if (id === "rv-codes" && !el.hidden) rvRenderCodeMap();
+function rvOpenModal(id, btn) {
+  const d = document.getElementById(id);
+  if (!d || d.open) return;
+  if (id === "rv-modal-settings") rvRenderSettings();
+  d._opener = btn;
+  btn.setAttribute("aria-expanded", "true");
+  d.showModal();
+  const x = d.querySelector(".rv-modal-foot [data-modal-close]");
+  if (x) x.focus();
+}
+
+function rvToggleSide(btn, want) {
+  const el = document.getElementById("rv-side-codes");
+  const open = want === undefined ? el.hidden : want;
+  el.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+  if (open) rvRenderCodeMap();
 }
 
 // 10-07 宇軒：「代號對照」抽屜——檢查後面內容的時候隨時叫得出來：上半 本名 → 代號 → 哪幾位學員 N → 來源；
@@ -233,7 +263,7 @@ function rvRenderCodeMap() {
   const pool = t["名單"] || {};
   const chips = (list) => list.map((e) => `<span class="rv-codechip${e["給了"].length ? " used" : " unused"}">${esc(e["代號"])}
       ${e["給了"].length ? `<span class="rv-cm-who">${esc(e["給了"].join("、"))}</span>` : '<span class="rv-meta">未用</span>'}${(e["撞名"] || []).length ? `<span class="rv-warnline">撞名：${esc(e["撞名"].join("、"))}</span>` : ""}</span>`).join("");
-  el.innerHTML = `<p class="rv-warnline">截圖或分享螢幕時，這裡會露出本名。用完再按一次「代號對照」收起來。</p>
+  el.innerHTML = `<p class="rv-warnline">截圖或分享螢幕時，這裡會露出本名。用完按右上角 ✕ 關閉。</p>
     <table class="rv-codemap"><thead><tr><th>本名</th><th>代號</th><th>學員</th><th class="rv-cm-src">來源</th></tr></thead><tbody>${body}</tbody></table>
     ${noReal.length ? `<p class="rv-meta">還沒選本名：${esc(noReal.map(stuNo).join("、"))}</p>` : ""}
     <h3>全部代號</h3>
@@ -260,7 +290,7 @@ function rvRenderAll() {
 // 看、播放、篩選、上一筆下一筆照常；其他按鈕與輸入框鎖住，上方橫幅說明。後端也擋（409）。
 // ---------------------------------------------------------------------------
 
-const RV_RO_ALLOW = ".help-tip-btn, #rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-export, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
+const RV_RO_ALLOW = ".help-tip-btn, [data-modal-close], #rv-side-x, #rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-export, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
 
 function rvReadonly() { return !!(rv.data && rv.data["AI執行中"]); }
 
@@ -288,6 +318,7 @@ function rvApplyReadonly() {
 
 function rvRenderMain() {
   document.getElementById("rv-prep-btn").classList.toggle("on", rv.prepOpen);
+  if (typeof navSubSync === "function") navSubSync();   // 10-16：左邊子步驟跟著亮、打勾
   if (rv.prepOpen) { rvRenderPrepSide(); rvRenderPrep(); rvApplyReadonly(); return; }
   rvRenderCard();
   rvRenderList();
@@ -300,9 +331,9 @@ async function rvReload() {
   if (back.length) { rv.prepOpen = true; rv.prepTab = back[0]; }   // 09-30：冒出新項目、自動改回還沒做的，直接打開給人看
   if (rv.cur && !rvItem(rv.cur)) rv.cur = rvFirstPending();
   rvRenderAll();
-  const s = document.getElementById("rv-settings");
-  if (s && !s.hidden) rvRenderSettings();
-  const c = document.getElementById("rv-codes");
+  const s = document.getElementById("rv-modal-settings");
+  if (s && s.open) rvRenderSettings();
+  const c = document.getElementById("rv-side-codes");
   if (c && !c.hidden) rvRenderCodeMap();
 }
 
@@ -581,6 +612,7 @@ function rvRecount() {
   const need = items.filter((x) => !x["不用處理"]).length;
   p["推算全部秒數"] = passed && p["已花秒數"] ? Math.round((p["已花秒數"] / passed) * need) : null;
   rvRenderProgress();
+  if (typeof navSubSync === "function") navSubSync();   // 審查必修 2：通過最後一筆時左邊 3-2 馬上打勾
 }
 
 // ---------------------------------------------------------------------------
@@ -906,6 +938,7 @@ function rvRenderPrep() {
     rv.data["開始前確認"] = r["開始前確認"];
     if (!done) { const i = RV_PREP.findIndex((x) => x[0] === k); const next = RV_PREP.slice(i + 1).concat(RV_PREP).find((x) => !rv.data["開始前確認"][x[0]]); if (next) rv.prepTab = next[0]; }
     rvRenderPrepSide(); rvRenderPrep();
+    if (typeof navSubSync === "function") navSubSync();   // 審查必修 2：標完最後一件時左邊 3-1 馬上打勾
   });
   rvBindPrep(lower);
   rvApplyReadonly();

@@ -863,3 +863,32 @@ table.kv.prof td:not(:first-child), table.kv.prof th:not(:first-child) { white-s
 .fc-tlead { margin: 6px 0; font-weight: 600; }
 .fc-other { margin: 8px 0; }
 .fc-other > summary { cursor: pointer; color: var(--muted); }
+/* 10-16 宇軒（乙方案）：設定、快捷鍵＝蓋版視窗；代號對照＝左側側欄；打開時頂端按鈕變綠色實心 */
+.rv-bar-btns button.ghost[aria-expanded="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+dialog.rv-modal { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: none; border-radius: 14px;
+  background: var(--bg); color: var(--fg);   /* 審查必修 1：深色模式下字才看得到 */
+  box-shadow: 0 12px 40px rgba(0,0,0,.25); display: flex; flex-direction: column; overflow: hidden; }
+dialog.rv-modal:not([open]) { display: none; }
+dialog.rv-modal::backdrop { background: rgba(0,0,0,.35); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+.rv-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--border); }
+.rv-modal-head h2 { margin: 0; font-size: 19px; }
+.rv-modal-x { font-size: 18px; line-height: 1; padding: 4px 10px; }
+.rv-modal-body { padding: 14px 20px; overflow: auto; flex: 1; }
+.rv-modal-body h3 { font-size: 15px; margin: 6px 0; }
+.rv-modal-body section + section { margin-top: 14px; }
+.rv-modal-foot { display: flex; justify-content: flex-end; padding: 12px 20px; border-top: 1px solid var(--border); }
+.rv-modal-foot .primary { min-width: 6em; }
+/* 10-16 宇軒：放左邊——要對照的卡片在右上角，放右邊會擋住；左邊蓋住的是側欄與影片 */
+.rv-side { position: fixed; top: 0; left: 0; bottom: 0; width: min(440px, 92vw); z-index: 900; background: var(--bg);
+  box-shadow: 6px 0 24px rgba(0,0,0,.18); display: flex; flex-direction: column; }
+.rv-side[hidden] { display: none; }
+.rv-side-body { padding: 12px 18px; overflow: auto; flex: 1; }
+.rv-side-body h3 { font-size: 15px; margin: 6px 0; }
+.rv-side-body th:nth-child(-n+3), .rv-side-body td:nth-child(-n+3) { white-space: nowrap; }
+/* 10-16 宇軒：側欄第 3 步的子步驟 3-1、3-2 */
+.substeps { list-style: none; margin: 0 0 2px; padding: 0 0 0 18px; }
+.substeps li a { padding: 6px 8px; font-size: 13px; }
+.substeps .sub-badge { width: 16px; height: 16px; flex-basis: 16px; font-size: 10px; }
+.app.nav-collapsed .substeps { display: none; }
+#fc-redo-slot:empty { display: none; }
+#fc-redoall:disabled { background: var(--bg-soft); border-color: var(--border); color: var(--muted); cursor: not-allowed; opacity: 1; }   /* 審查建議 1：只套這顆、不要再疊半透明 */

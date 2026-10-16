@@ -574,8 +574,18 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
         "已確認": sum(1 for t in stu_turns if t.get("已確認")), "學員段落數": len(stu_turns),
     }
 
+    # 10-16 宇軒：側欄第 3 步下面的子步驟「3-1 開始前 4 件事」完成打勾（4 件都標做完了）
+    try:
+        from bookclub.review import PREP_KEYS, load_decisions
+
+        prep = load_decisions(workdir).get("開始前確認") or {}
+        prep_state = {"done": all(prep.get(k) for k in PREP_KEYS)}
+    except Exception:  # noqa: BLE001 — 讀不到不擋側欄
+        prep_state = {"done": False}
+
     return {
         "proofread": proofread_state,
+        "開始前": prep_state,
         "workdir": str(workdir),
         "專案標示": project_label(workdir),   # 10-08：頂端常駐「現在在：名稱（上一層）」
         "video": {
