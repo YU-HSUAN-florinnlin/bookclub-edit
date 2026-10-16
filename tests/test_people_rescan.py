@@ -583,6 +583,62 @@ def test_sync_restore_uses_canonical_first():
     (_DATA / "名冊.csv").write_text(_ROSTER, encoding="utf-8")
 
 
+def _plan_used(w: Path, pick) -> tuple[set, dict]:
+    from bookclub import nameplan
+
+    cands = wd.read_json(wd.names_path(w))["candidates"]
+    idx = {k for k, x in enumerate(cands, start=1) if pick(x)}
+    plan = nameplan.compute_plan(w)
+    used = {i for g in plan["生成"] for i in g.get("候選", [])} | {m.get("候選") for m in plan.get("消音", [])}
+    return idx, plan
+
+
+def test_roster_student_not_needed_still_removed_from_plan():
+    """第三輪審查 必修 1（exp8）：小美在名冊、② 沒選、③ 選「不用處理」→ 成品照舊「換成空的」（名字拿掉重念），本名不出現；
+    ③ 那列警告會把名字拿掉重念。"""
+    w = _make()
+    personnames.decide(w, "小美", "不用處理")
+    idx, plan = _plan_used(w, lambda x: x.get("canonical") == "小美")
+    used = {i for g in plan["生成"] for i in g.get("候選", [])} | {m.get("候選") for m in plan.get("消音", [])}
+    assert idx and idx <= used, (idx, plan["生成"], plan.get("消音"))
+    assert not any("小美" in (g.get("text") or "") for g in plan["生成"]), plan["生成"]
+    mei = next(u for u in personnames.mentioned(w) if u["名字"] == "小美")
+    assert mei["做法"] == "不用處理" and mei["名冊上的人會拿掉"], mei
+
+
+def test_unknown_name_not_needed_keeps_original():
+    """名冊上沒有的名字選「不用處理」→ 照舊原聲（不排成換成空的）；③ 那列不警告。"""
+    w = _make()
+    personnames.decide(w, "阿德", "不用處理")
+    d = wd.read_json(wd.names_path(w))
+    c0 = dict(d["candidates"][0])
+    c0.update({"name": "阿德", "matched_text": "阿德", "canonical": "阿德", "代號": ""})
+    d["candidates"].append(c0)
+    wd.write_json(wd.names_path(w), d)
+    idx, plan = _plan_used(w, lambda x: x.get("canonical") == "阿德")
+    used = {i for g in plan["生成"] for i in g.get("候選", [])} | {m.get("候選") for m in plan.get("消音", [])}
+    assert idx and not (idx & used), (idx, plan["生成"])
+    ade = next(u for u in personnames.mentioned(w) if u["名字"] == "阿德")
+    assert not ade["名冊上的人會拿掉"], ade
+
+
+def test_restore_when_alias_removed_from_roster_by_hand():
+    """第三輪審查 建議 2（exp9 E3）：這一集選了不用處理後別支影片把阿德加成小美的其他寫法，之後宇軒又手動從名冊刪掉 →
+    還原用寫法本身（阿德），這一集照舊不換，不會念成小美的英文名。"""
+    w = _make()
+    _two(w)
+    personnames.decide(w, "阿德", "不用處理")
+    _other_video_aliases("小美", "阿德")
+    personnames.request_rescan(w)
+    personnames.wait_rescan(w)
+    assert _ade(w) and all(x == ("阿德", "") for x in _ade(w))
+    (_DATA / "名冊.csv").write_text(_ROSTER, encoding="utf-8")   # 宇軒手動刪掉阿德
+    epcodes.sync(w)
+    got = _ade(w)
+    assert got and all(x == ("阿德", "") for x in got), got
+    assert all(epcodes.ORIG_KEY not in c for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿德")
+
+
 def test_roster_alias_split_like_load_roster():
     """審查 C：名冊的其他寫法用「, 」「/」分開時，加寫法不重複加、不弄掉原本的。"""
     from bookclub import names
@@ -725,6 +781,7 @@ const { makeEnv } = require(process.argv[2]);
       "提到的名字": [
         row({"名字": "阿德", "名冊本名": "小美", "做法": "是上面的學員", "同一人": "小美", "代號": "艾瑪", "已決定": true}),
         row({"名字": "阿得", "名冊本名": "小美", "做法": "不用處理", "已決定": true, "名冊上是別人": "小美"}),
+        row({"名字": "小華", "名冊本名": "小華", "做法": "不是名字", "已決定": true, "名冊上的人會拿掉": true}),
         row({"名字": "小美", "名冊本名": "小美", "② 已決定": true, "做法": "換成代號", "代號": "艾瑪", "已決定": true}),
         row({"名字": "美美", "名冊本名": "小美", "② 已決定": true, "做法": "換成代號", "代號": "艾瑪", "已決定": true}),
         row({"名字": "阿明", "名冊本名": "阿明", "② 已決定": true, "做法": "換成代號", "代號": "湯姆", "已決定": true})],
@@ -762,7 +819,9 @@ def test_web_same_person_row_and_two_summary():
     assert 'data-unname="阿德"' in html and 'value="same:小美" selected>同一人：小美（艾瑪）' in html, html
     assert 'value="code:貝拉"' in html and 'value="how:不是名字"' in html
     # 審查 A：名冊上是別人的寫法、這一集選「不用處理」：那列提醒會念出原名（只有那一列）
-    assert html.count("rv-ownwarn") == 1 and "名冊上這是小美的另一種寫法，選「不用處理」這一集會念出原名" in html, html
+    assert html.count("rv-ownwarn") == 2 and "名冊上這是小美的另一種寫法，選「不用處理」這一集會念出原名" in html, html
+    # 第三輪審查：名冊上的人選了不用處理／不是名字 → 照實警告會把名字拿掉重念
+    assert html.count("這是名冊上的人，成品會把名字拿掉重念") == 1, html
     # ② 摘要只列 ② 的學員、用名冊本名（同一人的幾種寫法只列一次）
     assert "② 已經定好的學員（2 個）：小美 → 艾瑪、阿明 → 湯姆<" in html, html
     # ② 還沒選學員：選單裡一行灰字說明為什麼沒有「同一人」

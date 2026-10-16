@@ -782,12 +782,12 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     candidates = names.get("candidates", [])
     candidates = review.effective_name_candidates(workdir, candidates, decisions)   # 人工補的、改過時間的
     decisions = review.card_decisions(candidates, decisions)   # 10-03 補修：一張卡的決定套到同一句同代號的每一處
-    # 1016-3 第二輪審查：③ 這一集選了「不用處理／不是名字」的名字（名冊上有、所以還是會被比對到）→ 沒有代號，照原聲留著，
-    # 不能排成「換成空的」（以前會把名字從句子裡拿掉重念）。只在計算時略過，不寫回覆核決定
-    from bookclub import personnames
+    # 1016-3 第二、三輪審查：③ 這一集選了「不用處理／不是名字」、沒有代號的名字 → 照原聲留著（只在計算時略過，不寫回覆核決定），
+    # 但**只限** epcodes.keep_original_names 的那幾種（名冊上沒有、書中人物撞名、這一集蓋過名冊對到別人的）。
+    # 名冊上的學員選了不用處理／不是名字：照舊排成「換成空的」把名字拿掉重念（隱私安全網；③ 那列會警告）
+    from bookclub import epcodes
 
-    skip3 = {n for n, d in (wd.read_json(personnames.decisions_path(workdir), default={}) or {}).items()
-             if isinstance(d, dict) and d.get("做法") in ("不用處理", "不是名字")}
+    skip3 = epcodes.keep_original_names(workdir)
     if skip3:
         decisions = dict(decisions)
         for i, c in enumerate(candidates, start=1):

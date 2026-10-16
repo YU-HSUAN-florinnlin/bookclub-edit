@@ -181,6 +181,28 @@ def episode_spellings(workdir: str | Path, roster: list[dict] | None = None,
     return out
 
 
+def keep_original_names(workdir: str | Path) -> set[str]:
+    """第三輪審查：③ 選了「不用處理／不是名字」、成品可以照原聲留著的名字（第 4 步排計畫時這幾個沒代號的名字候選略過）。
+    只有兩種：(a) 決定時名冊上沒有這個名字（`決定時名冊對到` 空），或對到的是名字本身、而人名清單說是書中人物或作者（撞名）；
+    (b) 這一集蓋過名冊、名冊對到的是別人（`episode_spellings`）。
+    其餘（決定時名冊就對到某位學員、沒有 `決定時名冊對到` 的舊決定、自動配）照舊排成「換成空的」把名字拿掉重念。"""
+    from bookclub import personnames
+
+    workdir = Path(workdir)
+    dec = wd.read_json(personnames.decisions_path(workdir), default={}) or {}
+    spell = episode_spellings(workdir, dec=dec)
+    who = {p["名字"]: p.get("是誰") for p in (wd.read_json(personnames.people_path(workdir), default={}) or {}).get("人名", [])}
+    out = set()
+    for n, d in dec.items():
+        if not isinstance(d, dict) or d.get("做法") not in ("不用處理", "不是名字") or d.get("自動配"):
+            continue
+        if n in spell:
+            out.add(n)
+        elif AT_KEY in d and (not d[AT_KEY] or (d[AT_KEY] == n and who.get(n) == "書中人物或作者")):
+            out.add(n)
+    return out
+
+
 def same_person_names(workdir: str | Path) -> set[str]:
     """③ 選了「是上面的學員」的本名（跟別人同代號是應該的，不算重複）。"""
     from bookclub import names, personnames
@@ -355,7 +377,7 @@ def sync(workdir: str | Path) -> int:
                     c["canonical"] = spell[w][0]
                     n += 1
             elif ORIG_KEY in c:
-                c["canonical"] = canon.get(w) or c.pop(ORIG_KEY)
+                c["canonical"] = canon.get(w, w)   # 第三輪審查 2：名冊已經沒有這個寫法就用寫法本身，不退回原本那個人
                 c.pop(ORIG_KEY, None)
                 n += 1
             code = codes.get(c.get("canonical") or "") or ""   # 這一集還沒選代號＝空的（第 4 步開始前會擋）

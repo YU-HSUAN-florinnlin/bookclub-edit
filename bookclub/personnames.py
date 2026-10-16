@@ -324,6 +324,7 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
     people = [dict(p) for p in data.get("人名", []) if p["是誰"] != "老師本人"]
 
     spell = epcodes.episode_spellings(workdir, roster=roster, dec=dec)
+    keep = epcodes.keep_original_names(workdir)
 
     def same_pick(p: dict) -> bool:
         """③ 這一集自己決定的（「同一人：某某」，或這一集蓋過名冊對法的）：名冊比對到的本名不算這一列本身，
@@ -372,7 +373,10 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
                     "做法": "換成代號" if in_two else how,
                     "代號": codes.get(canon) if (in_two or how in ("換成代號", "是上面的學員")) else None,
                     "同一人": d.get("同一人"),
-                    "名冊上是別人": spell[p["名字"]][2] if p["名字"] in spell and d.get("做法") != "是上面的學員" else None,   # 1016-3：③ 那列提醒（選不用處理會念出原名）
+                    "名冊上是別人": spell[p["名字"]][2] if p["名字"] in spell and d.get("做法") != "是上面的學員" else None,
+                    # 第三輪審查：名冊上的人選了不用處理／不是名字，成品照舊把名字拿掉重念（③ 那列警告）
+                    "名冊上的人會拿掉": bool(d.get("做法") in ("不用處理", "不是名字") and p.get("名冊本名")
+                                       and p["名字"] not in keep and p["名字"] not in spell),   # 1016-3：③ 那列提醒（選不用處理會念出原名）
                     "自動配": bool(d.get("自動配")) and not in_two,   # 10-07：程式自動配的代號（算決定好，人沒改過）
                     "已決定": in_two or bool(d.get("做法"))})
     return out
