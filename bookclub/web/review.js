@@ -1148,7 +1148,7 @@ function rvNameRowHtml(u) {
       <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
         <select class="rv-unpick" data-name="${esc(u["名字"])}" data-cur="${esc(rvNamePickValue(u))}" aria-label="${esc(u["名字"])}要怎麼換" ${saving ? "disabled" : ""}>${rvNamePickOpts(u)}</select>
         ${state}</div>
-      ${u["名冊上的人會拿掉"] ? '<p class="rv-warnline rv-ownwarn">這是名冊上的人，成品會把名字拿掉重念</p>' : ""}${u["名冊現在有"] ? '<p class="rv-meta">名冊現在有這個名字（選的時候還沒有），這一集照原聲留著</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
+      ${u["名冊上的人會拿掉"] ? '<p class="rv-warnline rv-ownwarn">這是名冊上的人，成品會把名字拿掉重念</p>' : ""}${u["名冊現在有"] ? '<p class="rv-meta">選的時候名冊還沒有，現在有了；這一集照原聲留著</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
 }
 
 function rvNameCountHtml() {

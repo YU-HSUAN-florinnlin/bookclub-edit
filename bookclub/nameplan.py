@@ -791,7 +791,7 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     if skip3:
         decisions = dict(decisions)
         for i, c in enumerate(candidates, start=1):
-            if not c.get("敏感詞") and not (c.get("代號") or "").strip() and c.get("canonical") in skip3:
+            if not c.get("敏感詞") and not (c.get("代號") or "").strip() and c.get("name") in skip3.get(c.get("canonical"), ()):
                 k = str(c.get("id") or i)
                 d = dict(decisions.get(k) or {})
                 d["tags"] = sorted(set(d.get("tags") or []) | {"不是名字"})

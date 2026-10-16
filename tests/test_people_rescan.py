@@ -691,6 +691,36 @@ def test_s1_roster_added_later_keeps_original_with_note():
     (_DATA / "名冊.csv").write_text(_ROSTER, encoding="utf-8")
 
 
+def test_alt_spelling_on_roster_is_removed_exp11():
+    """第五輪審查 exp11：名冊「阿明：阿得」、② 沒選阿明；人名清單上阿德的其他寫法有「阿得」；③ 阿德選不用處理／不是名字
+    → 「阿得」決定時名冊上就有，照舊跟名冊走（拿掉重念），老師稿、學員重念稿都不念出阿得；③ 警告、不顯示「現在有了」。"""
+    for how in ("不用處理", "不是名字"):
+        w = _make()
+        (_DATA / "名冊.csv").write_text("中文名,其他寫法,性別\n小美,美美,女\n阿明,阿得,男\n", encoding="utf-8")
+        sp = json.loads((w / "說話者判斷.json").read_text(encoding="utf-8"))
+        k = [j for j, x in enumerate(sp["sentences"]) if x.get("label") == "老師"][5]
+        sp["sentences"][k]["text"] = "阿得上次也有提到"
+        (w / "說話者判斷.json").write_text(json.dumps(sp, ensure_ascii=False), encoding="utf-8")
+        m = json.loads((w / "transcript" / "merged.json").read_text(encoding="utf-8"))
+        m["words"] = fake_workdir._words(sp["sentences"])
+        (w / "transcript" / "merged.json").write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
+        pp = personnames.people_path(w)
+        d = json.loads(pp.read_text(encoding="utf-8"))
+        for p in d["人名"]:
+            if p["名字"] == "阿德":
+                p["其他寫法"] = ["阿得"]
+        pp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        personnames.request_rescan(w)
+        personnames.wait_rescan(w)
+        personnames.decide(w, "阿德", how)
+        got = [(c["canonical"], c["代號"]) for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿得"]
+        assert got and all(x[0] == "阿明" for x in got), (how, got)
+        _removed(w, "阿得")
+        ade = next(u for u in personnames.mentioned(w) if u["名字"] == "阿德")
+        assert ade["名冊上的人會拿掉"] and not ade["名冊現在有"], (how, ade)
+    (_DATA / "名冊.csv").write_text(_ROSTER, encoding="utf-8")
+
+
 def test_roster_alias_split_like_load_roster():
     """審查 C：名冊的其他寫法用「, 」「/」分開時，加寫法不重複加、不弄掉原本的。"""
     from bookclub import names
@@ -875,7 +905,7 @@ def test_web_same_person_row_and_two_summary():
     # 第四輪審查：名冊上有這個寫法、選了不用處理／不是名字（兩種都要）→ 警告會拿掉重念；舊的「會念出原名」那句拿掉
     assert html.count("這是名冊上的人，成品會把名字拿掉重念") == 2 and "會念出原名" not in html, html
     # 決定時名冊沒有、名冊現在才有（照原聲留著）→ 提醒
-    assert html.count("名冊現在有這個名字") == 1, html
+    assert html.count("選的時候名冊還沒有，現在有了") == 1, html
     # ③ 說明補一句：名冊上的人選不用處理也會拿掉名字；書中人物同名用「＋新增修改」
     assert "名冊上的人選「不用處理」也會拿掉名字" in html and "＋新增修改" in html
     # ② 摘要只列 ② 的學員、用名冊本名（同一人的幾種寫法只列一次）

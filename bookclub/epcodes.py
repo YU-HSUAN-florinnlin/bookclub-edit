@@ -167,48 +167,65 @@ def episode_spellings(workdir: str | Path, roster: list[dict] | None = None,
             continue
         if how not in SELF_HOWS or d.get("自動配"):
             continue
+        ws = [name, *alts.get(name, [])]
         if how != "換成代號":
-            # 第四輪審查：不用處理／不是名字只有「決定時名冊上沒有這個寫法」（或是這一集自己加進名冊的）才蓋過去、照原聲留著；
-            # 決定時名冊上就有的照舊跟名冊走（換掉）——跟 1016-3 之前一樣
-            if name not in keep_original_names(workdir, dec=dec):
-                continue
-            base = None
-        elif d.get(OWN_KEY):
-            base = name
+            # 第四、五輪審查：不用處理／不是名字只有「決定時名冊上沒有」的那幾個寫法（或這一集自己加進名冊的）才蓋過去、照原聲留著；
+            # 決定時名冊上就有的寫法照舊跟名冊走（換掉）——一個寫法一個寫法看（名字本身沒有、其他寫法是別人暱稱的也一樣）
+            kept = kept_spellings(name, d, ws)
+            for w in ws:
+                foreign = sorted(every.get(w, set()) - {w, name})
+                if w in kept and foreign:
+                    out[w] = (name, how, foreign[0])
+            continue
+        if d.get(OWN_KEY):
+            base_of = lambda w: name  # noqa: E731
         elif AT_KEY in d:
-            base = d.get(AT_KEY) or None
+            at = d.get(AT_KEY)
+            base_of = (lambda w: at.get(w) or None) if isinstance(at, dict) else (lambda w: at or None)
         else:
             continue
-        for w in [name, *alts.get(name, [])]:
-            mine = {w, name} if how != "換成代號" else {w, name, *([base] if base else [])}
-            foreign = sorted(every.get(w, set()) - mine)
+        for w in ws:
+            base = base_of(w)
+            foreign = sorted(every.get(w, set()) - {w, name, *([base] if base else [])})
             if foreign:
                 out[w] = (name, how, foreign[0])
     return out
 
 
-def _added_here(name: str, d: dict) -> bool:
-    """這個寫法是這一集選「同一人」時自己加進名冊的（名冊原本沒有）。"""
-    rec = d.get("加進名冊的其他寫法") or {}
-    return name in (rec.get("寫法") or [])
+def at_map(name: str, d: dict, spellings: list[str]) -> dict[str, str | None]:
+    """`決定時名冊對到` 讀成 {寫法: 對到誰（空字串＝決定時名冊上沒有）}；沒記到的寫法是 None（不知道，當成名冊上有）。
+    舊格式（只記名字本身的字串）：只有名字本身算數。"""
+    at = d.get(AT_KEY)
+    if isinstance(at, dict):
+        return {w: at.get(w) for w in spellings}
+    return {w: (at if (w == name and isinstance(at, str)) else None) for w in spellings}
 
 
-def keep_original_names(workdir: str | Path, dec: dict | None = None) -> set[str]:
-    """③ 選了「不用處理／不是名字」、成品照原聲留著的名字（第四輪審查：最保險、跟 1016-3 之前一致）。只有兩種：
-    (a) 決定當時名冊上沒有這個寫法（`決定時名冊對到` 是空的；之後別支影片才加進名冊的也一樣）；
-    (b) 這個寫法是這一集選「同一人」時自己加進名冊的（`加進名冊的其他寫法` 有它），後來改成不用處理／不是名字——名冊原本沒有，等同 (a)。
-    其餘（決定時名冊上就有、不論是本名或別人的其他寫法；不看人名清單「書中人物」標記；沒有 `決定時名冊對到` 的舊決定；自動配）
-    照舊跟名冊走：有代號換成代號、沒代號排成「換成空的」把名字拿掉重念。"""
+def kept_spellings(name: str, d: dict, spellings: list[str]) -> set[str]:
+    """③ 選了不用處理／不是名字、成品可以照原聲留著的寫法（第四、五輪審查：最保險，跟 1016-3 之前一致）。只有兩種：
+    (a) 決定當時名冊上沒有這個寫法（`決定時名冊對到` 記成空的；之後別支影片才加進名冊的也一樣）；
+    (b) 這個寫法是這一集選「同一人」時自己加進名冊的（`加進名冊的其他寫法` 有它）——名冊原本沒有，等同 (a)。
+    其餘（決定時名冊上就有，不論本名或別人的其他寫法；不看「書中人物」標記；沒記到的舊決定；自動配）照舊跟名冊走。"""
+    if not isinstance(d, dict) or d.get("做法") not in ("不用處理", "不是名字") or d.get("自動配"):
+        return set()
+    m = at_map(name, d, spellings)
+    rec = set((d.get("加進名冊的其他寫法") or {}).get("寫法") or [])
+    return {w for w in spellings if m.get(w) == "" or w in rec}
+
+
+def keep_original_names(workdir: str | Path, dec: dict | None = None) -> dict[str, set[str]]:
+    """{名字: 照原聲留著的寫法}（`kept_spellings`；第 4 步排計畫時，用這些寫法比對到、沒代號的名字候選略過）。"""
     from bookclub import personnames
 
+    workdir = Path(workdir)
     if dec is None:
-        dec = wd.read_json(personnames.decisions_path(Path(workdir)), default={}) or {}
-    out = set()
+        dec = wd.read_json(personnames.decisions_path(workdir), default={}) or {}
+    alts = {p["名字"]: p.get("其他寫法") or [] for p in (wd.read_json(personnames.people_path(workdir), default={}) or {}).get("人名", [])}
+    out = {}
     for n, d in dec.items():
-        if not isinstance(d, dict) or d.get("做法") not in ("不用處理", "不是名字") or d.get("自動配"):
-            continue
-        if (AT_KEY in d and not d[AT_KEY]) or _added_here(n, d):
-            out.add(n)
+        k = kept_spellings(n, d, [n, *alts.get(n, [])])
+        if k:
+            out[n] = k
     return out
 
 
