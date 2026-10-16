@@ -330,7 +330,7 @@ async function rvReload() {
   const back = rv.data["開始前自動改回"] || [];
   if (back.length) { rv.prepOpen = true; rv.prepTab = back[0]; }   // 09-30：冒出新項目、自動改回還沒做的，直接打開給人看
   const rs = rv.data["人名補找"] || {};
-  if (rs["補找中"] || rs["未通知"]) rvRescanPoll();   // 10-16 #234：③ 背景補找人名還在做（或做完還沒通知）
+  if (rs["補找中"] || (rs["未通知"] && !rv.rescanMute)) rvRescanPoll();   // 10-16 #234：③ 背景補找人名還在做（或做完還沒通知）
   if (rv.cur && !rvItem(rv.cur)) rv.cur = rvFirstPending();
   rvRenderAll();
   const s = document.getElementById("rv-modal-settings");
@@ -1065,25 +1065,31 @@ function rvEnglishCodesHtml() {
     <button class="primary small" id="rv-cvtgo">把這一集的英文代號換成中文</button></div>`;
 }
 
+// 10-16 #235 審查：② 叫「代號」，③ 叫「英文名」（③ 畫面一個概念一種說法）
+const rvWord = () => (rv.prepOpen && rv.prepTab === "名字" ? "英文名" : "代號");
+
 function rvAutoHtml() {
   // 09-29：名冊拿掉代號欄後，每一集要自己選代號；還沒選的一鍵配（10-07：依性別、不撞名，之後可以改）
   const lack = rv.data["還沒代號"] || [];
-  return `<div class="rv-actions">${lack.length ? `<span class="rv-warnline">還有 ${lack.length} 個名字這一集沒有代號</span>` : ""}
-    <button class="ghost small" id="rv-autocode">幫還沒代號的自動配</button></div>`;
+  const w = rvWord();
+  return `<div class="rv-actions">${lack.length ? `<span class="rv-warnline">還有 ${lack.length} 個名字這一集沒有${w}</span>` : ""}
+    <button class="ghost small" id="rv-autocode">幫還沒${w}的自動配</button></div>`;
 }
 
 // 10-07：手動選到跟名字撞的代號（名冊上有人、或這一集被叫到的人叫這個名字）→ 先問一次
 function rvCodeClashOk(code) {
   const who = ((rv.data["代號對照"] || {})["撞名"] || {})[code];
   if (!who || !who.length) return true;
-  return confirm(`「${code}」跟名字撞名（${who.join("、")} 也叫這個）。成品裡會分不出是代號還是真的在叫這個人。\n還是要用嗎？`);
+  return confirm(`「${code}」跟名字撞名（${who.join("、")} 也叫這個）。成品裡會分不出是${rvWord()}還是真的在叫這個人。\n還是要用嗎？`);
 }
 
 function rvDupHtml() {
   // 09-29：這一集的代號表（右欄＞③ 換成代號＞名冊預設）裡，兩個人用同一個代號
   const dup = Object.entries(rv.data["代號重複"] || {});
   if (!dup.length) return "";
-  return `<p class="rv-warnline">同一集有人用了同一個代號，成品裡會分不出是誰：${dup.map(([c, rs]) => `${esc(c)}（${esc(rs.join("、"))}）`).join("；")}。如果其實是同一個人（轉錯字、暱稱），不用改，或在「③」選「同一人：…」合併；不同人的話，學員在「② 辨識學員聲音是誰」右欄改，其他人在「③ 辨識其他名稱如何替換」改。</p>`;
+  const list = dup.map(([c, rs]) => `${esc(c)}（${esc(rs.join("、"))}）`).join("；");
+  if (rvWord() === "英文名") return `<p class="rv-warnline">有兩個人用了同一個英文名，成品裡分不出是誰：${list}。同一個人就選「同一人：…」；不同人就換一個英文名（學員在 ② 換）。</p>`;
+  return `<p class="rv-warnline">同一集有人用了同一個代號，成品裡會分不出是誰：${list}。如果其實是同一個人（轉錯字、暱稱），不用改，或在「③」選「同一人：…」合併；不同人的話，學員在「② 辨識學員聲音是誰」右欄改，其他人在「③ 辨識其他名稱如何替換」改。</p>`;
 }
 
 // 10-16 #225 宇軒：③ 上面的「名冊裡有同名的人」黃字拿掉（老師看卡片上的「也可能是」就懂）；名冊重複的列號只在第 0 步匯入時提醒
@@ -1106,10 +1112,14 @@ function rvNamePickOpts(u) {
   const sel = (v) => (v === cur ? "selected" : "");
   const note = rvCodeNote(curCode);
   const out = cur ? [] : ['<option value="" selected>選一個</option>'];
+  const sameR = u["做法"] === "是上面的學員" ? u["同一人"] : null;
+  if (sameR && (!reals.includes(sameR) || !codeOf(sameR))) {   // 存過「同一人：R」，R 現在沒英文名或不在 ② 裡：照實顯示，不要看起來像別的
+    out.push(`<option value="${esc(`same:${sameR}`)}" selected>同一人：${esc(sameR)}（還沒英文名）</option>`);
+  }
   if (reals.length) {
     out.push(`<optgroup label="② 的學員">${reals.map((r) => codeOf(r)
       ? `<option value="${esc(`same:${r}`)}" ${sel(`same:${r}`)}>同一人：${esc(r)}（${esc(codeOf(r))}）</option>`
-      : `<option value="${esc(`same:${r}`)}" disabled>同一人：${esc(r)}（② 還沒選英文名）</option>`).join("")}</optgroup>`);
+      : r === sameR ? "" : `<option value="${esc(`same:${r}`)}" disabled>同一人：${esc(r)}（② 還沒選英文名）</option>`).join("")}</optgroup>`);
   }
   const labs = { "女": "換成英文名（女）", "男": "換成英文名（男）", "這一集用到的其他代號": "換成英文名（這一集用過的）", "代號": "換成英文名" };
   const groups = rvCodeGroups().filter(([, cs]) => cs.length);
@@ -1147,7 +1157,7 @@ function rvNameCountHtml() {
 function rvRescanLineHtml() {
   const st = rv.data["人名補找"] || {};
   if (st["補找中"]) return '<p class="rv-meta" id="rvRescanLine">正在找老師還有哪裡提到這些名字…（可以繼續選）</p>';
-  if (st["錯誤"]) return `<p class="rv-warnline" id="rvRescanLine">找老師提到的名字時出錯了，重新整理網頁會再試一次：${esc(st["錯誤"])}</p>`;
+  if (st["錯誤"]) return '<p class="rv-warnline" id="rvRescanLine">找老師提到的名字時出錯了。重新整理網頁再試；一直不行，用「＋新增修改」補漏抓的名字。</p>';
   return '<p class="rv-meta" id="rvRescanLine" hidden></p>';
 }
 
@@ -1159,10 +1169,10 @@ function rvPrepNamesHtml() {
   const un = all.filter((u) => !u["② 已決定"] && !u["都在刪除段落"]);
   const cutOnly = all.filter((u) => u["都在刪除段落"]);
   const unRows = un.map(rvNameRowHtml).join("");
-  const twoBlock = fromTwo.length ? `<li class="rv-person"><details><summary class="rv-meta">② 已經定好的學員（${fromTwo.length} 個）：${fromTwo.map((u) => `${esc(u["名字"])} → ${esc(u["代號"] || "還沒選代號")}`).join("、")}</summary>
-      <p class="rv-meta">被提到時一樣換成這個代號；要改代號回「② 辨識學員聲音是誰」右欄。</p></details></li>` : "";
+  const twoBlock = fromTwo.length ? `<li class="rv-person"><details><summary class="rv-meta">② 已經定好的學員（${fromTwo.length} 個）：${fromTwo.map((u) => `${esc(u["名字"])} → ${esc(u["代號"] || "還沒選英文名")}`).join("、")}</summary>
+      <p class="rv-meta">被提到時換成這個英文名；要改到 ② 改。</p></details></li>` : "";
   const cutBlock = cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只出現在確認刪除的段落裡（${cutOnly.length} 個：${esc(cutOnly.map((u) => u["名字"]).join("、"))}），不用處理</summary>
-      <p class="rv-meta">這些段落會整段刪掉。如果在「① 建議刪除段落」改成不刪，會回到上面。</p></details></li>` : "";
+      <p class="rv-meta">這些段落會整段刪掉。在 ① 改成不刪，就會出現在這一頁要選。</p></details></li>` : "";
   // 10-02 第七批（A3）：Claude 那一步沒跑成功，名冊上沒有的名字這裡看不到
   const peopleWarn = rv.data["人名清單沒跑成功"] ? `<p class="rv-warnline" id="rvPeopleMissing">人名清單沒跑成功（第 1 步用 Claude 找這一集提到的人名）：名冊上沒有的名字這裡看不到，成品可能照原聲念出來。到第 1 步按「重新分析（做完的會跳過）」，或命令列 bookclub run people &lt;工作區&gt;；跑成功之前 ③ 不能標完成。</p>` : "";
   if (!all.length) return peopleWarn || `<p class="rv-meta">這一集沒有找到被提到的人名（第 1 步人名清單還沒跑，或真的沒有）。</p>`;
@@ -1192,6 +1202,20 @@ function rvNameRowRefresh(name) {
   }
   const cnt = document.getElementById("rvNameCount");
   if (cnt) cnt.innerHTML = rvNameCountHtml();
+  rvPrepDoneRefresh();
+}
+
+// ③ 還沒決定的筆數在前端重算（後端 review.prep_pending 同一句），「這一件做完了」按鈕跟著變，不用整頁重抓
+function rvPrepDoneRefresh() {
+  const left = rv.data["開始前待處理"] = rv.data["開始前待處理"] || {};
+  const n = (rv.data["提到的名字"] || []).filter((u) => !u["已決定"] && !u["都在刪除段落"]).length;
+  const others = (left["名字"] || []).filter((x) => !/個被提到的名字還沒決定$/.test(x));
+  left["名字"] = n ? others.concat([`${n} 個被提到的名字還沒決定`]) : others;
+  if (!rv.prepOpen || rv.prepTab !== "名字" || (rv.data["開始前確認"] || {})["名字"]) return;
+  const btn = document.getElementById("rv-prepdone");
+  const why = document.getElementById("rv-prepwhy");
+  if (btn) btn.disabled = !!left["名字"].length;
+  if (why) why.textContent = left["名字"].length ? `還不能標完成：${left["名字"].join("；")}` : "";
 }
 
 function rvRescanLineRefresh() {
@@ -1204,6 +1228,7 @@ function rvNameQuietReload() {
   clearTimeout(rv.nameReloadTimer);
   rv.nameReloadTimer = setTimeout(async () => {
     if (Object.keys(rv.nameSaving || {}).length || (rv.data["人名補找"] || {})["補找中"]) return;
+    if (rvTyping()) { rvNameQuietReload(); return; }   // 正在選別的、打字：等離開再抓
     await rvReload();
   }, 800);
 }
@@ -1211,16 +1236,25 @@ function rvNameQuietReload() {
 async function rvRescanPoll() {
   if (rv.rescanPolling) return;
   rv.rescanPolling = true;
+  let fails = 0;
   try {
     for (;;) {
       let st;
-      try { st = (await apiGet("/api/people/rescan")) || {}; } catch (e) { break; }
+      try { st = (await apiGet("/api/people/rescan")) || {}; fails = 0; } catch (e) {
+        if (++fails < 3) { await new Promise((r) => setTimeout(r, 3000)); continue; }
+        rv.data["人名補找"] = { ...(rv.data["人名補找"] || {}), "補找中": false };   // 讀不到就不再顯示「正在找…」
+        rvRescanLineRefresh();
+        break;
+      }
       rv.data["人名補找"] = st;
       rvRescanLineRefresh();
       if (!st["補找中"]) {
         if (st["未通知"]) {
-          try { await apiPost("/api/people/rescan/seen", {}, { quiet: true }); } catch (e) { /* 下次再通知 */ }
-          alert(`補找到 ${st["未通知"]} 處老師提到這些名字，已經加進清單。`);
+          // 記成「看過了」成功才跳通知；記不了（例如第 4 步執行中、斷線）就不跳，這次也不再輪詢（不會一直重跳）
+          let ok = false;
+          try { await apiPost("/api/people/rescan/seen", {}, { quiet: true }); ok = true; } catch (e) { rv.rescanMute = true; }
+          rv.data["人名補找"] = { ...st, "未通知": ok ? 0 : st["未通知"] };
+          if (ok) alert(`補找到 ${st["未通知"]} 處老師提到這些名字，已經加進清單。`);
         }
         break;
       }
@@ -1344,6 +1378,7 @@ function rvBindPrep(root) {
     if (code === undefined) return;
     const res = await apiPost("/api/turns/namecode", { "本名": el.dataset.real, "代號": code });
     if (res["補找到的老師名字"]) alert(`加進名冊了，補找到 ${res["補找到的老師名字"]} 處老師提到這個名字，已經加進清單。`);
+    if (res["補找中"]) rv.data["人名補找"] = { ...(rv.data["人名補找"] || {}), "補找中": true };   // 10-16 審查：背景補找，reload 後輪詢、做完通知
     await reload();
   }));
   rvBindNameRow(root);   // 10-16 #234 #235：③ 每個名字一個下拉選單，只更新那一列
@@ -1367,7 +1402,7 @@ function rvBindPrep(root) {
   if (auto) auto.addEventListener("click", async () => {
     try {
       const r = await apiPost("/api/codes/auto", {});
-      alert(`配好了：② ${r["②"]} 位、③ ${r["③"]} 個。${r["代號不夠"] ? "名單上的代號不夠用，剩下的請自己打新代號。" : "不喜歡的直接改。"}`);
+      alert(`配好了：② ${r["②"]} 位、③ ${r["③"]} 個。${r["代號不夠"] ? `名單上的${rvWord()}不夠用，剩下的請自己打一個。` : "不喜歡的直接改。"}`);
     } catch (e) { alert(e.message || e); }
     await reload();
   });

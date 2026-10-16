@@ -149,24 +149,127 @@ def test_pending_rescan_after_restart_is_done_on_open():
 def test_rescan_error_keeps_pending_until_page_reopens():
     w = _make()
     real = personnames._scan_teacher
+    gate = threading.Event()
 
     def boom(workdir):
         raise RuntimeError("假的錯誤")
 
     personnames._scan_teacher = boom
+    retry0 = personnames.RETRY_AFTER_S
     try:
         personnames.decide(w, "阿強", "換成代號", "傑克")
         st = personnames.wait_rescan(w, 30)
-        assert not st["補找中"] and "假的錯誤" in (st["錯誤"] or ""), st
+        # 網頁只看到白話，不給例外字樣
+        assert not st["補找中"] and st["錯誤"] == personnames.ERROR_MSG and "RuntimeError" not in st["錯誤"], st
         assert wd.read_json(personnames.rescan_path(w))["待補找"]   # 沒有默默當成做完
-        assert not personnames.ensure_rescan(w, retry=False)        # 網頁輪詢不重試
-        personnames._scan_teacher = real
-        assert personnames.ensure_rescan(w)                         # 重新打開網頁才再試
+        assert not personnames.ensure_rescan(w)                     # 網頁輪詢不重試
+        assert not personnames.ensure_rescan(w, retry=True)         # 剛出錯：打開網頁也先不重掃（隔 RETRY_AFTER_S）
+        # 第 4 步不會永遠擋住：背景沒在做 → 不算「還在找」；出錯提醒一次，再按就放行
+        assert not personnames.rescan_busy(w)
+        assert personnames.rescan_error_gate(w).startswith(personnames.ERROR_MSG)
+        assert personnames.rescan_error_gate(w) is None
+
+        # 重試的那一輪在跑的時候：狀態是「補找中」，不顯示錯誤；第 4 步等它
+        def slow(workdir):
+            gate.wait(30)
+            return real(workdir)
+
+        personnames._scan_teacher = slow
+        personnames.RETRY_AFTER_S = 0
+        assert personnames.ensure_rescan(w, retry=True)
+        st = personnames.rescan_status(w)
+        assert st["補找中"] and st["錯誤"] is None and personnames.rescan_busy(w), st
+        gate.set()
         st = personnames.wait_rescan(w, 120)
         assert not st["補找中"] and not st["錯誤"] and st["未通知"] >= 1, st
+        assert personnames.rescan_error_gate(w) is None
     finally:
         personnames._scan_teacher = real
+        personnames.RETRY_AFTER_S = retry0
+        gate.set()
         personnames.wait_rescan(w, 60)
+
+
+def test_turn_append_does_not_overwrite_background_merge():
+    """審查 #3：② 把一段改成老師（turns → names.append_candidates）掃的途中，背景補找先接上了；
+    以前 append_candidates 讀→掃→寫整份，會把背景加的名字蓋掉（名字漏消）。"""
+    from bookclub import names
+
+    w = _make()
+    real_find = names.find_names
+    gate = threading.Event()
+    entered = threading.Event()
+
+    def find(*a, **k):   # 只卡住「改成老師」那一個執行緒的掃描；背景補找照常
+        if threading.current_thread().name == "改成老師":
+            entered.set()
+            gate.wait(30)
+        return real_find(*a, **k)
+
+    names.find_names = find
+    try:
+        stu = ["00_023"]   # 假資料：學員 2 說「我跟小美一樣…」（名冊上的小美），改成老師後補找得到
+        out = {}
+        t = threading.Thread(target=lambda: out.setdefault("n", names.append_candidates(w, stu)), name="改成老師")
+        t.start()
+        assert entered.wait(30)
+        personnames.decide(w, "阿強", "換成代號", "傑克")   # 背景補找：名冊加了阿強
+        st = personnames.wait_rescan(w, 120)
+        assert st["未通知"] >= 1
+        before = [c for c in wd.read_json(wd.names_path(w))["candidates"] if c["canonical"] == "阿強"]
+        assert before
+        gate.set()
+        t.join(60)
+        after = [c for c in wd.read_json(wd.names_path(w))["candidates"] if c["canonical"] == "阿強"]
+        assert len(after) == len(before) and after[0]["代號"] == "傑克", (before, after)
+        assert out.get("n") == 1   # 改成老師那邊補到的也在
+        assert any(c["sentence_id"] == "00_023" for c in wd.read_json(wd.names_path(w))["candidates"])
+    finally:
+        names.find_names = real_find
+        gate.set()
+
+
+def test_merge_skipped_when_input_changed_during_scan():
+    """掃的途中第 1 步重跑（名字候選的輸入指紋變了）：這輪不接上，回 None 要重掃。"""
+    from bookclub import names
+
+    w = _make()
+    personnames.add_to_roster("阿強", [])
+    scan = names.scan_candidates(w, personnames._teacher_sentence_ids(w))
+    assert scan and scan["candidates"]
+    cur = wd.read_json(wd.names_path(w))
+    cur["輸入指紋"] = "第 1 步重跑過"
+    wd.write_json(wd.names_path(w), cur)
+    n0 = len(cur["candidates"])
+    assert names.merge_candidates(w, scan, "測試") is None
+    assert len(wd.read_json(wd.names_path(w))["candidates"]) == n0
+
+
+def test_pinyin_cache_same_hits():
+    """`names._syllable_parts` 加了快取：比對到的候選跟不快取時一模一樣。"""
+    from bookclub import names
+
+    w = _make()
+    personnames.add_to_roster("阿強", [])
+    personnames.add_to_roster("阿德", [])
+    ids = personnames._teacher_sentence_ids(w)
+    cached = names._syllable_parts
+    names._syllable_parts = cached.__wrapped__   # 不快取
+    try:
+        plain = names.scan_candidates(w, ids)["candidates"]
+    finally:
+        names._syllable_parts = cached
+    cached.cache_clear()
+    fast = names.scan_candidates(w, ids)["candidates"]
+    key = lambda c: (c["sentence_id"], c["start"], c["end"], c["canonical"], c["比對層級"])  # noqa: E731
+    assert plain and [key(c) for c in plain] == [key(c) for c in fast]
+    assert cached.cache_info().hits > 0
+
+
+def test_seen_allowed_while_executing():
+    from bookclub import server
+
+    assert "/api/people/rescan/seen" in server.STEP3_WRITES_OK
 
 
 def test_old_decisions_file_still_read():
@@ -233,6 +336,37 @@ const { makeEnv } = require(process.argv[2]);
   process.stdout.write(JSON.stringify(out));
 })();
 """
+
+
+_JS_SEEN = r"""
+const { makeEnv } = require(process.argv[2]);
+(async () => {
+  const out = {};
+  for (const ok of [true, false]) {
+    const ctx = makeEnv(process.argv[3].split(","), "");
+    out[ok ? "ok" : "fail"] = await require("vm").runInContext(`(async () => {
+      rv.data = {"人名補找": {"補找中": false, "未通知": 3}};
+      globalThis.apiGet = async (u) => { H.log.push(["GET", u]); return {"補找中": false, "未通知": 3, "錯誤": null}; };
+      globalThis.apiPost = async (u) => { H.log.push(["POST", u]); if (!${ok}) throw new Error("第 4 步執行中"); return {ok: true}; };
+      await rvRescanPoll();
+      return {alerts: H.log.filter((x) => x[0] === "alert").length, mute: !!rv.rescanMute};
+    })()`, ctx);
+  }
+  process.stdout.write(JSON.stringify(out));
+})();
+"""
+
+
+def test_web_seen_fail_no_alert_loop():
+    if not NODE:
+        print("（沒有 node，略過）")
+        return
+    d = Path(tempfile.mkdtemp())
+    (d / "t.js").write_text(_JS_SEEN, encoding="utf-8")
+    files = ",".join(str(WEB / f) for f in ("cards.js", "review.js") if (WEB / f).is_file())
+    r = subprocess.run([NODE, str(d / "t.js"), str(HARNESS), files], capture_output=True, text=True, check=True)
+    out = json.loads(r.stdout)
+    assert out["ok"] == {"alerts": 1, "mute": False} and out["fail"] == {"alerts": 0, "mute": True}, out
 
 
 def test_web_one_dropdown_and_parallel_saves():

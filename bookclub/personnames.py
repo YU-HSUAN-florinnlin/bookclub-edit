@@ -437,23 +437,34 @@ def request_rescan(workdir: str | Path) -> bool:
         st = _load_rescan(workdir)
         st["待補找"] = True
         st["要求"] = int(st.get("要求") or 0) + 1
-        st.pop("錯誤", None)
+        for k in ("錯誤", "錯誤時間", "錯誤已提醒"):
+            st.pop(k, None)
         wd.write_json(rescan_path(workdir), st)
     return ensure_rescan(workdir)
 
 
-def ensure_rescan(workdir: str | Path, retry: bool = True) -> bool:
-    """有「待補找」又沒有背景在做（例如伺服器做到一半關掉）就開一個。回傳現在是不是在補找。
-    上一輪出錯的：`retry=False`（網頁輪詢進度）不重試，打開網頁（`retry=True`）才再試。"""
+RETRY_AFTER_S = 60.0   # 出錯之後，打開第 3 步網頁至少隔這麼久才再試（不要每次重抓都重掃幾十秒）
+ERROR_MSG = "找老師提到的名字時出錯了。重新整理網頁再試；一直不行，用「＋新增修改」補漏抓的名字。"
+
+
+def _alive(key: str) -> bool:
+    t = _workers.get(key)
+    return t is not None and t.is_alive()
+
+
+def ensure_rescan(workdir: str | Path, retry: bool = False) -> bool:
+    """有「待補找」又沒有背景在做（例如伺服器做到一半關掉）就開一個。回傳現在是不是**真的有背景在補找**。
+    上一輪出錯的：預設不重試；`retry=True`（打開第 3 步網頁）且距離出錯超過 `RETRY_AFTER_S` 才再試。"""
     workdir = Path(workdir)
     key = str(workdir.resolve())
     with _sched_lock:
-        st = _load_rescan(workdir)
-        if not st.get("待補找") or (st.get("錯誤") and not retry):
-            return False
-        t = _workers.get(key)
-        if t is not None and t.is_alive():
+        if _alive(key):
             return True
+        st = _load_rescan(workdir)
+        if not st.get("待補找"):
+            return False
+        if st.get("錯誤") and not (retry and time.time() - float(st.get("錯誤時間") or 0) >= RETRY_AFTER_S):
+            return False
         t = threading.Thread(target=_rescan_worker, args=(workdir, key), name="人名補找", daemon=True)
         _workers[key] = t
         t.start()
@@ -461,11 +472,12 @@ def ensure_rescan(workdir: str | Path, retry: bool = True) -> bool:
 
 
 def rescan_status(workdir: str | Path) -> dict:
-    """網頁用：`補找中`、`未通知`（掃完找到幾處、還沒跟人說）、`錯誤`。"""
+    """網頁用：`補找中`（背景真的在做）、`未通知`（掃完找到幾處、還沒跟人說）、`錯誤`（沒在做、上一輪出錯；白話）。"""
     workdir = Path(workdir)
-    busy = ensure_rescan(workdir, retry=False)
+    busy = ensure_rescan(workdir)
     st = _load_rescan(workdir)
-    return {"補找中": busy, "未通知": int(st.get("未通知") or 0), "錯誤": st.get("錯誤")}
+    return {"補找中": busy, "未通知": int(st.get("未通知") or 0),
+            "錯誤": ERROR_MSG if (st.get("錯誤") and st.get("待補找") and not busy) else None}
 
 
 def rescan_seen(workdir: str | Path) -> dict:
@@ -489,8 +501,36 @@ def wait_rescan(workdir: str | Path, timeout: float = 300.0) -> dict:
 
 
 def rescan_busy(workdir: str | Path) -> bool:
-    """第 4 步開始前：還有沒做完的補找（順便把沒在做的開起來）。"""
+    """第 4 步開始前：背景**真的在**補找（伺服器重開後沒做完的會在這裡開起來）。出錯停住的回 False，看 `rescan_error_gate`。"""
     return ensure_rescan(workdir)
+
+
+def rescan_error_gate(workdir: str | Path) -> str | None:
+    """第 4 步開始前：補找出錯停住了 → 第一次按回提醒文字（擋一次），再按一次就放行（不能讓第 4 步永遠進不去）。"""
+    workdir = Path(workdir)
+    with _sched_lock:
+        st = _load_rescan(workdir)
+        if not (st.get("待補找") and st.get("錯誤")) or st.get("錯誤已提醒"):
+            return None
+        st["錯誤已提醒"] = True
+        wd.write_json(rescan_path(workdir), st)
+    return ERROR_MSG + "要照樣開始，再按一次。"
+
+
+def _scan_teacher(workdir: Path) -> dict | None:
+    """在老師的句子裡比對名冊（不拿鎖，最花時間的部分；`names.scan_candidates`）。還沒跑過找名字回 None。"""
+    from bookclub import names
+
+    return names.scan_candidates(workdir, _teacher_sentence_ids(workdir))
+
+
+def _merge_found(workdir: Path, scan: dict | None) -> int | None:
+    """拿鎖接上（`names.merge_candidates`）。掃的途中第 1 步重跑或逐字稿改了回 None（這輪不算）。"""
+    from bookclub import names
+
+    if not scan:
+        return 0
+    return names.merge_candidates(workdir, scan, "名冊加了名字後補找")
 
 
 def _teacher_sentence_ids(workdir: Path) -> list[str]:
@@ -503,53 +543,9 @@ def _teacher_sentence_ids(workdir: Path) -> list[str]:
     return sorted(ids)
 
 
-def _scan_teacher(workdir: Path) -> list[dict] | None:
-    """在老師的句子裡比對名冊（不拿鎖，最花時間的部分）。跟 `names.append_candidates` 同一套；還沒跑過找名字回 None。"""
-    import tempfile
-
-    from bookclub import names
-    from bookclub.config import data_dir
-
-    roster = data_dir() / "名冊.csv"
-    if wd.read_json(wd.names_path(workdir), default=None) is None or not roster.is_file() \
-            or not wd.audio_path(workdir).is_file():
-        return None
-    ids = set(_teacher_sentence_ids(workdir))
-    sents = (wd.read_json(wd.speakers_path(workdir), default={}) or {}).get("sentences", [])
-    words = (wd.read_json(wd.merged_transcript_path(workdir), default={}) or {}).get("words", [])
-    sensitive = data_dir() / "敏感詞.csv"
-    with tempfile.TemporaryDirectory() as tmp:
-        res = names.find_names(wd.audio_path(workdir), workdir, sents, words, roster,
-                               sensitive if sensitive.is_file() else None,
-                               select=lambda s: s.get("id") in ids, cache_path=Path(tmp) / "補找.json", use_cache=False)
-    return res["candidates"]
-
-
-def _merge_found(workdir: Path, found: list[dict] | None) -> int:
-    """拿鎖、重讀名字候選（掃的途中別人可能改過），新的加在最後面（舊編號不變），代號對齊這一集。"""
-    from bookclub import epcodes
-
-    if not found:
-        return 0
-    with epcodes._auto_lock:
-        cur = wd.read_json(wd.names_path(workdir), default=None)
-        if cur is None:
-            return 0
-        old = cur.get("candidates", [])
-        new = [c for c in found
-               if not any(o.get("sentence_id") == c.get("sentence_id") and abs(o["start"] - c["start"]) < 0.05 for o in old)]
-        if new:
-            for c in new:
-                c["補找"] = "名冊加了名字後補找"
-            cur["candidates"] = old + new
-            cur.setdefault("統計", {})["總筆數"] = len(cur["candidates"])
-            wd.write_json(wd.names_path(workdir), cur)
-        epcodes.sync(workdir)
-        return len(new)
-
-
 def _rescan_worker(workdir: Path, key: str) -> None:
     me = threading.current_thread()
+    changed = 0   # 連續幾輪掃的途中資料變了
     while True:
         with _sched_lock:
             st = _load_rescan(workdir)
@@ -560,13 +556,21 @@ def _rescan_worker(workdir: Path, key: str) -> None:
             gen = st.get("要求")
         try:
             n = _merge_found(workdir, _scan_teacher(workdir))
+            if n is None:   # 掃的途中第 1 步重跑或逐字稿改了：這輪不算，再掃一輪（連續 3 輪都這樣算出錯）
+                changed += 1
+                if changed >= 3:
+                    raise RuntimeError("掃的途中名字候選或逐字稿一直在變")
+                continue
+            changed = 0
         except Exception as e:  # noqa: BLE001 — 留著「待補找」，下次打開網頁再試
             import traceback
 
             traceback.print_exc()
             with _sched_lock:
                 st = _load_rescan(workdir)
-                st["錯誤"] = f"{type(e).__name__}：{e}"
+                st["錯誤"] = f"{type(e).__name__}：{e}"   # 只記在檔案、印在終端機；網頁只給白話（ERROR_MSG）
+                st["錯誤時間"] = time.time()
+                st["錯誤已提醒"] = False
                 wd.write_json(rescan_path(workdir), st)
                 if _workers.get(key) is me:
                     _workers.pop(key, None)
@@ -574,7 +578,8 @@ def _rescan_worker(workdir: Path, key: str) -> None:
         with _sched_lock:
             st = _load_rescan(workdir)
             st["未通知"] = int(st.get("未通知") or 0) + n
-            st.pop("錯誤", None)
+            for k in ("錯誤", "錯誤時間", "錯誤已提醒"):
+                st.pop(k, None)
             if st.get("要求") == gen:   # 掃的途中沒有新的要求才算做完；有的話再掃一輪
                 st["待補找"] = False
             wd.write_json(rescan_path(workdir), st)

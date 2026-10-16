@@ -170,7 +170,7 @@ class Busy(Exception):
 
 # 第 4 步跑的時候擋掉的寫入（第 3 步覆核工作台的存檔）；計時、匯出不算修改
 STEP3_WRITES = ("/api/review/", "/api/turns/", "/api/people/", "/api/codes/", "/api/students/")
-STEP3_WRITES_OK = ("/api/review/time", "/api/review/export")
+STEP3_WRITES_OK = ("/api/review/time", "/api/review/export", "/api/people/rescan/seen")   # 10-16 #234：通知看過歸零，第 4 步執行中也要能記
 
 
 def workroot() -> Path:
@@ -1600,7 +1600,7 @@ class Handler(BaseHTTPRequestHandler):
             _needs_ensure(server, page, snap)   # 10-14 第5步2.0 第1段：第一次打開升級；之後同步第 3 步的卡片（用這份 page，不另外算）
             from bookclub import personnames
 
-            personnames.ensure_rescan(server.workdir)   # 10-16 #234：上次背景補找人名沒做完就補做
+            personnames.ensure_rescan(server.workdir, retry=True)   # 10-16 #234：上次背景補找人名沒做完（或出錯）就補做
             page["人名補找"] = personnames.rescan_status(server.workdir)
             self._send_json(200, {**page, "AI執行中": server.exec_running(), "開發者": _developer()})   # 09-30：執行中第 3 步變唯讀；10-16 #225：開發者設定（「你標的 → 對齊後」只給開發者看）
         elif path == "/api/video":
@@ -1971,8 +1971,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/execute/start":
             from bookclub import personnames
 
-            if server.has_workdir and personnames.rescan_busy(server.workdir):   # 10-16 #234：③ 補找老師提到的名字還沒做完
-                raise ValueError("還在補找老師提到的名字（第 3 步「③ 辨識其他名稱如何替換」剛選的），等一下再按")
+            if server.has_workdir:   # 10-16 #234：③ 補找老師提到的名字還沒做完
+                if personnames.rescan_busy(server.workdir):   # 背景真的在做（幾十秒）
+                    raise ValueError("還在找老師提到的名字（第 3 步 ③ 剛選的），等半分鐘再按")
+                why = personnames.rescan_error_gate(server.workdir)   # 出錯停住：提醒一次，再按就放行（不永遠擋住）
+                if why:
+                    raise ValueError(why)
             result = server.start_execute(body)
             self._send_json(202 if result.get("started") else 409, result)
         elif path == "/api/run/analyze":
