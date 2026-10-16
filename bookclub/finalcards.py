@@ -841,7 +841,6 @@ def export_version(workdir: str | Path, n: int, confirm: bool = False) -> dict:
     """10-15 第5步2.0 第3段（31 號設計 §6.5、§6.7）：輸出舊的那一版（選單選到哪一版就輸出哪一版）。規則照 0.2.1b3：沒看完也能輸出，
     先問一次（還有幾張沒看完）。那一版的影片清掉了不能輸出。輸出紀錄記到那一版（版本表），成品檢查檔照舊記最新一次輸出（雙寫）。"""
     import os
-    import shutil
     from datetime import datetime
 
     from bookclub import workdir as wd
@@ -872,7 +871,9 @@ def export_version(workdir: str | Path, n: int, confirm: bool = False) -> dict:
         dst = src.with_name(f"{Path(fc.final_name(src.name, stamp)).stem} ({k}){src.suffix}")
         k += 1
     tmp = dst.with_name(f".{dst.name}.輸出中")
-    shutil.copy2(src, tmp)
+    from bookclub.fileio import link_or_copy
+
+    link_or_copy(src, tmp)   # #79（1017-2）：硬連結（同一份資料），跨磁碟、不支援才複製；前提同 finalcheck.export_final
     os.replace(tmp, dst)
     extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
     rec = {"時間": fc._now(), "來源": rel, "檔案": str(dst.relative_to(workdir)),
