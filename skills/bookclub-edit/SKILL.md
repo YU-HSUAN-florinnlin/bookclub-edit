@@ -86,7 +86,8 @@ README 的例子用 `~/bookclub-edit`，夥伴放在別的位置時照查到的�
    不改名、不重新下載。步驟：確認有 `.git` → 查 `http://localhost:8766/api/run/status` 的 `第4步執行中`
    （這欄在 0.2.3 起才有；沒有這欄就請夥伴自己看第 4 步）：`true` 就先問夥伴、不替他按停止，`false` 才自己關網頁
    → 只備份紀錄（`~/讀書會剪輯資料` 跳過 `影片/`；每個工作區只複製 `.json`、`.jsonl`、`修改需求/`、`校對/`、`覆核/`、
-   `transcript/`）→ 記套件檔檢查碼 → `git fetch --tags`、`git checkout <新標籤>` → 套件有變才 `bash install.sh`
+   `transcript/`）→ 記套件檔檢查碼（`requirements.txt`、`constraints.txt`、`build-constraints.txt`、`install.sh`；`pyproject.toml`
+   只比 `version` 以外的行，版本號每版都變）→ `git fetch --tags`、`git checkout <新標籤>` → 套件有變才 `bash install.sh`
    → 用登入模式重開網頁、確認 8766 有回應 → 看版本號 → `bookclub doctor` 全 ✅ → 照 README 的三項檢查刪
    `bookclub-edit-舊版*`、四項檢查刪舊的更新前備份，只留這一次的小備份，做完說空出多少（不用問夥伴）。
    退回上一版也用標籤（`git checkout <上一版標籤>`，套件有變再跑 `install.sh`），工作區不用還原。
