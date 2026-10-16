@@ -953,12 +953,12 @@ def _set_name_code(workdir: Path, real: str, code: str | None, add_roster: bool 
     from bookclub.config import data_dir
 
     _ep.clear_auto(workdir, real)   # 10-07：人自己選了代號（自動配的會在這之後再標回去）
-    added = 0
+    rescan = False
     if add_roster and code and not any(r["canonical"] == real for r in names.load_roster(data_dir() / "名冊.csv")):
         alts = next((p["其他寫法"] for p in (wd.read_json(personnames.people_path(workdir), default=None) or {}).get("人名", [])
                      if p["名字"] == real), [])
         if personnames.add_to_roster(real, alts):   # 10-07：名字加進名冊，代號只記這一集
-            added = personnames.rescan_names(workdir)
+            rescan = True
     with _lock:
         data = wd.read_json(turns_path(workdir))
         data.setdefault("本名代號", {})[real] = code or None
@@ -971,7 +971,9 @@ def _set_name_code(workdir: Path, real: str, code: str | None, add_roster: bool 
     from bookclub import epcodes
 
     epcodes.sync(workdir)   # 老師講到這個名字、保留原聲學員講到的，一起換成這個代號
-    return {"ok": True, "本名": real, "代號": code, "改了幾位": n, "補找到的老師名字": added}
+    if rescan:   # 10-16 審查（#234）：補找老師提到這個名字的地方改到背景做（跟 ③ 同一套），不用等幾十秒
+        personnames.request_rescan(workdir)
+    return {"ok": True, "本名": real, "代號": code, "改了幾位": n, "補找到的老師名字": 0, "補找中": rescan}
 
 
 # ---------- 09-26：開始前確認「學員是誰」、漏抓的學員發言 ----------
