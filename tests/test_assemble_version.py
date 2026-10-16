@@ -5,6 +5,8 @@
 - 組裝相關程式的雜湊記在下面：程式改了這支測試就會失敗，提醒開發者選一個——
   1. 改了成品聽起來或看起來會不一樣的做法 → `render.ASSEMBLE_VERSION` 加 1，再更新下面的雜湊與版本號；
   2. 只是重構、改註解 → 只更新下面的雜湊，旁邊寫一句「這次沒改成品的聲音和畫面」。
+  雜湊只涵蓋這 5 支：組裝讀的計畫（nameplan、review、students、turns 的排法）和只重做片段用的 Swift 程式
+  改了也會影響成品，這支測試抓不到，改了要自己判斷要不要調號。
 
 獨立可跑：.venv/bin/python tests/test_assemble_version.py
 """
@@ -43,7 +45,8 @@ ASSEMBLE_FILES = {   # 10-17 #122 第 1 版的起點
 
 
 def _digest(rel: str) -> str:
-    return hashlib.sha256((REPO_ROOT / rel).read_bytes()).hexdigest()[:16]
+    data = (REPO_ROOT / rel).read_bytes().replace(b"\r\n", b"\n")   # Windows 換行不算改了程式
+    return hashlib.sha256(data).hexdigest()[:16]
 
 
 def _done_workdir(summary_extra: dict | None = None) -> Path:
@@ -93,6 +96,28 @@ def test_speakers_newer_than_product_requires_reassemble():
     sp.write_bytes(sp.read_bytes())
     done, why = execute.render_done(w, TAG, ["sw"])
     assert not done, why
+    shutil.rmtree(w.parent.parent)
+
+
+def test_save_corrected_same_content_does_not_touch_file():
+    """重跑第 1 步、文字修正結果一樣 → `說話者判斷.json` 不重寫（不然下次開始執行會白白重新組裝）。"""
+    from bookclub import speakers
+
+    w = _done_workdir({"組裝做法版本": 1})
+    sp = wd.speakers_path(w)
+    sents = wd.read_json(sp)["sentences"]
+    speakers.save_corrected(w, sents, [[1.0, 2.0]], 0.5, {"改了": 0})
+    time.sleep(0.02)
+    out = w / "輸出"
+    (out / f"成品_v1_{TAG}_sw.mp4").write_bytes(b"x")
+    before = sp.stat().st_mtime_ns
+    time.sleep(0.02)
+    speakers.save_corrected(w, sents, [[1.0, 2.0]], 0.5, {"改了": 0})
+    assert sp.stat().st_mtime_ns == before
+    assert execute.render_done(w, TAG, ["sw"])[0]
+    speakers.save_corrected(w, sents, [[1.0, 3.0]], 0.5, {"改了": 0})   # 內容不同照寫
+    assert wd.read_json(sp)["scan_regions"] == [[1.0, 3.0]]
+    assert not execute.render_done(w, TAG, ["sw"])[0]
     shutil.rmtree(w.parent.parent)
 
 
