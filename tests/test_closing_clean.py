@@ -1198,6 +1198,55 @@ def test_fix_s4_cross_device_copy_size_changed_not_deleted():
         assert vid.is_file()
 
 
+def test_fix2_partial_restore_blocks_resume_until_restored():
+    """刪檔第二輪專審：--restore 只搬回一部分 →「繼續清」不能出現、不能清（會刪掉剛搬回去的和原位的新檔）。"""
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        w = _lesson1(root)
+        _pack(w, root / "D槽")
+
+        def hook(stage, rel):
+            if stage == "搬好":
+                raise _Crash()
+
+        try:
+            closing.clean(w, _plan(w)["清單指紋"], kind="mac", hook=hook)
+        except _Crash:
+            pass
+        _mk(w / "audio.flac", b"new")
+        with redirect_stdout(io.StringIO()):
+            try:
+                closing.restore(w)
+            except closing.CleanError:
+                pass
+        rec = closing.read_record(w)
+        assert rec["狀態"] == closing.CLEANING and rec["清理"].get("搬回一部分")
+        before = _digest(w)
+        assert closing.pack_state(w)["可以繼續清"] is False
+        with redirect_stdout(io.StringIO()):
+            try:
+                closing.clean_resume(w)
+            except closing.CleanError as e:
+                assert "暫停" in str(e)
+            else:
+                raise AssertionError("應該擋")
+        assert _digest(w) == before
+        httpd, base = _serve(w)
+        try:
+            code, r = _call(base, "/api/close/clean", {"繼續": True})
+            assert code == 400 and "暫停" in r["error"], (code, r)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        assert _digest(w) == before
+        (w / "audio.flac").unlink()                          # 開發者處理掉衝突
+        with redirect_stdout(io.StringIO()):
+            closing.restore(w)
+        rec = closing.read_record(w)
+        assert rec["狀態"] == closing.PACKED and not rec["清理"].get("搬回一部分")
+        assert (w / "audio.flac").is_file() and not (w / closing.CLEAN_DIR).exists()
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     failed = 0
