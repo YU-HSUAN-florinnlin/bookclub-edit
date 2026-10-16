@@ -338,6 +338,7 @@ async function rvReload() {
   const rs = rv.data["人名補找"] || {};
   if (rs["補找中"] || (rs["未通知"] && !rv.rescanMute)) rvRescanPoll();   // 10-16 #234：③ 背景補找人名還在做（或做完還沒通知）
   if (rv.cur && !rvItem(rv.cur)) rv.cur = rvFirstPending();
+  if (!document.getElementById("rv-legend")) return;   // 1016-3：人已經離開第 3 步（例如背景補找做完才重抓）：只更新資料，不重畫
   rvRenderAll();
   const s = document.getElementById("rv-modal-settings");
   if (s && s.open) rvRenderSettings();
@@ -1122,6 +1123,7 @@ function rvNamePickOpts(u) {
   if (sameR && (!reals.includes(sameR) || !codeOf(sameR))) {   // 存過「同一人：R」，R 現在沒英文名或不在 ② 裡：照實顯示，不要看起來像別的
     out.push(`<option value="${esc(`same:${sameR}`)}" selected>同一人：${esc(sameR)}（還沒英文名）</option>`);
   }
+  if (!reals.length) out.push('<optgroup label="② 的學員"><option disabled>② 還沒選學員</option></optgroup>');   // 1016-3：讓老師知道為什麼沒有「同一人」
   if (reals.length) {
     out.push(`<optgroup label="② 的學員">${reals.map((r) => codeOf(r)
       ? `<option value="${esc(`same:${r}`)}" ${sel(`same:${r}`)}>同一人：${esc(r)}（${esc(codeOf(r))}）</option>`
@@ -1152,7 +1154,7 @@ function rvNameRowHtml(u) {
       <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
         <select class="rv-unpick" data-name="${esc(u["名字"])}" data-cur="${esc(rvNamePickValue(u))}" aria-label="${esc(u["名字"])}要怎麼換" ${saving ? "disabled" : ""}>${rvNamePickOpts(u)}</select>
         ${state}</div>
-      ${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
+      ${u["名冊上的人會拿掉"] ? '<p class="rv-warnline rv-ownwarn">這是名冊上的人，成品會把名字拿掉重念</p>' : ""}${u["名冊現在有"] ? '<p class="rv-meta">選的時候名冊還沒有，現在有了；這一集照原聲留著</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
 }
 
 function rvNameCountHtml() {
@@ -1175,7 +1177,10 @@ function rvPrepNamesHtml() {
   const un = all.filter((u) => !u["② 已決定"] && !u["都在刪除段落"]);
   const cutOnly = all.filter((u) => u["都在刪除段落"]);
   const unRows = un.map(rvNameRowHtml).join("");
-  const twoBlock = fromTwo.length ? `<li class="rv-person"><details><summary class="rv-meta">② 已經定好的學員（${fromTwo.length} 個）：${fromTwo.map((u) => `${esc(u["名字"])} → ${esc(u["代號"] || "還沒選英文名")}`).join("、")}</summary>
+  // 1016-3：摘要用名冊本名（同一人的幾種寫法只列一次）
+  const twoMap = new Map();
+  fromTwo.forEach((u) => { const k = u["名冊本名"] || u["名字"]; if (!twoMap.has(k) || (!twoMap.get(k) && u["代號"])) twoMap.set(k, u["代號"] || ""); });
+  const twoBlock = twoMap.size ? `<li class="rv-person"><details><summary class="rv-meta">② 已經定好的學員（${twoMap.size} 個）：${[...twoMap].map(([k, c]) => `${esc(k)} → ${esc(c || "還沒選英文名")}`).join("、")}</summary>
       <p class="rv-meta">被提到時換成這個英文名；要改到 ② 改。</p></details></li>` : "";
   const cutBlock = cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只出現在確認刪除的段落裡（${cutOnly.length} 個：${esc(cutOnly.map((u) => u["名字"]).join("、"))}），不用處理</summary>
       <p class="rv-meta">這些段落會整段刪掉。在 ① 改成不刪，就會出現在這一頁要選。</p></details></li>` : "";
@@ -1185,7 +1190,7 @@ function rvPrepNamesHtml() {
   return `${peopleWarn}${rvDupHtml()}${rvAutoHtml()}<div class="rv-meta">每個名字選一項：<ul class="rv-bullets">
     <li>是 ② 的學員（轉錯字、暱稱）→「同一人：…」</li>
     <li>其他人（家人朋友、沒登記的人）→ 挑一個英文名</li>
-    <li>書中人物、公眾人物 →「不用處理」</li>
+    <li>書中人物、公眾人物 →「不用處理」（名冊上的人選「不用處理」也會拿掉名字；書中人物剛好跟學員同名，用「＋新增修改」逐筆處理）</li>
     <li>抓錯的 →「不是名字」</li></ul></div>
     ${rvRescanLineHtml()}
     <p class="rv-meta" id="rvNameCount">${rvNameCountHtml()}</p>

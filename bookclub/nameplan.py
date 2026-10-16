@@ -782,6 +782,20 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     candidates = names.get("candidates", [])
     candidates = review.effective_name_candidates(workdir, candidates, decisions)   # 人工補的、改過時間的
     decisions = review.card_decisions(candidates, decisions)   # 10-03 補修：一張卡的決定套到同一句同代號的每一處
+    # 1016-3 第二、三輪審查：③ 這一集選了「不用處理／不是名字」、沒有代號的名字 → 照原聲留著（只在計算時略過，不寫回覆核決定），
+    # 但**只限** epcodes.keep_original_names 的那幾種（決定時名冊上沒有這個寫法、或是這一集自己加進名冊的）。
+    # 決定時名冊上就有的選了不用處理／不是名字：照舊換掉或排成「換成空的」把名字拿掉重念（隱私安全網；③ 那列會警告）
+    from bookclub import epcodes
+
+    skip3 = epcodes.keep_original_names(workdir)
+    if skip3:
+        decisions = dict(decisions)
+        for i, c in enumerate(candidates, start=1):
+            if not c.get("敏感詞") and not (c.get("代號") or "").strip() and c.get("name") in skip3.get(c.get("canonical"), ()):
+                k = str(c.get("id") or i)
+                d = dict(decisions.get(k) or {})
+                d["tags"] = sorted(set(d.get("tags") or []) | {"不是名字"})
+                decisions[k] = d
     if only:
         candidates = [c for c in candidates if "id" not in c]     # 測試只處理幾筆時，人工補的先不做
         keep = set(only)
