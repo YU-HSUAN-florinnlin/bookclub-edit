@@ -1658,6 +1658,8 @@ document.addEventListener("keydown", (e) => {
   if (e.isComposing || e.keyCode === 229) return;
   if (document.querySelector("dialog[open]")) return;
   if (["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
+  // 10-17 畫面測試：已結案只能看紀錄——通過、要修改、播放、跳秒都不做（以前 Enter 照樣送出、409 再跳對話框）；↑↓ 換卡片只是看，照樣可以
+  if (fc.data && fc.data["已結案"] && e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   const k = e.key.toLowerCase();
   const c = fc.cur && fcCard(fc.cur);
   if (e.key === " ") { e.preventDefault(); fc.video.paused ? fc.video.play().catch(() => {}) : fc.video.pause(); }
