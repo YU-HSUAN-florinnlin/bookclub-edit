@@ -122,13 +122,18 @@ def test_unlisted_decide_adds_to_roster_and_rescans():
         # 10-07 宇軒：名字加進名冊，但代號不寫進名冊（舊名冊有代號欄也留空），只記在這一集
         assert res["加進名冊"] and any(r["寫法"] == "阿強" and not r["代號"] for r in names.load_roster(_DATA / "名冊.csv"))
         # 老師那句「阿強你要不要說說看」補找到了（假資料的名字候選是手寫的，其他名冊名字也可能一起補到）
+        # 10-16 #234：補找改到背景做，等它做完再看
+        assert res["補找中"]
+        st = personnames.wait_rescan(w)
         new = wd.read_json(wd.names_path(w))["candidates"][n0:]
-        assert res["補找到的老師名字"] == len(new) and any(c["代號"] == "Kevin" and c["補找"] for c in new), res
+        assert not st["補找中"] and st["未通知"] == len(new) and any(c["代號"] == "Kevin" and c["補找"] for c in new), st
+        personnames.rescan_seen(w)
         assert personnames.unlisted(w)[0]["做法"] == "換成代號" and personnames.unlisted(w)[0]["已決定"]
         # 已經在名冊上、再選一個新代號：名冊不改（只是預設），這一集的代號表跟名字候選換成新的（09-29 宇軒：只要同一集一致）
         from bookclub import epcodes
 
         res = personnames.decide(w, "阿強", "換成代號", "Kyle")
+        personnames.wait_rescan(w)
         assert not res["加進名冊"] and any(r["寫法"] == "阿強" and not r["代號"] for r in names.load_roster(_DATA / "名冊.csv"))
         assert epcodes.episode_codes(w)["阿強"] == "Kyle"
         cands = [c for c in wd.read_json(wd.names_path(w))["candidates"] if c["canonical"] == "阿強"]
@@ -146,6 +151,7 @@ def test_unlisted_decide_adds_to_roster_and_rescans():
         # 其實是上面「學員是誰」選過的某位（轉錯字）：用他的代號，名冊那一列補上這個寫法
         code = next(r["代號"] for r in names.load_roster(_DATA / "名冊.csv") if r["canonical"] == "小美")
         res = personnames.decide(w, "某作者", "是上面的學員", same_as="小美")
+        personnames.wait_rescan(w)
         assert any(r["寫法"] == "某作者" and r["canonical"] == "小美" for r in names.load_roster(_DATA / "名冊.csv"))
         d = next(x for x in personnames.unlisted(w) if x["名字"] == "某作者")
         assert (d["做法"], d["同一人"], d["代號"]) == ("是上面的學員", "小美", code)

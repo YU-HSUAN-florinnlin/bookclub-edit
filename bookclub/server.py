@@ -1548,6 +1548,12 @@ class Handler(BaseHTTPRequestHandler):
             if not server.has_workdir:
                 self._send_json(200, {"沒有專案": True, "workdir": None, "video": {}, "substeps": {}, "proofread": {}})
                 return
+            try:   # 10-16 #234：上次背景補找人名沒做完（伺服器關掉）→ 打開網頁就補做
+                from bookclub import personnames
+
+                personnames.ensure_rescan(server.workdir)
+            except Exception:  # noqa: BLE001 — 不擋畫面
+                pass
             self._send_json(200, build_state(server.workdir, video=server.video))
         elif path == "/api/profile":
             from bookclub import profile
@@ -1582,12 +1588,20 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub.turns import page_data as turns_page
 
             self._send_json(200, turns_page(server.workdir))
+        elif path == "/api/people/rescan":   # 10-16 #234：③ 背景補找老師提到的名字做到哪了
+            from bookclub import personnames
+
+            self._send_json(200, personnames.rescan_status(server.workdir))
         elif path == "/api/review":
             from bookclub.review import page_data as review_page
 
             snap = _needs_snap(server)   # 10-15 第1段審查修正：第 3 步快照在算 page 之前拍（中間有 POST 下次會再同步）
             page = review_page(server.workdir, video=server.video)
             _needs_ensure(server, page, snap)   # 10-14 第5步2.0 第1段：第一次打開升級；之後同步第 3 步的卡片（用這份 page，不另外算）
+            from bookclub import personnames
+
+            personnames.ensure_rescan(server.workdir)   # 10-16 #234：上次背景補找人名沒做完就補做
+            page["人名補找"] = personnames.rescan_status(server.workdir)
             self._send_json(200, {**page, "AI執行中": server.exec_running(), "開發者": _developer()})   # 09-30：執行中第 3 步變唯讀；10-16 #225：開發者設定（「你標的 → 對齊後」只給開發者看）
         elif path == "/api/video":
             from bookclub.review import video_path
@@ -1828,6 +1842,10 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub import personnames
 
             self._send_json(200, personnames.decide(server.workdir, str(body["名字"]), str(body["做法"]), body.get("代號"), body.get("同一人")))
+        elif path == "/api/people/rescan/seen":   # 10-16 #234：「補找到 N 處」通知跳過了，歸零
+            from bookclub import personnames
+
+            self._send_json(200, personnames.rescan_seen(server.workdir))
         elif path.startswith("/api/review/"):
             from bookclub import review as rv
 
@@ -1951,6 +1969,10 @@ class Handler(BaseHTTPRequestHandler):
                                            body.get("看過的列") if isinstance(body.get("看過的列"), list) else None,
                                            look_key=body.get("看一眼") if isinstance(body.get("看一眼"), str) else None))
         elif path == "/api/execute/start":
+            from bookclub import personnames
+
+            if server.has_workdir and personnames.rescan_busy(server.workdir):   # 10-16 #234：③ 補找老師提到的名字還沒做完
+                raise ValueError("還在補找老師提到的名字（第 3 步「③ 辨識其他名稱如何替換」剛選的），等一下再按")
             result = server.start_execute(body)
             self._send_json(202 if result.get("started") else 409, result)
         elif path == "/api/run/analyze":
