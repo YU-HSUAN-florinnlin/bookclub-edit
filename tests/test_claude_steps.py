@@ -209,6 +209,7 @@ def test_start_analyze_says_when_claude_missing():
         srv.workdir = w
         srv._fresh_run_state = lambda: {"running": False, "messages": []}
         srv._run_job = lambda video, opts: None
+        srv.close_packing = lambda: False   # 1015-8 第 2 段起 start_analyze 會問結案打包有沒有在存（假的伺服器補上）
 
         class _T:
             def __init__(self, target=None, args=(), daemon=None):

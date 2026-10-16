@@ -182,6 +182,15 @@ def wd_no_writes():
     return no_writes()
 
 
+def _server_closed(server) -> bool:
+    """目前的工作區已結案（沒有專案＝False）。"""
+    try:
+        w = server.workdir
+    except Exception:  # noqa: BLE001 — 沒有專案
+        return False
+    return _closed(w)
+
+
 def _closed(workdir) -> bool:
     from bookclub import closing
 
@@ -1792,7 +1801,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route_get_api(self, path: str, query: dict) -> None:
         server = self.server
-        if server.has_workdir and _closed(server.workdir):
+        if _server_closed(server):
             # 1015-8 第 3 段（32 號設計 §5.2、§9.3）：已結案不切試聽檔、不寫匯出檔（聲音也清掉了）；其他 GET 照樣讀，
             # 但打開頁面時順手存檔的地方（第 3、5 步的 page_data 會整理後存檔）一律不寫——瘦身版裡不長出、不改任何檔
             if path in CLOSED_GET_BLOCK or (path == "/api/audio" and "path" not in query):
@@ -1968,7 +1977,7 @@ class Handler(BaseHTTPRequestHandler):
     def _route_post_api(self, path: str, body: dict) -> None:
         server = self.server
         # 1015-8 第 3 段（32 號設計 §5.2）：伺服器一層擋——已結案（含清理中）所有會寫這個工作區的 API 一律 409
-        if server.has_workdir and _closed(server.workdir) and not closed_post_allowed(path, body):
+        if _server_closed(server) and not closed_post_allowed(path, body):
             raise Closed(CLOSED_MSG)
         if path.startswith(STEP3_WRITES) and path not in STEP3_WRITES_OK and server.exec_running():
             raise Busy("AI 正在執行第 4 步，第 3 步這時候不能改（改了這次執行也用不到）。等它跑完，或到第 4 步按「停止」")
