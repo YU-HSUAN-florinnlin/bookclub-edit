@@ -302,7 +302,8 @@ function clView(d) {
     status = `已結案，空出 ${clGB(cl["省下位元組"])}。成品存在：${cl["成品存在"] || ""}`;
     statusKind = "done"; badge = "已結案";
   } else if (st === "清理中") {
-    status = js === "失敗" && job["錯誤"] ? `${job["錯誤"]}` : "上次清到一半。";
+    status = d["可以繼續清"] === false ? "這支影片的清理被開發者暫停了，先不要清。"   // 開發者 --restore 暫停中
+      : js === "失敗" && job["錯誤"] ? `${job["錯誤"]}` : "上次清到一半。";
     if (js === "失敗") { statusKind = "error"; badge = "沒有清完"; }
   } else if (js === "失敗") { status = job["錯誤"] || "沒有存好"; statusKind = "error"; badge = "沒有存好"; }
   else if (js === "停止") status = "停下來了：存好的留著，按「繼續」接著存。";
@@ -316,7 +317,7 @@ function clView(d) {
   return { running, line, warn, btn, status, statusKind, badge,
            stop: running && js !== "清理中",
            resume: !running && !cleaning && st !== "已結案" && !!d["可以繼續"],
-           cleanResume: !running && cleaning,
+           cleanResume: !running && cleaning && d["可以繼續清"] !== false,
            cleanBtn: !running && st === "已打包",
            reveal: !running && statusKind === "done" };
 }

@@ -884,6 +884,7 @@ def test_js_close_box_texts():
         clView({...base, "狀態": "已結案", "只有紀錄": true, "清理": {"省下位元組": 2.6e9, "成品存在": "D:\\\\讀書會剪輯結案\\\\第一堂_20261016"}}),
         clView({...base, "狀態": "清理中", "可以繼續清": true}),
         clView({...base, "工作": {"狀態": "已存好", "清理錯誤": "清單變了，請重新看一次。"}, "狀態": "已打包", "核對通過的": {"資料夾": "D:\\\\x"}}),
+        clView({...base, "狀態": "清理中", "可以繼續清": false}),
       ]));"""
     v = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
     assert v[0]["line"] == "會把成品影片、逐字稿、修改紀錄存到你選的地方，然後刪掉這裡的暫存檔（共 2.6 GB）。", v[0]
@@ -893,6 +894,7 @@ def test_js_close_box_texts():
     assert v[3]["btn"] == "再存一份紀錄…"
     assert v[4]["status"] == "上次清到一半。" and v[4]["cleanResume"] and not v[4]["resume"]
     assert "清單變了" in v[5]["status"] and v[5]["cleanBtn"]
+    assert not v[6]["cleanResume"] and "暫停" in v[6]["status"]          # 開發者 --restore 暫停中：沒有「繼續清」
 
 
 def test_js_overview_groups_closed_last():

@@ -900,7 +900,7 @@ def pack_state(workdir: str | Path) -> dict:
     return {"狀態": st, "輸出過": bool(exp), "打包大小": pack_size(items), "檔數": len(items) + (1 if items else 0),
             "暫存大小": plan["合計"] if plan else 0, "清單指紋": plan["清單指紋"] if plan else None,
             "含影片副本": bool(plan and plan["含影片副本"]), "清理": clean_info, "已結案": closed(w),
-            "可以繼續清": st == CLEANING,
+            "可以繼續清": st == CLEANING and not cl.get("搬回一部分"),   # 開發者 --restore 暫停中：畫面不給「繼續清」
             "最後輸出版本": ver["最後輸出版本"], "最新版本": ver["最新版本"],
             "不是最新版": bool(ver["最後輸出版本"] and ver["最新版本"] and ver["最後輸出版本"] != ver["最新版本"]),
             "最近一次": {k: v for k, v in last.items() if k != "檔案"} if last else None, "核對通過的": ok,
@@ -1223,9 +1223,23 @@ def clean(workdir: str | Path, fingerprint: str, *, busy=None, kind: str | None 
 def clean_resume(workdir: str | Path, hook=None) -> dict:
     """「繼續清」：照 `結案.json` 記的清單把還在原位的搬完、再刪（清單是上次確認過的，不重算、不再問）。"""
     w = Path(workdir)
-    if read_record(w).get("狀態") != CLEANING:
+    rec = read_record(w)
+    if rec.get("狀態") != CLEANING:
         raise CleanError("沒有清到一半的東西。")
+    paused_check(rec)
     return _finish(w, hook)
+
+
+PAUSED = "這支影片的清理被開發者暫停了，先不要清。"
+
+
+def paused_check(rec: dict) -> None:
+    """第二輪專審：開發者 --restore 只搬回一部分（`清理.搬回一部分`）＝暫停中，不能繼續清
+    （會把剛搬回去的檔和原位的新檔一起刪掉）。"""
+    if (rec.get("清理") or {}).get("搬回一部分"):
+        print("⚠️ [結案清理] 清理被 --restore 暫停（有檔原位已經有同名的，留在 .結案清理中/）：比對後移走其中一邊，"
+              "再跑一次 bookclub close --restore <工作區>；全部搬回後才能重新清")
+        raise CleanError(PAUSED)
 
 
 def _import_dir(data: Path | None) -> str:
@@ -1374,6 +1388,7 @@ def restore(workdir: str | Path) -> int:
         raise CleanError(f"搬回 {n} 個；有 {len(left)} 個檔原位已經有同名的檔，留在 {CLEAN_DIR}/。請開發者先手動處理"
                          f"（比對後移走其中一邊），再跑一次 --restore。")
     cl["搬回"] = _now()
+    cl.pop("搬回一部分", None)   # 全部搬回了：暫停解除
     rec["狀態"] = PACKED if _verified_pack(rec) else PACKING
     _write_record(w, rec)
     return n

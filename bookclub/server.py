@@ -1448,6 +1448,10 @@ class BookclubServer(ThreadingHTTPServer):
         if body.get("繼續"):
             if st != closing.CLEANING:
                 raise ValueError("沒有清到一半的東西。")
+            try:   # 第二輪專審：開發者 --restore 暫停中不能繼續清
+                closing.paused_check(closing.read_record(self.workdir))
+            except closing.CleanError as e:
+                raise ValueError(str(e)) from None
             job = closing.CleanJob(self.workdir, resume=True)
         else:
             fp = str(body["清單指紋"])
