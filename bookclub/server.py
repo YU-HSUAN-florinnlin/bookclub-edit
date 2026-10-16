@@ -164,6 +164,42 @@ class NoProject(Exception):
     """還沒選專案（`bookclub serve` 沒帶工作區、網頁上也還沒選影片）。"""
 
 
+class Closed(Exception):
+    """1015-8 第 3 段（32 號設計 §5.2）：這支影片已結案，這裡只能看紀錄（所有會寫工作區的 API 一律 409）。"""
+
+
+CLOSED_MSG = "這支影片已結案，這裡只能看紀錄。"
+# 已結案時照樣放行的 POST（不寫這個工作區）：結案框（再存一份紀錄）、切換／開始別的專案、設定包、複製工作、給新影片的選檔
+CLOSED_POST_OK = ("/api/close/", "/api/projects/")
+CLOSED_POST_OK_EXACT = ("/api/profile/import", "/api/copy/cancel", "/api/pick/forget")
+# 已結案時擋的 GET（會在工作區裡切試聽檔、寫匯出檔）
+CLOSED_GET_BLOCK = ("/api/final/clip", "/api/final/vclip", "/api/review/export.zip")
+
+
+def wd_no_writes():
+    from bookclub.workdir import no_writes
+
+    return no_writes()
+
+
+def _closed(workdir) -> bool:
+    from bookclub import closing
+
+    try:
+        return closing.closed(workdir)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def closed_post_allowed(path: str, body: dict) -> bool:
+    """（純函式）已結案時這個 POST 能不能照樣做。選檔視窗只有「給新影片」的能用（給目前專案的片頭片尾會寫工作區設定）。"""
+    if path.startswith(CLOSED_POST_OK) or path in CLOSED_POST_OK_EXACT:
+        return True
+    if path in ("/api/pick", "/api/pick/browsed"):
+        return str((body or {}).get("給", "新影片")) != "目前"
+    return False
+
+
 class Busy(Exception):
     """AI 執行（第 4 步）還在跑：第 3 步的東西這時候不能改（09-30）。"""
 
@@ -242,7 +278,7 @@ def known_project(d: Path) -> bool:
 
 def _mark_interrupted(workdir: Path | None) -> None:
     """進度檔殘留「進行中」＝上次跑到一半伺服器被關掉 → 改成「中斷」（09-30）。"""
-    if not workdir:
+    if not workdir or _closed(workdir):   # 1015-8 第 3 段：已結案的瘦身版不補寫任何檔（§9.3）
         return
     from bookclub.execute import mark_interrupted
 
@@ -326,7 +362,17 @@ def _project_row(d: Path, current: Path | None) -> dict:
         "有覆核": (d / "覆核" / "覆核決定.json").exists(),
         "舊位置": d.parent == workroot(),
         "修改時間": datetime.fromtimestamp(d.stat().st_mtime).strftime("%m-%d %H:%M"),
+        "已結案": _closed_info(d),   # 1015-8 第 3 段（§5.3）：總覽放到最下面「已結案」那一組
     }
+
+
+def _closed_info(d: Path) -> dict | None:
+    from bookclub import closing
+
+    try:
+        return closing.closed_info(d)
+    except Exception:  # noqa: BLE001 — 讀不到當沒結案（不擋總覽）
+        return None
 
 
 def list_projects(current: Path | None = None) -> dict:
@@ -588,6 +634,7 @@ def build_state(workdir: Path, video: Path | None = None) -> dict:
         "開始前": prep_state,
         "workdir": str(workdir),
         "專案標示": project_label(workdir),   # 10-08：頂端常駐「現在在：名稱（上一層）」
+        "已結案": _closed(workdir), "結案": _closed_info(workdir),   # 1015-8 第 3 段：每一步頂端那一句
         "video": {
             "path": str(video_path) if video_path else None,
             "name": video_path.name if video_path else None,
@@ -935,7 +982,8 @@ class BookclubServer(ThreadingHTTPServer):
         self.pick_token: dict[tuple[str, str], str] = {}   # 每個 (用途, 去處) 最新的那一次選擇（見 accept_pick 上面的說明）
         self.exporting = False                     # 「複製成品到 Windows」正在準備（找下載資料夾）
         self.close_job = None                      # 1015-8：結案打包（closing.PackJob；同時只有一個，佔 pick_lock）
-        self.final_exporting = False               # 第 5 步「輸出成品」正在複製最終成品（跟結案打包互擋，佔 pick_lock）
+        self.final_exporting = 0                   # 第 5 步「輸出成品」正在複製最終成品的個數（跟結案打包互擋，佔 pick_lock；
+        #                                            第 2 段審查建議 (a)：計數器，同時兩個時第一個做完不會清成 0）
         try:   # 上次複製到一半伺服器被關掉留下的暫存檔（只清這個工具自己取名的 .*.複製中）
             from bookclub import fileio
 
@@ -1331,7 +1379,12 @@ class BookclubServer(ThreadingHTTPServer):
             locp = closing.check_location(self.workdir, loc, need)
         except closing.PackError as e:
             raise ValueError(str(e)) from None
-        job = closing.PackJob(self.workdir, locp, display=disp, resume=resume, records_only=records_only)
+        # 第 3 段（§1a 第 3 點）：還沒打包好過（第一次、或存到一半繼續）而且帶了畫面上的清單指紋 → 存好核對全對就接著清
+        fp = body.get("清單指紋")
+        then_clean = fp if isinstance(fp, str) and fp and not records_only and \
+            rec.get("狀態") in (None, closing.PACKING) else None
+        job = closing.PackJob(self.workdir, locp, display=disp, resume=resume, records_only=records_only,
+                              clean_fp=then_clean, busy=self._clean_busy)
         with self.pick_lock:
             if self.final_exporting:
                 raise ValueError("成品正在輸出，等它做完再結案打包。")
@@ -1348,7 +1401,7 @@ class BookclubServer(ThreadingHTTPServer):
         return {"ok": True, "工作": job.to_dict(), "提醒": closing.ubuntu_inside_warning(kind, locp)}
 
     def close_packing(self) -> bool:
-        """結案打包正在存（第 4 步開始、輸出成品、影片分析都要看這個）。"""
+        """結案打包正在存、或正在清（第 4 步開始、輸出成品、影片分析都要看這個）。"""
         job = self.close_job
         return bool(job is not None and job.running)
 
@@ -1357,8 +1410,55 @@ class BookclubServer(ThreadingHTTPServer):
         job = self.close_job
         if job is None or not job.running:
             raise ValueError("現在沒有在結案打包")
+        if job.state == "清理中":   # §4.4：清理開始後不給停止
+            raise ValueError("已經在清了，清理開始後不能停（幾秒就好）。")
         job.cancel()
         return {"ok": True}
+
+    def _clean_busy(self) -> str | None:
+        """清之前（§4.3 第 4 點）：第 4 步、影片分析、輸出成品、複製有沒有在跑（回原因或 None）。不看結案打包自己
+        （存好接著清時，打包工作還算在跑）。#236 的更新指令也看同一個 `/api/run/status`。"""
+        if self.exec_running():
+            return "第 4 步正在跑，跑完才能清。"
+        if self.run_status_running():
+            return "影片分析正在跑，跑完才能清。"
+        with self.pick_lock:
+            if self.final_exporting:
+                return "成品正在輸出，等它做完再清。"
+            if self.exporting or any(getattr(j, "running", False) for j in self.copy_jobs.values()):
+                return "正在複製檔案，複製完才能清。"
+        return None
+
+    def close_clean(self, body: dict) -> dict:
+        """`POST /api/close/clean` {清單指紋} 或 {繼續: true}（§4.3、§4.4）：再確認都過了就開背景工作清；「繼續清」照上次記的清單做完。"""
+        from bookclub import closing
+
+        st = closing.state(self.workdir)
+        if st == closing.CLOSED:
+            raise ValueError("這支影片已結案了，沒有東西可以清。")
+        if body.get("繼續"):
+            if st != closing.CLEANING:
+                raise ValueError("沒有清到一半的東西。")
+            job = closing.CleanJob(self.workdir, resume=True)
+        else:
+            fp = str(body["清單指紋"])
+            why = self._close_busy()
+            if why:
+                raise ValueError(why)
+            try:   # 先在這裡確認一次（不行馬上回一句）；背景工作開始時會再確認一次
+                closing.clean_check(self.workdir, fp, busy=self._clean_busy)
+            except closing.CleanError as e:
+                raise ValueError(str(e)) from None
+            job = closing.CleanJob(self.workdir, fp, busy=self._clean_busy)
+        with self.pick_lock:
+            if self.close_job is not None and self.close_job.running:
+                raise ValueError("結案打包正在存，等它存完。")
+            self.close_job = job   # 佔位子：第 4 步、輸出成品、分析開始前都看 close_packing()
+            if self.exec_running() or self.run_status_running():
+                self.close_job = None
+                raise ValueError("第 4 步或影片分析剛開始跑，跑完才能清。")
+        job.start()
+        return {"ok": True, "工作": job.to_dict()}
 
     def exec_running(self) -> bool:
         with self.run_lock:
@@ -1675,6 +1775,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(403, {"error": str(e)})
         except NoProject as e:
             self._send_json(409, {"error": str(e), "沒有專案": True})
+        except Closed as e:
+            self._send_json(409, {"error": str(e), "已結案": True})
         except FileNotFoundError as e:
             self._send_json(404, {"error": str(e)})
         except ValueError as e:
@@ -1689,6 +1791,17 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_file(file_path)
 
     def _route_get_api(self, path: str, query: dict) -> None:
+        server = self.server
+        if server.has_workdir and _closed(server.workdir):
+            # 1015-8 第 3 段（32 號設計 §5.2、§9.3）：已結案不切試聽檔、不寫匯出檔（聲音也清掉了）；其他 GET 照樣讀，
+            # 但打開頁面時順手存檔的地方（第 3、5 步的 page_data 會整理後存檔）一律不寫——瘦身版裡不長出、不改任何檔
+            if path in CLOSED_GET_BLOCK or (path == "/api/audio" and "path" not in query):
+                raise Closed(CLOSED_MSG)
+            with wd_no_writes():
+                return self._route_get_api_inner(path, query)
+        return self._route_get_api_inner(path, query)
+
+    def _route_get_api_inner(self, path: str, query: dict) -> None:
         server = self.server
         if path == "/api/state":
             if not server.has_workdir:
@@ -1717,7 +1830,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/roomtone":   # 10-02 第六批第五件：第 2 步「全片底噪」（沒有就自動補挑）
             from bookclub import roomtone
 
-            self._send_json(200, roomtone.ensure_info(server.workdir) or {"沒有": True})
+            # 1015-8 第 3 段（§9.3）：已結案不自動補挑底噪（會去讀已經清掉的 audio.flac、寫檔），只讀記下的
+            info = roomtone.load_info(server.workdir) if _closed(server.workdir) else roomtone.ensure_info(server.workdir)
+            self._send_json(200, info or {"沒有": True})
         elif path == "/api/names":
             self._send_json(200, build_names(server.workdir))
         elif path == "/api/proofread":
@@ -1835,6 +1950,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(409, {"error": str(e), "沒有專案": True})
         except Busy as e:
             self._send_json(409, {"error": str(e), "執行中": True})
+        except Closed as e:
+            self._send_json(409, {"error": str(e), "已結案": True})
         except FileNotFoundError as e:
             self._send_json(404, {"error": str(e)})
         except json.JSONDecodeError:
@@ -1850,6 +1967,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route_post_api(self, path: str, body: dict) -> None:
         server = self.server
+        # 1015-8 第 3 段（32 號設計 §5.2）：伺服器一層擋——已結案（含清理中）所有會寫這個工作區的 API 一律 409
+        if server.has_workdir and _closed(server.workdir) and not closed_post_allowed(path, body):
+            raise Closed(CLOSED_MSG)
         if path.startswith(STEP3_WRITES) and path not in STEP3_WRITES_OK and server.exec_running():
             raise Busy("AI 正在執行第 4 步，第 3 步這時候不能改（改了這次執行也用不到）。等它跑完，或到第 4 步按「停止」")
         if path == "/api/execute/stop":
@@ -1895,6 +2015,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/close/reveal":   # 打開打包資料夾（路徑是伺服器自己記的）
             self._send_json(200, server.close_reveal())
             return
+        if path == "/api/close/clean":   # 1015-8 第 3 段：清空間（再確認 → 搬 → 刪）、繼續清
+            self._send_json(200, server.close_clean(body))
+            return
         if path == "/api/final/to_windows":
             self._send_json(200, server.final_to_windows(confirm=bool(body.get("confirm"))))
             return
@@ -1914,6 +2037,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not video.is_file() or video.suffix.lower() not in VIDEO_EXTS:
                     raise FileNotFoundError(f"不是影片檔：{video}")
             d = project_dir_for(video)
+            if _closed(d):   # 1015-8 第 3 段：同一支影片的工作區已結案（瘦身版），不在裡面重新分析
+                raise Closed("這支影片已結案，這裡只能看紀錄。要重做得先由開發者取消結案（bookclub close --reopen）。")
             existed = d.exists()
             if server.run_status_running():
                 raise ValueError("分析還在跑，等它結束再開始另一支")
@@ -2091,7 +2216,7 @@ class Handler(BaseHTTPRequestHandler):
                 with server.pick_lock:
                     if server.close_packing():
                         raise Busy("結案打包正在存，等它存完再輸出成品。")
-                    server.final_exporting = True
+                    server.final_exporting += 1
                 try:
                     ver = body.get("版本")
                     if isinstance(ver, int) and not isinstance(ver, bool) and ver != _current_version(server):
@@ -2102,7 +2227,7 @@ class Handler(BaseHTTPRequestHandler):
                         out = fc.export_final(w, confirm=body.get("確定") is True)   # 10-08：還沒看完要先確認
                 finally:
                     with server.pick_lock:
-                        server.final_exporting = False
+                        server.final_exporting -= 1
                 self._send_json(200, out)
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
@@ -2214,6 +2339,7 @@ def _final_data(server, page: dict | None) -> dict:
     index = finalcheck._index(server.workdir)
     data = finalcheck.page_data(server.workdir, index=index)
     data.update(finalcards.page_part(server.workdir, page, running=server.exec_running(), index=index))
+    data["已結案"], data["結案"] = _closed(server.workdir), _closed_info(server.workdir)   # 1015-8 第 3 段：瘦身版
     return data
 
 
@@ -2235,6 +2361,8 @@ def _needs_ensure(server, page: dict | None = None, snap: dict | None = None) ->
     try:
         w = server.workdir
     except Exception:  # noqa: BLE001 — 沒有專案：不用做
+        return
+    if _closed(w):   # 1015-8 第 3 段（§9.3）：已結案的瘦身版不升級、不同步（不在裡面長出檔案）
         return
     needs.ensure(w, running=server.exec_running(), page=page, snap=snap if page is not None else None)
 

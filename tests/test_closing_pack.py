@@ -386,7 +386,8 @@ def test_js_close_box_view():
         clView({...base, "狀態": "已結案", "只有紀錄": true}),
       ]));"""
     v = json.loads(subprocess.run([node, "-e", code], capture_output=True, text=True, check=True).stdout)
-    assert v[0]["btn"] == "結案打包…" and v[0]["line"] == "會把成品影片、逐字稿、修改紀錄存到你選的地方。"
+    # 第 3 段：接上 clean_plan 之後那一句補回「然後刪掉這裡的暫存檔（共 X GB）」（32 號設計 §1a 第 1 點）
+    assert v[0]["btn"] == "結案打包…" and v[0]["line"] == "會把成品影片、逐字稿、修改紀錄存到你選的地方，然後刪掉這裡的暫存檔（共 2.6 GB）。"
     assert not v[0]["warn"] and not v[0]["status"]
     assert v[1]["warn"] == "最後輸出的是第 2 版，最新是第 3 版。"
     assert v[2]["btn"] == "再存一份…" and "已存好" in v[2]["status"] and "第一堂_20261016" in v[2]["status"]

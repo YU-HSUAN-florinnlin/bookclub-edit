@@ -580,22 +580,8 @@ def resume_folder(entry: dict | None) -> Path | None:
 
 
 def clean_estimate(workdir: str | Path) -> int:
-    """（第 2 段的佔位，第 3 段換成 `clean_plan` 的合計）框裡那一句「共 N GB」：工作區裡大的暫存檔大概多大——
-    `輸出/` 的影片與聲音、`生成/` 的聲音、`web快取/`、`audio*.flac`、`名字候選/`、`重疊/`、`參考音/` 的聲音。只讀。"""
-    w = Path(workdir)
-    total = 0
-    for sub, exts in (("輸出", (".mp4", ".mov", ".wav")), ("生成", (".wav",)), ("web快取", None), ("名字候選", None),
-                      ("重疊", None), ("參考音", (".wav",)), ("chunks", None)):
-        d = w / sub
-        if not d.is_dir():
-            continue
-        for root, _dirs, files in os.walk(d, followlinks=False):
-            for f in files:
-                if exts is None or f.lower().endswith(exts):
-                    total += _file_size(os.path.join(root, f), None)
-    for p in w.glob("audio*.flac"):
-        total += _file_size(str(p), None)
-    return total
+    """框裡那一句「共 N GB」（第 3 段起＝`clean_plan` 的合計；舊名字留著給別的地方用）。只讀。"""
+    return clean_plan(workdir)["合計"]
 
 
 def _sha(path: Path) -> str:
@@ -662,7 +648,7 @@ class PackJob:
     """背景打包一次（網頁看得到第幾個檔、可以停）。只寫目的地與 `結案.json`。"""
 
     def __init__(self, workdir: Path, location: Path, *, display: str | None = None, resume: bool = False,
-                 records_only: bool = False, fail_hook=None):
+                 records_only: bool = False, fail_hook=None, clean_fp: str | None = None, busy=None):
         self.workdir, self.location = Path(workdir), Path(location)
         self.display = display or str(location)
         self.resume, self.records_only = resume, records_only
@@ -675,10 +661,15 @@ class PackJob:
         self._fail_hook = fail_hook   # 測試用：fail_hook(相對路徑, 第幾次) → 回 True 就把目的地那個檔改壞一個位元組
         self.thread: threading.Thread | None = None
         self.purpose = "結案打包"
+        # 第 3 段（§1a 第 3 點）：存→核對→全對才清，一個按鈕跑到底。clean_fp＝老師按下去那一刻畫面上的清單指紋；
+        # busy()＝伺服器問「第 4 步、輸出、複製有沒有在跑」（回原因或 None）
+        self.clean_fp, self._busy = clean_fp, busy
+        self.clean_error: str | None = None
+        self.saved: int | None = None
 
     @property
     def running(self) -> bool:
-        return self.state in ("等待", "存檔中", "核對中")
+        return self.state in ("等待", "存檔中", "核對中", "清理中")
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -691,12 +682,24 @@ class PackJob:
     def to_dict(self) -> dict:
         return {"用途": self.purpose, "狀態": self.state, "第幾個": self.index, "共幾個": self.total,
                 "檔名": self.current, "錯誤": self.error, "位置顯示": self.display,
-                "資料夾": windows_display(self.folder) if self.folder else None}
+                "資料夾": windows_display(self.folder) if self.folder else None,
+                "清理錯誤": self.clean_error, "省下位元組": self.saved}
 
     # --- 主流程 ---
     def run(self) -> None:
         try:
             self._run()
+            if self.clean_fp and not self.records_only:
+                self.state = "清理中"   # 從這裡開始不給停止（§4.4）
+                try:
+                    self.saved = clean(self.workdir, self.clean_fp, busy=self._busy)["省下位元組"]
+                    self.state = CLOSED
+                except CleanError as e:   # 清之前的再確認沒過：存好的留著，一個檔都沒刪
+                    self.state, self.clean_error = "已存好", str(e)
+                except Exception as e:  # noqa: BLE001 — 搬到一半：結案.json 是「清理中」，下次「繼續清」
+                    print(f"⚠️ [結案清理] {type(e).__name__}：{e}")
+                    self.state, self.error = "失敗", CLEAN_FAILED
+                return
         except PackError as e:
             self.state, self.error = ("停止" if self._cancel.is_set() else "失敗"), str(e)
         except OSError as e:
@@ -783,7 +786,10 @@ class PackJob:
         → 重讀重存，最多 3 次，還是變才失敗；影片等大檔一變就失敗。"""
         rel = it["相對路徑"]
         src = it.get("來源")
-        small = src is not None and src.suffix in SMALL_RECORD_EXTS and src.stat().st_size < SMALL_RECORD_BYTES
+        try:   # 第 2 段審查建議 (b)：來源剛好不見了（又組裝、被移走）＝來源變了，不是「出了問題」
+            small = src is not None and src.suffix in SMALL_RECORD_EXTS and src.stat().st_size < SMALL_RECORD_BYTES
+        except OSError:
+            raise PackError(SOURCE_CHANGED.format(rel)) from None
         for n in range(1, (SMALL_RECORD_TRIES if small else 1) + 1):
             try:
                 return self._one_try(folder, it)
@@ -884,8 +890,18 @@ def pack_state(workdir: str | Path) -> dict:
     resumable = resume_folder(last) is not None
     if ok:
         ok = {**ok, "資料夾": windows_display(ok.get("資料夾") or ""), "檔案": len(ok.get("檔案") or [])}
+    # 第 3 段：框裡那一句的大小、按下去要帶的清單指紋（清理中、已結案不重算：清單是上次記下的）
+    plan = clean_plan(w) if st not in (CLEANING, CLOSED) else None
+    cl = rec.get("清理") or {}
+    clean_info = None
+    if cl:
+        clean_info = {"省下位元組": cl.get("省下位元組"), "開始": cl.get("開始"), "完成": cl.get("完成"),
+                      "檔數": len(cl.get("清單") or []), "成品存在": windows_display(cl.get("打包資料夾") or "")}
     return {"狀態": st, "輸出過": bool(exp), "打包大小": pack_size(items), "檔數": len(items) + (1 if items else 0),
-            "暫存大小": clean_estimate(w), "最後輸出版本": ver["最後輸出版本"], "最新版本": ver["最新版本"],
+            "暫存大小": plan["合計"] if plan else 0, "清單指紋": plan["清單指紋"] if plan else None,
+            "含影片副本": bool(plan and plan["含影片副本"]), "清理": clean_info, "已結案": closed(w),
+            "可以繼續清": st == CLEANING,
+            "最後輸出版本": ver["最後輸出版本"], "最新版本": ver["最新版本"],
             "不是最新版": bool(ver["最後輸出版本"] and ver["最新版本"] and ver["最後輸出版本"] != ver["最新版本"]),
             "最近一次": {k: v for k, v in last.items() if k != "檔案"} if last else None, "核對通過的": ok,
             "成品不在": missing, "可以繼續": resumable, "只有紀錄": records_only}
@@ -930,3 +946,451 @@ def pack_locations(kind: str | None = None, *, ismount=os.path.ismount, download
         add("D", "D 槽", Path("/mnt/d"))
     add("自己選", "自己選", None)
     return out
+
+
+# ===========================================================================
+# 清空間（32 號設計 §4，以 §1a、§1b 為準；1015-8 第 3 段）
+# ===========================================================================
+#
+# 三道保險（§9.1）：
+# 1. 沒存好就不能清：最近一次核對通過的打包、`含成品: true`；清之前再看一次打包的每個檔在、大小對（`clean_check`）。
+# 2. 只刪認得的：清的規則和留的規則寫在下面同一個地方（`classify`），一個檔兩邊都對到時留的贏、兩邊都沒對到＝不認得、不動；
+#    只在工作區裡找、不跟捷徑（`os.walk(followlinks=False)`，捷徑本身也不刪）。工作區外只有一個例外：WSL 上複製進
+#    `~/讀書會剪輯資料/影片/` 的那一支影片（§1a 問題 1 甲；Mac 上影片是原檔，不碰）。
+# 3. 看到的就是刪的：清單指紋要跟老師按下去那一刻的一樣；先把清單寫進 `結案.json`（清理中）→ 一個一個搬進 `.結案清理中/`
+#    → 寫「刪除開始」→ 整個資料夾刪掉 → 寫已結案。中斷了「繼續清」照記下的清單做完；「刪」開始前開發者可以 `--restore` 搬回去。
+
+import errno
+import fnmatch
+import json
+from pathlib import PurePosixPath
+
+CLEAN_DIR = ".結案清理中"
+OUTSIDE_DIR = "_工作區外"                     # .結案清理中/ 底下放工作區外那支影片副本的地方（工作區自己的檔不會叫這個名字：不認得）
+CAT_VIDEO, CAT_AB, CAT_GEN, CAT_TMP, CAT_COPY = "影片", "比對用聲音", "AI 生成的聲音", "暫存", "影片副本"
+CAT_NOTES = {CAT_VIDEO: "各版本的成品影片（最後輸出的那一支已經存好）", CAT_AB: "比對、試聽用的聲音檔",
+             CAT_GEN: "AI 生成的聲音", CAT_TMP: "播放和分析用的暫存", CAT_COPY: "複製進來的那支原始影片（Windows 那邊有原檔）"}
+
+# ---- 留的規則（留的贏）----
+KEEP_DIRS = ("transcript", "修改需求", "校對", "覆核", "匯出", "備份", CLEAN_DIR)   # 整個資料夾都留
+KEEP_EXTS = (".json", ".jsonl", ".md", ".txt", ".csv")                             # 紀錄：在哪裡都留（§9.1）
+CACHE_JSON = ("_嘗試快取.json", "_停頓快取.json")                                  # 例外：§2.2 生成用的快取要清
+TOP_KEEP_EXTS = KEEP_EXTS + (".html",)                                            # 工作區最上層：名字覆核.html 之類
+# ---- 清的規則 ----
+CACHE_DIRS = ("web快取", "chunks", "名字候選", "重疊")                              # 整個資料夾是暫存（.json 照樣留）
+OUT_VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv")
+AB_TRACKS = ("原聲音軌.wav", "新聲音軌.wav")
+
+PACK_GONE = "找不到剛才存的地方（D 槽沒插？），插回去才能清。"
+CLEAN_FAILED = "清的時候出了問題，按「繼續清」再試一次；還是不行，把終端機最後幾行給開發者。"
+
+
+class CleanError(Exception):
+    """不能清（訊息是給老師看的一句）。丟出來的時候一個檔都還沒動。"""
+
+
+def _keep(parts: tuple, name: str) -> bool:
+    suf = PurePosixPath(name).suffix.lower()
+    if parts[0] in KEEP_DIRS:
+        return True
+    if len(parts) == 1 and (name == RECORD_FILE or suf in TOP_KEEP_EXTS):
+        return True
+    if suf in KEEP_EXTS and name not in CACHE_JSON:
+        return True
+    if parts[0] == "輸出" and len(parts) == 2 and any(fnmatch.fnmatchcase(name, g) for g in OUTPUT_RECORD_GLOBS):
+        return True
+    return False
+
+
+def _clean_cat(parts: tuple, name: str) -> str | None:
+    top, n, low = parts[0], len(parts), name.lower()
+    if n == 1:
+        if name in ("audio.flac", "audio.抽音中.flac") or (name.startswith("audio.殘檔-") and low.endswith(".flac")):
+            return CAT_TMP
+        return None
+    if top in CACHE_DIRS:
+        return CAT_TMP
+    if top == "輸出":
+        if n == 2:
+            if name.startswith("_輸出中_") or (name.startswith(".") and name.endswith(".輸出中")):
+                return CAT_TMP
+            if name.startswith(("成品_", "最終成品_")) and low.endswith(OUT_VIDEO_EXTS):
+                return CAT_VIDEO
+            if low.endswith(".wav") and (name.startswith(("原聲_", "新聲音_")) or name in AB_TRACKS):
+                return CAT_AB
+            return None
+        return CAT_AB if parts[1] == "處理前後" else None
+    if top == "生成":
+        if low.endswith(".wav") or name in CACHE_JSON or any(p.startswith("重做前_") for p in parts[1:-1]):
+            return CAT_GEN
+        return None
+    if top == "參考音":
+        if n == 2 and low.endswith(".wav"):
+            return CAT_TMP
+        if n >= 3 and parts[1].startswith("舊候選備份_"):
+            return CAT_TMP
+    return None
+
+
+def classify(rel: str) -> tuple[str | None, str | None]:
+    """（純函式）工作區裡的一個檔（相對路徑）→ ("留", None)／("清", 分類)／(None, None)＝不認得、不動。留的規則先看（留的贏）。"""
+    parts = PurePosixPath(str(rel).replace(os.sep, "/")).parts
+    if not parts or any(p in ("..", "") for p in parts):
+        return None, None
+    name = parts[-1]
+    if _keep(parts, name):
+        return "留", None
+    cat = _clean_cat(parts, name)
+    return ("清", cat) if cat else (None, None)
+
+
+def _analysis_video(w: Path) -> Path | None:
+    try:
+        v = (wd.read_json(wd.analysis_result_path(w), default=None) or {}).get("video")
+    except (OSError, ValueError):
+        return None
+    return Path(str(v)) if v else None
+
+
+def _video_copy_row(w: Path, kind: str, data: Path | None) -> dict | None:
+    """§1a 問題 1 甲：WSL 上這個工作區的影片是複製進 `~/讀書會剪輯資料/影片/` 的那一份 → 列進清單（只有這一支）。
+    不是 WSL、影片不在匯入資料夾最上層、是捷徑、別的還沒結案的專案也用這支影片 → 不列。"""
+    from bookclub.fileio import VIDEO_EXTS
+
+    if kind != "wsl":
+        return None
+    v = _analysis_video(w)
+    if v is None:
+        return None
+    if data is None:
+        from bookclub.config import data_dir
+
+        data = data_dir()
+    try:
+        imp = (Path(data) / "影片").resolve()
+        if v.is_symlink() or not v.is_file() or not v.name.lower().endswith(VIDEO_EXTS):
+            return None
+        if v.parent.resolve() != imp:
+            return None
+        me, target = w.resolve(), v.resolve()
+        for d in project_dirs(Path(data)):
+            if d.resolve() == me or closed(d):
+                continue
+            other = _analysis_video(d)
+            if other is not None and other.exists() and other.resolve() == target:
+                return None   # 別的專案還要用這支影片
+        size = v.stat().st_size
+    except OSError:
+        return None
+    return {"相對路徑": f"{OUTSIDE_DIR}/{v.name}", "大小": size, "分類": CAT_COPY, "說明": CAT_NOTES[CAT_COPY],
+            "路徑": str(v)}
+
+
+def _fingerprint(rows: list[dict]) -> str:
+    key = [[r["相對路徑"], r["大小"], r.get("路徑")] for r in rows]
+    return hashlib.sha1(json.dumps(key, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def clean_plan(workdir: str | Path, *, kind: str | None = None, data: Path | None = None) -> dict:
+    """（唯一來源，§4.1）這個工作區結案要清哪些檔。只讀。
+    回 {檔案: [{相對路徑, 大小, 分類, 說明, 路徑（只有工作區外那支影片）}], 分類: [{分類, 檔數, 大小}], 合計, 清單指紋, 含影片副本}。
+    合計＝真的會空出來的位元組：硬連結用 (st_dev, st_ino) 去重（跟 `dir_size(seen)` 同一套），跟留下來的檔同一個 inode 的不算。"""
+    import stat as _stat
+
+    w = Path(workdir)
+    if kind is None:
+        from bookclub import fileio
+
+        kind = fileio.platform_kind()
+    rows: list[dict] = []
+    keys: list[tuple] = []
+    others: set = set()
+    for root, dirs, files in os.walk(w, followlinks=False):
+        if Path(root) == w and CLEAN_DIR in dirs:
+            dirs.remove(CLEAN_DIR)
+        dirs.sort()
+        for f in sorted(files):
+            fp = os.path.join(root, f)
+            try:
+                st = os.lstat(fp)
+            except OSError:
+                continue
+            if not _stat.S_ISREG(st.st_mode):   # 捷徑（symlink）一律跳過：不刪捷徑、也不刪它指到的東西
+                continue
+            rel = Path(fp).relative_to(w).as_posix()
+            verdict, cat = classify(rel)
+            if verdict == "清":
+                rows.append({"相對路徑": rel, "大小": st.st_size, "分類": cat, "說明": CAT_NOTES[cat]})
+                keys.append((st.st_dev, st.st_ino))
+            else:
+                others.add((st.st_dev, st.st_ino))
+    seen = set(others)
+    total = 0
+    by: dict[str, list[int]] = {}
+    for r, k in zip(rows, keys):
+        n = 0 if k in seen else r["大小"]
+        seen.add(k)
+        total += n
+        c = by.setdefault(r["分類"], [0, 0])
+        c[0] += 1
+        c[1] += n
+    extra = _video_copy_row(w, kind, data)
+    if extra:
+        rows.append(extra)
+        total += extra["大小"]
+        by[CAT_COPY] = [1, extra["大小"]]
+    rows.sort(key=lambda r: r["相對路徑"])
+    cats = [{"分類": c, "檔數": v[0], "大小": v[1]} for c, v in sorted(by.items(), key=lambda x: -x[1][1])]
+    return {"檔案": rows, "分類": cats, "合計": total, "清單指紋": _fingerprint(rows), "含影片副本": extra is not None}
+
+
+def _verified_pack(rec: dict) -> dict | None:
+    return next((p for p in reversed(rec.get("打包") or []) if p.get("核對") == "通過"), None)
+
+
+def clean_check(workdir: str | Path, fingerprint: str, *, busy=None, kind: str | None = None,
+                data: Path | None = None) -> tuple[dict, dict]:
+    """§4.3 清之前再確認（照順序）：①最近一次核對通過的打包、含成品 ②那一份的每個檔在、大小對（不重算檢查碼）
+    ③清單指紋跟現在重算的一樣 ④第 4 步、輸出、複製都沒在跑（busy() 回原因或 None）。沒過丟 CleanError；過了回 (清單, 打包)。只讀。"""
+    w = Path(workdir)
+    rec = read_record(w)
+    st = rec.get("狀態")
+    if st == CLOSED:
+        raise CleanError("這支影片已結案了，沒有東西可以清。")
+    if st == CLEANING:
+        raise CleanError("上次清到一半，按「繼續清」。")
+    ok = _verified_pack(rec)
+    if ok is None:
+        raise CleanError("還沒存好（每個檔都核對過）不能清，先按「結案打包…」。")
+    if ok.get("含成品") is not True or ok.get("只有紀錄"):
+        raise CleanError("存好的那一份裡沒有成品影片，不能清。先在第 5 步重新輸出成品，再結案打包一次。")
+    folder = Path(ok.get("資料夾") or "")
+    try:
+        if not ok.get("資料夾") or not folder.is_dir() or not ok.get("檔案"):
+            raise CleanError(PACK_GONE)
+        for f in ok["檔案"]:
+            p = folder / f["相對路徑"]
+            if p.is_symlink() or not p.is_file() or p.stat().st_size != int(f["大小"]):
+                raise CleanError(PACK_GONE)
+    except OSError:
+        raise CleanError(PACK_GONE) from None
+    plan = clean_plan(w, kind=kind, data=data)
+    if plan["清單指紋"] != fingerprint:
+        raise CleanError("清單變了，請重新看一次。")
+    why = busy() if busy else None
+    if why:
+        raise CleanError(why)
+    return plan, ok
+
+
+def clean(workdir: str | Path, fingerprint: str, *, busy=None, kind: str | None = None, data: Path | None = None,
+          hook=None) -> dict:
+    """清空間（§4.4）：再確認 → `結案.json` 先寫「清理中」＋整份清單 → 搬 → 刪 → 寫已結案。回 {省下位元組}。
+    hook(階段, 相對路徑)：測試用（"搬" 每個檔之前、"搬好" 全部搬完、"刪" 刪之前）。"""
+    w = Path(workdir)
+    plan, ok = clean_check(w, fingerprint, busy=busy, kind=kind, data=data)
+    rec = read_record(w)
+    rec["狀態"] = CLEANING
+    rec["清理"] = {"清單指紋": plan["清單指紋"], "開始": _now(), "省下位元組": plan["合計"],
+                 "打包資料夾": ok.get("資料夾"), "打包時間": ok.get("時間"),
+                 "清單": [{k: r[k] for k in ("相對路徑", "大小", "分類", "路徑") if k in r} for r in plan["檔案"]]}
+    _write_record(w, rec)   # 先寫再動手
+    return _finish(w, hook)
+
+
+def clean_resume(workdir: str | Path, hook=None) -> dict:
+    """「繼續清」：照 `結案.json` 記的清單把還在原位的搬完、再刪（清單是上次確認過的，不重算、不再問）。"""
+    w = Path(workdir)
+    if read_record(w).get("狀態") != CLEANING:
+        raise CleanError("沒有清到一半的東西。")
+    return _finish(w, hook)
+
+
+def _src_of(w: Path, row: dict) -> Path:
+    return Path(row["路徑"]) if row.get("路徑") else w / row["相對路徑"]
+
+
+def _prune_empty(dirs: set[Path], stop: Path) -> None:
+    """清完（或搬回去）之後，這些資料夾空了就收掉（只收空的；從最深的開始；不收 stop 本身）。"""
+    for d in sorted(dirs, key=lambda p: len(p.parts), reverse=True):
+        while d != stop and stop in d.parents:
+            try:
+                d.rmdir()
+            except OSError:
+                break
+            d = d.parent
+
+
+def _finish(w: Path, hook=None) -> dict:
+    rec = read_record(w)
+    cl = rec["清理"]
+    tmp = w / CLEAN_DIR
+    later: list[Path] = []   # 不在同一顆磁碟、搬不進來的影片副本：到「刪」那一步直接刪
+    if not cl.get("刪除開始"):
+        parents: set[Path] = set()
+        for row in cl.get("清單") or []:
+            if hook:
+                hook("搬", row["相對路徑"])
+            src = _src_of(w, row)
+            if not row.get("路徑") and classify(row["相對路徑"])[0] != "清":   # 再保險一次：規則不認得的不動
+                continue
+            if src.is_symlink() or not src.is_file():   # 搬過了、或本來就不在：略過
+                continue
+            dst = tmp / row["相對路徑"]
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.rename(src, dst)
+            except OSError as e:
+                if e.errno == errno.EXDEV and row.get("路徑"):
+                    later.append(src)
+                    continue
+                raise
+            if not row.get("路徑"):
+                parents.add(src.parent)
+        _prune_empty(parents, w)
+        cl["搬好"] = _now()
+        _write_record(w, rec)
+        if hook:
+            hook("搬好", None)
+        cl["刪除開始"] = _now()
+        _write_record(w, rec)
+    else:
+        later = [p for p in (_src_of(w, r) for r in cl.get("清單") or [] if r.get("路徑"))
+                 if p.is_file() and not p.is_symlink()]
+    if hook:
+        hook("刪", None)
+    if tmp.is_dir() and not tmp.is_symlink():
+        shutil.rmtree(tmp)
+    for p in later:
+        p.unlink()
+    rec = read_record(w)
+    cl = rec["清理"]
+    cl["完成"] = _now()
+    rec["狀態"] = CLOSED
+    _write_record(w, rec)
+    try:   # §4.2：版本表每一版 `影片還在` 改 false、歷史記一條「結案」（只有數字）
+        from bookclub import needs
+
+        needs.mark_closed(w, int(cl.get("省下位元組") or 0), len(cl.get("清單") or []))
+    except Exception as e:  # noqa: BLE001 — 版本表記不下來不影響已經清好
+        print(f"⚠️ [結案清理] 版本表沒有改到（影片還在）：{type(e).__name__}")
+    return {"省下位元組": int(cl.get("省下位元組") or 0)}
+
+
+def restore(workdir: str | Path) -> int:
+    """`bookclub close --restore`（只給開發者）：「刪」開始前，把 `.結案清理中/` 的東西搬回原位，`結案.json` 回到「已打包」。
+    原位已經有同名的檔不蓋掉（留在 `.結案清理中/`，印出來）。回搬回幾個。"""
+    w = Path(workdir)
+    rec = read_record(w)
+    if rec.get("狀態") != CLEANING:
+        raise CleanError("不是清到一半的工作區，沒有東西可以搬回去。")
+    cl = rec.get("清理") or {}
+    if cl.get("刪除開始"):
+        raise CleanError("已經開始刪了，搬不回去（照「繼續清」清完）。")
+    tmp = w / CLEAN_DIR
+    n, left = 0, []
+    parents: set[Path] = set()
+    for row in cl.get("清單") or []:
+        src = tmp / row["相對路徑"]
+        if src.is_symlink() or not src.is_file():
+            continue
+        dst = _src_of(w, row)
+        if dst.exists() or dst.is_symlink():
+            left.append(row["相對路徑"])
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(src, dst)
+        parents.add(src.parent)
+        n += 1
+    _prune_empty(parents, w)
+    try:
+        tmp.rmdir()
+    except OSError:
+        pass
+    if left:
+        print(f"⚠️ 原位已經有同名的檔，這 {len(left)} 個留在 {CLEAN_DIR}/：" + "、".join(left[:10]))
+    cl["搬回"] = _now()
+    rec["狀態"] = PACKED if _verified_pack(rec) else PACKING
+    _write_record(w, rec)
+    return n
+
+
+def reopen(workdir: str | Path) -> Path:
+    """`bookclub close --reopen`（§1a 問題 2：不給老師「取消結案」，開發者手動）：`結案.json` 改名成
+    `結案_取消_<時間>.json`。清到一半（`.結案清理中/` 還在）不行：先 --restore 或繼續清完。回改好的路徑。"""
+    w = Path(workdir)
+    p = record_path(w)
+    if not p.is_file():
+        raise CleanError("這個工作區沒有 結案.json，不用取消。")
+    if read_record(w).get("狀態") == CLEANING and (w / CLEAN_DIR).exists():
+        raise CleanError("清到一半：先用 --restore 搬回去，或在網頁按「繼續清」清完再取消。")
+    new = w / f"結案_取消_{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    os.rename(p, new)
+    return new
+
+
+def closed_info(workdir: str | Path) -> dict | None:
+    """總覽、頂端那一句用（§5.3）：{日期, 位置顯示, 省下位元組, 狀態}；沒結案＝None。只讀。"""
+    w = Path(workdir)
+    if not closed(w):
+        return None
+    rec = read_record(w)
+    cl = rec.get("清理") or {}
+    when = cl.get("完成") or cl.get("開始") or ""
+    day = f"{when[5:7]}-{when[8:10]}" if len(when) >= 10 else ""
+    return {"日期": day, "位置顯示": windows_display(cl.get("打包資料夾") or ""), "省下位元組": cl.get("省下位元組"),
+            "狀態": rec.get("狀態")}
+
+
+class CleanJob:
+    """背景清一次（網頁看得到「正在清…」）。不能停（§4.4）。resume＝「繼續清」。"""
+
+    def __init__(self, workdir: Path, fingerprint: str | None = None, *, resume: bool = False, busy=None):
+        self.workdir = Path(workdir)
+        self.fingerprint, self.resume, self._busy = fingerprint, resume, busy
+        self.state = "清理中"
+        self.error: str | None = None
+        self.saved: int | None = None
+        self.purpose = "結案清理"
+        self.thread: threading.Thread | None = None
+
+    @property
+    def running(self) -> bool:
+        return self.state == "清理中"
+
+    def cancel(self) -> None:   # 清理開始後不給停止
+        pass
+
+    def start(self) -> "CleanJob":
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+        return self
+
+    def run(self) -> None:
+        try:
+            r = clean_resume(self.workdir) if self.resume else clean(self.workdir, self.fingerprint, busy=self._busy)
+            self.saved, self.state = r["省下位元組"], CLOSED
+        except CleanError as e:
+            self.state, self.error = "失敗", str(e)
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️ [結案清理] {type(e).__name__}：{e}")
+            self.state, self.error = "失敗", CLEAN_FAILED
+
+    def to_dict(self) -> dict:
+        return {"用途": self.purpose, "狀態": self.state, "錯誤": self.error, "省下位元組": self.saved,
+                "第幾個": 0, "共幾個": 0, "檔名": None, "位置顯示": None, "資料夾": None, "清理錯誤": None}
+
+
+def dry_run_lines(workdir: str | Path) -> list[str]:
+    """`bookclub close --dry-run <工作區>`（給宇軒查「看每一個檔」）：會清哪些檔、各多大、合計、清單指紋。只讀，不刪。"""
+    plan = clean_plan(workdir)
+    lines = [f"會清的檔（{len(plan['檔案'])} 個；只看、不刪）："]
+    for r in plan["檔案"]:
+        lines.append(f"  {r['相對路徑']}\t{human(r['大小'])}\t{r['分類']}" + (f"\t{r['路徑']}" if r.get("路徑") else ""))
+    lines.append("分類：" + "、".join(f"{c['分類']} {c['檔數']} 個 {human(c['大小'])}" for c in plan["分類"]))
+    lines.append(f"合計（同一個檔不重複算）：{human(plan['合計'])}（{plan['合計']} 位元組）")
+    lines.append(f"清單指紋：{plan['清單指紋']}")
+    st = state(workdir)
+    if st:
+        lines.append(f"結案.json 狀態：{st}")
+    return lines

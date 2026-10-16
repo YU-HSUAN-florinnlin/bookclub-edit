@@ -279,28 +279,45 @@ async function fileOutInit(el) {
 // ---------------------------------------------------------------------------
 
 let clPollTimer = null;
+let clWasRunning = false;
 
 function clGB(n) { return `${(Number(n || 0) / 1e9).toFixed(1)} GB`; }
 
 // 框裡的文字（純函式）：標題下面那一句、紅字提醒、按鈕字、狀態列
+// 第 3 段（32 號設計 §1a）：存→核對→全對就接著清，一個按鈕跑到底；清理開始後不給停止；做完框換成「已結案，空出 X GB」
 function clView(d) {
   const job = d["工作"];
-  const running = !!(job && ["等待", "存檔中", "核對中"].includes(job["狀態"]));
+  const js = job && job["狀態"];
+  const running = !!(job && ["等待", "存檔中", "核對中", "清理中"].includes(js));
   const st = d["狀態"];
-  // 第 2 段審查建議：清空間（第 3 段）接上 clean_plan 之前，不提「刪掉暫存檔」與大小
-  const line = d["只有紀錄"] ? "影片已經清掉了，這次只存逐字稿和紀錄。" : "會把成品影片、逐字稿、修改紀錄存到你選的地方。";
-  const warn = d["不是最新版"] ? `最後輸出的是第 ${d["最後輸出版本"]} 版，最新是第 ${d["最新版本"]} 版。` : "";
+  const copy = d["含影片副本"] ? "，含複製進來的那支原始影片" : "";
+  const line = d["只有紀錄"] || st === "已結案" ? "影片已經清掉了，這次只存逐字稿和紀錄。"
+    : `會把成品影片、逐字稿、修改紀錄存到你選的地方，然後刪掉這裡的暫存檔（共 ${clGB(d["暫存大小"])}${copy}）。`;
+  const warn = d["不是最新版"] && st !== "已結案" ? `最後輸出的是第 ${d["最後輸出版本"]} 版，最新是第 ${d["最新版本"]} 版。` : "";
   const btn = st === "已結案" ? "再存一份紀錄…" : (st === "已打包" ? "再存一份…" : "結案打包…");
-  let status = "", statusKind = "";
-  if (running) status = job["狀態"] === "核對中" ? "正在核對…" : `正在存…（第 ${job["第幾個"]}／${job["共幾個"]} 個檔）`;
-  else if (job && job["狀態"] === "失敗") { status = job["錯誤"] || "沒有存好"; statusKind = "error"; }
-  else if (job && job["狀態"] === "停止") status = "停下來了：存好的留著，按「繼續」接著存。";
-  else if ((job && job["狀態"] === "已存好") || (d["核對通過的"] && st !== "打包中")) {
+  const cl = d["清理"] || {};
+  let status = "", statusKind = "", badge = "";
+  if (running) status = js === "清理中" ? "正在清…" : (js === "核對中" ? "正在核對…" : `正在存…（第 ${job["第幾個"]}／${job["共幾個"]} 個檔）`);
+  else if (st === "已結案") {
+    status = `已結案，空出 ${clGB(cl["省下位元組"])}。成品存在：${cl["成品存在"] || ""}`;
+    statusKind = "done"; badge = "已結案";
+  } else if (st === "清理中") {
+    status = js === "失敗" && job["錯誤"] ? `${job["錯誤"]}` : "上次清到一半。";
+    if (js === "失敗") { statusKind = "error"; badge = "沒有清完"; }
+  } else if (js === "失敗") { status = job["錯誤"] || "沒有存好"; statusKind = "error"; badge = "沒有存好"; }
+  else if (js === "停止") status = "停下來了：存好的留著，按「繼續」接著存。";
+  else if (js === "已存好" || (d["核對通過的"] && st !== "打包中")) {
     const ok = d["核對通過的"] || {};
     status = `已存好，每個檔都核對過了。存在：${(job && job["資料夾"]) || ok["資料夾"] || ok["位置顯示"] || ""}`;
-    statusKind = "done";
+    if (job && job["清理錯誤"]) status += `。這裡的暫存還沒清：${job["清理錯誤"]}`;
+    statusKind = "done"; badge = "已存好";
   } else if (d["可以繼續"]) status = "上次存到一半。";
-  return { running, line, warn, btn, status, statusKind, resume: !running && !!d["可以繼續"],
+  const cleaning = st === "清理中";
+  return { running, line, warn, btn, status, statusKind, badge,
+           stop: running && js !== "清理中",
+           resume: !running && !cleaning && st !== "已結案" && !!d["可以繼續"],
+           cleanResume: !running && cleaning,
+           cleanBtn: !running && st === "已打包",
            reveal: !running && statusKind === "done" };
 }
 
@@ -312,16 +329,19 @@ async function closeBoxInit(box) {
   if (!d["輸出過"] && !d["只有紀錄"]) { box.hidden = true; return; }   // 輸出過成品才出現
   const v = clView(d);
   box.hidden = false;
+  const closedNow = d["狀態"] === "已結案";
   box.innerHTML = `<h3>結案打包</h3>
-    <p>${esc(v.line)}</p>
+    ${closedNow ? "" : `<p>${esc(v.line)}</p>`}
     ${v.warn ? `<p class="rv-warnline">${esc(v.warn)}</p>` : ""}
     <div class="fo-row">
-      ${v.running ? `<button class="secondary" id="cl-stop">停止</button>`
-        : `<button class="secondary" id="cl-go" ${d["可以打包"] ? "" : "disabled"}>${esc(v.btn)}</button>
+      ${v.running ? (v.stop ? `<button class="secondary" id="cl-stop">停止</button>` : "")
+        : v.cleanResume ? `<button class="secondary" id="cl-clean-resume">繼續清</button>`
+        : `${v.cleanBtn ? `<button class="secondary" id="cl-clean" ${d["清單指紋"] ? "" : "disabled"}>清掉這裡的暫存（${esc(clGB(d["暫存大小"]))}）</button>` : ""}
+           <button class="${closedNow || v.cleanBtn ? "ghost" : "secondary"}" id="cl-go" ${d["可以打包"] ? "" : "disabled"}>${esc(v.btn)}</button>
            ${v.resume ? `<button class="secondary" id="cl-resume" ${d["可以打包"] ? "" : "disabled"}>繼續</button>` : ""}
            ${v.reveal ? `<button class="ghost" id="cl-open">打開資料夾</button>` : ""}`}
-      ${!d["可以打包"] && !v.running && d["不行的原因"] ? `<span class="muted">${esc(d["不行的原因"])}</span>` : ""}
-      <span id="cl-msg" role="status">${v.status ? (v.statusKind ? `<span class="badge ${v.statusKind}">${v.statusKind === "done" ? "已存好" : "沒有存好"}</span> ` : "") + esc(v.status) : ""}</span>
+      ${!d["可以打包"] && !v.running && !v.cleanResume && !closedNow && d["不行的原因"] ? `<span class="muted">${esc(d["不行的原因"])}</span>` : ""}
+      <span id="cl-msg" role="status">${v.status ? (v.badge ? `<span class="badge ${v.statusKind}">${esc(v.badge)}</span> ` : "") + esc(v.status) : ""}</span>
     </div>
     <div id="cl-typed" hidden><p class="hint" id="cl-typed-why"></p>
       <input type="text" id="cl-path" size="50" placeholder="資料夾的完整路徑">
@@ -330,6 +350,8 @@ async function closeBoxInit(box) {
   let note = "";   // WSL 上存在 Ubuntu 裡面時的提醒（不擋）
   const start = async (body) => {
     let r;
+    // 第 3 段（§1a 第 3 點）：還沒存好過 → 帶畫面上的清單指紋，存好核對全對就接著清（伺服器再確認一次指紋）
+    if ((d["狀態"] == null || d["狀態"] === "打包中") && d["清單指紋"]) body = { ...body, "清單指紋": d["清單指紋"] };
     try { r = await apiPost("/api/close/pack", body, { quiet: true }); }
     catch (e) { msg.innerHTML = `<span class="badge error">沒有開始</span> ${esc(e.message)}`; return; }
     note = (r && r["提醒"]) || note;
@@ -360,6 +382,15 @@ async function closeBoxInit(box) {
     note = r["提醒"] || "";
     start({ "位置": "自己選", "路徑": r["路徑"] });
   });
+  const cleanCall = async (body) => {
+    try { await apiPost("/api/close/clean", body, { quiet: true }); }
+    catch (e) { msg.innerHTML = `<span class="badge error">沒有清</span> ${esc(e.message)}`; return; }
+    closeBoxInit(box);
+  };
+  const cbtn = box.querySelector("#cl-clean");
+  if (cbtn) cbtn.addEventListener("click", () => { cbtn.disabled = true; cleanCall({ "清單指紋": d["清單指紋"] }); });
+  const cres = box.querySelector("#cl-clean-resume");
+  if (cres) cres.addEventListener("click", () => { cres.disabled = true; cleanCall({ "繼續": true }); });
   const res = box.querySelector("#cl-resume");
   if (res) res.addEventListener("click", () => start({ "繼續": true }));
   const stop = box.querySelector("#cl-stop");
@@ -369,4 +400,7 @@ async function closeBoxInit(box) {
   });
   clearTimeout(clPollTimer);
   if (v.running) clPollTimer = setTimeout(() => { if (document.body.contains(box)) closeBoxInit(box); }, 1000);
+  // 剛清完（這一頁從「正在清…」變成已結案）：整頁重畫成瘦身版（頂端那一句、按鈕灰掉）
+  if (!v.running && clWasRunning && d["狀態"] === "已結案" && typeof render === "function") { clWasRunning = false; render(); return; }
+  clWasRunning = v.running;
 }

@@ -499,7 +499,10 @@ async function renderFinal() {
   catch (e) { if (!fc.ver) throw e; fc.ver = null; fc.data = fcFillDefaults(await apiGet(fcUrl())); }   // 那一版不在了：回最新
   contentEl.classList.add("wide");
   const d = fc.data;
-  if (!d["看的是舊版"] && (!d["有處理紀錄"] || !d["成品影片"])) {   // 31 號設計 §6.8：一句話＋連結（霧化預覽拿掉）
+  // 1015-8 第 3 段（32 號設計 §5.2）：已結案＝瘦身版——卡片照樣列（都從 修改需求/ 讀），影片那一塊換一行灰字，
+  // 聽／改／重做／輸出／拿檔灰掉（style.css 的 body.ws-closed）；頂端一句「這支影片已結案（…），這裡只能看紀錄」
+  const closed = !!d["已結案"];
+  if (!closed && !d["看的是舊版"] && (!d["有處理紀錄"] || !d["成品影片"])) {   // 31 號設計 §6.8：一句話＋連結（霧化預覽拿掉）
     contentEl.innerHTML = `<div class="rv2 fc"><h1>5　成品檢查</h1>
       <p class="fc-none">還沒有成品，請先到 <a href="#step4">第 4 步</a></p>${fcWhereHtml(d["專案標示"])}</div>`;
     return;
@@ -511,12 +514,13 @@ async function renderFinal() {
         <div class="fc-vers">${fcVersionMenuHtml(d)}</div>
         <div class="rv-bar-btns"><span id="fc-redo-slot"></span><button class="ghost" id="fc-export" ${d["影片清掉了"] ? "disabled" : ""}>輸出成品</button></div>
       </header>
+      ${closed && typeof wsClosedBarHtml === "function" ? wsClosedBarHtml(d) : ""}
       <div class="fc-status" id="fc-status" role="status"></div>
       <div class="fo-box" id="fc-fileout"></div>
       <section class="rv-upper">
         <div class="rv-left">
-          ${d["影片清掉了"] ? `<p class="rv-warnline">這一版的影片清掉了</p>` : ""}
-          <video id="fc-video" controls preload="metadata" ${d["影片網址"] ? `src="${esc(d["影片網址"])}${String(d["影片網址"]).includes("?") ? "&" : "?"}v=${encodeURIComponent(d["成品影片"] + "|" + (d["成品版本"] || ""))}"` : ""}></video>
+          ${closed ? `<p class="muted fc-gone">影片已經清掉了。</p>` : d["影片清掉了"] ? `<p class="rv-warnline">這一版的影片清掉了</p>` : ""}
+          <video id="fc-video" controls preload="metadata" ${closed ? "hidden" : ""} ${d["影片網址"] && !closed ? `src="${esc(d["影片網址"])}${String(d["影片網址"]).includes("?") ? "&" : "?"}v=${encodeURIComponent(d["成品影片"] + "|" + (d["成品版本"] || ""))}"` : ""}></video>
           <div class="rv-timebar"><span class="rv-clock"><b id="fc-clock">0:00</b> ／ ${esc(fcFmt(d["成品長度"], 0))}</span>
             <input id="fc-goto" class="rv-goto" placeholder="跳到 43:15" aria-label="跳到原片時間（例如 43:15，按 Enter）">
             <select id="fc-rate" aria-label="播放速度"><option value="1">1 倍速</option><option value="1.25">1.25 倍速</option><option value="1.5">1.5 倍速</option><option value="2">2 倍速</option></select></div>

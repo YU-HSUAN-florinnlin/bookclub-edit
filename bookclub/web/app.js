@@ -63,7 +63,8 @@ async function apiPost(path, body, { quiet = false } = {}) {
   if (!res.ok) {
     const err = new Error(data.error || `${path} 失敗（${res.status}）`);
     err.data = data;   // 10-02 第七批：呼叫端看得到其他欄位（例如「找不到claude」）
-    if (!quiet) { showSaveError(err.message); err.shown = true; }
+    // 1015-8 第 3 段：已結案的瘦身版——頂端那一句已經說了，不再跳「沒存到」的提示
+    if (!quiet && !data["已結案"]) { showSaveError(err.message); err.shown = true; }
     throw err;
   }
   return data;
@@ -203,6 +204,30 @@ let lastState = null;
 function pjNowHtml(lab) {
   if (!lab || !lab["顯示名稱"]) return "";
   return `<div class="pj-now"><b>現在在：${esc(lab["顯示名稱"])}</b> <span class="badge ${lab["標示"] === "測試" ? "" : "done"}">${esc(lab["標示"])}</span></div>`;
+}
+
+// 1015-8 第 3 段（32 號設計 §5.2）：已結案的瘦身版——每一步頂端一句（給老師看）；第 1–4 步所有按鈕灰掉、第 5 步只灰掉
+// 聽／改／重做／輸出／拿檔（style.css 的 body.ws-closed、body.ws-closed-all）。伺服器那邊另外一層擋（409）。
+function wsClosed() { return !!(lastState && lastState["已結案"]); }
+
+function wsClosedBarHtml(st) {
+  const s = st || lastState || {};
+  if (!s["已結案"]) return "";
+  const c = s["結案"] || {};
+  const where = c["日期"] || c["位置顯示"] ? `（${[c["日期"], c["位置顯示"] ? `存到 ${c["位置顯示"]}` : ""].filter(Boolean).join(" ")}）` : "";
+  return `<div class="ws-closed-bar" role="status">這支影片已結案${esc(where)}，這裡只能看紀錄。</div>`;
+}
+
+function wsClosedMark(id) {
+  const on = wsClosed() && /^step[1-5]$/.test(id || "");
+  document.body.classList.toggle("ws-closed", on);
+  document.body.classList.toggle("ws-closed-all", on && id !== "step5");
+  if (on && id !== "step5" && !contentEl.querySelector(".ws-closed-bar")) contentEl.insertAdjacentHTML("afterbegin", wsClosedBarHtml());
+}
+
+// 總覽：進行中的在上面、已結案的放最下面一組（純函式；順序照原本的）
+function pjGroups(list) {
+  return { "進行中": (list || []).filter((p) => !p["已結案"]), "已結案": (list || []).filter((p) => !!p["已結案"]) };
 }
 
 async function renderSidebar() {
@@ -363,11 +388,12 @@ async function renderRoute() {
       contentEl.innerHTML = `<div class="notyet-card">還沒選影片。到 <a href="#overview">總覽</a> 選一支影片，或切換到已有的專案。</div>`;
       return;
     }
-    if (id === "step1") return await renderStep1();
-    if (id === "step2") return await renderStep2();
-    if (id === "step3") return await renderReview();
-    if (id === "step4") return await renderExecute();
-    if (id === "step5") return await renderFinal();
+    document.body.classList.remove("ws-closed", "ws-closed-all");
+    if (id === "step1") { await renderStep1(); return wsClosedMark(id); }
+    if (id === "step2") { await renderStep2(); return wsClosedMark(id); }
+    if (id === "step3") { await renderReview(); return wsClosedMark(id); }
+    if (id === "step4") { await renderExecute(); return wsClosedMark(id); }
+    if (id === "step5") { await renderFinal(); return wsClosedMark(id); }
     if (id === "step0") return await renderProfile();
     const def = STEP_DEFS.find((s) => s.id === id);
     return renderNotYet(def);
@@ -1055,19 +1081,29 @@ async function renderOverview() {
   }
   const list = projects["專案"] || [];
   // 10-04 #129：每一列小字印完整路徑（以前只印上一層），資料夾名稱一樣的專案分得出來
-  const rows = list.map((p) => `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
-      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${p["路徑"] === projects["目前"] ? "　（目前）" : ""}<div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）：" : ""}${esc(p["路徑"])}</div></td>
+  // 1015-8 第 3 段（§5.3）：已結案的放到最下面一個收合的「已結案（N 支）」，名稱旁徽章、底下灰字「10-16 存到 D:\…」
+  const rowHtml = (p) => {
+    const c = p["已結案"];
+    return `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
+      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${c ? ` <span class="badge">已結案</span>` : ""}${p["路徑"] === projects["目前"] ? "　（目前）" : ""}
+        ${c ? `<div class="muted">${esc([c["日期"], c["位置顯示"] ? `存到 ${c["位置顯示"]}` : ""].filter(Boolean).join(" "))}</div>` : ""}
+        <div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）：" : ""}${esc(p["路徑"])}</div></td>
       <td>${esc(p["長度"] || "—")}</td>
-      <td>${p["分析完成"] ? "分析完成" : "還沒分析完"}${p["有覆核"] ? "、覆核中" : ""}</td>
+      <td>${c ? "已結案，只能看紀錄" : `${p["分析完成"] ? "分析完成" : "還沒分析完"}${p["有覆核"] ? "、覆核中" : ""}`}</td>
       <td>${esc(p["修改時間"])}</td>
-      <td>${p["路徑"] === projects["目前"] ? "" : `<button class="secondary pj-switch" data-path="${esc(p["路徑"])}">切換</button>`}</td></tr>`).join("");
+      <td>${p["路徑"] === projects["目前"] ? "" : `<button class="secondary pj-switch" data-path="${esc(p["路徑"])}">切換</button>`}</td></tr>`;
+  };
+  const groups = pjGroups(list);
+  const rows = groups["進行中"].map(rowHtml).join("");
+  const closedRows = groups["已結案"].map(rowHtml).join("");
   contentEl.innerHTML = `
     <h1>總覽</h1>
     ${projects["轉文字金鑰"] === false ? `<div class="hint">${esc(projects["轉文字金鑰說明"] || "這個網頁伺服器讀不到 Groq 金鑰，新影片沒辦法轉文字。關掉這個伺服器，改用雙擊「啟動.command」重開。")}（已經轉好文字的專案不受影響）</div>` : ""}
     ${pickCardHtml()}
     ${current}
     <h2>已有的專案（${list.length}）</h2>
-    <div class="card">${list.length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">還沒有專案。</p>`}</div>`;
+    <div class="card">${groups["進行中"].length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">${list.length ? "沒有進行中的專案。" : "還沒有專案。"}</p>`}
+      ${closedRows ? `<details class="pj-closed"><summary>已結案（${groups["已結案"].length} 支）</summary><table class="kv pj-list"><tbody>${closedRows}</tbody></table></details>` : ""}</div>`;
   contentEl.querySelectorAll(".pj-switch").forEach((b) => b.addEventListener("click", async () => {
     const p = list.find((x) => x["路徑"] === b.dataset.path) || {};
     // 10-08：切換前說清楚要切去哪一個（名稱一樣的專案分得出來）

@@ -77,7 +77,8 @@ def _digest(w: Path) -> dict[str, str]:
 KEEP = {
     # 紀錄（transcript、修改需求、校對、覆核、匯出、備份）
     "transcript/merged.json", "transcript/raw/00.json",
-    "修改需求/格式.json", "修改需求/版本.json", "修改需求/卡片.json", "修改需求/版本/v3/處理紀錄.json",
+    "修改需求/格式.json", "修改需求/版本.json", "修改需求/卡片.json", "修改需求/生成句.json", "修改需求/成品狀態.json",
+    "修改需求/版本/v3/處理紀錄.json",
     "修改需求/升級前備份_20261014/成品檢查.json", "修改需求/歷史.jsonl", "修改需求/.寫入鎖",
     "校對/段落.json", "覆核/覆核決定.json", "覆核/成品檢查.json",
     "匯出/覆核結果_0-97.zip", "備份/舊設定.json",
@@ -393,7 +394,7 @@ def test_restore_before_delete_puts_everything_back():
         before = {k: v for k, v in _digest(w).items() if k != closing.RECORD_FILE}
 
         def hook(stage, rel):
-            if stage == "刪":
+            if stage == "搬好":
                 raise _Crash()
 
         try:
@@ -503,7 +504,7 @@ def test_wsl_interrupted_move_with_video_copy_resumes():
         plan = _plan(w, kind="wsl", data=data)
 
         def hook(stage, rel):
-            if stage == "刪":
+            if stage == "搬好":
                 raise _Crash()
 
         try:
@@ -533,7 +534,9 @@ def _call(base, path, body=None, method=None):
     import urllib.error
     import urllib.request
 
-    req = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode(),
+    import urllib.parse
+
+    req = urllib.request.Request(base + urllib.parse.quote(path, safe="/?&="), data=None if body is None else json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"},
                                  method=method or ("GET" if body is None else "POST"))
     try:
@@ -674,7 +677,7 @@ def _closed_fresh() -> Path:
 
 def _api_paths(kind: str) -> list[str]:
     src = (REPO_ROOT / "bookclub" / "server.py").read_text(encoding="utf-8")
-    body = src.split("def _route_get_api")[1].split("def _handle_audio")[0] if kind == "GET" else \
+    body = src.split("def _route_get_api")[-1].split("def _handle_audio")[0] if kind == "GET" else \
         src.split("def _route_post_api")[1].split("# 對外入口")[0]
     paths = set(re.findall(r'path == "(/api/[^"]+)"', body))
     if kind == "POST":   # path.startswith("/api/turns/") 之類的分支：裡面的 path == 都已經列到
@@ -682,7 +685,7 @@ def _api_paths(kind: str) -> list[str]:
     return sorted(paths)
 
 
-POST_OK = ("/api/close/", "/api/projects/", "/api/profile/import", "/api/copy/cancel")
+POST_OK = ("/api/close/", "/api/projects/", "/api/profile/import", "/api/copy/cancel", "/api/pick/forget")
 
 
 def test_closed_every_post_409_every_get_no_500_files_unchanged():
@@ -735,12 +738,13 @@ def test_closed_project_start_same_video_refused():
         _mk(video, b"fake")
         from bookclub import server as srv
 
-        orig = srv.project_dir_for
+        orig, orig_home = srv.project_dir_for, srv.home_path
         srv.project_dir_for = lambda v: w
+        srv.home_path = lambda text: Path(text)          # 假影片在系統暫存資料夾（不在家目錄底下）
         try:
             code, r = _call(base, "/api/projects/start", {"影片": str(video)})
         finally:
-            srv.project_dir_for = orig
+            srv.project_dir_for, srv.home_path = orig, orig_home
         assert code == 409 and r.get("已結案"), (code, r)
     finally:
         httpd.shutdown()
@@ -835,7 +839,7 @@ def test_cli_dry_run_restore_reopen_inspect():
         _pack(w, root / "D槽")
 
         def hook(stage, rel):
-            if stage == "刪":
+            if stage == "搬好":
                 raise _Crash()
 
         try:
@@ -900,6 +904,30 @@ def test_js_overview_groups_closed_last():
     g = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
     assert [p["名稱"] for p in g["進行中"]] == ["a", "c"] and [p["名稱"] for p in g["已結案"]] == ["b"]
     assert "已結案（" in APPJS and "這支影片已結案" in APPJS
+
+
+def test_js_step5_closed_page_lists_cards():
+    """第 5 步瘦身版（真的後端資料）：卡片照樣列、影片那一塊換成「影片已經清掉了」、畫面不出錯。"""
+    if not NODE:
+        print("（沒有 node，略過）")
+        return
+    import test_final_cards_web as tw
+
+    w = _closed_fresh()
+    httpd, base = _serve(w)
+    try:
+        code, data = _call(base, "/api/final")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert code == 200 and data["已結案"] and data["卡片"], data.get("error")
+    got = tw._run_page([{"名稱": "瘦身版", "程式": """
+          await renderFinal();
+          return {left: contentEl.innerHTML, lower: document.getElementById("fc-lower").innerHTML,
+                  hidden: document.getElementById("fc-video").hidden, n: DATA["卡片"].length};"""}], data=data)
+    r = got["瘦身版"]
+    assert "影片已經清掉了" in r["left"] and "還沒有成品" not in r["left"], r["left"][:300]
+    assert r["n"] > 0 and r["lower"].strip()
 
 
 if __name__ == "__main__":

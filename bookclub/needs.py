@@ -994,6 +994,22 @@ def set_next_base(workdir: str | Path, n: int | None) -> None:
         _save_fmt(w, st)
 
 
+def mark_closed(workdir: str | Path, saved_bytes: int, files: int) -> bool:
+    """1015-8 第 3 段（32 號設計 §4.2）：結案清完——每一版 `影片還在` 改 false，`歷史.jsonl` 記一條「結案」（只有數字）。
+    沒升級過的工作區不記（回 False）。"""
+    w = Path(workdir)
+    if not exists(w):
+        return False
+    with _locked(w):
+        st = load(w)
+        now = _now()
+        for v in st.versions.values():
+            v["影片還在"] = False
+        st.log(now, None, 5, "結案", None, {"省下位元組": int(saved_bytes), "檔數": int(files)})
+        save(w, st)
+    return True
+
+
 def version_video(workdir: str | Path, v: dict | None) -> str | None:
     """10-15 第5步2.0 第3段：這一版的成品影片（相對工作區；第一支還在的、不是標字版）。影片清掉了、這一版沒記成品回 None。"""
     if not v or v.get("影片還在") is False:

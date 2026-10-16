@@ -76,6 +76,8 @@ VOCAB = {
     "改成消音", "修齊照做", "其餘照做", "跟著那一筆",
     # 名字候選從哪一種句子找到的、補找的原因（10-04 #119）
     "太短句", "不確定句", "老師段落裡的不是老師句", "找名字範圍放寬後補找", "段落改成老師後補找",
+    # 1015-8 第 3 段：修改需求歷史的「結案」
+    "結案",
     # 10-08：第 5 步「有修改的」的組（finalcheck.CHANGE_GROUPS）
     "學員空隙", "名字重念", "名字消音", "名字要人處理", "學員名字", "重疊", "剪掉", "消音", "停格", "其他", "學員重念",
     # 10-14 第5步2.0 第1段：修改需求紀錄（needs）的卡片類型、狀態、來源、成品狀態、生成句的角色與對應方式、歷史的動作
@@ -557,6 +559,44 @@ def _hv(v) -> str:
     if isinstance(v, list) and all(isinstance(x, (int, float)) or x is None for x in v):
         return "[" + ", ".join("—" if x is None else tfmt(x) for x in v) + "]"
     return val("前", v)
+
+
+def topic_closing(w: Path, out: list[str]) -> None:
+    """1015-8 第 3 段：結案（`結案.json`）。只印狀態、時間、數字；路徑、檔名不印（影片檔名、資料夾名可能有學員資訊），
+    只印「讀得到／讀不到」。"""
+    from bookclub import closing
+
+    rec = closing.read_record(w)
+    st = rec.get("狀態")
+    states = (closing.PACKING, closing.PACKED, closing.CLEANING, closing.CLOSED)
+    ver = rec.get("程式版本")
+    if not rec:
+        out.append("還沒結案（沒有 結案.json）")
+    else:
+        out.append(f"狀態 {st if st in states else mask(st or '')}；寫的程式版本 "
+                   f"{ver if isinstance(ver, str) and _VER_RE.match(ver) else mask(ver or '')}；已結案 {val('', closing.closed(w))}")
+    for i, p in enumerate(rec.get("打包") or [], start=1):
+        files = p.get("檔案") or []
+        folder = Path(str(p.get("資料夾") or ""))
+        there = bool(p.get("資料夾")) and folder.is_dir()
+        out.append(f"  打包第 {i} 次：{val('時間', p.get('時間'))}，版本號 {val('', p.get('版本號'))}，"
+                   f"核對 {'通過' if p.get('核對') == '通過' else '沒過／還沒'}，含成品 {val('', bool(p.get('含成品')))}，"
+                   f"只有紀錄 {val('', bool(p.get('只有紀錄')))}，{len(files)} 個檔、{closing.human(sum(int(x.get('大小') or 0) for x in files))}，"
+                   f"存的地方 {'讀得到' if there else '讀不到'}")
+    cl = rec.get("清理") or {}
+    if cl:
+        rows = cl.get("清單") or []
+        by = Counter(str(r.get("分類")) for r in rows)
+        cats = "、".join(f"{k if k in closing.CAT_NOTES else mask(k)} {n}" for k, n in by.items()) or "（沒有）"
+        out.append(f"清理：清單 {len(rows)} 個檔（{cats}），省下 {closing.human(int(cl.get('省下位元組') or 0))}")
+        out.append("  " + "；".join(f"{k} {val('時間', cl.get(k))}" for k in ("開始", "搬好", "刪除開始", "完成", "搬回")))
+    tmp = w / closing.CLEAN_DIR
+    out.append(f"{closing.CLEAN_DIR}：{'還在（清到一半）' if tmp.exists() else '沒有'}")
+    if st not in (closing.CLEANING, closing.CLOSED):
+        plan = closing.clean_plan(w)
+        out.append(f"現在會清：{len(plan['檔案'])} 個檔、{closing.human(plan['合計'])}（"
+                   + "、".join(f"{c['分類']} {c['檔數']} 個 {closing.human(c['大小'])}" for c in plan["分類"])
+                   + f"）；含影片副本 {val('', plan['含影片副本'])}。每一個檔：bookclub close --dry-run <工作區>")
 
 
 def topic_needs(w: Path, f: Filter, out: list[str], limit: int = 300) -> None:
@@ -1070,13 +1110,16 @@ TOPICS = {
     "前後沒聲音": "老師重念範圍開頭或結尾有一段沒有字（第六批）：建議範圍、能不能一鍵縮小",
     "底噪": "全片底噪（第六批第五件）：挑到哪一段、音量、確認了沒有、候選",
     "代號": "這一集用到的代號（每個幾個人用，不印本名）、還在用的英文代號與建議的中文、要念的文字裡還有舊英文代號的地方",
+    "結案": "結案（1015-8）：結案.json 的狀態、每次打包（時間、版本號、核對、含成品、檔數、大小、存的地方讀不讀得到）、"
+            "清理（清單幾個檔、各分類、開始／搬好／刪除開始／完成、省下多少）、.結案清理中 還在不在；沒結案的列出現在會清多少",
     "修改需求": "修改需求紀錄（10-14）：每張卡的卡號、類型、第 3 步鍵、狀態、來源、等重做；每一版的範圍、成品數、"
                "每張卡在那一版的狀態（不印原因文字）；生成句對到哪幾張卡；歷史（--id K0003 只看一張卡）",
 }
 ALIASES = {"files": "檔案", "turns": "段落", "sentences": "句子", "words": "字", "overlaps": "重疊", "names": "名字",
            "mutes": "消音", "cuts": "消音", "剪掉": "消音", "finalcheck": "總檢查", "gen": "生成", "parts": "子程式", "progress": "執行進度", "執行時間": "執行進度",
            "final": "成品檢查", "第5步": "成品檢查", "decisions": "剪輯決策", "convert": "換算", "time": "換算",
-           "edges": "前後沒聲音", "room": "底噪", "codes": "代號", "needs": "修改需求", "卡片": "修改需求"}
+           "edges": "前後沒聲音", "room": "底噪", "codes": "代號", "needs": "修改需求", "卡片": "修改需求",
+           "close": "結案", "closing": "結案"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1150,6 +1193,8 @@ def run(argv: list[str]) -> list[str]:
             topic_codes(w, f, out)
         elif topic == "修改需求":
             topic_needs(w, f, out, args.limit)
+        elif topic == "結案":
+            topic_closing(w, out)
     return out
 
 
