@@ -337,7 +337,7 @@ def test_transcript_product_time_uses_exported_version_log():
 
 
 def test_inspect_prints_stale_counts():
-    """`bookclub inspect <工作區> 修改需求` 多印「生成程式會重新生成 N 句」「stale 但對不到卡的句子」（§7.3 safeview）。"""
+    """`bookclub inspect <工作區> 修改需求` 多印「生成程式會重新生成 N 句」「要重新生成、但對不到卡的句子」（§7.3 safeview）。"""
     import io
     from contextlib import redirect_stdout
 
@@ -348,8 +348,8 @@ def test_inspect_prints_stale_counts():
     with redirect_stdout(buf):
         safeview.main([str(w), "修改需求"])
     out = buf.getvalue()
-    assert "生成程式會重新生成 1 句（老師 1）；stale 但對不到卡的句子：0 句" in out
-    assert "要重做的卡（needs.redo_list，第 4、5 步同一份）1 張：改了 1" in out
+    assert "生成程式會重新生成 1 句（老師 1）；要重新生成、但對不到卡的句子：0 句" in out
+    assert "要重做的卡（第 4、5 步看的是同一份）1 張：改了 1" in out
 
 
 # ---------- 1015-8 審查修正 ----------
