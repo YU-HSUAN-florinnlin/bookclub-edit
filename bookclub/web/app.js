@@ -128,6 +128,61 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// 10-16 #225 宇軒（乙方案）：藏起來的說明用小問號。滑鼠滑過出現、點一下固定住、再點收起；觸控點一下開、再點收起。
+// html 由呼叫端負責 esc；說明框用 fixed 定位，避免被外層 overflow 切掉
+function helpTip(html, label) {
+  return `<span class="help-tip"><button type="button" class="help-tip-btn" aria-label="${esc(label || "說明")}" aria-expanded="false">?</button><span class="help-tip-pop" role="tooltip" hidden>${html}</span></span>`;
+}
+
+function helpTipPlace(tip) {
+  const btn = tip.querySelector(".help-tip-btn"), pop = tip.querySelector(".help-tip-pop");
+  const b = btn.getBoundingClientRect();
+  pop.style.left = "0px"; pop.style.top = "0px";
+  const w = pop.offsetWidth, h = pop.offsetHeight, gap = 8;
+  const left = Math.max(gap, Math.min(b.left - 12, window.innerWidth - w - gap));
+  const below = b.bottom + 6;
+  const top = below + h > window.innerHeight - gap && b.top - 6 - h > gap ? b.top - 6 - h : below;
+  pop.style.left = `${left}px`; pop.style.top = `${top}px`;
+}
+
+function helpTipShow(tip, on) {
+  const pop = tip.querySelector(".help-tip-pop");
+  if (!pop) return;
+  clearTimeout(tip._hideTimer);
+  pop.hidden = !on;
+  tip.querySelector(".help-tip-btn").setAttribute("aria-expanded", on ? "true" : "false");
+  if (on) helpTipPlace(tip); else tip.classList.remove("pinned");
+}
+
+(function helpTipInit() {
+  const tipOf = (el) => el && el.closest && el.closest(".help-tip");
+  document.addEventListener("pointerover", (e) => {
+    if (e.pointerType !== "mouse") return;
+    const t = tipOf(e.target);
+    if (t) helpTipShow(t, true);
+  });
+  document.addEventListener("pointerout", (e) => {
+    if (e.pointerType !== "mouse") return;
+    const t = tipOf(e.target);
+    if (!t || t.classList.contains("pinned") || t.contains(e.relatedTarget)) return;
+    t._hideTimer = setTimeout(() => helpTipShow(t, false), 200);   // 留一點時間讓滑鼠移到說明框上
+  });
+  document.addEventListener("click", (e) => {
+    const t = tipOf(e.target);
+    if (t && e.target.closest(".help-tip-btn")) {
+      e.preventDefault(); e.stopPropagation();
+      const pin = !t.classList.contains("pinned");
+      t.classList.toggle("pinned", pin);
+      helpTipShow(t, pin);
+    }
+    document.querySelectorAll(".help-tip.pinned").forEach((x) => { if (x !== t) helpTipShow(x, false); });   // 點別的地方收起
+  }, true);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") document.querySelectorAll(".help-tip-pop:not([hidden])").forEach((p) => helpTipShow(p.closest(".help-tip"), false));
+  });
+  window.addEventListener("scroll", () => document.querySelectorAll(".help-tip-pop:not([hidden])").forEach((p) => helpTipPlace(p.closest(".help-tip"))), true);
+})();
+
 function fmtElapsed(s) {
   if (s == null) return "—";
   return `${s} 秒`;

@@ -803,6 +803,14 @@ def edited(workdir: str | Path, key: str, new: bool = False, *, page: dict | Non
     return {"ok": True, "記了": bool(no), "卡號": no}
 
 
+def unedited(workdir: str | Path, key: str, *, page: dict | None = None, snap: dict | None = None) -> dict:
+    """10-16 #225：`POST /api/final/unedited`——第 5 步「復原」把第 3 步改回去之後，拿掉那張卡的「已改，等重做」（`needs.unmark_edited`）。"""
+    workdir = Path(workdir)
+    if not needs.healthy(workdir):
+        return {"ok": True, "清了": False}
+    return {"ok": True, **needs.unmark_edited(workdir, str(key), page=page, snap=snap)}
+
+
 def take(workdir: str | Path) -> dict | None:
     """10-15 第5步2.0 第3段（31 號設計 §6.7）：拿檔按鈕拿哪一支——「最新一次輸出」；沒輸出過拿最新一版的成品。
     回傳 {路徑（相對工作區）, 是: 最終成品／還在檢查的成品, 輸出版本, 最新版本}；新紀錄不能用＝None（照 0.2.1b3 的過期判斷）。

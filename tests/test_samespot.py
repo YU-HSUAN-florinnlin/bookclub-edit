@@ -151,7 +151,8 @@ def test_roster_duplicate_spellings_warning():
     w = _fresh()
     assert review.page_data(w)["名冊重複寫法"] == dups
     js = ((REPO_ROOT / "bookclub" / "web" / "review.js").read_text(encoding="utf-8") + (REPO_ROOT / "bookclub" / "web" / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
-    assert "名冊重複寫法" in js and "也可能是" in js
+    assert "也可能是" in js
+    assert "rvRosterDupHtml" not in js   # 10-16 #225：③ 上面的名冊重複黃字拿掉，只留卡片上的「也可能是」
 
 
 def test_same_spot_groups_pure():

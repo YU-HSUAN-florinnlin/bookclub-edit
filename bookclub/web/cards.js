@@ -38,6 +38,12 @@ function cvSelect(key, opts) { cv.ctx.select(key, opts); }
 function cvOpenEditor(it, rng) { cv.ctx.openEditor(it, rng); }
 function cvPrefill(kind, a, b, who, note) { cv.ctx.prefill(kind, a, b, who, note); }
 function cvAskOutside(before) { if (cv.ctx.askOutside) cv.ctx.askOutside(before); }
+// 10-16 #225：第 5 步的「復原」——改之前記下原本的樣子（第 3 步沒有這個，什麼都不做）
+function cvNoteUndo(u) { if (cv.ctx.noteUndo) cv.ctx.noteUndo(u); }
+function cvTurnSnap(it) {
+  const ta = document.getElementById("rv-text");
+  return { id: it.id, who: it["說話者"], text: (it["已確認"] ? it["校對稿"] : it["建議稿"]) || "", ok: !!it["已確認"], typed: ta ? ta.value : null };
+}
 function cvRefreshSug() { if (cv.ctx.refreshSug) cv.ctx.refreshSug(); }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +70,7 @@ function cvPadRange(a, b, pad = cvPad()) {
 }
 // 滑動開關（iOS 樣式，樣式在 style.css 的 .fc-pad／.fc-switch）
 function cvPadHtml(id) {
-  return `<label class="fc-pad"><input type="checkbox" role="switch" id="${esc(id)}" data-cv-pad aria-label="試聽前後多 2 秒" ${cvPadOn() ? "checked" : ""}><span class="fc-switch" aria-hidden="true"></span>前後多 2 秒</label>`;
+  return `<label class="fc-pad"><input type="checkbox" role="switch" id="${esc(id)}" data-cv-pad aria-label="前後多聽 2 秒" ${cvPadOn() ? "checked" : ""}><span class="fc-switch" aria-hidden="true"></span>前後多聽 2 秒</label>`;
 }
 function cvBindPad(id, root = null) {   // root：不在頁面上的元素（例如跳出來的視窗）
   const el = root ? root.querySelector(`#${id}`) : document.getElementById(id);
@@ -117,8 +123,9 @@ function cvBindTools(it) {
     // 09-29 宇軒：聲音辨識把老師判成學員時，一鍵改回老師（只有一部分是老師：先用「改做法」裡的「從游標處切開」）
     // 10-15：第 5 步的按鈕叫「改」（不是「改做法」）；整段改回老師原聲，選字（#226）之後做
     // 10-15 要修改合併（1015-4）：第 5 步這顆在「要修改」→「其他」裡，切開也在同一塊
-    const where = cv.ctx.mode === "第5步" ? "在下面按「從游標處切開」" : "先按「改做法」→「從游標處切開」";
+    const where = cv.ctx.mode === "第5步" ? "改按「從游標處切開」" : "先按「改做法」→「從游標處切開」";
     if (!confirm(`把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 這一段改成老師？\n改了之後這段不會重念，也會補找這段裡老師提到的名字。\n只有一部分是老師的話，${where}。`)) return;
+    cvNoteUndo({ kind: "teacher", ...cvTurnSnap(it) });
     await cvToTeacher(it);
   });
   const uncut = document.getElementById("rv-uncut");   // 10-01 2-4：「通過＝剪掉」產生的剪掉片段，在原本那一段取消
@@ -308,7 +315,7 @@ function rvChip(it) {
 
 function rvSuggestText(it) {
   const s = it["建議"] || {};
-  if (it["類型"] === "學員段落") return s["做法"] === "刪除這段" ? "剪掉這段（聲音和畫面都拿掉，影片會變短）" : "學員重念（逐字稿沒問題就通過）";
+  if (it["類型"] === "學員段落") return s["做法"] === "刪除這段" ? "剪掉這段（聲音和畫面都拿掉，影片會變短）" : "學員重念";   // 10-16 #225：「（逐字稿沒問題就通過）」跟下面那行重複
   if (it["類型"] === "改成老師") return "保留老師原聲";
   return rvHowLabel(s["做法"]) || "—";
 }
@@ -328,8 +335,11 @@ function rvChosen(it) {   // 現在會套用的做法：人改過的，或建議
 function rvPlayOnlyHtml(it) {
   const a = Number(it && it.start), b = Number(it && it.end);
   if (!it || it.start == null || it.end == null || !Number.isFinite(a) || !Number.isFinite(b) || b <= a) return "";
-  if (it["類型"] === "名字") return "";   // 10-04 宇軒：名字卡不要這顆（已經有重念範圍的「聽這一段」）
-  return ` <button class="ghost small" id="rv-playonly" data-s="${a}" data-e="${b}" title="聽 ${esc(rvFmt(a, 1))}–${esc(rvFmt(b, 1))}（開了「前後多 2 秒」就前後各多 2 秒）">聽這一段</button>${cvPadHtml("rv-pad")}`;
+  // 10-16 #225 宇軒：名字卡的「聽這一段」＋開關也放標題列（跟其他卡一樣），播重念範圍；第 5 步照舊在重念範圍那一列
+  const w = it["整句"];
+  if (it["類型"] === "名字" && (!w || it["老師整段"] || (cv.ctx && cv.ctx.mode === "第5步"))) return "";
+  const [s0, e0] = it["類型"] === "名字" ? [Number(w.start), Number(w.end)] : [a, b];
+  return ` <button class="ghost small" id="rv-playonly" data-s="${s0}" data-e="${e0}" title="聽 ${esc(rvFmt(s0, 1))}–${esc(rvFmt(e0, 1))}（開了「前後多聽 2 秒」就前後各多 2 秒）">聽這一段</button>${cvPadHtml("rv-pad")}`;
 }
 
 // 10-02 第六批：老師重念範圍開頭或結尾有一段沒有人講話：提醒＋「照建議縮小」（不自動改；改了這一句要重新生成）
@@ -391,7 +401,7 @@ function rvRangeHtml(it) {   // 10-01 宇軒 7-1：名字的重念範圍（可�
   // 10-15 前後 2 秒開關統一（1015-5）：「只播重念範圍」改「聽這一段」＋「前後多 2 秒」開關（第 5 步卡片上已經有一顆，這裡不再放）；
   // 「回到預設範圍」是重設起訖、不是播放：改成次要樣式，放在起訖欄下面
   return `<div class="rv-field rv-range"><div class="rv-edrow"><b>重念範圍</b><span class="rv-meta">${esc(tag)}</span>
-      <button class="ghost small" id="rv-playrange">聽這一段</button>${cv.ctx && cv.ctx.mode === "第5步" ? "" : cvPadHtml("rv-pad")}</div>
+      ${cv.ctx && cv.ctx.mode === "第5步" ? `<button class="ghost small" id="rv-playrange">聽這一段</button>` : ""}</div>
       ${rvTimeRows("rg", [["0", "起點", w.start], ["1", "終點", w.end]])}
       ${w["範圍"] === "人選" ? `<div class="rv-edrow"><button class="linkish rv-reset" id="rv-rangereset">回到預設範圍</button></div>` : ""}</div>`;
 }
@@ -519,8 +529,16 @@ function rvBodyHtml(it) {
   if (t === "學員段落") {
     const text = it["已確認"] ? it["校對稿"] : it["建議稿"];
     const rows = Math.min(9, Math.max(3, Math.ceil((text || "").length / 34)));
-    return `<p class="rv-who">${rvWhoHtml(it["說話者"])}${it["手動標記"] ? "　（人工標記的段落）" : ""}</p>
-      <textarea id="rv-text" rows="${rows}" aria-label="逐字稿（可以直接改）">${esc(text)}</textarea>
+    // 10-16 #225 宇軒：加「學員」「會念成」小標（跟名字卡一樣）；落在剪掉片段裡的不會重念，字照列、不能改
+    const [whoA, whoB] = rvWhoParts(it["說話者"]);
+    const whoM = /^(.*)（(.*)）$/.exec(whoA);
+    const who = (whoM ? `${esc(whoM[1])}<span class="rv-meta">（代號 ${esc(whoM[2])}）</span>` : esc(whoA)) + (whoB ? `<small class="rv-meta">${esc(whoB)}</small>` : "");
+    const say = rvInCut(it)
+      ? `<p class="rv-quote rv-cuttext"><span class="rv-lab">逐字稿</span>${esc(text)}</p>`
+      : `<div class="rv-edrow"><span class="rv-lab">會念成</span><span class="rv-meta">可以直接改在下面框內</span></div>
+      <textarea id="rv-text" rows="${rows}" aria-label="學員重念要念的字（可以直接改）">${esc(text)}</textarea>`;
+    return `<p class="rv-who"><span class="rv-lab">學員</span>${who}${it["手動標記"] ? "　（人工標記的段落）" : ""}</p>
+      ${say}
       ${(it["換過的字"] || []).length && !it["已確認"] ? `<p class="rv-note">自動換成代號的地方：${rvMarkChanges(it["建議稿"], it["換過的字"])}</p>` : ""}
       ${it["代號改過"] ? `<p class="rv-warnline">代號改過，請再看一次（原本的代號：${esc(it["代號改過"])}，別人也在用，沒有自動換）。</p>` : ""}
       ${it["含本名"] ? `<p class="rv-warnline">文字裡還有名冊上的本名，要換成代號。</p>` : ""}
@@ -544,18 +562,33 @@ function rvBodyHtml(it) {
       <p class="rv-meta">這一段不用重念、要保留老師原聲：按「不用改，保留老師原聲」。</p>`;
   }
   if (t === "名字") {
+    // 10-16 #225 宇軒：決定放上面、細節收起來。原句 → 會念成 → 也可能是 → 「調整重念的字和範圍」（預設收起；有問題、改過、第 5 步自動打開）
     const w = it["整句"];
-    return `<p class="rv-quote">${it.sentence_html}</p>
-      ${w ? `${rvRangeHtml(it)}
-        <p class="rv-note">重念範圍（${esc(rvFmt(w.start, 1))}–${esc(rvFmt(w.end, 1))}，${(w.end - w.start).toFixed(1)} 秒）的逐字稿：${esc(w["原文"])}</p>
-        <div class="rv-field"><label>老師重念要念的句子（逐字稿漏了名字、名字講了兩次，直接在這裡改；重念範圍內老師講的話都要寫進來）
-          <textarea id="rv-namesay" rows="2" data-auto="${esc(w["換成代號"] || "")}">${esc(w["改稿"] || w["換成代號"] || w["原文"])}</textarea></label>
-          <span class="rv-meta" id="rv-namesay-st">${w["改稿"] ? RV_ST_EDITED : w["換成代號"] ? RV_ST_AUTO : "句子裡找不到比對到的字，要人改（把名字改成代號才能通過）"}</span>
+    const skip = rvNotName(it) || rvInCut(it);   // 不會重念：收合區整個不出現
+    const say = w ? (w["改稿"] || w["換成代號"] || w["原文"]) : "";
+    const problem = w && (!(w["改稿"] || w["換成代號"]) || w["字太少"] || w["實際會念"]);
+    const step5 = cv.ctx && cv.ctx.mode === "第5步";
+    const key = rvKey(it);
+    const open = step5 || problem || (cv.nameFold || {})[key];
+    const low = it["信心"] === "低" ? `<p class="rv-warnline">低信心，先聽清楚是不是名字</p>` : "";
+    const speak = !skip && w && rvChosen(it) === "整句換掉"
+      ? `<p class="rv-quote rv-say"><span class="rv-lab">會念成</span>${w["改稿"] || w["換成代號"] ? esc(say) : `<span class="rv-warnline">（還沒換成代號）</span>`}<span class="rv-meta">（代號 ${esc(it["代號"] || "（沒有）")}）</span></p>` : "";   // 審查建議 7：沒換成代號時不顯示含本名的原文
+    const fold = w && !skip ? `<details class="rv-namefold" data-key="${esc(key)}" ${open ? "open" : ""}>
+        <summary>調整重念的字和範圍${w["改稿"] || w["範圍"] === "人選" ? ` <span class="rv-tag">已改過</span>` : ""}</summary>
+        ${rvRangeHtml(it)}
+        <div class="rv-field"><div class="rv-edrow"><b>要念的句子</b>${helpTip("逐字稿漏了名字、名字講了兩次，直接在這裡改；重念範圍內老師講的話都要寫進來。")}</div>
+          <textarea id="rv-namesay" rows="2" aria-label="老師重念要念的句子" data-auto="${esc(w["換成代號"] || "")}">${esc(say)}</textarea>
+          <p class="rv-meta">原本逐字稿：${esc(w["原文"])}</p>
+          <span class="rv-meta" id="rv-namesay-st">${w["改稿"] ? RV_ST_EDITED : w["換成代號"] ? "" : "句子裡找不到比對到的字，要人改（把名字改成代號才能通過）"}</span>
           ${w["字太少"] ? `<p class="rv-warnline">要念 ${w["字數"][0]} 個字，重念範圍的逐字稿有 ${w["字數"][1]} 個字：這一段其他的話會不見。請把重念範圍改小，或把話補齊（不然不能通過）。</p>` : ""}
-          ${w["實際會念"] ? `<p class="rv-warnline">句子裡還有名冊上的名字，生成時會自動換成代號。實際會念：${esc(w["實際會念"])}</p>` : ""}</div>` : ""}
-      <p class="rv-meta">代號 ${esc(it["代號"] || "（沒有）")}${it["信心"] === "低" ? "　低信心，先聽清楚是不是名字" : ""}</p>
-      ${rvSpotsHtml(it)}
-      ${rvAlsoHtml(it)}`;
+          ${w["實際會念"] ? `<p class="rv-warnline">句子裡還有名冊上的名字，生成時會自動換成代號。實際會念：${esc(w["實際會念"])}</p>` : ""}</div>
+      </details>` : "";
+    return `<p class="rv-quote"><span class="rv-lab">原句</span>${it.sentence_html}</p>
+      ${speak}${low}
+      ${rvAlsoHtml(it)}
+      ${!w ? `<p class="rv-meta">代號 ${esc(it["代號"] || "（沒有）")}</p>` : ""}
+      ${fold}
+      ${rvSpotsHtml(it)}`;
   }
   if (t === "改成老師") {
     return `<p class="rv-who">這一段你改成老師了：照老師原聲留著，不重念、不用處理</p>
@@ -591,6 +624,9 @@ function rvBindBody(it) {
   const ta = document.getElementById("rv-text");
   if (ta) ta.addEventListener("blur", () => rvSaveTurnText(it));
   if (it["類型"] === "名字") { rvBindAlso(it); rvBindSpots(it); }
+  document.querySelectorAll(".rv-namefold").forEach((d) => d.addEventListener("toggle", () => {
+    cv.nameFold = cv.nameFold || {}; cv.nameFold[d.dataset.key] = d.open;
+  }));
   const say = document.getElementById("rv-namesay");   // 09-29：名字整句的重念稿
   if (say) say.addEventListener("blur", async () => {
     const v = say.value.trim();
@@ -600,7 +636,7 @@ function rvBindBody(it) {
     await cvPost("/api/review/name", { id: it.id, "改稿": txt });
     if (it["整句"]) it["整句"]["改稿"] = txt;
     const st = document.getElementById("rv-namesay-st");
-    if (st) st.textContent = txt ? RV_ST_EDITED : RV_ST_AUTO;
+    if (st) st.textContent = txt ? RV_ST_EDITED : "";   // 10-16 #225：「照逐字稿自動排的」不顯示
   });
 }
 
@@ -757,6 +793,7 @@ function rvBindMore(it) {
     });
   } else if (t === "學員段落") {
     q("rv-who").addEventListener("change", async (e) => {
+      cvNoteUndo({ kind: "who", ...cvTurnSnap(it) });
       await rvSaveTurnText(it);
       await cvPost("/api/turns/save", { id: it.id, "說話者": e.target.value }); await cvReload();
     });
@@ -770,16 +807,19 @@ function rvBindMore(it) {
     q("rv-split").addEventListener("mousedown", (e) => e.preventDefault());
     q("rv-split").addEventListener("click", async () => {
       const ta = q("rv-text");
+      if (!ta) { alert("這段落在剪掉的片段裡，不用切開"); return; }   // 10-16 #225：剪掉的卡沒有輸入框
       const at = ta.selectionStart;
       if (!at || at >= ta.value.length) { alert("先在逐字稿裡把游標放在要切開的地方（換人的第一個字前面）"); return; }
+      const snap = cvTurnSnap(it);
       await rvSaveTurnText(it);
       const before = rvOutKeys();
       let sp;
       try { sp = await cvPost("/api/turns/split", { id: it.id, at }); } catch (err) { alert(err.message); return; }
+      cvNoteUndo({ kind: "split", ...snap, made: (sp && sp["新段落"]) || [] });
       await cvReload();
       cvAskOutside(before);
       if (sp && String(sp["切在"] || "").startsWith("一句話裡面")) {   // 09-30：切在一句話裡面，切點是照逐字稿每個字的時間找的
-        alert(`切在${sp["切在"]}：切點 ${rvFmt(sp["切點"], 1)}。\n前後兩段請各聽一下開頭結尾，不準的話用「改時間」調整。後面那一段如果是老師講的，按「這段其實是老師」。`);
+        alert(`切在${sp["切在"]}：切點 ${rvFmt(sp["切點"], 1)}。\n前後兩段請各聽一下開頭結尾，不準的話用「改時間」調整。後面那一段如果是老師講的，${cv.ctx.mode === "第5步" ? "到那一段按「整段改成老師」" : "按「這段其實是老師」"}。`);
       }
     });
     q("rv-ask").addEventListener("change", async (e) => {
@@ -919,7 +959,7 @@ function rvPreview(it) {
 
 function rvAlignLine(it) {   // 「你標的 → 對齊後」（人工新增、改過時間的才有）
   const m = it["標的起訖"];
-  if (!m) return "";
+  if (!m || !cvData()["開發者"]) return "";   // 10-16 #225 宇軒（甲）：只在開發者設定顯示，老師的畫面不出現
   const ok = it["對齊"] || [];
   const note = it["對齊到"] === "照填的時間" ? "照你填的時間，沒有自動對齊"   // 10-01 第三批：第 5 步改的
     : ok[0] && ok[1] ? `對齊${it["對齊到"] || ""}` : !ok[0] && !ok[1] ? "沒對齊，保留你標的時間" : `${ok[0] ? "終點" : "起點"}沒對齊`;

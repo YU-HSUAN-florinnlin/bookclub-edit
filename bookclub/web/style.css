@@ -823,3 +823,43 @@ details.fc-whole[open] > summary .fc-foldbtn::after { content: "（點了收合�
 .rv-list .tm .fc-vtag { display: block; font-size: 12px; color: var(--muted); font-weight: normal; }
 /* 10-15 總檢查修正（1015-7）：舊版畫面上「最新版：要重做（原因）」小字 */
 .fc-latest-redo { margin: 4px 0 0; }
+
+/* 10-16 #225 問號說明（乙方案），由 app.js helpTip() 產生 */
+.help-tip { display: inline-block; vertical-align: middle; margin-left: 4px; line-height: 1; }
+.help-tip button.help-tip-btn {
+  width: 16px; height: 16px; padding: 0; border-radius: 50%;
+  border: 1.2px solid var(--muted); background: var(--bg); color: var(--muted);
+  font: 700 11px/1 -apple-system, BlinkMacSystemFont, sans-serif; cursor: pointer; min-width: 0; flex: none;
+}
+.help-tip button.help-tip-btn:hover, .help-tip button.help-tip-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.help-tip.pinned button.help-tip-btn { background: var(--accent); border-color: var(--accent); color: #fff; }
+.help-tip-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.help-tip-pop {
+  position: fixed; z-index: 1000; width: max-content; max-width: min(360px, calc(100vw - 16px));
+  padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--fg); box-shadow: 0 4px 16px rgba(0, 0, 0, .15);
+  font-size: 15px; font-weight: normal; line-height: 1.7; text-align: left; white-space: normal;
+}
+.help-tip-pop[hidden] { display: none; }
+.help-tip-pop ul { margin: 0; padding-left: 1.2em; }
+.help-tip-pop li + li { margin-top: 4px; }
+/* 10-16 #225：說明改列點 */
+.rv-bullets { margin: 2px 0 4px; padding-left: 1.4em; }
+.rv-bullets li { margin: 1px 0; }
+/* 10-16 #225：第 0 步表格第一欄要換行（長的名冊提醒會撐出畫面、擠到筆數與時間欄） */
+table.kv.prof td:first-child { width: auto; white-space: normal; }
+table.kv.prof td:not(:first-child), table.kv.prof th:not(:first-child) { white-space: nowrap; width: 1%; }
+/* 10-16 #225：名字卡「原句／會念成」小標、收合的調整區 */
+.rv-lab { display: inline-block; min-width: 3.5em; margin-right: 8px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.rv-say { font-weight: 600; }
+.rv-say .rv-meta { font-weight: normal; margin-left: 6px; }
+.rv-namefold { margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; }
+.rv-namefold > summary { cursor: pointer; color: var(--muted); font-size: 15px; }
+.rv-namefold[open] > summary { margin-bottom: 8px; }
+.rv-cuttext { color: var(--muted); }
+.rv-body > .rv-edrow + textarea { margin-top: 2px; }
+/* 10-16 #225：第 5 步「裡面有老師的聲音」 */
+.fc-tacts { align-items: center; }
+.fc-tlead { margin: 6px 0; font-weight: 600; }
+.fc-other { margin: 8px 0; }
+.fc-other > summary { cursor: pointer; color: var(--muted); }

@@ -1211,7 +1211,7 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
             continue
         draft, changes = (t["校對稿"], []) if t["已確認"] else replace_real_names(t["校對稿"], table)
         keep = voices.get(t["說話者"]) == "保留原聲"
-        why = "逐字稿看過、沒有錯字就通過（成品會照這份文字重念）"
+        why = "逐字稿沒錯字就按通過"   # 10-16 #225：原本「逐字稿看過、沒有錯字就通過（成品會照這份文字重念）」跟建議那一行重複
         if changes:
             why = f"已把名冊上的名字換成代號：{'、'.join(sorted({c['換成'] for c in changes}))}；" + why
         if t.get("學員是猜的"):

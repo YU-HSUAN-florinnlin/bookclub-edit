@@ -260,7 +260,7 @@ function rvRenderAll() {
 // 看、播放、篩選、上一筆下一筆照常；其他按鈕與輸入框鎖住，上方橫幅說明。後端也擋（409）。
 // ---------------------------------------------------------------------------
 
-const RV_RO_ALLOW = "#rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-export, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
+const RV_RO_ALLOW = ".help-tip-btn, #rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-export, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
 
 function rvReadonly() { return !!(rv.data && rv.data["AI執行中"]); }
 
@@ -602,23 +602,24 @@ function rvRenderCard() {
   const all = rvItems();
   const idx = all.findIndex((x) => rvKey(x) === rv.cur);
   const state = it["類型"] === "名字" && it["老師整段"] && rvNotName(it) ? `<span class="rv-state ok">✓ 不用改：這一段保留老師原聲（再按一次取消）</span>`
-    : it["類型"] === "名字" && rvNotName(it) ? `<span class="rv-state ok">✓ 不是名字，不用改：抓錯了、這裡沒有人名，照原音保留（這個寫法以後不會再被抓成名字；再按一次取消）</span>`
-    : rvInCut(it) ? `<span class="rv-state ok">✓ 通過：這段落在剪掉的片段裡（聲音和畫面都拿掉）${it["剪掉的片段"] ? "" : "（要救回：到蓋住這裡的那一筆「剪掉」，在「改做法」按「還原（不剪）」）"}</span>${it["剪掉的片段"] ? ` <button class="ghost small" id="rv-uncut">取消剪掉（還原這一段）</button>` : ""}`
+    : it["類型"] === "名字" && rvNotName(it) ? `<span class="rv-state ok">✓ 不是名字，照原音保留${helpTip("抓錯了、這裡沒有人名。這個寫法以後不會再被抓成名字；再按一次「不是名字，不用改」取消。")}</span>`   // 10-16 #225：說明收進問號
+    : rvInCut(it) ? `<span class="rv-state ok">✓ 這段會剪掉${it["剪掉的片段"] ? "" : helpTip("聲音和畫面都拿掉。要救回：到蓋住這裡的那一筆「剪掉」，在「改做法」按「還原（不剪）」。")}</span>${it["剪掉的片段"] ? ` <button class="ghost small" id="rv-uncut">取消剪掉（還原這一段）</button>` : ""}`
     : it["涵蓋"] ? `<span class="rv-state ok">✓ 已由〈${esc(it["涵蓋"]["名稱"])}〉涵蓋：這一處會跟著那一筆整段換掉，不用另外選</span> <button class="ghost small" id="rv-gocover">跳到那一筆</button>`
     : it["不用處理"] ? `<span class="rv-state skip">不用處理：${esc(it["不用處理"])}</span>`
     : it["已確認"] && it["還缺"] ? `<span class="rv-warnline">按過通過，但還缺東西（見上面）</span>`
-    : it["已確認"] ? `<span class="rv-state ok">✓ 已通過</span>` : "";
+    : "";   // 10-16 #225：「✓ 已通過」拿掉，按鈕已經寫了
   const sug = it["建議"] || {};
   const chosen = rvChosen(it);
   const changed = chosen && sug["做法"] && chosen !== sug["做法"] && it["類型"] !== "學員段落";
   const w0 = it["整句"];
   const when = it["類型"] === "名字" && w0 && !it["老師整段"]   // 10-01：名字卡片寫重念範圍（不再只寫名字那 0.3 秒）
-    ? `重念範圍 ${rvFmt(w0.start, 1)}–${rvFmt(w0.end, 1)}（名字在 ${rvFmt(it.start, 1)}）` : `${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)}`;
+    ? `重念範圍 ${rvFmt(w0.start, 1)}–${rvFmt(w0.end, 1)}` : `${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)}`;   // 10-16 #225 宇軒：「（名字在…）」拿掉，保留「重念範圍」四個字
   const lack = it["還缺"] ? `<p class="rv-warnline rv-lack">還缺：${esc(it["還缺"])}。${it["已確認"] ? "（之前按過通過，但補好之前第 4 步不能開始）" : ""}按「改做法」補好。</p>` : "";
   // 10-01 第三批 5：第 5 步要重做的，卡片上寫原因（重做完就消失）。10-15 總檢查修正（1015-7）：字改「第 5 步要重做」
   // （資料欄位 第5步退回 照舊；後端改讀 needs.redo_cards，跨版本卡、沿用卡按的也看得到）
   const back = it["第5步退回"] ? `<p class="rv-warnline rv-back5">第 5 步要重做：${esc(it["第5步退回"].join("；"))}</p>` : "";
-  const coverNote = back + lack + rvEdgeHtml(it) + (it["涵蓋消失"] ? `<p class="rv-warnline">原本由〈${esc(it["涵蓋消失"]["名稱"] || it["涵蓋消失"].id)}〉涵蓋，現在沒有了（那一筆改了時間、做法或被還原），請重新看。</p>`
+  const nameSkip = it["類型"] === "名字" && (rvNotName(it) || rvInCut(it));   // 10-16 #225：不會重念的名字卡不提醒縮範圍
+  const coverNote = back + lack + (nameSkip ? "" : rvEdgeHtml(it)) + (it["涵蓋消失"] ? `<p class="rv-warnline">原本由〈${esc(it["涵蓋消失"]["名稱"] || it["涵蓋消失"].id)}〉涵蓋，現在沒有了（那一筆改了時間、做法或被還原），請重新看。</p>`
     : it["涵蓋待通過"] ? `<p class="rv-note">這一處整個落在〈${esc(it["涵蓋待通過"]["名稱"])}〉裡；那一筆通過之後，這一處就自動算處理好。</p>` : "");
   box.innerHTML = `
     <article class="rv-card" data-key="${esc(rv.cur)}">
@@ -628,11 +629,11 @@ function rvRenderCard() {
         <span class="rv-count">第 ${idx + 1}／${all.length} 筆</span>
       </header>
       <div class="rv-body">${coverNote}${rvBodyHtml(it)}${rvAlignLine(it)}</div>
-      <div class="rv-sug">
+      ${rvInCut(it) ? "" : `<div class="rv-sug">
         <p class="what">建議：${esc(rvSuggestText(it))}</p>
         <p class="why">${esc(sug["原因"] || "")}</p>
         ${changed ? `<p class="mine">改成：${esc(rvHowLabel(chosen))}</p>` : ""}
-      </div>
+      </div>`}
       ${state ? `<div class="rv-statebox">${state}</div>` : ""}
       <div class="rv-actions">
         <button class="primary" id="rv-pass" title="已通過的再按一次會取消">${rvInCut(it) || it["涵蓋"] ? "✓ 已處理" : it["類型"] === "改成老師" ? "不用處理" : it["已確認"] ? "✓ 已通過（再按取消）" : rvPassCuts(it) ? "通過（這一段會整段剪掉，畫面也剪）" : "通過"}<kbd>Enter</kbd></button>
@@ -744,7 +745,7 @@ async function rvPass() {
     }
     if (t === "學員段落") {
       const ta = document.getElementById("rv-text");
-      const text = ta ? ta.value.trim() : it["校對稿"];
+      const text = ta ? ta.value.trim() : ((it["已確認"] ? it["校對稿"] : it["建議稿"]) || "");   // 10-16 #225：落在剪掉片段裡的卡沒有輸入框
       await apiPost("/api/turns/save", { id: it.id, "校對稿": text, "已確認": !undo });
       it["校對稿"] = it["建議稿"] = text;
       it["換過的字"] = [];
@@ -970,9 +971,10 @@ function rvPrepPeopleHtml() {
         ${auto ? `<span class="rv-tag" title="程式自動配的，不用改就不用動">自動配</span>` : ""}
 </div></li>`;
   }).join("") : `<li class="rv-meta">左邊選了本名之後，這裡會列出來。</li>`;
-  return `${rvDupHtml()}<p class="rv-meta">左邊是照聲音特徵分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）；聲音其實是老師的，選「${esc(teacher)}」；聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。右邊是每個本名在這支影片換成哪個代號（只影響這一集，老師講到他的名字、學員稿子裡的名字都會照這裡換）。</p>${rvEnglishCodesHtml()}${rvAutoHtml()}
-    <div class="rv-people2"><div><h4>照聲音特徵分出來的人</h4><ul class="rv-people">${left}</ul></div>
-      <div><h4>本名 → 這支影片的代號</h4><ul class="rv-people">${right}</ul></div></div>`;
+  // 10-16 #225 宇軒：上面那一大段說明收進兩欄標題旁的問號
+  return `${rvDupHtml()}${rvEnglishCodesHtml()}${rvAutoHtml()}
+    <div class="rv-people2"><div><h4>照聲音特徵分出來的人${helpTip(`<ul><li>這裡是照聲音特徵分出來的「學員 1、2⋯⋯」：試聽後選他的本名（最上面是這一集被叫到的名字）。</li><li>聲音其實是老師的，選「${esc(teacher)}」。</li><li>聽得出是另一個人、但不知道本名的，選「不知道是誰」（照樣換聲音，不用代號）。</li></ul>`)}</h4><ul class="rv-people">${left}</ul></div>
+      <div><h4>本名 → 這支影片的代號${helpTip("每個本名在這支影片換成哪個代號。只影響這一集；老師講到他的名字、學員稿子裡的名字，都會照這裡換。")}</h4><ul class="rv-people">${right}</ul></div></div>`;
 }
 
 // 09-30 宇軒：學員聲線依男女自動輪流（男 1、男 2⋯／女 1、女 2⋯，女 5 不用），每位不同；這裡顯示、可以改
@@ -1042,13 +1044,7 @@ function rvDupHtml() {
   return `<p class="rv-warnline">同一集有人用了同一個代號，成品裡會分不出是誰：${dup.map(([c, rs]) => `${esc(c)}（${esc(rs.join("、"))}）`).join("；")}。如果其實是同一個人（轉錯字、暱稱），不用改，或在「③」選「是上面的學員」合併；不同人的話，學員在「② 辨識學員聲音是誰」右欄改，其他人在「③ 辨識其他名稱如何替換」改。</p>`;
 }
 
-// 10-03 第八批（#12）：名冊裡同一個寫法出現在兩列 → 同一處名字會比中兩個人；讓人決定是不是同一人（改名冊）
-function rvRosterDupHtml() {
-  const dups = rv.data["名冊重複寫法"] || [];
-  if (!dups.length) return "";
-  return `<p class="rv-warnline" id="rvRosterDup">名冊裡同一個寫法出現在兩列：${esc(dups.map((d) => `「${d["寫法"]}」第 ${d["列"].join("、")} 列`).join("；"))}（標題列算第 1 列）。
-    同一處名字會同時比中這幾列的人，卡片合成一張、寫「也可能是」。是同一人的話到名冊把重複的那一列刪掉或合併；不是同一人，卡片上自己選是哪一位。</p>`;
-}
+// 10-16 #225 宇軒：③ 上面的「名冊裡有同名的人」黃字拿掉（老師看卡片上的「也可能是」就懂）；名冊重複的列號只在第 0 步匯入時提醒
 
 function rvPrepNamesHtml() {
   // 09-29 宇軒：③「辨識其他名稱如何替換」——這一集被提到的每個人名都列（名冊上有沒有都一樣）。
@@ -1086,8 +1082,11 @@ function rvPrepNamesHtml() {
   // 10-02 第七批（A3）：Claude 那一步沒跑成功，名冊上沒有的名字這裡看不到
   const peopleWarn = rv.data["人名清單沒跑成功"] ? `<p class="rv-warnline" id="rvPeopleMissing">人名清單沒跑成功（第 1 步用 Claude 找這一集提到的人名）：名冊上沒有的名字這裡看不到，成品可能照原聲念出來。到第 1 步按「重新分析（做完的會跳過）」，或命令列 bookclub run people &lt;工作區&gt;；跑成功之前 ③ 不能標完成。</p>` : "";
   if (!all.length) return peopleWarn || `<p class="rv-meta">這一集沒有找到被提到的人名（第 1 步人名清單還沒跑，或真的沒有）。</p>`;
-  return `${peopleWarn}${rvRosterDupHtml()}${rvDupHtml()}${rvAutoHtml()}<p class="rv-meta">這一集被提到的所有人名（老師或學員講到的），每個決定被提到時換成什麼：
-    名冊上的人預設「換成代號」，代號每一集自己選（或按上面自動配）；其實是 ② 某位學員（轉錯字、暱稱）選「是上面的學員」；家人、朋友、沒登記的人選「換成代號」；書中人物、公眾人物選「不用處理」；抓錯的選「不是名字」。</p>
+  return `${peopleWarn}${rvDupHtml()}${rvAutoHtml()}<div class="rv-meta">被提到的名字，照這樣選：<ul class="rv-bullets">
+    <li>名冊上的人、家人朋友、沒登記的人 →「換成代號」</li>
+    <li>其實是 ② 的某位學員（轉錯字、暱稱）→「是上面的學員」</li>
+    <li>書中人物、公眾人物 →「不用處理」</li>
+    <li>抓錯的 →「不是名字」</li></ul></div>
     <p class="rv-meta">${un.length} 個要看，${un.filter((u) => !u["已決定"]).length} 個還沒確認。</p>
     <ul class="rv-people">${unRows}${twoBlock}${cutBlock}</ul>`;
 }

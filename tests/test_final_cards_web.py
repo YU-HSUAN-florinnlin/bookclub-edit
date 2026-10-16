@@ -481,7 +481,7 @@ def test_page_renders_and_buttons_post_right_things():
     assert "重做這幾張（1 張）" in v["bar"] and "＋在這裡新增修改" in v["bar"] and 'data-tab="還沒看完"' not in v["lower"] and "還要確認的" in v["lower"]
     assert "重做這幾張" not in v["lower"] and "＋在這裡新增修改" not in v["lower"]
     assert v["left"].index("fc-seenpct") < v["left"].index('id="fc-actbar"') < v["left"].index('id="fc-io"')
-    assert 'id="fc-pad"' in v["right"] and "前後多 2 秒" in v["right"] and 'class="fc-switch"' in v["right"] and 'role="switch"' in v["right"]
+    assert 'id="fc-pad"' in v["right"] and "前後多聽 2 秒" in v["right"] and 'class="fc-switch"' in v["right"] and 'role="switch"' in v["right"]
     assert not re.search(r'id="fc-pad"[^>]*checked', v["right"])   # 滑動開關預設關
     assert "fc-preview" not in v["right"]   # 舊預覽的霧化樣式不能套到卡片的字
     assert "fc-back" in v["tl"] and "fc-todo" in v["tl"]
@@ -525,7 +525,10 @@ def test_page_renders_and_buttons_post_right_things():
     assert th["log"][0][2]["選項"] == ["裡面有老師的聲音"] and th["open"] is False
     te = got["老師聲音等於其他"]
     assert "錯誤" not in te, te
-    assert te["t"].replace("<b>裡面有老師的聲音</b>", "<b>其他</b>") == te["o"] and te["more"] is True
+    # 10-16 #225 宇軒：「裡面有老師的聲音」不再等於「其他」——學員段落卡先給「整段改成老師」「從游標處切開」（說明在問號），其他做法收起來
+    assert te["t"] != te["o"] and te["more"] is True
+    assert ">整段改成老師</button>" in te["t"] and ">從游標處切開</button>" in te["t"] and 'class="fc-other"' in te["t"]
+    assert te["t"].count('id="rv-split"') == 1 and te["t"].count('id="rv-isteacher"') == 1
     rd2 = got["要重做的卡再開"]
     assert "錯誤" not in rd2, rd2
     assert rd2["f"]["pick"] == "長度或停頓怪" and rd2["f"]["extra"] == "尾巴切太早"          # 帶入上次的原因與補充
