@@ -649,6 +649,19 @@ def cleanup_partials(folder: Path, *, older_than_s: float = PARTIAL_STALE_S, now
     return n
 
 
+def link_or_copy(src: Path, dst: Path) -> bool:
+    """#79（1017-2）：讓 dst 跟 src 是同一份資料——先試硬連結（同一個檔兩個名字，不多佔空間、一下就好），
+    做不到（跨磁碟、檔案系統不支援硬連結、dst 已經在之類的 OSError）就照舊 `shutil.copy2`（修改時間保留）。
+    回傳 True＝連結、False＝複製。src 是捷徑時連到它指到的那支（`os.link` 預設跟著捷徑走）。
+    前提：任何程式都不可以原地改寫 src／dst（要換內容就寫暫存檔再換名），不然兩個名字會一起變。"""
+    try:
+        os.link(src, dst)
+        return True
+    except OSError:
+        shutil.copy2(src, dst)
+        return False
+
+
 class CopyCancelled(Exception):
     pass
 

@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import threading
 from datetime import datetime
@@ -904,7 +903,7 @@ def export_stale(workdir: str | Path, check: dict, cur: str | None = None) -> di
     過期＝任一成立（10-13 複核調整 3：只看「是不是同一份檔」，不做內容指紋）：
     1. `輸出成品.來源` 不是現在檢查的那支（cur，沒給就用 `check["成品影片"]`）——「換了成品」；
     2. 輸出時記的 `成品檔指紋` 跟現在那支的 `product_print` 不同——「成品換新了」（重新組裝過，只重組內容沒變也算）；
-    3. 舊紀錄沒 `成品檔指紋`：直接比 `輸出成品.檔案`（最終成品）與現在那支兩個檔（輸出用 copy2，修改時間保留，相等＝同一份）。
+    3. 舊紀錄沒 `成品檔指紋`：直接比 `輸出成品.檔案`（最終成品）與現在那支兩個檔（輸出是硬連結＝同一個檔；退回複製時用 copy2、修改時間保留——相等＝同一份）。
     `重做中` 期間成品檔還沒換，自然不算過期。現在那支讀不到（檔案不見）就不判斷。"""
     out = check.get("輸出成品") or {}
     cur = cur if cur is not None else check.get("成品影片")
@@ -1810,12 +1809,15 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
         while dst.exists() or dst.is_symlink():   # 同一秒按兩次：加編號，一樣不蓋掉
             dst = src.with_name(f"{Path(final_name(src.name, datetime.now().strftime('%Y%m%d-%H%M%S'))).stem} ({n}){src.suffix}")
             n += 1
-        from bookclub.fileio import cleanup_partials
+        from bookclub.fileio import cleanup_partials, link_or_copy
 
         # 10-08：上次輸出到一半斷掉（伺服器被關掉）留下、超過 1 小時沒動的 `.最終成品_….輸出中` 先清掉
         cleanup_partials(dst.parent, suffix=".輸出中")
         tmp = dst.with_name(f".{dst.name}.輸出中")
-        shutil.copy2(src, tmp)   # 先複製到暫存檔、完整了才換上（複製到一半中斷不會留下半個最終成品）
+        # #79（1017-2）：最終成品是成品的硬連結（同一份資料兩個名字，不再多佔一份 0.5–1 GB）；跨磁碟、不支援才複製。
+        # 安全前提：第 4 步組裝是寫 `_輸出中_…` 再換名（新的檔），不會改到已經輸出的最終成品；標字版（ffmpeg 直接寫
+        # 正式檔名）不能輸出（export_blocks 擋下）。以後任何程式都不可以原地改寫成品檔。
+        link_or_copy(src, tmp)   # 先放到暫存檔名、完整了才換上（複製到一半中斷不會留下半個最終成品）
         os.replace(tmp, dst)
         extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
         rec = {"時間": _now(), "來源": check["成品影片"], "檔案": str(dst.relative_to(workdir)),
