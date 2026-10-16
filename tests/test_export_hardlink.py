@@ -88,16 +88,40 @@ def test_link_or_copy_helper():
             assert fileio.link_or_copy(src, dst2) is False
         assert not _same(src, dst2) and dst2.read_bytes() == src.read_bytes()
         assert dst2.stat().st_mtime_ns == src.stat().st_mtime_ns   # copy2：修改時間保留（舊紀錄的過期判斷靠這個）
-        # 目的地已經在（例如上次中斷留下的暫存檔）：os.link 丟 FileExistsError → 退回複製蓋掉，不會失敗
+        # 目的地已經在（例如上次中斷留下的暫存檔）：先拿掉那個名字再連結，不會失敗
         stale = Path(t) / "d.mp4"
         stale.write_bytes(b"half")
-        assert fileio.link_or_copy(src, stale) is False and stale.read_bytes() == src.read_bytes()
+        assert fileio.link_or_copy(src, stale) is True and _same(src, stale)
         # 捷徑：連到捷徑指到的那支（複製來的工作區）
         ln = Path(t) / "捷徑.mp4"
         os.symlink(src, ln)
         dst3 = Path(t) / "e.mp4"
         assert fileio.link_or_copy(ln, dst3) is True
         assert not dst3.is_symlink() and _same(src, dst3)
+
+
+def test_link_or_copy_does_not_overwrite_existing_dst_in_place():
+    """審查（1017-2）：目的地已經在、而且是另一支成品的硬連結（例如上次中斷留下的暫存檔）——不能原地覆寫改到那支成品。"""
+    with tempfile.TemporaryDirectory() as t:
+        v1, v2 = Path(t) / "成品_v1.mp4", Path(t) / "成品_v2.mp4"
+        v1.write_bytes(b"v1" * 500)
+        v2.write_bytes(b"v2" * 700)
+        tmp = Path(t) / ".最終成品.mp4.輸出中"
+        os.link(v1, tmp)                                      # 預留的暫存檔連到成品_v1
+        assert fileio.link_or_copy(v2, tmp) is True
+        assert v1.read_bytes() == b"v1" * 500 and _same(v2, tmp) and v1.stat().st_nlink == 1
+        os.link(v1, tmp.with_name("x"))
+        tmp2 = tmp.with_name("x")
+        with _no_link():                                      # 退回複製那條路也一樣
+            assert fileio.link_or_copy(v2, tmp2) is False
+        assert v1.read_bytes() == b"v1" * 500 and tmp2.read_bytes() == v2.read_bytes() and v1.stat().st_nlink == 1
+        # 同一個檔（同一個路徑）：照舊丟 SameFileError，不會先把它刪掉
+        try:
+            fileio.link_or_copy(v1, v1)
+            raise AssertionError("同一個檔應該丟 SameFileError")
+        except shutil.SameFileError:
+            pass
+        assert v1.read_bytes() == b"v1" * 500
 
 
 # ---------------------------------------------------------------------------
