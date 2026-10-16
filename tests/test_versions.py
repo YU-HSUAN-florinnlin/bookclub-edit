@@ -724,7 +724,9 @@ def test_api_execute_start_base_version_developer_only():
 # ---------- 10-15 總檢查修正（1015-7）：要修改的分流、第 4 步拿得到原因、redo_cards 一份清單 ----------
 
 def _gen_logs(w: Path) -> None:
-    """假的生成紀錄（照現在排出來的計畫，每句一個種子、一個聲音檔）：第 4 步才算得出「文字和範圍都沒改＝換一種念法」。"""
+    """假的生成紀錄（照現在排出來的計畫，每句一個種子、一個聲音檔）：第 4 步才算得出「文字和範圍都沒改＝換一種念法」。
+    1015-8 #228：每句也記「放回時間格」、檔案都在——生成程式看來是做好了的（不然 `needs.redo_list` 照生成程式的判斷
+    會把這幾張都列成「已改，等重做」）。"""
     from bookclub import workdir as wd
 
     for role, xs in fc._redo_ctx(w).items():
@@ -732,10 +734,13 @@ def _gen_logs(w: Path) -> None:
             continue
         lp, od = fc._role_paths(w, role)
         od.mkdir(parents=True, exist_ok=True)
+        rel = od.relative_to(w)
         wd.write_json(lp, {"句子": [{"id": x["id"], "text": x.get("text"), "slot": x["slot"], "嘗試": [{"種子": 7}],
-                                    "選定": 1, "第幾版": 1} for x in xs]})
+                                    "選定": 1, "第幾版": 1,
+                                    "放回時間格": {"檔案": str(rel / f"{x['id']}_放回時間格.wav")}} for x in xs]})
         for x in xs:
             (od / f"{x['id']}.wav").write_bytes(b"wav")
+            (od / f"{x['id']}_放回時間格.wav").write_bytes(b"wav")
 
 
 def _gen_ids(w: Path, role: str) -> set:
@@ -914,6 +919,7 @@ def test_reason_after_reassemble_only_not_orphaned():
         assert [e["鍵"] for e in plan] == c["紀錄鍵"]
         tn._quiet(fc.prepare_redo, w, log=lambda s: None)
         assert needs.redo_run_cards(w, needs.load(w), fc._index(w)) == {c["卡號"]}
+        _gen_logs(w)   # 1015-8 #228：生成程式把清掉的那一句重新生成了（不然 redo_list 照生成程式的判斷還是「已改，等重做」）
         recs = tn._records()
         i = next(j for j, x in enumerate(recs) if x.get("檔案") and "S001" in x["檔案"])
         recs[i] = {**recs[i], "檔案指紋": "fp-new"}
