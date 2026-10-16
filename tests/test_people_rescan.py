@@ -910,8 +910,8 @@ def test_web_same_person_row_and_two_summary():
     assert html.count("這是名冊上的人，成品會把名字拿掉重念") == 2 and "會念出原名" not in html, html
     # 決定時名冊沒有、名冊現在才有（照原聲留著）→ 提醒
     assert html.count("選的時候名冊還沒有，現在有了") == 1, html
-    # ③ 說明補一句：名冊上的人一律會把名字拿掉（1017 總審查縮短）
-    assert "名冊上的人一律會把名字拿掉" in html
+    # ③ 說明補一句：名冊上的人會把名字拿掉（1017 總審查縮短）
+    assert "名冊上的人會把名字拿掉" in html
     # ② 摘要只列 ② 的學員、用名冊本名（同一人的幾種寫法只列一次）
     assert "② 已經定好的學員（2 個）：小美 → 艾瑪、阿明 → 湯姆<" in html, html
     # ② 還沒選學員：選單裡一行灰字說明為什麼沒有「同一人」

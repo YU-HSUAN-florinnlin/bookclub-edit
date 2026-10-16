@@ -1191,7 +1191,7 @@ function rvPrepNamesHtml() {
   return `${peopleWarn}${rvDupHtml()}${rvAutoHtml()}<div class="rv-meta">每個名字選一項：<ul class="rv-bullets">
     <li>是 ② 的學員（轉錯字、暱稱）→「同一人：…」</li>
     <li>其他人（家人朋友、沒登記的人）→ 挑一個英文名</li>
-    <li>書中人物、公眾人物 →「不用處理」（名冊上的人一律會把名字拿掉）</li>
+    <li>書中人物、公眾人物 →「不用處理」（名冊上的人會把名字拿掉）</li>
     <li>抓錯的 →「不是名字」</li></ul></div>
     ${rvRescanLineHtml()}
     <p class="rv-meta" id="rvNameCount">${rvNameCountHtml()}</p>

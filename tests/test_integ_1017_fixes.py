@@ -277,10 +277,10 @@ process.stdout.write(JSON.stringify(out));
 
 def test_5_dropdown_labels_and_hint():
     review_js = (WEB / "review.js").read_text(encoding="utf-8")
-    assert "名冊上的人一律會把名字拿掉" in review_js
+    assert "名冊上的人會把名字拿掉" in review_js
     assert "名冊上的人選「不用處理」也會拿掉名字" not in review_js
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "名冊上的人一律會把名字拿掉" in readme and "名冊上的人選「不用處理」也會拿掉名字" not in readme
+    assert "名冊上的人會把名字拿掉" in readme and "名冊上的人選「不用處理」也會拿掉名字" not in readme
     if not NODE:
         print("（沒有 node，略過選單）")
         return

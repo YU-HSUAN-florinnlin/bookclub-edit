@@ -41,7 +41,7 @@
 更新流程與文件（待辦 #236、#237、#175）。
 
 - **#236 README〈更新到新版本〉改用版本標籤**：在原本的 `~/bookclub-edit` 用 `git fetch --tags`、`git checkout <標籤>` 換版本，退回也用標籤，不再改名、重新下載；套件有變（`requirements.txt`、`constraints.txt`、`build-constraints.txt`、`install.sh`，或 `pyproject.toml` 版本號以外的行）才跑 `install.sh`；更新前只備份紀錄，健檢通過後只留這一次的備份。`skills/bookclub-edit/SKILL.md` 同步
-- **#237 `/api/run/status` 多回 `第4步執行中`**：給更新指令判斷能不能自己關網頁（沒在跑才關，有在跑先問）
+- **#236 `/api/run/status` 多回 `第4步執行中`**：給更新指令判斷能不能自己關網頁（沒在跑才關，有在跑先問）
 - **#175 文件**：`docs/工作區格式.md` 補 10-04 起沒寫的欄位與檔案；`bookclub inspect` 印的字拿掉內部說法
 - README 第 5 節補「結案打包」的使用說明
 
