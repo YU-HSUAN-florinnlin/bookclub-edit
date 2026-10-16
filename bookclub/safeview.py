@@ -359,7 +359,7 @@ def topic_words(w: Path, f: Filter, out: list[str], limit: int) -> None:
     # 10-04 #105：轉文字時被挖掉的靜音（只有時間），用來查「一個字橫跨被挖掉的靜音」
     sil = [s for s in (merged.get("silence_map") or []) if f.ok({"start": s.get("start"), "end": s.get("end")})]
     if sil:
-        out.append(f"VAD 判定的安靜處（挖停頓的做法轉的就是被挖掉的地方）{len(sil)} 處：" + "、".join(
+        out.append(f"偵測到沒人講話的安靜處（用挖掉停頓的舊做法轉文字時，挖掉的就是這些地方）{len(sil)} 處：" + "、".join(
             f"{tfmt(s['start'])}–{tfmt(s['end'])}（{s['end'] - s['start']:.1f} 秒）" for s in sil[:limit]) + more(len(sil)))
     # 10-04 #62：整個落在安靜超過 1 秒的地方的字（可能是 Groq 自己編的；只印數字與時間）
     from bookclub.transcribe import QUIET_WORD_MIN_S, quiet_word_stats
@@ -680,11 +680,11 @@ def topic_needs(w: Path, f: Filter, out: list[str], limit: int = 300) -> None:
         lost = sorted(f"{r}:{i}" for r, i in stale if (i, r) not in st.gen)
         by_role = Counter(r for r, _i in stale)
         out.append(f"生成程式會重新生成 {len(stale)} 句（{'、'.join(f'{r} {n}' for r, n in by_role.items()) or '沒有'}）；"
-                   f"stale 但對不到卡的句子：{len(lost)} 句" + ("（不是 0＝生成句表要補）" if lost else ""))
+                   f"要重新生成、但對不到卡的句子：{len(lost)} 句" + ("（不是 0＝生成句表要補）" if lost else ""))
         if lost:
             out.append("  對不到卡：" + "、".join(x if re.match(r"^[\w:.\-]+$", x) else mask(x) for x in lost[:50]))
         rows = needs.redo_list(w, st, stale=stale)
-        out.append(f"要重做的卡（needs.redo_list，第 4、5 步同一份）{len(rows)} 張：{cnt(rows, '起因')}")
+        out.append(f"要重做的卡（第 4、5 步看的是同一份）{len(rows)} 張：{cnt(rows, '起因')}")
     except Exception as e:  # noqa: BLE001 — 算不出來不擋其他內容
         out.append(f"生成程式會重新生成：算不出來（{type(e).__name__}）")
     hist = needs.read_history(w)
@@ -786,13 +786,13 @@ def topic_generation(w: Path, f: Filter, out: list[str], who: str | None) -> Non
                 cur = now_by.get(r.get("id"))
                 row["現在還在"] = cur is not None
                 if cur is not None and r.get("slot"):
-                    row["現在的slot"] = cur["slot"]
+                    row["現在的時間格"] = cur["slot"]
                     row["跟現在差秒"] = round(max(abs(cur["slot"][0] - r["slot"][0]), abs(cur["slot"][1] - r["slot"][1])), 3)
                     row["現在切在講話中"] = bool(cur.get(students.MID_SPEECH))
             if not f.ok(row):
                 continue
             out.append(fmt_row(row, ("id", "段落", "學員", "slot", "slot_s", "選定", "要人聽", "要人聽原因", "切在講話中",
-                                     "聲音檔在", "現在還在", "現在的slot", "跟現在差秒", "現在切在講話中", "建議做法", "放回時間格.放回做法", "放回時間格.差異比例", "第幾版", "內容問題"))
+                                     "聲音檔在", "現在還在", "現在的時間格", "跟現在差秒", "現在切在講話中", "建議做法", "放回時間格.放回做法", "放回時間格.差異比例", "第幾版", "內容問題"))
                        + (f"  切點={'、'.join(tfmt(x) for x in pts if isinstance(x, (int, float)))}" if pts else ""))
             for a in r.get("嘗試") or []:
                 out.append("    嘗試 " + fmt_row(a, ("第幾次", "種子", "語速", "長度秒", "插入停頓後長度秒", "內容相似度", "內容通過",
@@ -1107,12 +1107,12 @@ TOPICS = {
                 "處理紀錄每一筆的通過／退回狀態（不印原因文字）、沒登記的變動、整片退回",
     "剪輯決策": "組裝排出的動作、剪掉、停格、標記、每一筆警告（類型、涉及的 id、起訖到毫秒）；--重算 用現在的程式重新排一次",
     "換算": "原片時間 ↔ 成品時間（--原片 42:59.8 或 --成品 38:26.4，可以給好幾個）",
-    "前後沒聲音": "老師重念範圍開頭或結尾有一段沒有字（第六批）：建議範圍、能不能一鍵縮小",
-    "底噪": "全片底噪（第六批第五件）：挑到哪一段、音量、確認了沒有、候選",
+    "前後沒聲音": "老師重念範圍開頭或結尾有一段沒有字：建議範圍、能不能一鍵縮小",
+    "底噪": "全片底噪：挑到哪一段、音量、確認了沒有、候選",
     "代號": "這一集用到的代號（每個幾個人用，不印本名）、還在用的英文代號與建議的中文、要念的文字裡還有舊英文代號的地方",
-    "結案": "結案（1015-8）：結案.json 的狀態、每次打包（時間、版本號、核對、含成品、檔數、大小、存的地方讀不讀得到）、"
+    "結案": "結案：結案.json 的狀態、每次打包（時間、版本號、核對、含成品、檔數、大小、存的地方讀不讀得到）、"
             "清理（清單幾個檔、各分類、開始／搬好／刪除開始／完成、省下多少）、.結案清理中 還在不在；沒結案的列出現在會清多少",
-    "修改需求": "修改需求紀錄（10-14）：每張卡的卡號、類型、第 3 步鍵、狀態、來源、等重做；每一版的範圍、成品數、"
+    "修改需求": "修改需求紀錄：每張卡的卡號、類型、第 3 步鍵、狀態、來源、等重做；每一版的範圍、成品數、"
                "每張卡在那一版的狀態（不印原因文字）；生成句對到哪幾張卡；歷史（--id K0003 只看一張卡）",
 }
 ALIASES = {"files": "檔案", "turns": "段落", "sentences": "句子", "words": "字", "overlaps": "重疊", "names": "名字",
