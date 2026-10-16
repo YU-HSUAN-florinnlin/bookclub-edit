@@ -930,6 +930,271 @@ def test_js_step5_closed_page_lists_cards():
     assert r["n"] > 0 and r["lower"].strip()
 
 
+# ---------------------------------------------------------------------------
+# 第 3 段審查修正（必修 A、B、C；建議 1–4）
+# ---------------------------------------------------------------------------
+
+def test_fixA_new_export_after_pack_refused():
+    """專審 1：存好之後又輸出了新的成品 → 不能清（不然會刪掉沒存過的最新成品）。"""
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        w = _lesson1(root)
+        _pack(w, root / "D槽")
+        new = _mk(w / "輸出/最終成品_0-97_sw_20261017-090000.mp4", os.urandom(3000))
+        chk = wd.read_json(w / "覆核/成品檢查.json")
+        chk["輸出成品"]["檔案"] = str(new.relative_to(w))
+        wd.write_json(w / "覆核/成品檢查.json", chk)
+        _refused(w, _plan(w)["清單指紋"], want="存好之後又輸出了新的成品")
+        assert new.is_file()
+
+
+def test_fixA_pack_without_video_file_refused_even_if_flag_true():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        w = _lesson1(root)
+        _pack(w, root / "D槽")
+        rec = closing.read_record(w)
+        rec["打包"][-1]["檔案"] = [f for f in rec["打包"][-1]["檔案"] if not f["相對路徑"].endswith(".mp4")]
+        rec["打包"][-1]["含成品"] = True
+        wd.write_json(closing.record_path(w), rec)
+        _refused(w, _plan(w)["清單指紋"], want="成品")
+
+
+def test_fixB_clean_dir_already_there_or_symlink_refused():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        w = _lesson1(root)
+        _pack(w, root / "D槽")
+        fp = _plan(w)["清單指紋"]
+        (w / closing.CLEAN_DIR).mkdir()
+        _mk(w / closing.CLEAN_DIR / "別人的.txt", b"x")
+        with redirect_stdout(io.StringIO()):
+            try:
+                closing.clean(w, fp, kind="mac")
+            except closing.CleanError as e:
+                assert "清理中" in str(e) or "開發者" in str(e)
+            else:
+                raise AssertionError("應該擋")
+        assert closing.read_record(w)["狀態"] == closing.PACKED and (w / closing.CLEAN_DIR / "別人的.txt").is_file()
+        shutil.rmtree(w / closing.CLEAN_DIR)
+        out = _mk(root / "別的地方" / "重要.txt", b"keep")
+        os.symlink(out.parent, w / closing.CLEAN_DIR)
+        with redirect_stdout(io.StringIO()):
+            try:
+                closing.clean(w, fp, kind="mac")
+            except closing.CleanError:
+                pass
+            else:
+                raise AssertionError("應該擋")
+        assert out.is_file() and closing.read_record(w)["狀態"] == closing.PACKED
+
+
+def test_fixB_finish_stops_when_clean_dir_became_symlink():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        w = _lesson1(root)
+        _pack(w, root / "D槽")
+
+        def hook(stage, rel):
+            if stage == "搬":
+                raise _Crash()
+
+        try:
+            closing.clean(w, _plan(w)["清單指紋"], kind="mac", hook=hook)
+        except _Crash:
+            pass
+        if (w / closing.CLEAN_DIR).exists():
+            shutil.rmtree(w / closing.CLEAN_DIR)
+        out = _mk(root / "別的地方" / "重要.txt", b"keep")
+        os.symlink(out.parent, w / closing.CLEAN_DIR)
+        before = _digest(w)
+        with redirect_stdout(io.StringIO()):
+            try:
+                closing.clean_resume(w)
+            except closing.CleanError:
+                pass
+            else:
+                raise AssertionError("應該停")
+        assert out.is_file() and _digest(w) == before
+
+
+def test_fixB_restore_with_leftover_keeps_cleaning_state():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        w = _lesson1(root)
+        _pack(w, root / "D槽")
+
+        def hook(stage, rel):
+            if stage == "搬好":
+                raise _Crash()
+
+        try:
+            closing.clean(w, _plan(w)["清單指紋"], kind="mac", hook=hook)
+        except _Crash:
+            pass
+        _mk(w / "audio.flac", b"new")                       # 原位又有同名的檔
+        with redirect_stdout(io.StringIO()):
+            try:
+                closing.restore(w)
+            except closing.CleanError as e:
+                assert "手動" in str(e)
+            else:
+                raise AssertionError("有東西留下應該說")
+        assert closing.read_record(w)["狀態"] == closing.CLEANING
+        assert (w / closing.CLEAN_DIR / "audio.flac").is_file()
+
+
+def test_fixC_webcache_growth_does_not_block_clean():
+    """整體 1：拿了指紋之後又聽了一段（web快取 多一個檔）→ 照樣清完，新的快取也清掉。"""
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        w = _lesson1(root)
+        _pack(w, root / "D槽")
+        fp = _plan(w)["清單指紋"]
+        _mk(w / "web快取/成品檢查/新聽的.wav", os.urandom(500))
+        closing.clean(w, fp, kind="mac")
+        assert closing.closed(w) and not (w / "web快取/成品檢查/新聽的.wav").exists()
+        assert _files(w) == KEEP | UNKNOWN | LINKS | {closing.RECORD_FILE}
+
+
+def test_fixC_other_change_new_message():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        w = _lesson1(root)
+        _pack(w, root / "D槽")
+        fp = _plan(w)["清單指紋"]
+        _mk(w / "生成/老師/S099.wav", b"new")
+        _refused(w, fp, want="剛剛這裡的檔案又有變動，按「清掉這裡的暫存」再清一次。")
+
+
+def test_fixC_api_one_button_with_listening_during_pack():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        w = _lesson1(root)
+        loc = root / "存這裡"
+        loc.mkdir()
+        httpd, base = _serve(w)
+        try:
+            fp = _call(base, "/api/close/state")[1]["清單指紋"]
+            _mk(w / "web快取/成品檢查/前_099.wav", os.urandom(300))      # 拿了指紋之後又聽了一段卡片
+            code, r = _call(base, "/api/close/pack", {"位置": "自己選", "路徑": str(loc), "清單指紋": fp})
+            assert code == 200, r
+            st = _wait(base)
+            assert st["工作"]["狀態"] == "已結案", st["工作"]
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+    # 畫面：開始存之前重抓一次狀態（用當下的指紋）
+    body = _fn(FIOJS, "closeBoxInit")
+    i = body.index("const start = async")
+    assert 'apiGet("/api/close/state")' in body[i:i + 900]
+
+
+def test_fix_s1_broken_project_list_no_crash():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        data = root / "讀書會剪輯資料"
+        vid = _mk(data / "影片" / "2025-04-09 第一堂.mp4", os.urandom(700))
+        w = _lesson1(root, ws_parent=data / "影片", video=vid)
+        (data / "專案清單.json").write_text("{壞掉", encoding="utf-8")
+        plan = _plan(w, kind="wsl", data=data)
+        assert not plan["含影片副本"]
+
+
+def test_fix_s2_parent_became_symlink_outside_not_moved():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        w = _lesson1(root)
+        _pack(w, root / "D槽")
+
+        def hook(stage, rel):
+            if stage == "搬":
+                raise _Crash()
+
+        try:
+            closing.clean(w, _plan(w)["清單指紋"], kind="mac", hook=hook)
+        except _Crash:
+            pass
+        out = root / "外面的名字候選"
+        (w / "名字候選").rename(out)
+        os.symlink(out, w / "名字候選")
+        with redirect_stdout(io.StringIO()):
+            closing.clean_resume(w)
+        assert (out / "0000_12.3s.wav").is_file() and (out / "0000_12.3s_消音.wav").is_file()
+
+
+def test_fix_s3_resume_outside_row_checked():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        data = root / "讀書會剪輯資料"
+        vid = _mk(data / "影片" / "2025-04-09 第一堂.mp4", os.urandom(700))
+        w = _lesson1(root, ws_parent=data / "影片", video=vid)
+        _pack(w, root / "D槽")
+
+        def hook(stage, rel):
+            if stage == "搬":
+                raise _Crash()
+
+        try:
+            closing.clean(w, _plan(w, kind="wsl", data=data)["清單指紋"], kind="wsl", data=data, hook=hook)
+        except _Crash:
+            pass
+        decoy = _mk(root / "別處" / "重要.mp4", os.urandom(700))
+        rec = closing.read_record(w)
+        row = next(r for r in rec["清理"]["清單"] if r.get("路徑"))
+        row["路徑"] = str(decoy)                               # 記錄被改壞：指到匯入資料夾以外
+        wd.write_json(closing.record_path(w), rec)
+        with redirect_stdout(io.StringIO()):
+            closing.clean_resume(w)
+        assert decoy.is_file()
+        # 大小跟記下的不一樣也不動
+        w2 = _lesson1(root / "二", ws_parent=data / "影片", video=_mk(data / "影片" / "第二支.mp4", os.urandom(700)))
+        _pack(w2, root / "D2")
+        try:
+            closing.clean(w2, _plan(w2, kind="wsl", data=data)["清單指紋"], kind="wsl", data=data, hook=hook)
+        except _Crash:
+            pass
+        v2 = data / "影片" / "第二支.mp4"
+        with open(v2, "ab") as f:
+            f.write(b"more")
+        with redirect_stdout(io.StringIO()):
+            closing.clean_resume(w2)
+        assert v2.is_file()
+
+
+def test_fix_s4_cross_device_copy_size_changed_not_deleted():
+    with tempfile.TemporaryDirectory() as t:
+        root = Path(t)
+        data = root / "讀書會剪輯資料"
+        vid = _mk(data / "影片" / "2025-04-09 第一堂.mp4", os.urandom(700))
+        w = _lesson1(root, ws_parent=data / "影片", video=vid)
+        _pack(w, root / "D槽")
+        real_rename = os.rename
+
+        def fake_rename(a, b):
+            if str(a) == str(vid):
+                raise OSError(18, "Invalid cross-device link")
+            return real_rename(a, b)
+
+        def hook(stage, rel):
+            if stage == "刪":
+                raise _Crash()
+
+        closing.os.rename = fake_rename
+        try:
+            closing.clean(w, _plan(w, kind="wsl", data=data)["清單指紋"], kind="wsl", data=data, hook=hook)
+        except _Crash:
+            pass
+        finally:
+            closing.os.rename = real_rename
+        assert vid.is_file()
+        with open(vid, "ab") as f:
+            f.write(b"changed")
+        with redirect_stdout(io.StringIO()):
+            closing.clean_resume(w)
+        assert vid.is_file()
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     failed = 0
