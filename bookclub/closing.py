@@ -982,6 +982,10 @@ OUT_VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv")
 AB_TRACKS = ("原聲音軌.wav", "新聲音軌.wav")
 
 PACK_GONE = "找不到剛才存的地方（D 槽沒插？），插回去才能清。"
+PLAN_CHANGED = "剛剛這裡的檔案又有變動，按「清掉這裡的暫存」再清一次。"
+NEW_EXPORT = "存好之後又輸出了新的成品，再按一次「結案打包…」把新的存起來。"
+NO_PRODUCT = "存好的那一份裡沒有成品影片，不能清。先在第 5 步重新輸出成品，再結案打包一次。"
+TMP_THERE = "這裡有一個上次留下的「.結案清理中」資料夾，先請開發者處理（bookclub close --restore 或手動看過），再清一次。"
 CLEAN_FAILED = "清的時候出了問題，按「繼續清」再試一次；還是不行，把終端機最後幾行給開發者。"
 
 
@@ -1073,21 +1077,26 @@ def _video_copy_row(w: Path, kind: str, data: Path | None) -> dict | None:
         if v.parent.resolve() != imp:
             return None
         me, target = w.resolve(), v.resolve()
-        for d in project_dirs(Path(data)):
+        for d in project_dirs(Path(data)):   # 專案清單.json 壞掉（ValueError）：下面接住，讀不到就不列影片副本
             if d.resolve() == me or closed(d):
                 continue
             other = _analysis_video(d)
             if other is not None and other.exists() and other.resolve() == target:
                 return None   # 別的專案還要用這支影片
         size = v.stat().st_size
-    except OSError:
+    except (OSError, ValueError):   # 審查建議 1：專案清單、分析結果壞掉 → 不列（寧可少清）
         return None
     return {"相對路徑": f"{OUTSIDE_DIR}/{v.name}", "大小": size, "分類": CAT_COPY, "說明": CAT_NOTES[CAT_COPY],
             "路徑": str(v)}
 
 
+FP_SKIP = ("web快取/",)   # 審查必修 C：播放用的快取（老師邊存邊聽卡片就會多），不算進指紋
+
+
 def _fingerprint(rows: list[dict]) -> str:
-    key = [[r["相對路徑"], r["大小"], r.get("路徑")] for r in rows]
+    """清單指紋。`web快取/` 底下的不算：那裡只會因為聽了一段而多出試聽檔（隨時能重切），不該擋清；
+    真的清的時候用伺服器當下重算的清單（同一套規則），多出來的試聽檔一起清。其他地方有任何一個檔不一樣，指紋就不同。"""
+    key = [[r["相對路徑"], r["大小"], r.get("路徑")] for r in rows if not r["相對路徑"].startswith(FP_SKIP)]
     return hashlib.sha1(json.dumps(key, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
@@ -1163,7 +1172,15 @@ def clean_check(workdir: str | Path, fingerprint: str, *, busy=None, kind: str |
     if ok is None:
         raise CleanError("還沒存好（每個檔都核對過）不能清，先按「結案打包…」。")
     if ok.get("含成品") is not True or ok.get("只有紀錄"):
-        raise CleanError("存好的那一份裡沒有成品影片，不能清。先在第 5 步重新輸出成品，再結案打包一次。")
+        raise CleanError(NO_PRODUCT)
+    # 審查必修 A：不只信旗標——那一份裡真的要有影片檔；而且最後一次輸出的成品要在那一份裡
+    # （存好之後又輸出了新的，清掉就會刪掉沒存過的最新成品）
+    saved = {Path(str(f.get("相對路徑") or "")).name for f in ok.get("檔案") or []}
+    if not any(n.lower().endswith(OUT_VIDEO_EXTS) for n in saved):
+        raise CleanError(NO_PRODUCT)
+    exp = last_export(w)
+    if exp and Path(str(exp["檔案"])).name not in saved:
+        raise CleanError(NEW_EXPORT)
     folder = Path(ok.get("資料夾") or "")
     try:
         if not ok.get("資料夾") or not folder.is_dir() or not ok.get("檔案"):
@@ -1176,10 +1193,14 @@ def clean_check(workdir: str | Path, fingerprint: str, *, busy=None, kind: str |
         raise CleanError(PACK_GONE) from None
     plan = clean_plan(w, kind=kind, data=data)
     if plan["清單指紋"] != fingerprint:
-        raise CleanError("清單變了，請重新看一次。")
+        raise CleanError(PLAN_CHANGED)
     why = busy() if busy else None
     if why:
         raise CleanError(why)
+    tmp = w / CLEAN_DIR
+    if tmp.exists() or tmp.is_symlink():   # 審查必修 B：不是這一次建的（或是捷徑）——不往裡面搬、也不整個刪
+        print(f"⚠️ [結案清理] {tmp} 已經存在（{'捷徑' if tmp.is_symlink() else '資料夾'}），不清；請開發者看過再處理")
+        raise CleanError(TMP_THERE)
     return plan, ok
 
 
@@ -1193,6 +1214,7 @@ def clean(workdir: str | Path, fingerprint: str, *, busy=None, kind: str | None 
     rec["狀態"] = CLEANING
     rec["清理"] = {"清單指紋": plan["清單指紋"], "開始": _now(), "省下位元組": plan["合計"],
                  "打包資料夾": ok.get("資料夾"), "打包時間": ok.get("時間"),
+                 "匯入資料夾": _import_dir(data) if plan["含影片副本"] else None,
                  "清單": [{k: r[k] for k in ("相對路徑", "大小", "分類", "路徑") if k in r} for r in plan["檔案"]]}
     _write_record(w, rec)   # 先寫再動手
     return _finish(w, hook)
@@ -1204,6 +1226,36 @@ def clean_resume(workdir: str | Path, hook=None) -> dict:
     if read_record(w).get("狀態") != CLEANING:
         raise CleanError("沒有清到一半的東西。")
     return _finish(w, hook)
+
+
+def _import_dir(data: Path | None) -> str:
+    if data is None:
+        from bookclub.config import data_dir
+
+        data = data_dir()
+    return str((Path(data) / "影片").resolve())
+
+
+def _outside_ok(row: dict, cl: dict) -> bool:
+    """審查建議 3、4：工作區外那一列（影片副本）真的要動之前再看一次——上一層是記下的 `<資料>/影片`、影片副檔名、
+    不是捷徑、大小跟記下的一樣。不符合就不搬、不刪（印出來）。"""
+    from bookclub.fileio import VIDEO_EXTS
+
+    p = Path(str(row.get("路徑") or ""))
+    try:
+        ok = (bool(cl.get("匯入資料夾")) and p.name.lower().endswith(VIDEO_EXTS) and not p.is_symlink() and p.is_file()
+              and str(p.parent.resolve()) == str(Path(cl["匯入資料夾"]).resolve()) and p.stat().st_size == int(row["大小"]))
+    except (OSError, ValueError, KeyError):
+        ok = False
+    if not ok and p.exists():
+        print(f"⚠️ [結案清理] 影片副本跟記下的不一樣（位置、種類或大小），不動：{p}")
+    return ok
+
+
+def _inside_real(p: Path, w: Path) -> bool:
+    """審查建議 2：這個檔所在的資料夾（照實際位置，跟著捷徑走）還在工作區裡面。"""
+    rw, rp = os.path.realpath(w), os.path.realpath(p.parent)
+    return rp == rw or rp.startswith(rw + os.sep)
 
 
 def _src_of(w: Path, row: dict) -> Path:
@@ -1225,14 +1277,20 @@ def _finish(w: Path, hook=None) -> dict:
     rec = read_record(w)
     cl = rec["清理"]
     tmp = w / CLEAN_DIR
-    later: list[Path] = []   # 不在同一顆磁碟、搬不進來的影片副本：到「刪」那一步直接刪
+    if tmp.is_symlink():   # 審查必修 B：清理資料夾變成捷徑了——不往裡面搬、也不刪它指到的東西
+        print(f"⚠️ [結案清理] {tmp} 是捷徑，停下來；請開發者看過再處理")
+        raise CleanError(TMP_THERE)
+    later: list[dict] = []   # 不在同一顆磁碟、搬不進來的影片副本：到「刪」那一步（再確認一次）直接刪
     if not cl.get("刪除開始"):
         parents: set[Path] = set()
         for row in cl.get("清單") or []:
             if hook:
                 hook("搬", row["相對路徑"])
             src = _src_of(w, row)
-            if not row.get("路徑") and classify(row["相對路徑"])[0] != "清":   # 再保險一次：規則不認得的不動
+            if row.get("路徑"):
+                if not _outside_ok(row, cl):
+                    continue
+            elif classify(row["相對路徑"])[0] != "清" or not _inside_real(src, w):   # 再保險：規則不認得、跑到工作區外的不動
                 continue
             if src.is_symlink() or not src.is_file():   # 搬過了、或本來就不在：略過
                 continue
@@ -1242,7 +1300,7 @@ def _finish(w: Path, hook=None) -> dict:
                 os.rename(src, dst)
             except OSError as e:
                 if e.errno == errno.EXDEV and row.get("路徑"):
-                    later.append(src)
+                    later.append(row)
                     continue
                 raise
             if not row.get("路徑"):
@@ -1255,14 +1313,16 @@ def _finish(w: Path, hook=None) -> dict:
         cl["刪除開始"] = _now()
         _write_record(w, rec)
     else:
-        later = [p for p in (_src_of(w, r) for r in cl.get("清單") or [] if r.get("路徑"))
-                 if p.is_file() and not p.is_symlink()]
+        later = [r for r in cl.get("清單") or [] if r.get("路徑") and _src_of(w, r).is_file()]
     if hook:
         hook("刪", None)
-    if tmp.is_dir() and not tmp.is_symlink():
+    if tmp.is_symlink():
+        raise CleanError(TMP_THERE)
+    if tmp.is_dir():
         shutil.rmtree(tmp)
-    for p in later:
-        p.unlink()
+    for row in later:
+        if _outside_ok(row, cl):   # 審查建議 4：刪之前再比一次大小、位置
+            _src_of(w, row).unlink()
     rec = read_record(w)
     cl = rec["清理"]
     cl["完成"] = _now()
@@ -1307,8 +1367,12 @@ def restore(workdir: str | Path) -> int:
         tmp.rmdir()
     except OSError:
         pass
-    if left:
+    if left:   # 審查必修 B：有東西留下——狀態留「清理中」（不退回已打包），請開發者先手動處理
         print(f"⚠️ 原位已經有同名的檔，這 {len(left)} 個留在 {CLEAN_DIR}/：" + "、".join(left[:10]))
+        cl["搬回一部分"] = _now()
+        _write_record(w, rec)
+        raise CleanError(f"搬回 {n} 個；有 {len(left)} 個檔原位已經有同名的檔，留在 {CLEAN_DIR}/。請開發者先手動處理"
+                         f"（比對後移走其中一邊），再跑一次 --restore。")
     cl["搬回"] = _now()
     rec["狀態"] = PACKED if _verified_pack(rec) else PACKING
     _write_record(w, rec)

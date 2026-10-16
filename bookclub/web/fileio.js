@@ -350,8 +350,11 @@ async function closeBoxInit(box) {
   let note = "";   // WSL 上存在 Ubuntu 裡面時的提醒（不擋）
   const start = async (body) => {
     let r;
-    // 第 3 段（§1a 第 3 點）：還沒存好過 → 帶畫面上的清單指紋，存好核對全對就接著清（伺服器再確認一次指紋）
-    if ((d["狀態"] == null || d["狀態"] === "打包中") && d["清單指紋"]) body = { ...body, "清單指紋": d["清單指紋"] };
+    // 第 3 段（§1a 第 3 點）：還沒存好過 → 帶清單指紋，存好核對全對就接著清（伺服器再確認一次指紋）。
+    // 審查必修 C：選好資料夾、開始存之前重抓一次狀態，用當下的指紋（畫面打開後老師可能又聽了卡片、又輸出了）
+    let now = d;
+    try { now = await apiGet("/api/close/state"); } catch (e) { /* 抓不到就用畫面上的 */ }
+    if ((now["狀態"] == null || now["狀態"] === "打包中") && now["清單指紋"]) body = { ...body, "清單指紋": now["清單指紋"] };
     try { r = await apiPost("/api/close/pack", body, { quiet: true }); }
     catch (e) { msg.innerHTML = `<span class="badge error">沒有開始</span> ${esc(e.message)}`; return; }
     note = (r && r["提醒"]) || note;
@@ -388,7 +391,12 @@ async function closeBoxInit(box) {
     closeBoxInit(box);
   };
   const cbtn = box.querySelector("#cl-clean");
-  if (cbtn) cbtn.addEventListener("click", () => { cbtn.disabled = true; cleanCall({ "清單指紋": d["清單指紋"] }); });
+  if (cbtn) cbtn.addEventListener("click", async () => {
+    cbtn.disabled = true;
+    let now = d;
+    try { now = await apiGet("/api/close/state"); } catch (e) { /* 抓不到就用畫面上的 */ }
+    cleanCall({ "清單指紋": now["清單指紋"] || d["清單指紋"] });
+  });
   const cres = box.querySelector("#cl-clean-resume");
   if (cres) cres.addEventListener("click", () => { cres.disabled = true; cleanCall({ "繼續": true }); });
   const res = box.querySelector("#cl-resume");

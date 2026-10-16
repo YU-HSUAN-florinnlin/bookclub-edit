@@ -212,6 +212,8 @@ def test_plan_changes_when_files_change():
         w = _lesson1(Path(t))
         fp = _plan(w)["清單指紋"]
         _mk(w / "web快取/9.00_10.00.wav", b"new")
+        assert _plan(w)["清單指紋"] == fp                 # 審查必修 C：web快取/ 多了試聽檔不算
+        _mk(w / "生成/老師/S100.wav", b"new")
         assert _plan(w)["清單指紋"] != fp
 
 
@@ -297,7 +299,7 @@ def test_refuse_without_verified_pack_with_product():
         _refused(w, fp, want="找不到剛才存的地方")
         f.write_bytes(data)
         # 清單指紋不一樣
-        _refused(w, "0" * 40, want="清單變了")
+        _refused(w, "0" * 40, want="剛剛這裡的檔案又有變動")
         # 有東西在跑
         _refused(w, fp, busy=lambda: "第 4 步正在跑，跑完才能清。", want="第 4 步正在跑")
         # 都對了才清
@@ -1148,13 +1150,14 @@ def test_fix_s3_resume_outside_row_checked():
             closing.clean_resume(w)
         assert decoy.is_file()
         # 大小跟記下的不一樣也不動
-        w2 = _lesson1(root / "二", ws_parent=data / "影片", video=_mk(data / "影片" / "第二支.mp4", os.urandom(700)))
+        data2 = root / "二" / "讀書會剪輯資料"
+        v2 = _mk(data2 / "影片" / "第二支.mp4", os.urandom(700))
+        w2 = _lesson1(root / "二", ws_parent=data2 / "影片", video=v2)
         _pack(w2, root / "D2")
         try:
-            closing.clean(w2, _plan(w2, kind="wsl", data=data)["清單指紋"], kind="wsl", data=data, hook=hook)
+            closing.clean(w2, _plan(w2, kind="wsl", data=data2)["清單指紋"], kind="wsl", data=data2, hook=hook)
         except _Crash:
             pass
-        v2 = data / "影片" / "第二支.mp4"
         with open(v2, "ab") as f:
             f.write(b"more")
         with redirect_stdout(io.StringIO()):
