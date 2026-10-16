@@ -382,6 +382,8 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
                     # 第五輪審查：一個寫法一個寫法看（名字本身、人名清單的其他寫法）
                     "名冊上的人會拿掉": bool(d.get("做法") in ("不用處理", "不是名字")
                                        and any(w in spellings and w not in keep.get(p["名字"], ()) for w in ws_of(p))),
+                    # 1017 總審查：名冊上的人（選不用處理／不是名字也會把名字拿掉）——③ 下拉選單標「（名字照樣拿掉）」
+                    "名冊上的人": any(w in spellings and w not in keep.get(p["名字"], ()) for w in ws_of(p)),
                     "名冊現在有": bool(d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配")
                                      and any(w in spellings and epcodes.at_map(p["名字"], d, ws_of(p)).get(w) == "" for w in ws_of(p))),   # 1016-3：③ 那列提醒（選不用處理會念出原名）
                     "自動配": bool(d.get("自動配")) and not in_two,   # 10-07：程式自動配的代號（算決定好，人沒改過）
@@ -518,8 +520,10 @@ def _load_rescan(workdir: Path) -> dict:
 
 
 def request_rescan(workdir: str | Path) -> bool:
-    """記下「名冊變了，要補找」，並開背景去做（已經在做就讓它做完再多做一輪）。"""
+    """記下「名冊變了，要補找」，並開背景去做（已經在做就讓它做完再多做一輪）。已結案的工作區不補找（回 False）。"""
     workdir = Path(workdir)
+    if _closed(workdir):
+        return False
     with _sched_lock:
         st = _load_rescan(workdir)
         st["待補找"] = True
@@ -539,11 +543,26 @@ def _alive(key: str) -> bool:
     return t is not None and t.is_alive()
 
 
+def _closed(workdir: Path) -> bool:
+    """1017 總審查：已結案（瘦身版）的工作區不補找、不寫檔。`workdir.no_writes()` 只管得到發起的那個執行緒，
+    背景補找管不到，所以開背景之前、背景每一輪開始都看一次。"""
+    from bookclub import closing
+
+    return closing.closed(workdir)
+
+
+def rescan_running(workdir: str | Path) -> bool:
+    """背景補找**現在真的在跑**（只看，不會順手開補找；結案打包、清空間前用）。"""
+    return _alive(str(Path(workdir).resolve()))
+
+
 def ensure_rescan(workdir: str | Path, retry: bool = False) -> bool:
     """有「待補找」又沒有背景在做（例如伺服器做到一半關掉）就開一個。回傳現在是不是**真的有背景在補找**。
     上一輪出錯的：預設不重試；`retry=True`（打開第 3 步網頁）且距離出錯超過 `RETRY_AFTER_S` 才再試。"""
     workdir = Path(workdir)
     key = str(workdir.resolve())
+    if _closed(workdir):   # 1017 總審查：已結案不補找（背景執行緒不在 no_writes 裡，會寫進瘦身版）
+        return _alive(key)
     with _sched_lock:
         if _alive(key):
             return True
@@ -636,7 +655,7 @@ def _rescan_worker(workdir: Path, key: str) -> None:
     while True:
         with _sched_lock:
             st = _load_rescan(workdir)
-            if not st.get("待補找"):
+            if not st.get("待補找") or _closed(workdir):   # 1017 總審查：做到一半結案了（清理中也算）就停，不寫檔
                 if _workers.get(key) is me:
                     _workers.pop(key, None)
                 return

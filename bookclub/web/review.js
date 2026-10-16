@@ -1136,8 +1136,9 @@ function rvNamePickOpts(u) {
     `<option value="${esc(`code:${c}`)}" ${sel(`code:${c}`)}>${esc(c + note(c))}</option>`).join("")}</optgroup>`));
   if (curCode && !all.includes(curCode)) out.push(`<option value="${esc(`code:${curCode}`)}" selected>${esc(curCode)}</option>`);
   out.push('<option value="code:__new">自己打一個英文名…</option>');
-  out.push(`<option value="how:不是名字" ${sel("how:不是名字")}>不是名字</option>`);
-  out.push(`<option value="how:不用處理" ${sel("how:不用處理")}>不用處理</option>`);
+  const drop = u["名冊上的人"] ? "（名字照樣拿掉）" : "";   // 1017 總審查：名冊上的人選這兩個，成品照樣把名字拿掉
+  out.push(`<option value="how:不是名字" ${sel("how:不是名字")}>不是名字${drop}</option>`);
+  out.push(`<option value="how:不用處理" ${sel("how:不用處理")}>不用處理${drop}</option>`);
   return out.join("");
 }
 
@@ -1190,7 +1191,7 @@ function rvPrepNamesHtml() {
   return `${peopleWarn}${rvDupHtml()}${rvAutoHtml()}<div class="rv-meta">每個名字選一項：<ul class="rv-bullets">
     <li>是 ② 的學員（轉錯字、暱稱）→「同一人：…」</li>
     <li>其他人（家人朋友、沒登記的人）→ 挑一個英文名</li>
-    <li>書中人物、公眾人物 →「不用處理」（名冊上的人選「不用處理」也會拿掉名字；書中人物剛好跟學員同名，用「＋新增修改」逐筆處理）</li>
+    <li>書中人物、公眾人物 →「不用處理」（名冊上的人一律會把名字拿掉）</li>
     <li>抓錯的 →「不是名字」</li></ul></div>
     ${rvRescanLineHtml()}
     <p class="rv-meta" id="rvNameCount">${rvNameCountHtml()}</p>

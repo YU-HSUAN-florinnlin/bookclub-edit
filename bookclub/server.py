@@ -1283,12 +1283,20 @@ class BookclubServer(ThreadingHTTPServer):
 
     # ---------- 結案打包（1015-8，32 號設計 §3，以 §1a 為準） ----------
 
+    def _rescan_running(self) -> bool:
+        """1017 總審查：③ 背景補找老師提到的名字**真的在跑**（只看，不順手開補找；`rescan_busy` 會開）。"""
+        from bookclub import personnames
+
+        return self.has_workdir and personnames.rescan_running(self.workdir)
+
     def _close_busy(self) -> str | None:
         """不能開始打包的原因（§3.6）；沒有＝None。要在 pick_lock 外面呼叫（會拿 run_lock）。"""
         if self.exec_running():
             return "第 4 步正在跑，跑完才能結案打包。"
         if self.run_status_running():
             return "影片分析正在跑，跑完才能結案打包。"
+        if self._rescan_running():
+            return "還在找老師提到的名字，等它做完再結案打包。"
         with self.pick_lock:
             if self.final_exporting:
                 return "成品正在輸出，等它做完再結案打包。"
@@ -1431,6 +1439,8 @@ class BookclubServer(ThreadingHTTPServer):
             return "第 4 步正在跑，跑完才能清。"
         if self.run_status_running():
             return "影片分析正在跑，跑完才能清。"
+        if self._rescan_running():
+            return "還在找老師提到的名字，等它做完再清。"
         with self.pick_lock:
             if self.final_exporting:
                 return "成品正在輸出，等它做完再清。"
@@ -1874,7 +1884,8 @@ class Handler(BaseHTTPRequestHandler):
             _needs_ensure(server, page, snap)   # 10-14 第5步2.0 第1段：第一次打開升級；之後同步第 3 步的卡片（用這份 page，不另外算）
             from bookclub import personnames
 
-            personnames.ensure_rescan(server.workdir, retry=True)   # 10-16 #234：上次背景補找人名沒做完（或出錯）就補做
+            if not server.exec_running():   # 1017 總審查：第 4 步執行中不重試出錯的補找（第 4 步開始前已經等過／放行過）
+                personnames.ensure_rescan(server.workdir, retry=True)   # 10-16 #234：上次背景補找人名沒做完（或出錯）就補做
             page["人名補找"] = personnames.rescan_status(server.workdir)
             self._send_json(200, {**page, "AI執行中": server.exec_running(), "開發者": _developer()})   # 09-30：執行中第 3 步變唯讀；10-16 #225：開發者設定（「你標的 → 對齊後」只給開發者看）
         elif path == "/api/video":
@@ -2065,7 +2076,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise FileNotFoundError(f"不是影片檔：{video}")
             d = project_dir_for(video)
             if _closed(d):   # 1015-8 第 3 段：同一支影片的工作區已結案（瘦身版），不在裡面重新分析
-                raise Closed("這支影片已結案，這裡只能看紀錄。要重做得先由開發者取消結案（bookclub close --reopen）。")
+                print(f"[結案] {d} 已結案；要重做由開發者取消結案：bookclub close --reopen", file=sys.stderr)   # 開發者指令只印終端機
+                raise Closed("這支影片已結案，要重做請找宇軒")
             existed = d.exists()
             if server.run_status_running():
                 raise ValueError("分析還在跑，等它結束再開始另一支")

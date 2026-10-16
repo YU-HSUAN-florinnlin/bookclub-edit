@@ -642,7 +642,11 @@ def _removed(w: Path, spelling: str) -> None:
     used = {i for g in plan["生成"] for i in g.get("候選", [])} | {m.get("候選") for m in plan.get("消音", [])}
     assert idx and idx <= used, (spelling, idx, plan["生成"], plan.get("消音"))
     assert not any(spelling in (g.get("text") or "") for g in plan["生成"]), plan["生成"]
-    assert any(r["寫法"] == spelling for r in epcodes.replace_table(w)), spelling
+    # 1017 總審查：實際套用學員重念稿的替換表，比對文字（以前只看表裡有這一列，代號空的那列其實不會換）
+    from bookclub import review
+
+    said, _ = review.replace_real_names(f"我覺得{spelling}說得很好", epcodes.replace_table(w))
+    assert spelling not in said, (spelling, said)
 
 
 def test_roster_spelling_not_needed_is_removed_x1_x2_x3():
@@ -906,8 +910,8 @@ def test_web_same_person_row_and_two_summary():
     assert html.count("這是名冊上的人，成品會把名字拿掉重念") == 2 and "會念出原名" not in html, html
     # 決定時名冊沒有、名冊現在才有（照原聲留著）→ 提醒
     assert html.count("選的時候名冊還沒有，現在有了") == 1, html
-    # ③ 說明補一句：名冊上的人選不用處理也會拿掉名字；書中人物同名用「＋新增修改」
-    assert "名冊上的人選「不用處理」也會拿掉名字" in html and "＋新增修改" in html
+    # ③ 說明補一句：名冊上的人一律會把名字拿掉（1017 總審查縮短）
+    assert "名冊上的人一律會把名字拿掉" in html
     # ② 摘要只列 ② 的學員、用名冊本名（同一人的幾種寫法只列一次）
     assert "② 已經定好的學員（2 個）：小美 → 艾瑪、阿明 → 湯姆<" in html, html
     # ② 還沒選學員：選單裡一行灰字說明為什麼沒有「同一人」

@@ -177,17 +177,19 @@ def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict, s
 
 def replace_real_names(text: str, table: list[dict]) -> tuple[str, list[dict]]:
     """名冊上的本名、敏感詞換成代號／替代詞（純函式）。table：[{寫法, 代號}]，長的先換。
-    回傳 (新文字, [{原字, 換成, 位置}])，位置是新文字裡的字元索引，給畫面標出換過的字。"""
-    rows = sorted((r for r in table if r.get("代號") and len(r["寫法"]) >= 2), key=lambda r: -len(r["寫法"]))
+    回傳 (新文字, [{原字, 換成, 位置}])，位置是新文字裡的字元索引，給畫面標出換過的字。
+    1017 總審查：標 `拿掉` 的列（名冊上的人在 ③ 選不用處理／不是名字、沒有代號）換成空字串，跟老師句子一樣把名字拿掉。"""
+    rows = sorted((r for r in table if (r.get("代號") or r.get("拿掉")) and len(r["寫法"]) >= 2), key=lambda r: -len(r["寫法"]))
     out, changes, i = [], [], 0
     text = text or ""
     pos = 0
     while i < len(text):
         hit = next((r for r in rows if text.startswith(r["寫法"], i)), None)
         if hit:
-            out.append(hit["代號"])
-            changes.append({"原字": hit["寫法"], "換成": hit["代號"], "位置": pos})
-            pos += len(hit["代號"])
+            to = hit.get("代號") or ""
+            out.append(to)
+            changes.append({"原字": hit["寫法"], "換成": to, "位置": pos})
+            pos += len(to)
             i += len(hit["寫法"])
         else:
             out.append(text[i])

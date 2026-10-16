@@ -269,6 +269,7 @@ def replace_table(workdir: str | Path | None = None) -> list[dict]:
     if workdir is not None:
         codes = episode_codes(workdir)
         spell = episode_spellings(workdir, roster=rows)
+        drop = _dropped_spellings(workdir, rows)
         out = []
         for r in rows:
             if r["寫法"] in spell:   # 1016-3 審查 A：這一集自己決定的寫法
@@ -277,9 +278,32 @@ def replace_table(workdir: str | Path | None = None) -> list[dict]:
                     continue   # 這一集不換
                 out.append({**r, "canonical": target, "代號": codes.get(r["寫法"]) or codes.get(target) or ""})
             else:
-                out.append({**r, "代號": codes.get(r["canonical"], r["代號"])})
+                code = codes.get(r["canonical"], r["代號"])
+                if not code and r["寫法"] in drop:   # 1017 總審查：名冊上的人選不用處理／不是名字，學員重念稿也把名字拿掉
+                    out.append({**r, "代號": "", "拿掉": True})
+                else:
+                    out.append({**r, "代號": code})
         rows = out
     return rows + names.load_sensitive_words(data_dir() / "敏感詞.csv")
+
+
+def _dropped_spellings(workdir: Path, roster: list[dict]) -> set[str]:
+    """1017 總審查：③ 這一集選了不用處理／不是名字、決定時名冊上就有的寫法（`kept_spellings` 以外的）——
+    老師句子照舊排成「換成空的」把名字拿掉重念；學員重念稿也一樣拿掉（替換表標 `拿掉`，代號空的）。
+    範圍：這個名字本身、人名清單上的其他寫法、名冊上本名是這個名字的每一列寫法。"""
+    from bookclub import personnames
+
+    dec = wd.read_json(personnames.decisions_path(workdir), default={}) or {}
+    alts = {p["名字"]: p.get("其他寫法") or [] for p in (wd.read_json(personnames.people_path(workdir), default={}) or {}).get("人名", [])}
+    on_roster = {r["寫法"] for r in roster} | {r["canonical"] for r in roster}
+    out: set[str] = set()
+    for name, d in dec.items():
+        if not isinstance(d, dict) or d.get("做法") not in ("不用處理", "不是名字"):
+            continue
+        ws = list(dict.fromkeys([name, *alts.get(name, []), *(r["寫法"] for r in roster if r["canonical"] == name)]))
+        kept = kept_spellings(name, d, ws)
+        out |= {w for w in ws if w in on_roster and w not in kept}
+    return out
 
 
 SNAPSHOT_NAME = "代號表紀錄.json"   # 放在 校對/：上一次對齊時的代號表，拿來看哪個本名的代號改了
