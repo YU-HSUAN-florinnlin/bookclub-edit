@@ -467,6 +467,122 @@ def test_change_while_rescan_not_merged_yet():
         assert got and all(x == ("阿德", want) for x in got), (how, got)
 
 
+def _other_video_aliases(real: str, alias: str) -> None:
+    """模擬別支影片把 alias 加成名冊上 real 的其他寫法（直接改名冊檔，不經過這一集）。"""
+    import csv
+    import io
+
+    raw = (_DATA / "名冊.csv").read_text(encoding="utf-8")
+    rows = list(csv.DictReader(io.StringIO(raw)))
+    for r in rows:
+        if r["中文名"] == real:
+            r["其他寫法"] = "、".join([x for x in (r["其他寫法"] or "").split("、") if x] + [alias])
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=list(rows[0].keys()), lineterminator="\n")
+    w.writeheader()
+    w.writerows(rows)
+    (_DATA / "名冊.csv").write_text(buf.getvalue(), encoding="utf-8")
+
+
+def _ade(w: Path) -> list:
+    return [(c["canonical"], c["代號"]) for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿德"]
+
+
+def test_decided_before_other_video_adds_alias():
+    """第二輪審查 必修 1（exp5 S1）：這一集先選好（當時名冊沒有阿德），之後別支影片把阿德加成小美的其他寫法、這一集再補找一次
+    → 照這一集的決定（不用處理＝不換；換成代號＝這一集選的），③ 那列不被收進 ②。"""
+    for how, code, want in (("不用處理", None, ""), ("換成代號", "傑克", "傑克")):
+        w = _make()
+        _two(w)
+        personnames.decide(w, "阿德", how, code)
+        personnames.wait_rescan(w)
+        if how == "換成代號":   # 換成代號會把阿德加成自己一列；別支影片再把它加成小美的其他寫法（exp7：兩列都有）
+            assert any(r["寫法"] == "阿德" for r in __import__("bookclub.names", fromlist=["x"]).load_roster(_DATA / "名冊.csv"))
+        _other_video_aliases("小美", "阿德")
+        personnames.request_rescan(w)
+        personnames.wait_rescan(w)
+        got = _ade(w)
+        assert got and all(x == ("阿德", want) for x in got), (how, got)
+        tab = {r["寫法"]: r["代號"] for r in epcodes.replace_table(w)}
+        assert tab.get("阿德") == (code or None) and tab["小美"] == "艾瑪", (how, tab)
+        ade = next(u for u in personnames.mentioned(w, chosen={"小美", "阿明"}) if u["名字"] == "阿德")
+        assert not ade["② 已決定"] and ade["做法"] == how and ade["代號"] == code, (how, ade)
+        if how == "不用處理":
+            assert ade["名冊上是別人"] == "小美", ade
+
+
+def test_not_a_name_on_roster_stays_out_of_global_exclusion():
+    """第二輪審查 建議 2：C 影片把名冊上別人的暱稱（阿強＝阿明的其他寫法）判成不是名字 → 不寫進全域排除清單，
+    別支影片老師提到阿強照樣列成候選、照樣換；C 這一集不換、也不會排出「換成空的」。"""
+    from bookclub import nameplan
+    from bookclub.server import _remove_exclusion
+
+    _remove_exclusion("阿強")   # 同一支測試檔前面的情境可能寫過
+    c, b = _two_workdirs()
+    (_DATA / "名冊.csv").write_text("中文名,其他寫法,性別\n小美,美美,女\n阿明,阿強,男\n", encoding="utf-8")
+    personnames.request_rescan(c)
+    personnames.wait_rescan(c)
+    pp = personnames.people_path(c)
+    d = json.loads(pp.read_text(encoding="utf-8"))
+    for p in d["人名"]:
+        if p["名字"] == "阿強":
+            p["是誰"] = "其他人"
+    pp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    personnames.decide(c, "阿強", "是上面的學員", same_as="阿明")
+    personnames.wait_rescan(c)
+    personnames.decide(c, "阿強", "不是名字")
+    ex = _DATA / "名字排除清單.csv"
+    assert not ex.is_file() or "阿強" not in ex.read_text(encoding="utf-8")
+    personnames.request_rescan(b)
+    personnames.wait_rescan(b)
+    got = [(x["canonical"], x["代號"]) for x in wd.read_json(wd.names_path(b))["candidates"] if x.get("name") == "阿強"]
+    assert got and all(g == ("阿明", "凱文") for g in got), got
+    assert {r["寫法"]: r["代號"] for r in epcodes.replace_table(b)}["阿強"] == "凱文"
+    # C 這一集：不換；排計畫時阿強那幾處不生成、不消音
+    assert "阿強" not in {r["寫法"] for r in epcodes.replace_table(c)}
+    cands = wd.read_json(wd.names_path(c))["candidates"]
+    idx = {k for k, x in enumerate(cands, start=1) if x.get("name") == "阿強"}
+    assert idx and all(not cands[k - 1]["代號"] for k in idx)
+    plan = nameplan.compute_plan(c)
+    used = {i for g in plan["生成"] for i in g.get("候選", [])} | {m.get("候選") for m in plan.get("消音", [])}
+    assert not (idx & used), (idx, plan["生成"], plan.get("消音"))
+    # 名冊上沒有的詞照舊寫進排除清單
+    personnames.decide(c, "路人甲", "不是名字")
+    assert "路人甲" in ex.read_text(encoding="utf-8")
+    (_DATA / "名冊.csv").write_text(_ROSTER, encoding="utf-8")
+
+
+def test_alias_not_added_when_it_is_another_rows_name():
+    """第二輪審查 建議 3：阿德已經是名冊上自己一列：選「同一人：小美」不把阿德加到小美那列，改由這一集蓋過去。"""
+    w = _make()
+    _two(w)
+    (_DATA / "名冊.csv").write_text(_ROSTER + "阿德,,男\n", encoding="utf-8")
+    assert personnames.add_roster_alias("小美", ["阿德"]) == []
+    personnames.decide(w, "阿德", "是上面的學員", same_as="小美")
+    personnames.wait_rescan(w)
+    assert _roster_alts("小美") == ["美美"], _roster_alts("小美")
+    assert epcodes.episode_codes(w)["阿德"] == "艾瑪"
+    got = _ade(w)
+    assert got and all(x == ("小美", "艾瑪") for x in got), got
+    assert {r["寫法"]: r["代號"] for r in epcodes.replace_table(w)}["阿德"] == "艾瑪"
+
+
+def test_sync_restore_uses_canonical_first():
+    """第二輪審查 建議 4：還原「名冊本名原本」也是本名優先（阿德自己一列排在前、又是小美的其他寫法 → 還原成阿德）。"""
+    w = _make()
+    _two(w)
+    (_DATA / "名冊.csv").write_text("中文名,其他寫法,性別\n阿德,,男\n小美,美美、阿德,女\n阿明,,男\n", encoding="utf-8")
+    d = wd.read_json(wd.names_path(w))
+    c0 = dict(d["candidates"][0])
+    c0.update({"name": "阿德", "matched_text": "阿德", "canonical": "路人", epcodes.ORIG_KEY: "小美"})
+    d["candidates"].append(c0)
+    wd.write_json(wd.names_path(w), d)
+    epcodes.sync(w)
+    last = wd.read_json(wd.names_path(w))["candidates"][-1]
+    assert last["canonical"] == "阿德" and epcodes.ORIG_KEY not in last, last
+    (_DATA / "名冊.csv").write_text(_ROSTER, encoding="utf-8")
+
+
 def test_roster_alias_split_like_load_roster():
     """審查 C：名冊的其他寫法用「, 」「/」分開時，加寫法不重複加、不弄掉原本的。"""
     from bookclub import names
