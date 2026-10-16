@@ -149,7 +149,7 @@ function fcStatusLine(d) {
   } else {
     if (d["AI執行中"]) return { text: "正在重做…", cls: "" };
     if (st["要重做"] && ["停止", "失敗", "中斷"].includes(run)) return { text: "上次重做沒做完：按『重做這幾張』繼續", cls: "fc-st-redo" };
-    if (st["要重做"]) return { text: "改過的還沒重做：按下面『重做這幾張』", cls: "fc-st-redo" };
+    if (st["要重做"]) return { text: "改過的還沒重做：按右上角『重做這幾張』", cls: "fc-st-redo" };
   }
   if (left) return { text: `還有 ${left} 張沒看`, cls: "" };
   if (out && !d["輸出成品過期"]) return { text: `已輸出（${fcShortStamp(out["時間"])}）`, cls: "fc-st-done" };
@@ -509,7 +509,7 @@ async function renderFinal() {
       <header class="rv-bar">
         <h1>5　成品檢查</h1>
         <div class="fc-vers">${fcVersionMenuHtml(d)}</div>
-        <div class="rv-bar-btns"><button class="primary" id="fc-export" ${d["影片清掉了"] ? "disabled" : ""}>輸出成品</button></div>
+        <div class="rv-bar-btns"><span id="fc-redo-slot"></span><button class="ghost" id="fc-export" ${d["影片清掉了"] ? "disabled" : ""}>輸出成品</button></div>
       </header>
       <div class="fc-status" id="fc-status" role="status"></div>
       <div class="fo-box" id="fc-fileout"></div>
@@ -1356,7 +1356,7 @@ function fcRenderLower() {
   fcMarkRow();
 }
 
-// 10-15 宇軒驗證回饋：「＋在這裡新增修改」「重做這幾張」搬到時間軸下面、「看過 P%」那一行之下（以前在清單底下）；
+// 10-15 宇軒驗證回饋：「＋在這裡新增修改」「重做這幾張」搬到時間軸下面、「看過 P%」那一行之下（以前在清單底下）；10-16 重做這幾張再搬到右上角；
 // 新增修改的面板（fc-io）跟著放在按鈕下面。舊版上不出現（不能新增、不能重做）
 function fcRenderActBar() {
   const bar = document.getElementById("fc-actbar");
@@ -1365,8 +1365,12 @@ function fcRenderActBar() {
   const n = rc.n;
   const busy = !!fc.data["AI執行中"];
   bar.innerHTML = fcOld() ? "" : `<div class="rv-row fc-bottom">
-      <button class="ghost" id="fc-add" ${busy ? "disabled title=\"正在重做，做完才能改\"" : ""}>＋在這裡新增修改</button>
-      ${rc.show ? `<button class="primary" id="fc-redoall" ${busy ? "disabled" : ""}>${n ? `重做這幾張（${n} 張）` : "重做這幾張"}</button>` : ""}</div>`;
+      <button class="ghost" id="fc-add" ${busy ? "disabled title=\"正在重做，做完才能改\"" : ""}>＋在這裡新增修改</button></div>`;
+  // 10-16 宇軒：「重做這幾張」搬到右上角「輸出成品」左邊（輸出成品改一般按鈕外觀）
+  const slot = document.getElementById("fc-redo-slot");
+  // 10-16 宇軒：沒有要重做的卡也照樣顯示，變灰按不下去（看舊版、正在重做也是）
+  const off = fcOld() ? "看舊版時不能重做，要回最新那一版" : busy ? "正在重做" : !rc.show ? "沒有要重做的卡" : "";
+  if (slot) slot.innerHTML = `<button class="primary" id="fc-redoall" ${off ? `disabled title="${esc(off)}"` : ""}>${n && rc.show ? `重做這幾張（${n} 張）` : "重做這幾張"}</button>`;
   const add = document.getElementById("fc-add");
   if (add) add.addEventListener("click", () => fcOpenEditor(null));
   const redo = document.getElementById("fc-redoall");

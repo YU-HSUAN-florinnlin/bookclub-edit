@@ -240,9 +240,64 @@ async function renderSidebar() {
     const who = s.who ? `<span class="step-who ${s.who === "AI" ? "ai" : "human"}">${esc(s.who)}</span>` : "";
     return `<li><a href="#${s.id}" class="${s.id === active ? "active" : ""}" title="${esc(label)}${s.who ? `（${esc(s.who)}）` : ""}">
       <span class="step-badge ${badgeClass}">${badgeText}</span><span class="step-num ${badgeClass}">${esc(short)}${badgeClass === "done" ? "✓" : ""}</span><span class="step-label">${esc(label)}</span>${who}
-    </a></li>`;
+    </a>${s.num === 3 && s.real && state && !state["沒有專案"] ? navSubHtml(state) : ""}</li>`;
   }).join("");
+  navSubSync();
 }
+
+// 10-16 宇軒：第 3 步下面兩個子步驟，點了切到那一頁、看得出現在在哪裡；做完前面綠色打勾
+const NAV_SUBS = [["prep", "3-1", "開始前 4 件事"], ["cards", "3-2", "逐筆確認"]];
+let navSubWant = null;
+let navSubLast = null;   // 最後一次在第 3 步算的打勾 {workdir, prep, cards}   // 從別的步驟點子步驟：進第 3 步時要打開哪一頁（review.js renderReview 讀）
+
+function navSubHtml(state) {
+  return `<ul class="substeps">${NAV_SUBS.map(([k, n, t]) => `<li><a href="#step3" data-sub="${k}" title="${esc(`${n} ${t}`)}">
+    <span class="step-badge sub-badge" data-sub-badge="${k}">·</span><span class="step-label">${esc(n)}　${esc(t)}</span></a></li>`).join("")}</ul>`;
+}
+
+// 子步驟的「現在在哪一頁」與打勾：第 3 步的資料讀過就照它算，沒讀過照 /api/state
+function navSubSync() {
+  const st = lastState || {};
+  const onStep3 = currentRouteId() === "step3";
+  // 審查必修 3：只在第 3 步上才用第 3 步的資料（離開後、換專案後照 /api/state，不沿用舊資料）
+  const rvd = onStep3 && typeof rv !== "undefined" && rv.data && document.getElementById("rv-prep-btn") ? rv : null;
+  // 離開第 3 步：同一個專案沿用最後一次在第 3 步算的結果（/api/state 的 3-2 只看學員段落，會跟第 3 步裡不一樣）；換了專案才照 /api/state
+  const last = !rvd && navSubLast && navSubLast.workdir === st.workdir ? navSubLast : null;
+  const prepDone = rvd ? rvPrepDone() : last ? last.prep : !!(st["開始前"] && st["開始前"].done);
+  const cardsDone = rvd ? rvItems().every((x) => rvDone(x)) : last ? last.cards : !!(st.proofread && st.proofread.done);
+  if (rvd) navSubLast = { workdir: st.workdir, prep: prepDone, cards: cardsDone };
+  const done = { prep: prepDone, cards: cardsDone };
+  const cur = onStep3 && rvd ? (rv.prepOpen ? "prep" : "cards") : null;
+  document.querySelectorAll(".substeps a[data-sub]").forEach((a) => {
+    const k = a.dataset.sub;
+    a.classList.toggle("active", k === cur);
+    const b = a.querySelector("[data-sub-badge]");
+    if (b) { b.classList.toggle("done", !!done[k]); b.textContent = done[k] ? "✓" : "·"; }
+  });
+  const main = document.querySelector('.steps a[href="#step3"]:not([data-sub])');
+  if (main && cur) main.classList.remove("active");   // 亮子步驟就好，第 3 步本身不重複亮
+  if (main && (rvd || last)) {   // 第 3 步本身：兩個子步驟都做完才打勾（第 3 步的資料算得出來才這樣算；沒有就照 /api/state）
+    const all = prepDone && cardsDone;
+    const b = main.querySelector(".step-badge"), n = main.querySelector(".step-num");
+    if (b) { b.classList.toggle("done", all); b.textContent = all ? "✓" : "·"; }
+    if (n) { n.classList.toggle("done", all); n.textContent = all ? "3✓" : "3"; }
+  }
+}
+
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest(".substeps a[data-sub]");
+  if (!a) return;
+  e.preventDefault();
+  const want = a.dataset.sub;
+  if (currentRouteId() === "step3" && typeof rv !== "undefined" && rv.data && document.getElementById("rv-prep-btn")) {   // 審查建議 2：載入中不切
+    rv.prepOpen = want === "prep";
+    rvRenderMain();
+    window.scrollTo(0, 0);
+  } else {
+    navSubWant = want;
+    location.hash = "#step3";
+  }
+});
 
 // 收合／展開（記在 localStorage；讀不到、私密視窗丟例外時一律當作展開）
 const NAV_KEY = "nav-collapsed";
@@ -298,6 +353,7 @@ async function render() {
 async function renderRoute() {
   await renderSidebar();
   const id = currentRouteId();
+  if (id !== "step3") navSubWant = null;   // 審查建議 3：沒進到第 3 步就不留著
   stopStatusPoll();
   contentEl.classList.remove("wide");
 
