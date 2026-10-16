@@ -44,6 +44,11 @@ BLUR_S = 30.0
 JOIN_FADE_S = 0.01
 from bookclub.assemble import GAP_KIND, MUTE_KINDS  # noqa: E402  墊底噪的動作（名字消音、局部消音…）
 
+# 10-17 #122：組裝做法版本（寫進輸出摘要 `組裝做法版本`，第 4 步「做過沒有」比對）。改了成品聽起來或看起來
+# 會不一樣的組裝做法就加 1（老師按「開始執行」會重新組裝一次、生成好的聲音沿用）；只是重構、改註解不加。
+# tests/test_assemble_version.py 記了組裝相關程式的雜湊，程式改了它會提醒你選一個。
+ASSEMBLE_VERSION = 1
+
 ROOM_UNDER = True   # 生成的聲音底下墊附近原片的環境底噪（生成檔的停頓是數位全靜音，接在原片中間會像突然真空）
 
 
@@ -1202,7 +1207,8 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
     summary = {"範圍": [a, b], "原長度秒": round(b - a, 3), "刪除秒": round(sum(y - x for x, y in d["刪除"]), 3),
                "停格秒": round(sum(f["dur"] for f in d["停格"]), 3), "預期成品秒": round(expected, 3),
                "片段數": len(plist), "聲音處理秒": round(audio_s, 1), "動作數": len(d["動作"]),
-               "警告": d["警告"], "輸出": {}, "底噪挑法": roomtone_method()}
+               "警告": d["警告"], "輸出": {}, "底噪挑法": roomtone_method(),
+               "組裝做法版本": ASSEMBLE_VERSION}
     old = wd.read_json(out / f"輸出摘要_{tag}.json", default=None) or {}
     if old.get("範圍") == [a, b]:
         summary["輸出"] = old.get("輸出", {})   # 只重跑某幾種做法時，其他做法的紀錄留著

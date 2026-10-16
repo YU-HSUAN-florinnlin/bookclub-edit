@@ -1127,7 +1127,8 @@ def render_inputs(workdir: Path) -> list[Path]:
     return [p for p in (review.review_path(workdir), nameplan.plan_path(workdir), tts.teacher_log_path(workdir),
                         students.log_path(workdir), workdir / "校對" / "段落.json", workdir / "名字覆核決定.json",
                         studentnames.decisions_path(workdir), studentgen.log_path(workdir),
-                        workdir / "參考音" / "底噪.json")   # 10-02 第六批：全片底噪換一段 → 要重新組裝
+                        workdir / "參考音" / "底噪.json",   # 10-02 第六批：全片底噪換一段 → 要重新組裝
+                        wd.speakers_path(workdir))   # 10-17 #122：組裝會讀它找老師的句子（空隙要不要墊底噪）
             if p.exists()]
 
 
@@ -1148,6 +1149,10 @@ def render_done(workdir: Path, tag: str, methods: list[str]) -> tuple[bool, str]
 
     if summ.get("底噪挑法") != roomtone.METHOD:   # 10-02 第六批第五件：墊底噪的挑法改了，聲音會不一樣（生成好的聲音不用重做）
         return False, "墊底噪的挑法改了，要重新組裝（生成好的聲音沿用）"
+    from bookclub import render
+
+    if summ.get("組裝做法版本", 1) != render.ASSEMBLE_VERSION:   # 10-17 #122：舊摘要沒這一欄當第 1 版
+        return False, "工具更新改了組裝做法，要重新組裝（生成好的聲音沿用）"
     return True, "成品比覆核、生成結果都新"
 
 
