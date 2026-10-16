@@ -99,7 +99,7 @@ async function renderReview() {
   contentEl.innerHTML = "<p>載入中…</p>";
   rv.data = await apiGet("/api/review");
   // 10-07：進第 3 步時 ③ 名冊上的人自動配一次代號（後端記旗標，只做一次；GET 不寫檔，所以放在這裡 POST）
-  if (!rv.data["代號開始前已配"] && !rv.data["AI執行中"]) {
+  if (!rv.data["代號開始前已配"] && !rv.data["AI執行中"] && !(typeof wsClosed === "function" && wsClosed())) {   // 1015-8：已結案不配
     try {
       const r = await apiPost("/api/codes/initial", {});
       if (r["③"]) rv.data = await apiGet("/api/review");
