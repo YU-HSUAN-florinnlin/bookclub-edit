@@ -502,12 +502,13 @@ def _needs_store(workdir: Path):
         return None
 
 
-def card_redo_items(st, log: dict | None, check: dict, index: dict) -> list[dict]:
+def card_redo_items(st, log: dict | None, check: dict, index: dict, workdir: Path | None = None) -> list[dict]:
     """10-15 總檢查修正（1015-7，必修 1、分流定案甲）：`needs.redo_cards` 裡記了原因、成品檢查檔卻沒有的卡 → 第 4 步要重做的項目
     （跟 `redo_items` 同樣的欄位，另帶 `卡號`；鍵＝`卡片:<卡號>`）：
     - 跨版本卡、沿用卡（最新一版沒有它的狀態列）、舊版自己才有的卡按「要修改」——原因記在卡片的等重做
     - 之前版本退回、還沒重做的（例如範圍外、上一版退回的）
-    已經在成品檢查檔退回（`redo_items`）、或上次重做到一半（`重做中`）的卡不重複。st＝None（新紀錄不能用）回空的。"""
+    已經在成品檢查檔退回（`redo_items`）、或上次重做到一半（`重做中`）的卡不重複。st＝None（新紀錄不能用）回空的。
+    1015-8 #228：清單走 `needs.redo_list`（給了 workdir；只取記了原因的，結果跟以前一樣，收進同一個入口）。"""
     if st is None:
         return []
     from bookclub import needs
@@ -519,7 +520,8 @@ def card_redo_items(st, log: dict | None, check: dict, index: dict) -> list[dict
         if not e.get("卡號"):
             covered.update(needs._card_of_redo(st, e, index))
     out = []
-    for r in needs.redo_cards(st):
+    rows = needs.redo_list(workdir, st, log) if workdir is not None else needs.redo_cards(st)
+    for r in rows:
         if r["原因"] is None or r["卡號"] in covered:
             continue
         o = r["原片"] or [None, None]
@@ -1855,7 +1857,7 @@ def redo_list(workdir: str | Path) -> dict:
     # 10-15 總檢查修正（1015-7，必修 1）：成品檢查檔看不到的「要修改」——跨版本卡、沿用卡、看舊版時按的（原因記在卡片的等重做），
     # 之前版本退回還沒重做的——照卡片一起重做（`card_redo_items`）
     st = _needs_store(workdir)
-    items = items + card_redo_items(st, log, check, index)
+    items = items + card_redo_items(st, log, check, index, workdir)
     ctx = _redo_ctx(workdir) if items else {}
     logs: dict = {}
     doing_items = (check.get("重做中") or {}).get("項目") or []
@@ -2309,7 +2311,7 @@ def returned_by_card(workdir: str | Path, index: dict) -> dict[str, list[str]]:
         from bookclub import needs
 
         out: dict[str, list[str]] = {}
-        for r in needs.redo_cards(st):
+        for r in needs.redo_list(Path(workdir), st):   # 1015-8 #228：唯一入口；只列記了原因的（畫面不變）
             if r["原因"] is not None and r["第3步鍵"]:
                 why = needs.reason_text(r["原因"].get("選項"), r["原因"].get("補充", ""))
                 out[r["第3步鍵"]] = ["（沒寫原因）" if why == needs.REASON_NONE else why]

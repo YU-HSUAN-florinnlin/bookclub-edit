@@ -1543,7 +1543,60 @@ def _latest_reason(st: Store, k: str, vn: int | None) -> dict | None:
     return None
 
 
-def redo_cards(st: Store, log: dict | None = None, hist: list | None = None) -> list[dict]:
+# 1015-8 #228（32 號設計 §7.2 第 3 點）：沒有生成句、組裝時照第 3 步的範圍做的卡——範圍改了要從處理紀錄比
+ASSEMBLE_TYPES = ("刪除段落", "局部消音")
+RANGE_TOL_S = 0.05   # 跟 `tts.SLOT_TOLERANCE_S` 一樣：差超過這個才算範圍改了
+
+
+def _gen_by_card(st: Store) -> dict[str, set]:
+    """生成句表反查：{卡號: {(角色, 句id)}}。"""
+    out: dict[str, set] = {}
+    for (sid, role), g in st.gen.items():
+        for k in g.get("卡號") or []:
+            out.setdefault(k, set()).add((role, sid))
+    return out
+
+
+def _range_moved(c: dict, v: dict, row: dict, log: dict) -> bool:
+    """（1015-8 #228，§7.2 第 3 點）組裝類的卡（刪除段落、局部消音）：卡片現在的 `原片`（切到這一版的範圍）跟最新一版
+    處理紀錄裡這張卡那幾筆的 `原片`（`紀錄鍵` 對得到的）比，任一端差超過 0.05 秒＝改了。
+    只比「那幾筆只屬於這張卡」的（剪點合併成一筆、對到好幾張卡的分不出是哪一張改了，不比）；
+    處理紀錄那一端被別的動作切短的（局部消音碰到換聲音、刪除時以那一筆為準）不算：那一端剛好貼著別的紀錄的頭或尾。"""
+    record_key = _record_key
+    keys = set(row.get("紀錄鍵") or [])
+    if not keys:
+        return False
+    rec_cards = v.get("紀錄卡號") or {}
+    if any((rec_cards.get(k) or []) != [c["卡號"]] for k in keys):
+        return False
+    mine = [r for r in log.get("紀錄") or [] if record_key(r) in keys and r.get("原片") and r["原片"][0] is not None]
+    if not mine:
+        return False
+    o = c.get("原片") or [None, None]
+    if o[0] is None:
+        return False
+    cs, ce = float(o[0]), float(o[1] if o[1] is not None else o[0])
+    rs = min(float(r["原片"][0]) for r in mine)
+    re_ = max(float(r["原片"][1] if r["原片"][1] is not None else r["原片"][0]) for r in mine)
+    rng = v.get("範圍")
+    if rng and rng[0] is not None and rng[1] is not None:
+        # 審查必修 1：兩邊都切到這一版的範圍再比——組裝時剪點只篩不切（`render.build_decisions`），
+        # 跨範圍邊界的刪除段落處理紀錄記的是整段，卡片那端切了就會一直誤報「改了」
+        lo, hi = float(rng[0]), float(rng[1])
+        cs, ce, rs, re_ = max(cs, lo), min(ce, hi), max(rs, lo), min(re_, hi)
+    others = [r["原片"] for r in log.get("紀錄") or [] if record_key(r) not in keys and r.get("原片")
+              and r["原片"][0] is not None]
+
+    def touches(t: float) -> bool:
+        return any(abs(t - float(x)) <= RANGE_TOL_S for a, b in others for x in (a, b if b is not None else a))
+
+    moved_start = abs(cs - rs) > RANGE_TOL_S and not (rs > cs and touches(rs))
+    moved_end = abs(ce - re_) > RANGE_TOL_S and not (re_ < ce and touches(re_))
+    return moved_start or moved_end
+
+
+def redo_cards(st: Store, log: dict | None = None, hist: list | None = None,
+               stale: set | None = None) -> list[dict]:
     """10-15 總檢查修正（1015-7，A1／A9）：「要重做的卡」唯一的清單——第 4 步「要做哪些」與「要重做的（N 張）」、
     第 5 步「重做這幾張（N 張）」、第 3 步「第 5 步要重做：原因」都用這一份（31 號設計 §5.1）。只讀。
     一張卡算進來（照最新一版）：
@@ -1553,14 +1606,21 @@ def redo_cards(st: Store, log: dict | None = None, hist: list | None = None) -> 
     - 最新一版之後才有的卡（還沒生成）
     - log（最新一版的處理紀錄）有給：第 3 步改過、還沒做進最新一版的（聲音指紋跟最新一版記的不同；第 3 步選定不修改、
       之後改成要處理的）——跟第 5 步畫面「已改，等重做」同一個算法
+    - 1015-8 #228（32 號設計 §7.2）上面都判斷不出時：
+      - stale 有給（`execcounts.stale_ids`：生成程式會重新生成的 {(角色, 句id)}）：卡片有效、最新一版有它的狀態列（做進過
+        成品），而生成句表裡它的任何一句在 stale 裡 → 改了（升級前改過範圍、發音對照表改了、參考音換了、聲音檔不在）
+      - log 有給：組裝類的卡（刪除段落、局部消音）現在的範圍跟最新一版處理紀錄裡它那幾筆的 `原片` 差超過 0.05 秒 → 改了
     刪掉、併入⋯的卡沒有等重做就不算；等重做起因退回、卻找不到任何退回列的也不算。回傳 [{卡號, 編號, 類型, 第3步鍵, 原片,
-    起因, 原因: {選項, 補充} 或 None}]（照原片時間排）。原因只有一個來源（A7）：最新一版的狀態列是退回就用它，其他用等重做的。"""
+    起因, 原因: {選項, 補充} 或 None}]（照原片時間排）。原因只有一個來源（A7）：最新一版的狀態列是退回就用它，其他用等重做的。
+    畫面與第 4 步一律經 `redo_list(workdir)` 進來（參數由它備齊）；直接呼叫這裡是給測試與內部。"""
     v = st.latest_version()
     vn = v["版本號"] if v else None
     vtime = str((v or {}).get("建立時間") or "")
     vprints = (v or {}).get("卡片指紋") or {}
     now_prints = _card_prints(st, log, (v or {}).get("紀錄卡號") or {}) if (log and v and v.get("時間") == log.get("產生時間")) else None
     others = (v or {}).get("其他卡指紋")
+    log_now = bool(log and v and v.get("時間") == log.get("產生時間"))
+    by_card = _gen_by_card(st)
     out = []
     for k in sorted(st.cards, key=_card_num):
         c = st.cards[k]
@@ -1596,12 +1656,47 @@ def redo_cards(st: Store, log: dict | None = None, hist: list | None = None) -> 
                             and any(f not in NOT_SOUND_KEYS for f in ((h.get("後") or {}).get("欄位") or [])):
                         how = REDO_EDITED
                         break
+        if how is None and v is not None and row and c["狀態"] == ALIVE:
+            if stale and by_card.get(k, set()) & stale:
+                how = REDO_EDITED   # 生成程式會重新生成它的句子（#228）
+            elif log_now and c.get("類型") in ASSEMBLE_TYPES and not by_card.get(k) and _range_moved(c, v, row, log):
+                how = REDO_EDITED   # 組裝類：範圍跟這一版實際組裝用的不一樣（#228）
         if how is None:
             continue
         out.append({"卡號": k, "編號": _card_num(k), "類型": c.get("類型"), "第3步鍵": c.get("第3步鍵"),
                     "原片": c.get("原片"), "起因": how, "原因": why})
     out.sort(key=lambda x: ((x["原片"] or [None])[0] if (x["原片"] or [None])[0] is not None else 1e18, x["編號"]))
     return out
+
+
+def _stale_or_empty(w: Path, v: dict | None = None) -> set:
+    """`execcounts.stale_ids`，學員段落照最新一版（v）的範圍排；算不出來＝空的。"""
+    from bookclub import execcounts
+
+    rng = (v or {}).get("範圍") or [None, None]
+    try:
+        return execcounts.stale_ids(w, rng[0], rng[1])
+    except Exception:  # noqa: BLE001 — 算不出生成程式的判斷：照卡片指紋那幾條（不擋畫面）
+        return set()
+
+
+def redo_list(workdir: str | Path, st: Store | None = None, log: dict | None = None, *,
+              stale: set | None = None) -> list[dict]:
+    """（1015-8 #228，32 號設計 §7.2 第 4 點）「要重做的卡」唯一的入口：第 4 步「要做哪些」（`execute.redo_cards_view`）、
+    第 5 步（`finalcards._redo_map`）、`finalcheck.card_redo_items`、`finalcheck.returned_by_card`（第 3 步「第 5 步要重做」）
+    都從這裡拿，參數一律在這裡備齊（處理紀錄、歷史、`execcounts.stale_ids`），不再各傳各的。
+    st／log／stale 呼叫的地方已經讀好了可以傳進來（不重讀）；沒升級過（沒有修改需求紀錄）回空的。
+    已結案（`closing.closed`）回空的：聲音檔都清了，每一句都會變成「會重新生成」，不能冒出一堆要重做。"""
+    from bookclub import closing, proclog
+
+    w = Path(workdir)
+    if closing.closed(w) or (st is None and not exists(w)):
+        return []
+    st = load(w) if st is None else st
+    log = proclog.load(w) if log is None else log
+    v = st.latest_version()
+    hist = read_history(w) if v is not None and v.get("其他卡指紋") is None else None
+    return redo_cards(st, log, hist, _stale_or_empty(w, v) if stale is None else stale)
 
 
 def mark_edited(workdir: str | Path, key: str, *, new: bool = False, page: dict | None = None,
@@ -1654,6 +1749,7 @@ def unmark_edited(workdir: str | Path, key: str, *, page: dict | None = None, sn
         return {"清了": False, "原因": "沒有新紀錄"}
     sync_cards(w, page, snap=snap)
     log = proclog.load(w)
+    stale = _stale_or_empty(w, load(w).latest_version())   # 1015-8 #228：跟 `redo_list` 同一個判斷（鎖外先算，只讀檔）
     with _locked(w):
         st = load(w)
         c = st.alive_by_key().get(key)
@@ -1665,9 +1761,7 @@ def unmark_edited(workdir: str | Path, key: str, *, page: dict | None = None, sn
         if pend.get("起因") != WHY_EDITED or pend.get("退回原因") is not None:
             return {"清了": False, "卡號": c["卡號"], "原因": "不是單純改過"}
         c.pop("等重做")
-        v = st.latest_version()
-        hist = read_history(w) if v is not None and v.get("其他卡指紋") is None else None
-        if any(r["卡號"] == c["卡號"] for r in redo_cards(st, log, hist)):
+        if any(r["卡號"] == c["卡號"] for r in redo_list(w, st, log, stale=stale)):
             c["等重做"] = pend
             return {"清了": False, "卡號": c["卡號"], "原因": "內容跟這一版不一樣"}
         now = _now()

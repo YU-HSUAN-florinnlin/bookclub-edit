@@ -239,6 +239,14 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--tag", help="輸出檔名標記（預設「開始分-結束分」）")
     rv.add_argument("--no-demo-freeze", action="store_true", help="不做停格示範與模糊示範（正式成品 run execute 本來就不做）")
 
+    # 1015-8（32 號設計 #222 第 1 段）：結案——這一段只有逐字稿匯出；打包、清空間在第 2、3 段
+    close_parser = sub.add_parser("close", help="結案：這一段先能單獨匯出逐字稿（打包、清空間之後才做）")
+    close_parser.add_argument("--transcript", nargs=2, metavar=("工作區", "資料夾"), required=True,
+                              help="把逐字稿寫到資料夾：逐字稿.srt、逐字稿.txt（原片時間）、逐字稿_成品時間.srt（最後輸出那一版）")
+    close_parser.add_argument("--intro", type=float, default=0.0, metavar="秒",
+                              help="成品前面接的片頭長度（秒），成品時間的逐字稿每句往後加這麼多（預設 0）")
+    sub.add_parser("disk", help="查佔用空間：工作區、匯入的影片、模型快取、舊版工具、更新前備份各多大（只看、不刪）")
+
     return parser
 
 
@@ -261,6 +269,30 @@ def main(argv: list[str] | None = None) -> int:
         from bookclub.needs import main as upgrade_main
 
         return upgrade_main(args.rest)
+
+    if args.command == "close":
+        from bookclub import closing
+
+        try:
+            got = closing.export_transcripts(args.transcript[0], args.transcript[1], intro_s=args.intro)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"❌ {e}")
+            return 1
+        print(f"逐字稿寫好了（{got['句數']} 句）：")
+        for f in got["檔案"]:
+            print(f"  {f}")
+        if got["成品時間"] is not None:
+            print(f"成品時間照第 {got['成品時間']} 版換算，剪掉的句子沒寫。")
+        if got["說明"]:
+            print(f"⚠️ {got['說明']}")
+        print("逐字稿裡有學員的本名和分享內容，不要直接公開或傳給別人。拿去做行銷前，先挑段落、改掉名字。")
+        return 0
+
+    if args.command == "disk":
+        from bookclub import closing
+
+        print("\n".join(closing.disk_report()))
+        return 0
 
     if args.command == "models":
         if args.models_command == "download":

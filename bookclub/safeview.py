@@ -83,6 +83,7 @@ VOCAB = {
     "還沒生成", "還沒看", "退回", "改了", "升級前的成品", "舊版工具組的", "保留原聲學員", "計畫", "照段落", "照編號猜",
     "建立", "改鍵", "改類型", "改範圍", "改了第3步決定", "恢復有效", "從別張拆出", "拆出一張", "排進生成", "改回還沒看",
     "等重做", "取消等重做", "不用重做了", "重做過（升級時記）", "送回AI重做（升級時記）",
+    "要修改",   # 1015-8 #228：needs.redo_list 的起因（改了、還沒生成上面已經有）
 }
 ENUM_KEYS = {"狀態", "類型", "做法", "排法", "放回做法", "版本", "建議做法", "結果", "方式", "內容類型", "信心", "label", "role",
              "文字判斷", "聲音判斷", "比對層級", "位置", "切點信心", "聲線", "角色", "文字來源", "來源", "判斷依據", "建議類型",
@@ -630,6 +631,22 @@ def topic_needs(w: Path, f: Filter, out: list[str], limit: int = 300) -> None:
         if not f.ok({"id": g["句id"], "鍵": "、".join(g.get("卡號") or [])}) and not any(f.ok({"id": c}) for c in g.get("卡號") or []):
             continue
         out.append("生成句 " + fmt_row({k: g.get(k) for k in ("句id", "角色", "卡號", "第幾版", "種子", "對應方式")}))
+    # 1015-8 #228（32 號設計 §7.2）：生成程式會重新生成的句子（execcounts.stale_ids）、反查不到卡的句數、要重做的卡
+    try:
+        from bookclub import execcounts
+
+        rng = (st.latest_version() or {}).get("範圍") or [None, None]
+        stale = execcounts.stale_ids(w, rng[0], rng[1], cache=False)
+        lost = sorted(f"{r}:{i}" for r, i in stale if (i, r) not in st.gen)
+        by_role = Counter(r for r, _i in stale)
+        out.append(f"生成程式會重新生成 {len(stale)} 句（{'、'.join(f'{r} {n}' for r, n in by_role.items()) or '沒有'}）；"
+                   f"stale 但對不到卡的句子：{len(lost)} 句" + ("（不是 0＝生成句表要補）" if lost else ""))
+        if lost:
+            out.append("  對不到卡：" + "、".join(x if re.match(r"^[\w:.\-]+$", x) else mask(x) for x in lost[:50]))
+        rows = needs.redo_list(w, st, stale=stale)
+        out.append(f"要重做的卡（needs.redo_list，第 4、5 步同一份）{len(rows)} 張：{cnt(rows, '起因')}")
+    except Exception as e:  # noqa: BLE001 — 算不出來不擋其他內容
+        out.append(f"生成程式會重新生成：算不出來（{type(e).__name__}）")
     hist = needs.read_history(w)
     shown = [h for h in hist if not f.ids or f.ok({"id": h.get("卡號")})][-limit:]
     out.append(f"歷史 {len(hist)} 條（印最後 {len(shown)} 條）")

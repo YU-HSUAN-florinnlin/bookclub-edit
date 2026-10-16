@@ -2095,18 +2095,17 @@ def status(workdir: str | Path) -> dict:
 
 
 def redo_cards_view(workdir: Path, redo: list[dict] | None = None) -> list[dict]:
-    """10-15 總檢查修正（1015-7）：第 4 步「要重做的（N 張）」——新紀錄能用時照 `needs.redo_cards`（第 4、5 步同一份）；
+    """10-15 總檢查修正（1015-7）：第 4 步「要重做的（N 張）」——新紀錄能用時照 `needs.redo_list`（第 4、5 步同一份；
+    1015-8 #228 起含生成程式自己判斷會重新生成的卡）；
     不能用（還沒升級、同步出錯）照舊的退回清單（redo：`finalcheck.redo_list` 的項目），一筆當一張。
     審查建議 8：每筆另帶 `說明`（按下去會怎麼重做）、`改範圍`——照舊的退回清單那一筆（對到這張卡的；照卡片重做的看卡號），
     沒有對到的（改了、還沒生成：照一般流程生成）說明空的。"""
-    from bookclub import finalcheck, needs, proclog
+    from bookclub import finalcheck, needs
 
     empty = {"選項": [], "補充": ""}
     try:
         if needs.healthy(workdir):
             st = needs.load(workdir)
-            v = st.latest_version()
-            hist = needs.read_history(workdir) if v is not None and v.get("其他卡指紋") is None else None
             index = finalcheck._index(workdir) if redo else {}
             how: dict[str, dict] = {}
             for it in redo or []:
@@ -2119,7 +2118,7 @@ def redo_cards_view(workdir: Path, redo: list[dict] | None = None) -> list[dict]
                      "原因": r["原因"] or dict(empty), "起因": r["起因"],
                      "說明": "；".join((how.get(r["卡號"]) or {}).get("說明") or []),
                      "改範圍": (how.get(r["卡號"]) or {}).get("改範圍")}
-                    for r in needs.redo_cards(st, proclog.load(workdir), hist)]
+                    for r in needs.redo_list(workdir, st)]   # 1015-8 #228：唯一入口（含生成程式會重做的）
     except Exception:  # noqa: BLE001 — 新紀錄讀不到：照舊的退回清單
         pass
     return [{"卡號": None, "編號": None, "類型": it.get("類型"), "第3步鍵": None, "原片": it.get("原片"),

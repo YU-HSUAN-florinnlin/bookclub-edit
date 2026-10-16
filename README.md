@@ -874,3 +874,22 @@ WSL2 上找重疊比 M1 慢，是唯一的瓶頸（純本機運算）；聲音�
    - 如果方便，加跑 `.venv/bin/bookclub doctor --smoke`（實際跑三個模型各處理一小段測試音檔；只在 Mac 上跑，WSL2 會跳過），把輸出一起附上，裡面有更詳細的錯誤訊息
 4. **請不要附**：逐字稿內容、學員的名字（本名、代號對照都不要）、名冊、工作區裡的 JSON 檔、影片或聲音檔。截圖前先確認畫面上沒有逐字稿或名字。
 5. 把以上資訊回報給開發者，一起討論下一步。
+
+## 附錄：縮小虛擬硬碟（草稿，Windows 實機還沒驗過）
+
+> 草稿：下面的指令還沒在 Windows 實機驗過，驗過再定稿。
+
+Windows 上的 Ubuntu 整個裝在一個虛擬硬碟檔（`ext4.vhdx`，在 C 槽）。在 Ubuntu 裡刪了檔案，這個檔**不會自己變小**，C 槽的空間要縮小虛擬硬碟才拿得回來。
+
+先看佔了多少：在工具資料夾跑 `.venv/bin/bookclub disk`（只看、不刪），會列出每支影片的工作區、模型快取、舊版工具、更新前備份各多大，WSL 上最後一行是虛擬硬碟多大、C 槽還剩多少。
+
+1. 先在 Ubuntu 裡清好：結案打包（之後的版本才有）、`uv cache clean`（安裝工具時的下載暫存；下次更新會重新下載一部分，慢一點但不會壞）。
+2. 關掉讀書會剪輯工具，在 PowerShell 打 `wsl --shutdown`。
+3. 縮小，兩種做法擇一：
+   - 新版 WSL：`wsl --manage Ubuntu --set-sparse true`（之後刪檔會自動還空間給 C 槽）。
+   - 系統管理員身分開 PowerShell，打 `diskpart`，再依序打：
+     `select vdisk file="<ext4.vhdx 的完整路徑>"`、`attach vdisk readonly`、`compact vdisk`、`detach vdisk`、`exit`。
+     （`ext4.vhdx` 的路徑通常在 `C:\Users\<你的帳號>\AppData\Local\Packages\<Ubuntu 那個資料夾>\LocalState\`）
+4. 再開 Ubuntu，確認工具還能打開。
+
+`wsl --shrink` 不是每個版本都有，所以主要寫 diskpart 那一套。

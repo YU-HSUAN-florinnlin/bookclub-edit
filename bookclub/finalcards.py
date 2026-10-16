@@ -456,6 +456,12 @@ def build(workdir: str | Path, *, log: dict | None = None, check: dict | None = 
     for c in cross:
         c["共用"], c["連帶自"], c["跨版本"] = [], [], True   # 跨版本：狀態、成品時間是那一版的（畫面試聽播那一版的成品）
     redo = _redo_map(workdir, log) if src == SRC_NEW else None
+    for c in cards if redo else []:
+        # 1015-8 #228：要重做的清單說「改了」（例如生成程式會重新生成它的句子：升級前改過範圍、發音對照表、參考音換了、
+        # 聲音檔不在），卡片上照樣寫「已改，等重做」——畫面跟「重做這幾張（N 張）」、第 4 步同一份
+        r = redo.get(c.get("卡號"))
+        if r and r["起因"] == needs.REDO_EDITED and c["狀態"] in (needs.PASSED, needs.NOT_SEEN):
+            c["狀態"] = EDITED
     mark_flags(cards, cross, redo, reasons=_reason_cards(workdir) if src == SRC_NEW else None)
     return {"來源": src, "卡片": cards, "統計": summary(cards, cross, len(redo) if redo is not None else None),
             "跨版本卡片": cross}
@@ -468,12 +474,9 @@ def _reason_cards(workdir: Path) -> set[str]:
 
 
 def _redo_map(workdir: Path, log: dict | None = None) -> dict:
-    """10-15 總檢查修正（1015-7）：`needs.redo_cards`（要重做的卡唯一的清單）→ {卡號: 那一筆}。"""
-    st = needs.load(workdir)
-    v = st.latest_version()
-    hist = needs.read_history(workdir) if v is not None and v.get("其他卡指紋") is None else None
-    log = proclog.load(workdir) if log is None else log
-    return {r["卡號"]: r for r in needs.redo_cards(st, log, hist)}
+    """10-15 總檢查修正（1015-7）：要重做的卡唯一的清單 → {卡號: 那一筆}。1015-8 #228：改走 `needs.redo_list`
+    （跟第 4 步同一個入口；生成程式會重新生成的卡也算，畫面「已改，等重做」）。"""
+    return {r["卡號"]: r for r in needs.redo_list(workdir, needs.load(workdir), log)}
 
 
 # 第 5 步卡片要用到的第 3 步資料（卡片元件 cards.js 的 data()）
