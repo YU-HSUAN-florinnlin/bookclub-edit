@@ -1643,6 +1643,40 @@ def mark_edited(workdir: str | Path, key: str, *, new: bool = False, page: dict 
         return c["卡號"]
 
 
+def unmark_edited(workdir: str | Path, key: str, *, page: dict | None = None, snap: dict | None = None) -> dict:
+    """10-16 #225（宇軒）：第 5 步按錯了按「復原」——第 3 步的東西改回去之後，拿掉那張卡的「已改，等重做」。
+    只拿掉單純「改了」、沒記原因的等重做（記了原因的走「取消要重做」）；拿掉之後照 `redo_cards` 的指紋比對，
+    卡片內容跟最新一版還是不一樣（例如改回去的字不完全一樣）就放回去、不拿掉。回 {清了, 卡號, 原因}。"""
+    from bookclub import proclog
+
+    w = Path(workdir)
+    if not exists(w):
+        return {"清了": False, "原因": "沒有新紀錄"}
+    sync_cards(w, page, snap=snap)
+    log = proclog.load(w)
+    with _locked(w):
+        st = load(w)
+        c = st.alive_by_key().get(key)
+        if c is None:
+            return {"清了": False, "原因": "找不到這張卡"}
+        pend = c.get("等重做") or {}
+        if not pend:
+            return {"清了": False, "卡號": c["卡號"], "原因": "沒有等重做"}
+        if pend.get("起因") != WHY_EDITED or pend.get("退回原因") is not None:
+            return {"清了": False, "卡號": c["卡號"], "原因": "不是單純改過"}
+        c.pop("等重做")
+        v = st.latest_version()
+        hist = read_history(w) if v is not None and v.get("其他卡指紋") is None else None
+        if any(r["卡號"] == c["卡號"] for r in redo_cards(st, log, hist)):
+            c["等重做"] = pend
+            return {"清了": False, "卡號": c["卡號"], "原因": "內容跟這一版不一樣"}
+        now = _now()
+        st.log(now, c["卡號"], 5, "復原（取消等重做）", {"起因": WHY_EDITED}, None)
+        c["更新時間"] = now
+        save(w, st)
+        return {"清了": True, "卡號": c["卡號"]}
+
+
 def mirror_final(workdir: str | Path, check: dict | None = None, log: dict | None = None, *, force: bool = False) -> dict | None:
     """第 5 步成品檢查存檔之後（`finalcheck._save`）：照舊格式寫完，這裡算出每張卡在那一版的狀態（雙寫）。
     判斷相關的欄位沒變（例如只是記看過區段）就什麼都不做。處理紀錄是舊版工具組的（版本表裡沒有）→ 先補一個版本。

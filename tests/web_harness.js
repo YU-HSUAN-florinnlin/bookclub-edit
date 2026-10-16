@@ -12,6 +12,7 @@
 
 const fs = require("fs");
 const vm = require("vm");
+const path = require("path");
 
 function makeEnv(files, setup) {
   const H = { log: [], listeners: [], els: {}, api: {}, apiGetData: {}, skeleton: new Set(), confirm: true };
@@ -148,6 +149,10 @@ function makeEnv(files, setup) {
   };
   H.listenerSig = () => H.listeners.map((l) => [l.el.id || "", l.el.className || "", l.el.tagName, l.type, JSON.stringify(l.el.dataset)]);
   vm.createContext(ctx);
+  // 10-16 #225：問號說明 helpTip() 在 app.js（harness 不載 app.js），只抽這一個純函式進來
+  const appSrc = fs.readFileSync(path.join(__dirname, "..", "bookclub", "web", "app.js"), "utf8");
+  const tipAt = appSrc.indexOf("function helpTip(");
+  vm.runInContext(appSrc.slice(tipAt, appSrc.indexOf("\n}\n", tipAt) + 3), ctx, { filename: "app.js:helpTip" });
   for (const f of files) vm.runInContext(fs.readFileSync(f, "utf8"), ctx, { filename: f });
   if (setup) vm.runInContext(setup, ctx);
   return ctx;

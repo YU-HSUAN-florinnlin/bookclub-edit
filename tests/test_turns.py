@@ -110,6 +110,50 @@ def test_turn_sentences_clip_and_map_pos():
     assert not exact2 and 4.0 < cut2 < 34.0
 
 
+def test_split_mid_sentence_then_merge_back_in_order():
+    """10-16 #225（審查必修 1）：第 5 步「復原」切開——切在一句話中間、後面還有句子時會切成兩段新段落（剩下的半句、後面的句子）；
+    照新段落原本的順序一段一段併回，原段落要跟切開前一樣（不留 句尾切點）。倒著併會留下 句尾切點，那一句永遠只算前幾個字。"""
+    import os
+
+    old = os.environ.get("BOOKCLUB_DATA_DIR")
+    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as data_dir:
+        os.environ["BOOKCLUB_DATA_DIR"] = data_dir
+        try:
+            w = Path(d)
+            (w / "校對").mkdir()
+            (w / "transcript").mkdir()
+            sents = [{"id": "s0", "start": 0.0, "end": 4.0, "text": "我先說，", "label": "不是老師"},
+                     {"id": "s1", "start": 4.0, "end": 34.0, "text": "我講完了。好啊謝謝。", "label": "不確定"},
+                     {"id": "s2", "start": 34.0, "end": 38.0, "text": "還有一句。", "label": "不是老師"}]
+            words = [{"word": c, "start": 0.2 + k * 0.8, "end": 0.9 + k * 0.8} for k, c in enumerate("我先說")] + \
+                    [{"word": c, "start": 4.0 + k, "end": 4.8 + k} for k, c in enumerate("我講完了")] + \
+                    [{"word": c, "start": 24.0 + k, "end": 24.8 + k} for k, c in enumerate("好啊謝謝")] + \
+                    [{"word": c, "start": 34.2 + k * 0.7, "end": 34.8 + k * 0.7} for k, c in enumerate("還有一句")]
+            (w / "說話者判斷.json").write_text(json.dumps({"sentences": sents}, ensure_ascii=False), encoding="utf-8")
+            (w / "transcript" / "merged.json").write_text(json.dumps({"sentences": sents, "words": words}, ensure_ascii=False),
+                                                          encoding="utf-8")
+            raw = "我先說，我講完了。好啊謝謝。還有一句。"
+            orig = {"id": "T001", "start": 0.0, "end": 38.0, "句子": ["s0", "s1", "s2"], "說話者": "學員1", "原文": raw,
+                    "校對稿": raw, "已確認": True, "校對秒數": None}
+            data = {"段落": [dict(orig)], "學員": {"學員1": {"秒數": 38, "段數": 1, "點名線索": {}}}, "本名代號": {}}
+            (w / "校對" / "段落.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            load = lambda: json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))   # noqa: E731
+
+            r = turns.split_turn(w, "T001", raw.index("好啊"))
+            assert r["切在"].startswith("一句話裡面") and len(r["新段落"]) == 2, r
+            for tid in r["新段落"]:                 # 照原本的順序併回（第 5 步 fcUndo 的做法）
+                turns.merge_turn(w, tid)
+            turns.save_turn(w, "T001", {"校對稿": raw, "已確認": True})
+            back = load()["段落"]
+            assert len(back) == 1 and "句尾切點" not in back[0], back
+            assert back[0]["句子"] == orig["句子"] and back[0]["end"] == orig["end"] and back[0]["校對稿"] == raw
+        finally:
+            if old is None:
+                os.environ.pop("BOOKCLUB_DATA_DIR", None)
+            else:
+                os.environ["BOOKCLUB_DATA_DIR"] = old
+
+
 def test_split_inside_a_sentence_and_teacher_item():
     """09-30 宇軒：學員的最後一句跟老師的話被轉成同一句 → 從游標處切開要切得了；
     後面那半句（沒有逐字稿句子）改成老師時，變成一筆「老師這一段用 AI 聲音重念」。"""

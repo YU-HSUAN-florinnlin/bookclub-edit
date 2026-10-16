@@ -1578,7 +1578,7 @@ class Handler(BaseHTTPRequestHandler):
             snap = _needs_snap(server)   # 10-15 第1段審查修正：第 3 步快照在算 page 之前拍（中間有 POST 下次會再同步）
             page = review_page(server.workdir, video=server.video)
             _needs_ensure(server, page, snap)   # 10-14 第5步2.0 第1段：第一次打開升級；之後同步第 3 步的卡片（用這份 page，不另外算）
-            self._send_json(200, {**page, "AI執行中": server.exec_running()})   # 09-30：執行中第 3 步變唯讀
+            self._send_json(200, {**page, "AI執行中": server.exec_running(), "開發者": _developer()})   # 09-30：執行中第 3 步變唯讀；10-16 #225：開發者設定（「你標的 → 對齊後」只給開發者看）
         elif path == "/api/video":
             from bookclub.review import video_path
 
@@ -1903,6 +1903,13 @@ class Handler(BaseHTTPRequestHandler):
                 # （網頁接著的重新整理直接用這一份，不再 GET /api/final 重算一次第 3 步）
                 page, snap = _final_step3(server)
                 r = finalcards.edited(w, str(body["鍵"]), bool(body.get("新增")), page=page, snap=snap)
+                r["頁面"] = _final_data(server, page)
+                self._send_json(200, r)
+            elif path == "/api/final/unedited":   # 10-16 #225：第 5 步「復原」→ 拿掉「已改，等重做」（內容跟這一版一樣才拿）
+                from bookclub import finalcards
+
+                page, snap = _final_step3(server)
+                r = finalcards.unedited(w, str(body["鍵"]), page=page, snap=snap)
                 r["頁面"] = _final_data(server, page)
                 self._send_json(200, r)
             elif path == "/api/final/sendback":

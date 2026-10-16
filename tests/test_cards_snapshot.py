@@ -8,6 +8,8 @@
 快照（`tests/snapshots/第3步卡片快照.json`）是抽元件**之前**的程式（commit b8814cc 的 review.js）產生的；
 抽完之後的程式要產生一模一樣的東西。要刻意改第 3 步畫面時才重產：`python tests/test_cards_snapshot.py --update`。
 10-15 前後 2 秒開關統一（1015-5）：宇軒授權改第 3 步卡片畫面，快照照新畫面重產過一次（播放按鈕改名、加開關、播放範圍照開關）。
+10-16 #225（批次 1016-1）：宇軒授權改第 3 步畫面文字與名字卡、學員段落卡排版，快照重產（開關改名「前後多聽 2 秒」、名字卡「原句／會念成」＋收合的調整區、
+聽這一段搬到標題列、學員段落卡「學員／會念成」小標、拿掉「✓ 已通過」狀態行、剪掉片段裡的卡不顯示建議框與輸入框、開始前 ②③ 說明收進問號或改列點）。
 獨立可跑：.venv/bin/python tests/test_cards_snapshot.py
 """
 
@@ -195,11 +197,13 @@ def test_step3_pad_switch():
       const T3 = rvItem("學員段落:T009"), N3 = rvItem("名字:3"), O = rvItem("重疊:O100.00");
       shots.only = [await play("學員段落:T009", "rv-playonly"), T3.start, T3.end];
       shots.out = [await play("學員段落:T009", null, (x) => x.el.className.includes("rv-outplay")), T3["段落外"][1].start, T3["段落外"][1].end];
-      shots.range = [await play("名字:3", "rv-playrange"), N3["整句"].start, N3["整句"].end];
+      shots.range = [await play("名字:3", "rv-playonly"), N3["整句"].start, N3["整句"].end];   // 10-16 #225：名字卡的「聽這一段」搬到標題列，播重念範圍
       shots.spot = [await play("名字:3", null, (x) => x.el.className.includes("rv-segplay")), N3["這一句的處"][1].start, N3["這一句的處"][1].end];
       shots.gen = [await play("重疊:O100.00", "rv-genplay"), O["生成範圍"].start, O["生成範圍"].end];
       const cards = {};
       for (const k of ["學員段落:T009", "名字:3", "重疊:O100.00", "刪除段落:C1"]) { rv.cur = k; rv.open = true; rvRenderCard(); cards[k] = document.getElementById("rv-right").innerHTML; }
+      // 10-16 #225：名字:3 是「不是名字」，不會重念、沒有調整區；拿掉標記看要重念時的調整區
+      const tg = N3.tags; N3.tags = []; rv.cur = "名字:3"; rvRenderCard(); cards["名字:3 要重念"] = document.getElementById("rv-right").innerHTML; N3.tags = tg;
       rvOpenEditor(T3); H.listeners.length = 0; rvRenderIO();
       const te = H.listeners.filter((x) => "tePlay" in x.el.dataset && x.type === "click").pop();
       await te.fn({}); shots.te = [[rv.video.currentTime, rv.stopAt], rv.ed.a, rv.ed.b];
@@ -223,8 +227,10 @@ def test_step3_pad_switch():
             assert ("checked" in html.split('id="rv-pad"')[1].split(">")[0]) == (k == 2), (name, key)
             for old in ("只播這一段", "只播重念範圍", "播這一段", "試聽這幾秒", "試聽這段"):
                 assert old not in html.replace("聽這一段", ""), (name, key, old)
-        assert 'class="linkish rv-reset" id="rv-rangereset"' in v["cards"]["名字:3"]
-        assert v["cards"]["名字:3"].index('id="rv-rangereset"') > v["cards"]["名字:3"].index('data-rg="1"')   # 回到預設範圍在起訖欄後面
+        assert 'rv-namefold' not in v["cards"]["名字:3"] and 'rv-edge' not in v["cards"]["名字:3"]   # 不是名字：沒有調整區、不提醒縮範圍
+        nm = v["cards"]["名字:3 要重念"]
+        assert 'class="rv-namefold"' in nm and 'class="linkish rv-reset" id="rv-rangereset"' in nm
+        assert nm.index('id="rv-rangereset"') > nm.index('data-rg="1"')   # 回到預設範圍在起訖欄後面
     assert got["關"]["stored"] == "1" and got["關"]["padOn"] == 2   # 撥開關：記在第 5 步同一個鍵，馬上生效
     assert got["開"]["stored"] == "0" and got["開"]["padOn"] == 0
 

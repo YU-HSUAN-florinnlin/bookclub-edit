@@ -146,6 +146,34 @@ def test_edited_then_next_version_clears():
     assert c2["狀態"] == needs.NOT_SEEN and not needs.load(w).cards[c2["卡號"]].get("等重做")
 
 
+def test_unedited_after_undo():
+    """10-16 #225：第 5 步「復原」——第 3 步改回原樣後拿掉「已改，等重做」；內容還不一樣的不拿、沒有等重做的不用拿。"""
+    from bookclub import turns as _turns
+
+    w, log = _ready()
+    no = _by(finalcards.build(w)["卡片"], "學員段落:T005")["卡號"]
+    st_of = lambda: next(c for c in finalcards.build(w)["卡片"] if c.get("卡號") == no)["狀態"]   # noqa: E731
+    before = next(t for t in json.loads((Path(w) / "校對" / "段落.json").read_text(encoding="utf-8"))["段落"] if t["id"] == "T005")
+    # 改字（鍵不變）：等重做記在卡上
+    _turns.save_turn(w, "T005", {"校對稿": "按錯改的字"})
+    assert finalcards.edited(w, "學員段落:T005")["記了"] and st_of() == finalcards.EDITED
+    r = finalcards.unedited(w, "學員段落:T005")                   # 還沒改回去：不拿
+    assert r["清了"] is False and r["原因"] == "內容跟這一版不一樣", r
+    assert st_of() == finalcards.EDITED
+    _turns.save_turn(w, "T005", {"校對稿": before["校對稿"]})     # 復原：字改回去
+    r = finalcards.unedited(w, "學員段落:T005")
+    assert r["清了"] is True and r["卡號"] == no, r
+    assert st_of() != finalcards.EDITED and not needs.load(w).cards[no].get("等重做")
+    assert finalcards.unedited(w, "學員段落:T005")["原因"] == "沒有等重做"
+    # 整段改成老師（鍵變成 改成老師:T005）：灰掉是指紋比對來的，說話者改回去就恢復
+    _turns.save_turn(w, "T005", {"說話者": "老師"})
+    finalcards.edited(w, "學員段落:T005")
+    assert st_of() == finalcards.EDITED
+    _turns.save_turn(w, "T005", {"說話者": before["說話者"]})
+    finalcards.unedited(w, "學員段落:T005")
+    assert st_of() != finalcards.EDITED
+
+
 def test_edited_after_log_made_is_not_cleared():
     """10-15 第2段審查修正（建議）：處理紀錄產生之後才改的（這一版沒做進去），建版本時不清「已改，等重做」。"""
     w, log = _ready()
