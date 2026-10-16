@@ -806,6 +806,7 @@ def append_candidates(workdir: str | Path, sentence_ids: list[str], tag: str = "
         n = merge_candidates(workdir, scan, tag)
         if n is not None:
             return n
+    print("⚠️ 補找名字：掃的途中名字候選或逐字稿一直在變（連 3 輪），這次沒有補上；漏抓的名字請到第 3 步用「＋新增修改」補")
     return 0
 
 

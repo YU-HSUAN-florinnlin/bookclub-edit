@@ -1157,7 +1157,7 @@ function rvNameCountHtml() {
 function rvRescanLineHtml() {
   const st = rv.data["人名補找"] || {};
   if (st["補找中"]) return '<p class="rv-meta" id="rvRescanLine">正在找老師還有哪裡提到這些名字…（可以繼續選）</p>';
-  if (st["錯誤"]) return '<p class="rv-warnline" id="rvRescanLine">找老師提到的名字時出錯了。重新整理網頁再試；一直不行，用「＋新增修改」補漏抓的名字。</p>';
+  if (st["錯誤"]) return '<p class="rv-warnline" id="rvRescanLine">找老師提到的名字時出錯了。過一分鐘再重新整理網頁；一直不行，用「＋新增修改」補漏抓的名字。</p>';
   return '<p class="rv-meta" id="rvRescanLine" hidden></p>';
 }
 

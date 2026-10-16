@@ -166,7 +166,8 @@ def test_rescan_error_keeps_pending_until_page_reopens():
         assert not personnames.ensure_rescan(w, retry=True)         # 剛出錯：打開網頁也先不重掃（隔 RETRY_AFTER_S）
         # 第 4 步不會永遠擋住：背景沒在做 → 不算「還在找」；出錯提醒一次，再按就放行
         assert not personnames.rescan_busy(w)
-        assert personnames.rescan_error_gate(w).startswith(personnames.ERROR_MSG)
+        msg = personnames.rescan_error_gate(w)
+        assert msg.startswith(personnames.ERROR_MSG) and "可能沒換掉" in msg and "過一分鐘" in msg
         assert personnames.rescan_error_gate(w) is None
 
         # 重試的那一輪在跑的時候：狀態是「補找中」，不顯示錯誤；第 4 步等它

@@ -444,7 +444,7 @@ def request_rescan(workdir: str | Path) -> bool:
 
 
 RETRY_AFTER_S = 60.0   # 出錯之後，打開第 3 步網頁至少隔這麼久才再試（不要每次重抓都重掃幾十秒）
-ERROR_MSG = "找老師提到的名字時出錯了。重新整理網頁再試；一直不行，用「＋新增修改」補漏抓的名字。"
+ERROR_MSG = "找老師提到的名字時出錯了。過一分鐘再重新整理網頁；一直不行，用「＋新增修改」補漏抓的名字。"   # 出錯後隔 RETRY_AFTER_S 才重試
 
 
 def _alive(key: str) -> bool:
@@ -514,7 +514,7 @@ def rescan_error_gate(workdir: str | Path) -> str | None:
             return None
         st["錯誤已提醒"] = True
         wd.write_json(rescan_path(workdir), st)
-    return ERROR_MSG + "要照樣開始，再按一次。"
+    return ERROR_MSG + "照樣開始的話，剛加的名字在老師講到的地方可能沒換掉。要照樣開始，再按一次。"
 
 
 def _scan_teacher(workdir: Path) -> dict | None:

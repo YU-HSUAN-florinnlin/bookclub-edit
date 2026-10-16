@@ -1974,7 +1974,8 @@ class Handler(BaseHTTPRequestHandler):
             if server.has_workdir:   # 10-16 #234：③ 補找老師提到的名字還沒做完
                 if personnames.rescan_busy(server.workdir):   # 背景真的在做（幾十秒）
                     raise ValueError("還在找老師提到的名字（第 3 步 ③ 剛選的），等半分鐘再按")
-                why = personnames.rescan_error_gate(server.workdir)   # 出錯停住：提醒一次，再按就放行（不永遠擋住）
+                # 出錯停住：提醒一次，再按就放行（不永遠擋住）；已經在執行（會回 409）時不用掉這次提醒
+                why = None if server.exec_running() else personnames.rescan_error_gate(server.workdir)
                 if why:
                     raise ValueError(why)
             result = server.start_execute(body)
