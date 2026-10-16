@@ -167,7 +167,13 @@ def episode_spellings(workdir: str | Path, roster: list[dict] | None = None,
             continue
         if how not in SELF_HOWS or d.get("自動配"):
             continue
-        if d.get(OWN_KEY):
+        if how != "換成代號":
+            # 第四輪審查：不用處理／不是名字只有「決定時名冊上沒有這個寫法」（或是這一集自己加進名冊的）才蓋過去、照原聲留著；
+            # 決定時名冊上就有的照舊跟名冊走（換掉）——跟 1016-3 之前一樣
+            if name not in keep_original_names(workdir, dec=dec):
+                continue
+            base = None
+        elif d.get(OWN_KEY):
             base = name
         elif AT_KEY in d:
             base = d.get(AT_KEY) or None
@@ -181,24 +187,27 @@ def episode_spellings(workdir: str | Path, roster: list[dict] | None = None,
     return out
 
 
-def keep_original_names(workdir: str | Path) -> set[str]:
-    """第三輪審查：③ 選了「不用處理／不是名字」、成品可以照原聲留著的名字（第 4 步排計畫時這幾個沒代號的名字候選略過）。
-    只有兩種：(a) 決定時名冊上沒有這個名字（`決定時名冊對到` 空），或對到的是名字本身、而人名清單說是書中人物或作者（撞名）；
-    (b) 這一集蓋過名冊、名冊對到的是別人（`episode_spellings`）。
-    其餘（決定時名冊就對到某位學員、沒有 `決定時名冊對到` 的舊決定、自動配）照舊排成「換成空的」把名字拿掉重念。"""
+def _added_here(name: str, d: dict) -> bool:
+    """這個寫法是這一集選「同一人」時自己加進名冊的（名冊原本沒有）。"""
+    rec = d.get("加進名冊的其他寫法") or {}
+    return name in (rec.get("寫法") or [])
+
+
+def keep_original_names(workdir: str | Path, dec: dict | None = None) -> set[str]:
+    """③ 選了「不用處理／不是名字」、成品照原聲留著的名字（第四輪審查：最保險、跟 1016-3 之前一致）。只有兩種：
+    (a) 決定當時名冊上沒有這個寫法（`決定時名冊對到` 是空的；之後別支影片才加進名冊的也一樣）；
+    (b) 這個寫法是這一集選「同一人」時自己加進名冊的（`加進名冊的其他寫法` 有它），後來改成不用處理／不是名字——名冊原本沒有，等同 (a)。
+    其餘（決定時名冊上就有、不論是本名或別人的其他寫法；不看人名清單「書中人物」標記；沒有 `決定時名冊對到` 的舊決定；自動配）
+    照舊跟名冊走：有代號換成代號、沒代號排成「換成空的」把名字拿掉重念。"""
     from bookclub import personnames
 
-    workdir = Path(workdir)
-    dec = wd.read_json(personnames.decisions_path(workdir), default={}) or {}
-    spell = episode_spellings(workdir, dec=dec)
-    who = {p["名字"]: p.get("是誰") for p in (wd.read_json(personnames.people_path(workdir), default={}) or {}).get("人名", [])}
+    if dec is None:
+        dec = wd.read_json(personnames.decisions_path(Path(workdir)), default={}) or {}
     out = set()
     for n, d in dec.items():
         if not isinstance(d, dict) or d.get("做法") not in ("不用處理", "不是名字") or d.get("自動配"):
             continue
-        if n in spell:
-            out.add(n)
-        elif AT_KEY in d and (not d[AT_KEY] or (d[AT_KEY] == n and who.get(n) == "書中人物或作者")):
+        if (AT_KEY in d and not d[AT_KEY]) or _added_here(n, d):
             out.add(n)
     return out
 

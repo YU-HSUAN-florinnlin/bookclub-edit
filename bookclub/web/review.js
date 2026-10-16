@@ -1148,7 +1148,7 @@ function rvNameRowHtml(u) {
       <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
         <select class="rv-unpick" data-name="${esc(u["名字"])}" data-cur="${esc(rvNamePickValue(u))}" aria-label="${esc(u["名字"])}要怎麼換" ${saving ? "disabled" : ""}>${rvNamePickOpts(u)}</select>
         ${state}</div>
-      ${u["做法"] === "不用處理" && u["名冊上是別人"] ? `<p class="rv-warnline rv-ownwarn">名冊上這是${esc(u["名冊上是別人"])}的另一種寫法，選「不用處理」這一集會念出原名</p>` : ""}${u["名冊上的人會拿掉"] ? '<p class="rv-warnline rv-ownwarn">這是名冊上的人，成品會把名字拿掉重念</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
+      ${u["名冊上的人會拿掉"] ? '<p class="rv-warnline rv-ownwarn">這是名冊上的人，成品會把名字拿掉重念</p>' : ""}${u["名冊現在有"] ? '<p class="rv-meta">名冊現在有這個名字（選的時候還沒有），這一集照原聲留著</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
 }
 
 function rvNameCountHtml() {
@@ -1184,7 +1184,7 @@ function rvPrepNamesHtml() {
   return `${peopleWarn}${rvDupHtml()}${rvAutoHtml()}<div class="rv-meta">每個名字選一項：<ul class="rv-bullets">
     <li>是 ② 的學員（轉錯字、暱稱）→「同一人：…」</li>
     <li>其他人（家人朋友、沒登記的人）→ 挑一個英文名</li>
-    <li>書中人物、公眾人物 →「不用處理」</li>
+    <li>書中人物、公眾人物 →「不用處理」（名冊上的人選「不用處理」也會拿掉名字；書中人物剛好跟學員同名，用「＋新增修改」逐筆處理）</li>
     <li>抓錯的 →「不是名字」</li></ul></div>
     ${rvRescanLineHtml()}
     <p class="rv-meta" id="rvNameCount">${rvNameCountHtml()}</p>

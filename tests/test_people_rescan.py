@@ -508,7 +508,7 @@ def test_decided_before_other_video_adds_alias():
         ade = next(u for u in personnames.mentioned(w, chosen={"小美", "阿明"}) if u["名字"] == "阿德")
         assert not ade["② 已決定"] and ade["做法"] == how and ade["代號"] == code, (how, ade)
         if how == "不用處理":
-            assert ade["名冊上是別人"] == "小美", ade
+            assert ade["名冊上是別人"] == "小美" and ade["名冊現在有"] and not ade["名冊上的人會拿掉"], ade
 
 
 def test_not_a_name_on_roster_stays_out_of_global_exclusion():
@@ -538,14 +538,11 @@ def test_not_a_name_on_roster_stays_out_of_global_exclusion():
     got = [(x["canonical"], x["代號"]) for x in wd.read_json(wd.names_path(b))["candidates"] if x.get("name") == "阿強"]
     assert got and all(g == ("阿明", "凱文") for g in got), got
     assert {r["寫法"]: r["代號"] for r in epcodes.replace_table(b)}["阿強"] == "凱文"
-    # C 這一集：不換；排計畫時阿強那幾處不生成、不消音
-    assert "阿強" not in {r["寫法"] for r in epcodes.replace_table(c)}
-    cands = wd.read_json(wd.names_path(c))["candidates"]
-    idx = {k for k, x in enumerate(cands, start=1) if x.get("name") == "阿強"}
-    assert idx and all(not cands[k - 1]["代號"] for k in idx)
-    plan = nameplan.compute_plan(c)
-    used = {i for g in plan["生成"] for i in g.get("候選", [])} | {m.get("候選") for m in plan.get("消音", [])}
-    assert not (idx & used), (idx, plan["生成"], plan.get("消音"))
+    # C 這一集（第四輪審查）：決定時名冊上就有阿強（阿明的其他寫法）→ 照舊跟名冊換掉，不留原聲；③ 那列警告
+    assert {r["寫法"]: r["代號"] for r in epcodes.replace_table(c)}["阿強"] == "湯姆"
+    _removed(c, "阿強")
+    assert next(u for u in personnames.mentioned(c, chosen={"小美", "阿明"}) if u["名字"] == "阿強")["名冊上的人會拿掉"]
+    assert nameplan
     # 名冊上沒有的詞照舊寫進排除清單
     personnames.decide(c, "路人甲", "不是名字")
     assert "路人甲" in ex.read_text(encoding="utf-8")
@@ -637,6 +634,61 @@ def test_restore_when_alias_removed_from_roster_by_hand():
     got = _ade(w)
     assert got and all(x == ("阿德", "") for x in got), got
     assert all(epcodes.ORIG_KEY not in c for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿德")
+
+
+def _removed(w: Path, spelling: str) -> None:
+    """這個寫法在成品計畫裡被處理（換成代號或換成空的），生成的句子裡不出現它；學員重念的替換表也會換掉它。"""
+    idx, plan = _plan_used(w, lambda x: x.get("name") == spelling)
+    used = {i for g in plan["生成"] for i in g.get("候選", [])} | {m.get("候選") for m in plan.get("消音", [])}
+    assert idx and idx <= used, (spelling, idx, plan["生成"], plan.get("消音"))
+    assert not any(spelling in (g.get("text") or "") for g in plan["生成"]), plan["生成"]
+    assert any(r["寫法"] == spelling for r in epcodes.replace_table(w)), spelling
+
+
+def test_roster_spelling_not_needed_is_removed_x1_x2_x3():
+    """第四輪審查 exp10：決定當時名冊上就有這個寫法，選不用處理／不是名字一律照舊拿掉重念、③ 有警告，不看「書中人物」標記。
+    X1：名冊「小美：美美、阿德」，③ 阿德選不用處理／不是名字；X2：小美被標書中人物、選不用處理；X3：小美選不是名字。"""
+    for how in ("不用處理", "不是名字"):   # X1
+        w = _make()
+        _two(w)
+        (_DATA / "名冊.csv").write_text("中文名,其他寫法,性別\n小美,美美、阿德,女\n阿明,,男\n", encoding="utf-8")
+        personnames.request_rescan(w)
+        personnames.wait_rescan(w)
+        personnames.decide(w, "阿德", how)
+        _removed(w, "阿德")
+        ade = next(u for u in personnames.mentioned(w, chosen={"阿明"}) if u["名字"] == "阿德")
+        assert ade["名冊上的人會拿掉"] and not ade["名冊現在有"], (how, ade)
+    w = _make()   # X2
+    pp = personnames.people_path(w)
+    d = json.loads(pp.read_text(encoding="utf-8"))
+    d["人名"].append({"id": "P009", "名字": "小美", "其他寫法": [], "是誰": "書中人物或作者", "說明": "", "句子": ["00_019"],
+                    "次數": 1, "老師說": 1, "學員說": 0, "第一次": 76.3})
+    pp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    personnames.decide(w, "小美", "不用處理")
+    _removed(w, "小美")
+    mei = next(u for u in personnames.mentioned(w) if u["名字"] == "小美")
+    assert mei["名冊上的人會拿掉"], mei
+    w = _make()   # X3
+    personnames.decide(w, "小美", "不是名字")
+    _removed(w, "小美")
+    assert next(u for u in personnames.mentioned(w) if u["名字"] == "小美")["名冊上的人會拿掉"]
+    (_DATA / "名冊.csv").write_text(_ROSTER, encoding="utf-8")
+
+
+def test_s1_roster_added_later_keeps_original_with_note():
+    """上一輪 S1：決定時名冊沒有阿德（不用處理），之後別支影片加成小美的其他寫法 → 照 (a) 留原聲，③ 提醒「名冊現在有這個名字」。"""
+    w = _make()
+    _two(w)
+    personnames.decide(w, "阿德", "不用處理")
+    _other_video_aliases("小美", "阿德")
+    personnames.request_rescan(w)
+    personnames.wait_rescan(w)
+    idx, plan = _plan_used(w, lambda x: x.get("name") == "阿德")
+    used = {i for g in plan["生成"] for i in g.get("候選", [])} | {m.get("候選") for m in plan.get("消音", [])}
+    assert idx and not (idx & used), (idx, plan["生成"])
+    ade = next(u for u in personnames.mentioned(w, chosen={"小美", "阿明"}) if u["名字"] == "阿德")
+    assert ade["名冊現在有"] and not ade["名冊上的人會拿掉"], ade
+    (_DATA / "名冊.csv").write_text(_ROSTER, encoding="utf-8")
 
 
 def test_roster_alias_split_like_load_roster():
@@ -780,8 +832,9 @@ const { makeEnv } = require(process.argv[2]);
     rv.data = {
       "提到的名字": [
         row({"名字": "阿德", "名冊本名": "小美", "做法": "是上面的學員", "同一人": "小美", "代號": "艾瑪", "已決定": true}),
-        row({"名字": "阿得", "名冊本名": "小美", "做法": "不用處理", "已決定": true, "名冊上是別人": "小美"}),
+        row({"名字": "阿得", "名冊本名": "小美", "做法": "不用處理", "已決定": true, "名冊上是別人": "小美", "名冊現在有": true}),
         row({"名字": "小華", "名冊本名": "小華", "做法": "不是名字", "已決定": true, "名冊上的人會拿掉": true}),
+        row({"名字": "小蘭", "名冊本名": "小蘭", "做法": "不用處理", "已決定": true, "名冊上的人會拿掉": true}),
         row({"名字": "小美", "名冊本名": "小美", "② 已決定": true, "做法": "換成代號", "代號": "艾瑪", "已決定": true}),
         row({"名字": "美美", "名冊本名": "小美", "② 已決定": true, "做法": "換成代號", "代號": "艾瑪", "已決定": true}),
         row({"名字": "阿明", "名冊本名": "阿明", "② 已決定": true, "做法": "換成代號", "代號": "湯姆", "已決定": true})],
@@ -819,9 +872,12 @@ def test_web_same_person_row_and_two_summary():
     assert 'data-unname="阿德"' in html and 'value="same:小美" selected>同一人：小美（艾瑪）' in html, html
     assert 'value="code:貝拉"' in html and 'value="how:不是名字"' in html
     # 審查 A：名冊上是別人的寫法、這一集選「不用處理」：那列提醒會念出原名（只有那一列）
-    assert html.count("rv-ownwarn") == 2 and "名冊上這是小美的另一種寫法，選「不用處理」這一集會念出原名" in html, html
-    # 第三輪審查：名冊上的人選了不用處理／不是名字 → 照實警告會把名字拿掉重念
-    assert html.count("這是名冊上的人，成品會把名字拿掉重念") == 1, html
+    # 第四輪審查：名冊上有這個寫法、選了不用處理／不是名字（兩種都要）→ 警告會拿掉重念；舊的「會念出原名」那句拿掉
+    assert html.count("這是名冊上的人，成品會把名字拿掉重念") == 2 and "會念出原名" not in html, html
+    # 決定時名冊沒有、名冊現在才有（照原聲留著）→ 提醒
+    assert html.count("名冊現在有這個名字") == 1, html
+    # ③ 說明補一句：名冊上的人選不用處理也會拿掉名字；書中人物同名用「＋新增修改」
+    assert "名冊上的人選「不用處理」也會拿掉名字" in html and "＋新增修改" in html
     # ② 摘要只列 ② 的學員、用名冊本名（同一人的幾種寫法只列一次）
     assert "② 已經定好的學員（2 個）：小美 → 艾瑪、阿明 → 湯姆<" in html, html
     # ② 還沒選學員：選單裡一行灰字說明為什麼沒有「同一人」
