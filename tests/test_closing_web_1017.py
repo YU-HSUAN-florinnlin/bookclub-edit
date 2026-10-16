@@ -243,6 +243,34 @@ def test_4_closed_step3_prep_tabs_get_ws_nav_on_page():
     assert b["tabs"] and not any(b["tabs"]) and not b["start"], b
 
 
+def test_3b_closed_step3_shortcuts_do_nothing():
+    """已結案的第 3 步：Enter（通過）／E／空白鍵／J／L／I／O 不做事（以前「通過＝剪掉這段」先跳確認、按了確定沒反應）；↑↓ 換卡片照樣可以。"""
+    if not NODE:
+        print("（沒有 node，略過）")
+        return
+    import test_cards_snapshot as cs
+
+    spec = cs._scenarios(cs._items())[0]
+    prog = """
+          setup(); rv.cur = "名字:1"; rv.open = false; rvRenderCard(); H.log.length = 0;
+          const kd = H.docListeners.filter((l) => l.type === "keydown");
+          const ev = (key) => ({key, keyCode: 0, target: {tagName: "DIV", id: "", closest: () => null}, preventDefault() {}, isComposing: false});
+          for (const key of ["Enter", "e", " ", "j", "l", "i", "o"]) for (const l of kd) await l.fn(ev(key));
+          const log = H.log.filter((x) => ["POST", "confirm", "alert"].includes(x[0]));
+          const open = rv.open, edOpen = !!(rv.ed && rv.ed.open), before = rv.cur;
+          for (const l of kd) await l.fn(ev("ArrowDown"));
+          return {n: kd.length, log, open, edOpen, moved: rv.cur !== before};"""
+    got = _harness([Path(f).name for f in cs.STEP3_FILES], spec["前置"], [
+        {"名稱": "已結案", "程式": "wsClosed = () => true;" + prog},
+        {"名稱": "沒結案", "程式": "wsClosed = () => false;" + prog},
+    ])
+    a, b = got["已結案"], got["沒結案"]
+    assert a.get("n", 0) >= 1, a
+    assert a["log"] == [] and not a["open"] and not a["edOpen"], a
+    assert a["moved"], a                      # ↑↓ 換卡片只是看
+    assert b["log"] or b["open"] or b["edOpen"], b   # 沒結案：快捷鍵照常（對照組）
+
+
 # ---------------------------------------------------------------------------
 # 5. 已打包後又輸出新成品：直接寫那一句、清掉鈕灰掉
 # ---------------------------------------------------------------------------

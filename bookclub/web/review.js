@@ -1478,6 +1478,8 @@ function rvStartTimeTracking() {
 
 document.addEventListener("keydown", (e) => {
   if (currentRouteId() !== "step3" || !rv.data) return;
+  // 10-17：已結案只能看紀錄——跟第 5 步一樣，只留 ↑↓ 換卡片（以前 Enter「通過＝剪掉這段」先跳確認、按了確定卻沒反應）
+  if (typeof wsClosed === "function" && wsClosed() && e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   // 09-30 宇軒：中文輸入法選字按的 Enter 不算快捷鍵（以前會被當成「通過」，卡片重畫後游標跑掉，再按 ↓ 就跳到下一筆）
   if (e.isComposing || e.keyCode === 229) return;
   if (document.querySelector("dialog[open]")) return;   // 確認視窗開著時，快捷鍵不作用
