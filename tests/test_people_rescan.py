@@ -327,8 +327,9 @@ def test_same_person_row_stays_in_three():
     assert len(mei) == 1 and mei[0]["名字"] == "小美" and mei[0]["次數"] == before, (mei, before)
 
 
-def test_same_person_can_change_back_and_alias_removed():
-    """改掉「同一人：小美」：只拿掉這次加的其他寫法（名冊原本的「美美」不動）；老師提到阿德的地方跟著換成新的英文名。"""
+def test_same_person_can_change_back_episode_only():
+    """改掉「同一人：小美」（審查 A）：名冊是全域、多支影片共用，**不從名冊拿掉**寫法；這一集自己蓋過去——
+    老師提到阿德的地方換成新選的英文名，小美照舊。"""
     w = _make()
     _two(w)
     personnames.decide(w, "阿德", "是上面的學員", same_as="小美")
@@ -337,23 +338,147 @@ def test_same_person_can_change_back_and_alias_removed():
     assert ade_c and all(c["canonical"] == "小美" for c in ade_c)
     personnames.decide(w, "阿德", "換成代號", "傑克")
     personnames.wait_rescan(w)
-    assert _roster_alts("小美") == ["美美"], _roster_alts("小美")
-    from bookclub import names
-
-    assert any(r["寫法"] == "阿德" and r["canonical"] == "阿德" for r in names.load_roster(_DATA / "名冊.csv"))
+    assert _roster_alts("小美") == ["美美", "阿德"], _roster_alts("小美")   # 名冊不動
     codes = epcodes.episode_codes(w)
     assert codes.get("阿德") == "傑克" and codes.get("小美") == "艾瑪", codes
     ade_c = [c for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿德"]
     assert ade_c and all((c["canonical"], c["代號"]) == ("阿德", "傑克") for c in ade_c), ade_c
+    tab = {r["寫法"]: r["代號"] for r in epcodes.replace_table(w)}
+    assert tab["阿德"] == "傑克" and tab["小美"] == "艾瑪" and tab["美美"] == "艾瑪", tab
     ade = next(u for u in personnames.mentioned(w, chosen={"小美", "阿明"}) if u["名字"] == "阿德")
     assert (ade["做法"], ade["代號"], ade["同一人"], ade["② 已決定"]) == ("換成代號", "傑克", None, False)
-    # 再改成「不是名字」：老師提到阿德的地方不算缺英文名
+    # 再改成「不是名字」：這一集不換，老師提到阿強的地方不算缺英文名
     personnames.decide(w, "阿強", "是上面的學員", same_as="阿明")
     personnames.wait_rescan(w)
     personnames.decide(w, "阿強", "不是名字")
-    assert _roster_alts("阿明") == []
-    assert all(c["canonical"] == "阿強" for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿強")
-    assert "阿強" not in epcodes.missing(w) and "阿明" in epcodes.episode_codes(w)
+    assert _roster_alts("阿明") == ["阿強"]
+    assert all(c["canonical"] == "阿強" and not c["代號"] for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿強")
+    assert "阿強" not in epcodes.missing(w) and "阿明" not in epcodes.missing(w)
+    assert "阿強" not in {r["寫法"] for r in epcodes.replace_table(w)} and epcodes.episode_codes(w)["阿明"] == "湯姆"
+
+
+def _two_workdirs():
+    """兩支影片（兩個工作區）共用一份名冊；兩邊 ② 都選了小美、阿明（英文名不一樣）。"""
+    from bookclub import turns as turns_mod
+
+    a = _make()
+    b = _make()   # _make 會把名冊寫回原本的樣子：兩個都先建好再開始選
+    _two(a)
+    turns_mod.set_name_code(b, "小美", "貝拉", add_roster=False)
+    turns_mod.set_name_code(b, "阿明", "凱文", add_roster=False)
+    return a, b
+
+
+def _b_state(b: Path) -> dict:
+    epcodes.sync(b)
+    tab = {r["寫法"]: r["代號"] for r in epcodes.replace_table(b)}
+    cands = [(c["canonical"], c["代號"]) for c in wd.read_json(wd.names_path(b))["candidates"] if c.get("name") == "阿德"]
+    return {"表": tab.get("阿德"), "候選": cands, "缺": epcodes.missing(b)}
+
+
+def test_other_video_keeps_alias_when_this_one_changes():
+    """審查 A 重現一：A、B 都選「同一人：小美」（B 因名冊已經有阿德沒記），A 改「不用處理」→ B 照舊把阿德換成 B 的小美。"""
+    a, b = _two_workdirs()
+    personnames.decide(a, "阿德", "是上面的學員", same_as="小美")
+    personnames.wait_rescan(a)
+    personnames.decide(b, "阿德", "是上面的學員", same_as="小美")
+    personnames.wait_rescan(b)
+    want = _b_state(b)
+    assert want["表"] == "貝拉" and want["候選"] and all(x == ("小美", "貝拉") for x in want["候選"]), want
+    personnames.decide(a, "阿德", "不用處理")
+    personnames.wait_rescan(a)
+    assert _b_state(b) == want, (_b_state(b), want)
+    # A 這一集：阿德不換（照老師的選擇），③ 那列提醒名冊上這是小美的另一種寫法
+    assert "阿德" not in {r["寫法"] for r in epcodes.replace_table(a)}
+    assert all(not c["代號"] for c in wd.read_json(wd.names_path(a))["candidates"] if c.get("name") == "阿德")
+    ade = next(u for u in personnames.mentioned(a, chosen={"小美", "阿明"}) if u["名字"] == "阿德")
+    assert ade["做法"] == "不用處理" and ade["名冊上是別人"] == "小美" and not ade["② 已決定"], ade
+
+
+def test_other_video_relying_on_roster_not_affected():
+    """審查 A 重現二：B 沒決定、靠名冊認出阿德＝小美；A 改「換成代號 X」→ A 的阿德念 X，B 照舊、第 4 步照樣不缺。"""
+    a, b = _two_workdirs()
+    personnames.decide(a, "阿德", "是上面的學員", same_as="小美")
+    personnames.wait_rescan(a)
+    personnames.request_rescan(b)
+    personnames.wait_rescan(b)
+    want = _b_state(b)
+    assert want["表"] == "貝拉" and want["候選"] and all(x == ("小美", "貝拉") for x in want["候選"]), want
+    personnames.decide(a, "阿德", "換成代號", "傑克")
+    personnames.wait_rescan(a)
+    assert _b_state(b) == want, (_b_state(b), want)
+    assert {r["寫法"]: r["代號"] for r in epcodes.replace_table(a)}["阿德"] == "傑克"
+    assert epcodes.episode_codes(a)["小美"] == "艾瑪" and epcodes.episode_codes(a)["阿德"] == "傑克"
+
+
+def test_old_format_same_decision_changed_uses_new_pick():
+    """舊格式的「同一人」決定（沒記加了哪些寫法，名冊上阿德已經是小美的其他寫法）改成換成代號：用新選的，不被 ② 的小美蓋掉。"""
+    w = _make()
+    _two(w)
+    (_DATA / "名冊.csv").write_text("中文名,其他寫法,性別\n小美,美美、阿德,女\n阿明,,男\n", encoding="utf-8")
+    wd.write_json(personnames.decisions_path(w), {
+        "阿德": {"做法": "是上面的學員", "代號": "艾瑪", "同一人": "小美", "更新時間": "2026-10-10T10:00:00"}})
+    personnames.request_rescan(w)
+    personnames.wait_rescan(w)
+    personnames.decide(w, "阿德", "換成代號", "傑克")
+    personnames.wait_rescan(w)
+    codes = epcodes.episode_codes(w)
+    assert codes["阿德"] == "傑克" and codes["小美"] == "艾瑪", codes
+    ade_c = [c for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿德"]
+    assert ade_c and all((c["canonical"], c["代號"]) == ("阿德", "傑克") for c in ade_c), ade_c
+    ade = next(u for u in personnames.mentioned(w, chosen={"小美", "阿明"}) if u["名字"] == "阿德")
+    assert (ade["做法"], ade["代號"], ade["② 已決定"]) == ("換成代號", "傑克", False), ade
+
+
+def _scan_then_hold():
+    """補找：先照當下的名冊掃完，再卡住等放行才接上（模擬「掃完還沒接上」時有人改決定）。只卡第一輪。"""
+    gate, scanned = threading.Event(), threading.Event()
+    real = personnames._scan_teacher
+
+    def fake(workdir):
+        res = real(workdir)
+        if not scanned.is_set():
+            scanned.set()
+            gate.wait(30)
+        return res
+
+    personnames._scan_teacher = fake
+    return gate, scanned, real
+
+
+def test_change_while_rescan_not_merged_yet():
+    """審查 B（exp3）：補找掃完、還沒接上時改決定 → 接上的阿德照新的決定（換成代號 傑克／不用處理），不會變成小美的英文名。"""
+    for how, code, want in (("換成代號", "傑克", "傑克"), ("不用處理", None, "")):
+        w = _make()
+        _two(w)
+        gate, scanned, real = _scan_then_hold()
+        try:
+            personnames.decide(w, "阿德", "是上面的學員", same_as="小美")
+            assert scanned.wait(60)   # 背景已經用「阿德＝小美」的名冊掃完，卡在接上之前
+            personnames.decide(w, "阿德", how, code)
+            gate.set()
+            st = personnames.wait_rescan(w, 120)
+            assert not st["補找中"] and not st["錯誤"], st
+        finally:
+            personnames._scan_teacher = real
+            gate.set()
+            personnames.wait_rescan(w, 60)
+        got = [(c["canonical"], c["代號"]) for c in wd.read_json(wd.names_path(w))["candidates"] if c.get("name") == "阿德"]
+        assert got and all(x == ("阿德", want) for x in got), (how, got)
+
+
+def test_roster_alias_split_like_load_roster():
+    """審查 C：名冊的其他寫法用「, 」「/」分開時，加寫法不重複加、不弄掉原本的。"""
+    from bookclub import names
+
+    for alts in ("美美, 阿德", "美美/阿德", "美美，阿德"):
+        (_DATA / "名冊.csv").write_text(f"中文名,其他寫法,性別\n小美,\"{alts}\",女\n阿明,,男\n", encoding="utf-8")
+        assert personnames.add_roster_alias("小美", ["阿德", " 美美 "]) == [], alts
+        assert (_DATA / "名冊.csv").read_text(encoding="utf-8").count("阿德") == 1, alts
+        assert personnames.add_roster_alias("小美", ["阿德", "小美美"]) == ["小美美"], alts
+        got = sorted(r["寫法"] for r in names.load_roster(_DATA / "名冊.csv") if r["canonical"] == "小美")
+        assert got == ["小美", "小美美", "美美", "阿德"], (alts, got)
+    (_DATA / "名冊.csv").write_text(_ROSTER, encoding="utf-8")
 
 
 def test_same_person_keeps_roster_alias_that_was_there_before():
@@ -483,6 +608,7 @@ const { makeEnv } = require(process.argv[2]);
     rv.data = {
       "提到的名字": [
         row({"名字": "阿德", "名冊本名": "小美", "做法": "是上面的學員", "同一人": "小美", "代號": "艾瑪", "已決定": true}),
+        row({"名字": "阿得", "名冊本名": "小美", "做法": "不用處理", "已決定": true, "名冊上是別人": "小美"}),
         row({"名字": "小美", "名冊本名": "小美", "② 已決定": true, "做法": "換成代號", "代號": "艾瑪", "已決定": true}),
         row({"名字": "美美", "名冊本名": "小美", "② 已決定": true, "做法": "換成代號", "代號": "艾瑪", "已決定": true}),
         row({"名字": "阿明", "名冊本名": "阿明", "② 已決定": true, "做法": "換成代號", "代號": "湯姆", "已決定": true})],
@@ -519,6 +645,8 @@ def test_web_same_person_row_and_two_summary():
     # 阿德在 ③ 列出、下拉選單是「同一人：小美（艾瑪）」，可以改成別的
     assert 'data-unname="阿德"' in html and 'value="same:小美" selected>同一人：小美（艾瑪）' in html, html
     assert 'value="code:貝拉"' in html and 'value="how:不是名字"' in html
+    # 審查 A：名冊上是別人的寫法、這一集選「不用處理」：那列提醒會念出原名（只有那一列）
+    assert html.count("rv-ownwarn") == 1 and "名冊上這是小美的另一種寫法，選「不用處理」這一集會念出原名" in html, html
     # ② 摘要只列 ② 的學員、用名冊本名（同一人的幾種寫法只列一次）
     assert "② 已經定好的學員（2 個）：小美 → 艾瑪、阿明 → 湯姆<" in html, html
     # ② 還沒選學員：選單裡一行灰字說明為什麼沒有「同一人」
