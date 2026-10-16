@@ -131,7 +131,8 @@ def test_corrupt_once_resaved_twice_stops():
         job = _run(w, loc2, fail_hook=lambda rel, n: rel == "逐字稿.srt")
         assert job.state == "失敗" and "存過去不一樣（逐字稿.srt）" in job.error
         rec = closing.read_record(w)
-        assert rec["狀態"] == closing.PACKING and rec["打包"][-1]["核對"] == "還沒"
+        # 前一次已經核對通過：狀態留「已打包」（審查建議），這一筆沒核對完
+        assert rec["狀態"] == closing.PACKED and rec["打包"][-1]["核對"] == "還沒"
         assert list((loc2 / closing.PACK_ROOT).glob(f"*{closing.PACKING_SUFFIX}"))   # 資料夾名稱還帶「_打包中」
         assert not list(loc2.rglob(f"*{closing.PACK_TMP_SUFFIX}"))                    # 暫存檔清掉了
 
@@ -385,12 +386,191 @@ def test_js_close_box_view():
         clView({...base, "狀態": "已結案", "只有紀錄": true}),
       ]));"""
     v = json.loads(subprocess.run([node, "-e", code], capture_output=True, text=True, check=True).stdout)
-    assert v[0]["btn"] == "結案打包…" and "共 2.6 GB" in v[0]["line"] and not v[0]["warn"] and not v[0]["status"]
-    assert "含複製進來的那支原始影片" in v[1]["line"] and v[1]["warn"] == "最後輸出的是第 2 版，最新是第 3 版。"
+    assert v[0]["btn"] == "結案打包…" and v[0]["line"] == "會把成品影片、逐字稿、修改紀錄存到你選的地方。"
+    assert not v[0]["warn"] and not v[0]["status"]
+    assert v[1]["warn"] == "最後輸出的是第 2 版，最新是第 3 版。"
     assert v[2]["btn"] == "再存一份…" and "已存好" in v[2]["status"] and "第一堂_20261016" in v[2]["status"]
     assert v[3]["resume"] and v[3]["status"] == "上次存到一半。"
     assert v[4]["running"] and v[4]["status"] == "正在存…（第 2／9 個檔）"
     assert v[5]["btn"] == "再存一份紀錄…" and "只存逐字稿和紀錄" in v[5]["line"]
+
+
+# ---------- 第 2 段審查修正 ----------
+
+def test_fix1_missing_final_product_blocks_and_marks_has_product():
+    """必修 1：輸出紀錄記的最終成品不在 → 不能打包（不會「核對通過」卻沒有成品，第 3 段就會把成品全清掉）；
+    有成品的打包記 `含成品: true`。"""
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        job = _run(w, loc)
+        assert job.state == "已存好" and closing.read_record(w)["打包"][-1]["含成品"] is True
+        (w / "輸出" / "最終成品_v1_0-3_sw_20261016-101500.mp4").rename(w / "輸出" / "移走了.mp4")
+        job = _run(w, loc)
+        assert job.state == "失敗" and "找不到最後輸出的成品影片" in job.error, job.error
+        assert len(closing.read_record(w)["打包"]) == 1   # 沒有新增一筆
+        try:
+            closing.pack_items(w)
+            raise AssertionError("應該擋下")
+        except closing.PackError:
+            pass
+        st = closing.pack_state(w)
+        assert st["成品不在"] is True
+        httpd, base = _serve(w)
+        try:
+            code, st = _call(base, "/api/close/state")
+            assert not st["可以打包"] and "找不到最後輸出的成品影片" in st["不行的原因"]
+            code, r = _call(base, "/api/close/pack", {"位置": "自己選", "路徑": str(loc)})
+            assert code == 400 and "找不到最後輸出的成品影片" in r["error"]
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
+class _Running:
+    running = True
+    purpose = "結案打包"
+    workdir = None
+
+    def to_dict(self):
+        return {"狀態": "存檔中"}
+
+
+def test_fix2_packing_blocks_execute_export_analyze():
+    """必修 2：結案打包在存時，第 4 步開始、第 5 步輸出成品（含輸出舊版）、影片分析都擋下。"""
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t))
+        httpd, base = _serve(w)
+        try:
+            httpd.close_job = _Running()
+            code, r = _call(base, "/api/execute/start", {})
+            assert code == 409 and "結案打包正在存" in r["error"], r
+            code, r = _call(base, "/api/run/analyze", {})
+            assert code == 409 and "結案打包正在存" in r["error"], r
+            code, r = _call(base, "/api/final/export", {"確定": True})
+            assert code in (400, 409) and "結案打包正在存" in r["error"], r
+            code, r = _call(base, "/api/final/export", {"確定": True, "版本": 99})
+            assert code in (400, 409) and "結案打包正在存" in r["error"], r
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
+class _TouchSource(closing.PackJob):
+    """存最終成品的時候，來源檔被改了（例如有人又輸出了一次）。"""
+
+    def _copy(self, src, data, tmp):
+        got = super()._copy(src, data, tmp)
+        if src is not None and src.suffix == ".mp4" and "最終成品" in src.name:
+            with open(src, "ab") as f:
+                f.write(b"x")
+        return got
+
+
+def test_fix2_source_changed_while_copying_fails():
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        job = _TouchSource(w, loc)
+        job.run()
+        assert job.state == "失敗" and "存的時候工作區裡的檔案變了" in job.error, job.error
+        assert "Error" not in job.error
+        assert closing.read_record(w)["打包"][-1]["核對"] != "通過"
+
+
+def test_fix3_state_does_not_probe_locations():
+    """必修 3：`/api/close/state` 不叫 `pack_locations`（WSL 上會啟動 PowerShell）；要位置選項另外問 `/api/close/locations`。"""
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t))
+        calls = []
+        orig = closing.pack_locations
+        closing.pack_locations = lambda *a, **k: calls.append(1) or [{"代號": "自己選"}]
+        httpd, base = _serve(w)
+        try:
+            st = _call(base, "/api/close/state")[1]
+            assert "位置選項" not in st and calls == []
+            code, r = _call(base, "/api/close/locations")
+            assert code == 200 and r["位置選項"] == [{"代號": "自己選"}] and calls == [1]
+        finally:
+            closing.pack_locations = orig
+            httpd.shutdown()
+            httpd.server_close()
+
+
+def test_fix_os_error_messages_plain():
+    import errno
+
+    m = closing.os_message
+    assert "4 GB" in m(OSError(errno.EFBIG, "File too large")) and "OSError" not in m(OSError(errno.EFBIG, "x"))
+    assert "路徑太長" in m(OSError(errno.ENAMETOOLONG, "x"))
+    assert "滿了" in m(OSError(errno.ENOSPC, "x"))
+    assert "拔掉" in m(OSError(errno.EIO, "x")) and "拔掉" in m(OSError(errno.ENOENT, "x"))
+    assert "Error" not in m(OSError(errno.EIO, "Input/output error"))
+
+
+def test_fix_repack_stopped_keeps_packed_state():
+    """建議：已經有核對通過的打包，再存一份中途停掉 → 狀態留「已打包」（不倒退成打包中）。"""
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        assert _run(w, loc).state == "已存好"
+        job = _StopAfter(w, loc, stop_after=2)
+        job.run()
+        assert job.state == "停止" and closing.read_record(w)["狀態"] == closing.PACKED
+        assert closing.pack_state(w)["可以繼續"]
+
+
+def test_fix_resume_after_rename_before_record():
+    """建議：改名成正式名稱之後、還沒寫 結案.json 就當掉 →「繼續」找得到去掉 `_打包中` 的同名資料夾，重新核對。"""
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        assert _run(w, loc).state == "已存好"
+        rec = closing.read_record(w)
+        e = rec["打包"][-1]
+        e.update({"核對": "還沒", "資料夾": e["資料夾"] + closing.PACKING_SUFFIX})
+        rec["狀態"] = closing.PACKING
+        wd.write_json(closing.record_path(w), rec)
+        assert closing.pack_state(w)["可以繼續"]
+        again = _StopAfter(w, loc, resume=True)
+        again.run()
+        assert again.state == "已存好" and again.log == [], (again.error, again.log)   # 都對得上：一個都不用重存
+        assert closing.read_record(w)["打包"][-1]["核對"] == "通過"
+        assert not (loc / closing.PACK_ROOT / f"第一堂_{DAY} (2)").exists()
+
+
+def test_fix_resume_space_counts_saved_part():
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        job = _StopAfter(w, loc, stop_after=1)   # 第一個檔（最終成品 300 KB）存好了
+        job.run()
+        folder = Path(closing.read_record(w)["打包"][-1]["資料夾"])
+        need = closing.pack_size(closing.pack_items(w))
+        assert closing.remaining_bytes(closing.pack_items(w), folder) <= need - 300_000
+
+
+def test_fix_reveal_and_ubuntu_warning():
+    assert closing.ubuntu_inside_warning("wsl", "/home/老師/結案") and "Windows 看不到" in \
+        closing.ubuntu_inside_warning("wsl", "/home/老師/結案")
+    assert closing.ubuntu_inside_warning("wsl", "/mnt/d/結案") is None
+    assert closing.ubuntu_inside_warning("mac", "/Users/老師/Downloads") is None
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        httpd, base = _serve(w)
+        orig = fileio.reveal
+        seen = []
+        fileio.reveal = lambda p, **k: seen.append(Path(p)) or "打開了"
+        try:
+            assert _call(base, "/api/close/reveal", {})[0] == 400   # 還沒存好
+            _run(w, loc)
+            code, r = _call(base, "/api/close/reveal", {})
+            assert code == 200 and seen == [loc / closing.PACK_ROOT / f"第一堂_{DAY}"], (r, seen)
+        finally:
+            fileio.reveal = orig
+            httpd.shutdown()
+            httpd.server_close()
 
 
 if __name__ == "__main__":

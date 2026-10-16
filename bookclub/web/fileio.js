@@ -287,8 +287,8 @@ function clView(d) {
   const job = d["工作"];
   const running = !!(job && ["等待", "存檔中", "核對中"].includes(job["狀態"]));
   const st = d["狀態"];
-  const line = d["只有紀錄"] ? "影片已經清掉了，這次只存逐字稿和紀錄。"
-    : `會把成品影片、逐字稿、修改紀錄存到你選的地方，然後刪掉這裡的暫存檔（共 ${clGB(d["暫存大小"])}${d["系統"] === "wsl" ? "，含複製進來的那支原始影片" : ""}）。`;
+  // 第 2 段審查建議：清空間（第 3 段）接上 clean_plan 之前，不提「刪掉暫存檔」與大小
+  const line = d["只有紀錄"] ? "影片已經清掉了，這次只存逐字稿和紀錄。" : "會把成品影片、逐字稿、修改紀錄存到你選的地方。";
   const warn = d["不是最新版"] ? `最後輸出的是第 ${d["最後輸出版本"]} 版，最新是第 ${d["最新版本"]} 版。` : "";
   const btn = st === "已結案" ? "再存一份紀錄…" : (st === "已打包" ? "再存一份…" : "結案打包…");
   let status = "", statusKind = "";
@@ -300,7 +300,8 @@ function clView(d) {
     status = `已存好，每個檔都核對過了。存在：${(job && job["資料夾"]) || ok["資料夾"] || ok["位置顯示"] || ""}`;
     statusKind = "done";
   } else if (d["可以繼續"]) status = "上次存到一半。";
-  return { running, line, warn, btn, status, statusKind, resume: !running && !!d["可以繼續"] };
+  return { running, line, warn, btn, status, statusKind, resume: !running && !!d["可以繼續"],
+           reveal: !running && statusKind === "done" };
 }
 
 async function closeBoxInit(box) {
@@ -317,7 +318,8 @@ async function closeBoxInit(box) {
     <div class="fo-row">
       ${v.running ? `<button class="secondary" id="cl-stop">停止</button>`
         : `<button class="secondary" id="cl-go" ${d["可以打包"] ? "" : "disabled"}>${esc(v.btn)}</button>
-           ${v.resume ? `<button class="secondary" id="cl-resume" ${d["可以打包"] ? "" : "disabled"}>繼續</button>` : ""}`}
+           ${v.resume ? `<button class="secondary" id="cl-resume" ${d["可以打包"] ? "" : "disabled"}>繼續</button>` : ""}
+           ${v.reveal ? `<button class="ghost" id="cl-open">打開資料夾</button>` : ""}`}
       ${!d["可以打包"] && !v.running && d["不行的原因"] ? `<span class="muted">${esc(d["不行的原因"])}</span>` : ""}
       <span id="cl-msg" role="status">${v.status ? (v.statusKind ? `<span class="badge ${v.statusKind}">${v.statusKind === "done" ? "已存好" : "沒有存好"}</span> ` : "") + esc(v.status) : ""}</span>
     </div>
@@ -325,11 +327,20 @@ async function closeBoxInit(box) {
       <input type="text" id="cl-path" size="50" placeholder="資料夾的完整路徑">
       <button class="secondary" id="cl-typed-go">開始存</button> <button class="ghost" id="cl-typed-no">不存了</button></div>`;
   const msg = box.querySelector("#cl-msg");
+  let note = "";   // WSL 上存在 Ubuntu 裡面時的提醒（不擋）
   const start = async (body) => {
-    try { await apiPost("/api/close/pack", body, { quiet: true }); }
+    let r;
+    try { r = await apiPost("/api/close/pack", body, { quiet: true }); }
     catch (e) { msg.innerHTML = `<span class="badge error">沒有開始</span> ${esc(e.message)}`; return; }
-    closeBoxInit(box);
+    note = (r && r["提醒"]) || note;
+    await closeBoxInit(box);
+    if (note) box.querySelector("#cl-msg").insertAdjacentHTML("beforeend", ` <span class="rv-warnline">${esc(note)}</span>`);
   };
+  const open = box.querySelector("#cl-open");
+  if (open) open.addEventListener("click", async () => {
+    try { const r = await apiPost("/api/close/reveal", {}, { quiet: true }); msg.textContent = r["說明"] || ""; }
+    catch (e) { msg.innerHTML = `<span class="badge error">打不開</span> ${esc(e.message)}`; }
+  });
   const typed = (why) => {
     box.querySelector("#cl-typed").hidden = false;
     box.querySelector("#cl-typed-why").textContent = why || "打要存的資料夾路徑：";
@@ -346,6 +357,7 @@ async function closeBoxInit(box) {
     go.disabled = false;
     if (r["取消"]) return;                   // 按取消＝恢復原狀，什麼都不動
     if (r["退回網頁"]) { typed(r["說明"]); return; }
+    note = r["提醒"] || "";
     start({ "位置": "自己選", "路徑": r["路徑"] });
   });
   const res = box.querySelector("#cl-resume");

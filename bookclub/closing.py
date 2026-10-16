@@ -412,6 +412,35 @@ class PackError(Exception):
     """打包不能開始、或做到一半停下來（訊息是給老師看的一句）。"""
 
 
+MISSING_PRODUCT = "找不到最後輸出的成品影片，先到第 5 步重新輸出一次再打包。"
+SOURCE_CHANGED = "存的時候工作區裡的檔案變了（{}），可能剛好又輸出或組裝了一次。等它做完再按一次。"
+
+
+def os_message(e: OSError) -> str:
+    """（純函式）存檔時的系統錯誤 → 給老師看的一句（不帶錯誤名稱；細節另外印在終端機）。"""
+    import errno
+
+    if e.errno == errno.ENOSPC:
+        return "存的地方滿了，清出空間或換個位置再按「繼續」。"
+    if e.errno == errno.EFBIG:
+        return "這個隨身碟一個檔不能超過 4 GB，換個位置再試。"
+    if e.errno == errno.ENAMETOOLONG:
+        return "存的地方路徑太長，換個位置再試。"
+    if e.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
+        return "存的地方不能寫入（沒有權限或唯讀），換個位置再試。"
+    return "存的地方讀不到了，是不是拔掉了？插回去再按「繼續」。"
+
+
+def ubuntu_inside_warning(kind: str, path: str | Path) -> str | None:
+    """（純函式）WSL 上選的不是 Windows 的磁碟（`/mnt/<槽>`）：存在 Ubuntu 裡面，提醒一句（不擋）。"""
+    if kind != "wsl":
+        return None
+    parts = Path(str(path)).parts
+    if len(parts) >= 3 and parts[1] == "mnt" and len(parts[2]) == 1:
+        return None
+    return "這個位置存在 Ubuntu 裡面，Windows 看不到、也不會空出空間。"
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -462,17 +491,22 @@ def video_stem(workdir: Path) -> str:
     return workdir.name.removesuffix("_剪輯工作區")
 
 
-def pack_items(workdir: str | Path, *, records_only: bool = False) -> list[dict]:
+def pack_items(workdir: str | Path, *, records_only: bool = False, strict: bool = True) -> list[dict]:
     """要打包的檔（§3.3）：[{相對路徑（打包裡）, 來源（工作區裡的檔）或 None（現場產生的）, 產生（逐字稿／清單的種類）}]。
-    records_only：已結案後再存一份（影片已經清掉了）只存逐字稿、打包清單、紀錄。"""
+    records_only：已結案後再存一份（影片已經清掉了）只存逐字稿、打包清單、紀錄。
+    第 2 段審查必修 1：不是只存紀錄時，輸出紀錄記的最終成品不在（或還沒輸出過）→ 丟 PackError（不退回打包別的檔；
+    不然會「核對通過」卻沒有成品，第 3 段清空間就把成品全清掉）。strict=False（畫面讀狀態用）不丟，成品那一項略過。"""
     w = Path(workdir)
     out: list[dict] = []
     if not records_only:
         rec = last_export(w)
+        src = w / rec["檔案"] if rec else None
+        if src is None or not src.is_file() or src.is_symlink():
+            if strict:
+                raise PackError(MISSING_PRODUCT)
+        else:
+            out.append({"相對路徑": src.name, "來源": src, "成品": True})
         if rec:
-            src = w / rec["檔案"]
-            if src.is_file():
-                out.append({"相對路徑": src.name, "來源": src})
             prod = Path(str(rec.get("來源") or ""))
             if prod.name:
                 label = w / prod.parent / f"{prod.stem.rsplit('_', 1)[0]}_標字版{prod.suffix}"
@@ -506,6 +540,36 @@ def pack_items(workdir: str | Path, *, records_only: bool = False) -> list[dict]
 
 def pack_size(items: list[dict]) -> int:
     return sum(it["來源"].stat().st_size for it in items if it.get("來源") is not None and it["來源"].is_file())
+
+
+def remaining_bytes(items: list[dict], folder: Path | None) -> int:
+    """「繼續」還要存多少（空間檢查用）：打包資料夾裡已經在、大小對的不算（不重算檢查碼，存的時候會再核對）。"""
+    total = 0
+    for it in items:
+        src = it.get("來源")
+        if src is None or not src.is_file():
+            continue
+        n = src.stat().st_size
+        dst = folder / it["相對路徑"] if folder else None
+        if dst is not None and dst.is_file() and dst.stat().st_size == n:
+            continue
+        total += n
+    return total
+
+
+def resume_folder(entry: dict | None) -> Path | None:
+    """上次沒核對完的那一次打包，「繼續」要用的資料夾：記的 `…_打包中` 還在就用它；不在、但同位置去掉 `_打包中` 的
+    同名資料夾在（改名完成、還沒寫 `結案.json` 就當掉）也用它（重新核對）。都沒有＝None。"""
+    if not entry or entry.get("核對") == "通過" or not entry.get("資料夾"):
+        return None
+    p = Path(entry["資料夾"])
+    if p.is_dir() and not p.is_symlink():
+        return p
+    if p.name.endswith(PACKING_SUFFIX):
+        alt = p.with_name(p.name.removesuffix(PACKING_SUFFIX))
+        if alt.is_dir() and not alt.is_symlink():
+            return alt
+    return None
 
 
 def clean_estimate(workdir: str | Path) -> int:
@@ -629,15 +693,11 @@ class PackJob:
         except PackError as e:
             self.state, self.error = ("停止" if self._cancel.is_set() else "失敗"), str(e)
         except OSError as e:
-            import errno
-
-            if e.errno == errno.ENOSPC:
-                msg = "存的地方滿了，清出空間或換個位置再按「繼續」。"
-            else:
-                msg = "存的地方讀不到了，是不是拔掉了？插回去再按「繼續」。"
-            self.state, self.error = "失敗", f"{msg}（{type(e).__name__}：{e.strerror or e}）"
+            print(f"⚠️ [結案打包] {type(e).__name__}：{e}")   # 細節印終端機；畫面只給一句白話
+            self.state, self.error = "失敗", os_message(e)
         except Exception as e:  # noqa: BLE001 — 背景執行緒要把失敗記下來給網頁看
-            self.state, self.error = "失敗", f"{type(e).__name__}：{e}"
+            print(f"⚠️ [結案打包] {type(e).__name__}：{e}")
+            self.state, self.error = "失敗", "存的時候出了問題，換個位置再試；還是不行，把終端機最後幾行給開發者。"
 
     def _entry(self, rec: dict) -> dict | None:
         packs = rec.get("打包") or []
@@ -649,11 +709,7 @@ class PackJob:
         items = pack_items(w, records_only=self.records_only)
         self.total = len(items) + 1   # ＋打包清單
         last = self._entry(rec)
-        folder = None
-        if self.resume and last and last.get("核對") != "通過" and last.get("資料夾"):
-            p = Path(last["資料夾"])
-            if p.is_dir() and p.name.endswith(PACKING_SUFFIX):
-                folder = p
+        folder = resume_folder(last) if self.resume else None
         if self.resume and folder is None:
             raise PackError("找不到上次存到一半的資料夾（換了位置、或已經移走了），請重新按「結案打包…」選位置。")
         if folder is None:
@@ -664,12 +720,15 @@ class PackJob:
             folder.mkdir(parents=True)
             entry = {"時間": _now(), "位置": str(self.location), "位置顯示": self.display,
                      "版本號": export_version_info(w)["最後輸出版本"], "資料夾": str(folder), "檔案": [],
-                     "核對": "還沒", "只有紀錄": self.records_only}
+                     "核對": "還沒", "只有紀錄": self.records_only,
+                     "含成品": any(it.get("成品") for it in items)}   # 第 3 段清空間前檢查這一欄
             rec.setdefault("打包", []).append(entry)
         else:
             entry = last
         self.folder = folder
-        if rec.get("狀態") not in (CLEANING, CLOSED):
+        # 已經有核對通過的打包（再存一份）：狀態留「已打包」，中途停掉不倒退成「打包中」
+        if rec.get("狀態") not in (CLEANING, CLOSED) and not any(
+                p.get("核對") == "通過" for p in rec.get("打包") or []):
             rec["狀態"] = PACKING
         _write_record(w, rec)
         self.state = "存檔中"
@@ -690,8 +749,11 @@ class PackJob:
         for f in done:   # 最後整份再對一次大小（剛才每個檔都重讀算過檢查碼）
             if (folder / f["相對路徑"]).stat().st_size != f["大小"]:
                 raise PackError(f"有 1 個檔存過去不一樣（{f['相對路徑']}），換個位置再試。")
-        final = _numbered_dir(folder.with_name(folder.name.removesuffix(PACKING_SUFFIX)))
-        os.rename(folder, final)
+        if folder.name.endswith(PACKING_SUFFIX):
+            final = _numbered_dir(folder.with_name(folder.name.removesuffix(PACKING_SUFFIX)))
+            os.rename(folder, final)
+        else:
+            final = folder   # 上次已經改好名、還沒寫 結案.json：重新核對過了，照用
         self.folder = final
         rec = read_record(w)
         entry = self._entry(rec) or entry
@@ -722,10 +784,18 @@ class PackJob:
             if _sha(dst) == want:
                 return row(want)
         want = known
+        def stamp():
+            st = src.stat()
+            return (st.st_size, st.st_mtime_ns, st.st_ino)
+
         for attempt in (1, 2):
             tmp = dst.with_name(f".{dst.name}{PACK_TMP_SUFFIX}")
+            before = stamp() if src is not None else None
             try:
                 got = self._copy(src, data, tmp)   # 一邊讀來源一邊算 SHA-256
+                # 第 2 段審查必修 2：複製前後來源的大小、修改時間、inode 有變＝存的時候被改了（又輸出、又組裝）
+                if src is not None and (not src.is_file() or stamp() != before or before[0] != size):
+                    raise PackError(SOURCE_CHANGED.format(rel))
                 os.replace(tmp, dst)
             finally:
                 if tmp.exists():
@@ -733,7 +803,7 @@ class PackJob:
             if want is None:
                 want = got
             elif got != want:
-                raise PackError(f"來源檔在存的時候變了（{rel}），等第 4 步、輸出都停了再試。")
+                raise PackError(SOURCE_CHANGED.format(rel))
             if self._fail_hook and self._fail_hook(rel, attempt):
                 with open(dst, "r+b") as f:   # 測試：模擬寫壞一個位元組
                     b = f.read(1)
@@ -774,15 +844,17 @@ def pack_state(workdir: str | Path) -> dict:
     exp = last_export(w)
     st = rec.get("狀態")
     records_only = st == CLOSED
-    items = pack_items(w, records_only=records_only) if exp or records_only else []
+    items = pack_items(w, records_only=records_only, strict=False) if exp or records_only else []
+    missing = bool(exp) and not records_only and not any(it.get("成品") for it in items)
     ver = export_version_info(w)
-    resumable = bool(last and last.get("核對") != "通過" and last.get("資料夾") and Path(last["資料夾"]).is_dir())
+    resumable = resume_folder(last) is not None
     if ok:
         ok = {**ok, "資料夾": windows_display(ok.get("資料夾") or ""), "檔案": len(ok.get("檔案") or [])}
     return {"狀態": st, "輸出過": bool(exp), "打包大小": pack_size(items), "檔數": len(items) + (1 if items else 0),
             "暫存大小": clean_estimate(w), "最後輸出版本": ver["最後輸出版本"], "最新版本": ver["最新版本"],
             "不是最新版": bool(ver["最後輸出版本"] and ver["最新版本"] and ver["最後輸出版本"] != ver["最新版本"]),
-            "最近一次": {k: v for k, v in last.items() if k != "檔案"} if last else None, "核對通過的": ok, "可以繼續": resumable, "只有紀錄": records_only}
+            "最近一次": {k: v for k, v in last.items() if k != "檔案"} if last else None, "核對通過的": ok,
+            "成品不在": missing, "可以繼續": resumable, "只有紀錄": records_only}
 
 
 def windows_display(p: Path | str) -> str:
