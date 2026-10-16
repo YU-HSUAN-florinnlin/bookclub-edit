@@ -376,3 +376,451 @@ def disk_report(home: Path | None = None, data: Path | None = None, *, wsl: bool
     if len(lines) == 1:
         lines.append("  （沒有找到讀書會剪輯的資料夾）")
     return lines
+
+
+# ===========================================================================
+# 結案打包（32 號設計 §3，以 §1a 為準；1015-8 第 2 段）
+# ===========================================================================
+#
+# 存到哪：老師在系統的選資料夾視窗選（`fileio.pick_folder`）、或選「下載」「D 槽」——都在伺服器那邊換成一個資料夾路徑，
+# 這裡只收路徑。位置下面固定建 `讀書會剪輯結案/<影片>_<YYYYMMDD>/`，做的時候叫 `…_打包中`，全部核對過才改名成正式名稱
+# （同名已經在加 ` (2)`，不蓋掉）。每個檔：先寫 `.<檔名>.複製中`（一邊讀來源一邊算 SHA-256，寫完 fsync）→ 換正式檔名 →
+# **從目的地重讀一遍**算 SHA-256、比大小；不一樣刪掉重存一次，第二次還不一樣就停。來源是硬連結也一樣真的複製（只讀來源）。
+# 這一段不清任何東西（清空間是第 3 段）；不碰工作區裡的檔，只寫 `結案.json`。
+
+import hashlib
+import threading
+import time
+from datetime import datetime
+
+PACK_ROOT = "讀書會剪輯結案"
+PACKING_SUFFIX = "_打包中"
+PACK_MARGIN_BYTES = 200_000_000          # §3.6：存完還要留 200 MB
+PACK_LIST_NAME = "打包清單.txt"
+PACK_TMP_SUFFIX = ".複製中"
+HASH_CHUNK = 8 * 1024 * 1024
+PRIVACY_LINES = ("逐字稿和紀錄裡有學員的本名和分享內容，不要直接公開或傳給別人。",
+                 "拿去做行銷前，先挑段落、改掉名字。")
+# 要打包的紀錄（§3.3）：工作區裡的相對路徑 → 打包裡的相對路徑
+RECORD_FILES = (("生成/剪輯決策.json", "紀錄/剪輯決策.json"), ("生成/處理紀錄.json", "紀錄/處理紀錄.json"),
+                ("覆核/成品檢查.json", "紀錄/成品檢查.json"), ("分析結果.json", "紀錄/分析結果.json"),
+                ("報告.md", "紀錄/報告.md"))
+OUTPUT_RECORD_GLOBS = ("處理標記_*.md", "處理標記_*.html", "剪輯決策_*.json", "輸出摘要_*.json")
+
+
+class PackError(Exception):
+    """打包不能開始、或做到一半停下來（訊息是給老師看的一句）。"""
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def read_record(workdir: str | Path) -> dict:
+    try:
+        data = wd.read_json(record_path(workdir), default=None)
+    except (OSError, ValueError):
+        data = None
+    return data if isinstance(data, dict) else {}
+
+
+def _write_record(workdir: Path, data: dict) -> None:
+    from bookclub import __version__
+
+    data = {**data, "程式版本": __version__}
+    wd.write_json(record_path(workdir), data)
+
+
+def last_export(workdir: str | Path) -> dict | None:
+    """最後一次輸出的最終成品（成品檢查檔的 `輸出成品`）；沒輸出過＝None。"""
+    from bookclub import finalcheck
+
+    rec = (wd.read_json(finalcheck.check_path(Path(workdir)), default=None) or {}).get("輸出成品") or {}
+    return rec if rec.get("檔案") else None
+
+
+def export_version_info(workdir: str | Path) -> dict:
+    """{最後輸出版本, 最新版本}（§1a：最後輸出的不是最新版時框裡多一行紅字，不擋）。讀不到的給 None。"""
+    from bookclub import needs
+
+    n, _log = last_output_log(workdir)
+    latest = None
+    try:
+        if needs.exists(Path(workdir)):
+            v = needs.load(Path(workdir)).latest_version()
+            latest = v["版本號"] if v else None
+    except Exception:  # noqa: BLE001 — 讀不到就不提
+        latest = None
+    return {"最後輸出版本": n, "最新版本": latest}
+
+
+def video_stem(workdir: Path) -> str:
+    """打包資料夾名稱用的影片檔名（不含副檔名）：分析結果記的影片；沒有就用工作區名稱去掉「_剪輯工作區」。"""
+    v = (wd.read_json(wd.analysis_result_path(workdir), default=None) or {}).get("video")
+    if v:
+        return Path(str(v)).stem
+    return workdir.name.removesuffix("_剪輯工作區")
+
+
+def pack_items(workdir: str | Path, *, records_only: bool = False) -> list[dict]:
+    """要打包的檔（§3.3）：[{相對路徑（打包裡）, 來源（工作區裡的檔）或 None（現場產生的）, 產生（逐字稿／清單的種類）}]。
+    records_only：已結案後再存一份（影片已經清掉了）只存逐字稿、打包清單、紀錄。"""
+    w = Path(workdir)
+    out: list[dict] = []
+    if not records_only:
+        rec = last_export(w)
+        if rec:
+            src = w / rec["檔案"]
+            if src.is_file():
+                out.append({"相對路徑": src.name, "來源": src})
+            prod = Path(str(rec.get("來源") or ""))
+            if prod.name:
+                label = w / prod.parent / f"{prod.stem.rsplit('_', 1)[0]}_標字版{prod.suffix}"
+                if label.is_file():
+                    out.append({"相對路徑": label.name, "來源": label})
+    if wd.merged_transcript_path(w).is_file():
+        out.append({"相對路徑": SRT_NAME, "來源": None, "產生": "srt"})
+        out.append({"相對路徑": TXT_NAME, "來源": None, "產生": "txt"})
+        if last_output_log(w)[1] is not None:
+            out.append({"相對路徑": PRODUCT_SRT_NAME, "來源": None, "產生": "product"})
+    needs_dir = w / "修改需求"
+    if needs_dir.is_dir():
+        for root, _dirs, files in os.walk(needs_dir, followlinks=False):
+            for f in sorted(files):
+                p = Path(root) / f
+                if f == ".寫入鎖" or p.is_symlink() or not p.is_file():
+                    continue
+                out.append({"相對路徑": str(Path("紀錄") / p.relative_to(w)), "來源": p})
+    outdir = w / "輸出"
+    if outdir.is_dir():
+        for pat in OUTPUT_RECORD_GLOBS:
+            for p in sorted(outdir.glob(pat)):
+                if p.is_file() and not p.is_symlink():
+                    out.append({"相對路徑": str(Path("紀錄") / p.name), "來源": p})
+    for rel, dst in RECORD_FILES:
+        p = w / rel
+        if p.is_file() and not p.is_symlink():
+            out.append({"相對路徑": dst, "來源": p})
+    return out
+
+
+def pack_size(items: list[dict]) -> int:
+    return sum(it["來源"].stat().st_size for it in items if it.get("來源") is not None and it["來源"].is_file())
+
+
+def clean_estimate(workdir: str | Path) -> int:
+    """（第 2 段的佔位，第 3 段換成 `clean_plan` 的合計）框裡那一句「共 N GB」：工作區裡大的暫存檔大概多大——
+    `輸出/` 的影片與聲音、`生成/` 的聲音、`web快取/`、`audio*.flac`、`名字候選/`、`重疊/`、`參考音/` 的聲音。只讀。"""
+    w = Path(workdir)
+    total = 0
+    for sub, exts in (("輸出", (".mp4", ".mov", ".wav")), ("生成", (".wav",)), ("web快取", None), ("名字候選", None),
+                      ("重疊", None), ("參考音", (".wav",)), ("chunks", None)):
+        d = w / sub
+        if not d.is_dir():
+            continue
+        for root, _dirs, files in os.walk(d, followlinks=False):
+            for f in files:
+                if exts is None or f.lower().endswith(exts):
+                    total += _file_size(os.path.join(root, f), None)
+    for p in w.glob("audio*.flac"):
+        total += _file_size(str(p), None)
+    return total
+
+
+def _sha(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(HASH_CHUNK)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+def check_location(workdir: str | Path, location: str | Path, need: int, usage=None) -> Path:
+    """打包位置能不能用（§3.4、§3.6）：在不在、是不是資料夾、不在工作區裡（也不是工作區的上層——打包資料夾會建在
+    工作區裡面）、空間夠不夠（要 need＋200 MB）。能用回 resolve 後的路徑，不能用丟 PackError（給老師看的一句）。"""
+    from bookclub import fileio
+
+    w = Path(workdir).resolve()
+    loc = Path(location).expanduser()
+    if not loc.is_dir():
+        raise PackError(f"找不到這個資料夾：{location}（D 槽沒插？），換個位置再試。")
+    loc = loc.resolve()
+    if _inside(loc, w) or _inside(w, loc / PACK_ROOT):
+        raise PackError("不能存在這支影片的工作資料夾裡，請選別的地方。")
+    why = fileio.space_problem(need, loc, PACK_MARGIN_BYTES, "存的地方", usage=usage)
+    if why:
+        raise PackError(f"空間不夠：要 {need / 1e9:.1f} GB，"
+                        f"只剩 {(usage or shutil.disk_usage)(str(loc)).free / 1e9:.1f} GB。換個位置或清出空間再試。")
+    return loc
+
+
+def _numbered_dir(path: Path) -> Path:
+    if not path.exists() and not path.is_symlink():
+        return path
+    for n in range(2, 1000):
+        cand = path.with_name(f"{path.name} ({n})")
+        if not cand.exists() and not cand.is_symlink():
+            return cand
+    raise PackError(f"{path.parent} 裡同名的資料夾太多了，先整理一下再試。")
+
+
+def _gen_text(workdir: Path, kind: str) -> bytes:
+    sents = sentences(workdir)
+    if kind == "srt":
+        text = transcript_srt(sents)
+    elif kind == "txt":
+        text = transcript_txt(sents)
+    else:
+        _n, log = last_output_log(workdir)
+        text = transcript_product_srt(sents, (log or {}).get("片段"))
+    return text.encode("utf-8")
+
+
+def pack_list_text(files: list[dict]) -> str:
+    """`打包清單.txt`（§3.3、§6.4）：最上面兩句說明，之後每個檔的大小與 SHA-256。`\\r\\n`（Windows 記事本好讀）。"""
+    lines = [*PRIVACY_LINES, "", f"共 {len(files)} 個檔（不含這份清單）：", ""]
+    for f in files:
+        lines.append(f"{f['相對路徑']}\t{f['大小']} 位元組\tSHA-256 {f['sha256']}")
+    return NL.join(lines) + NL
+
+
+class PackJob:
+    """背景打包一次（網頁看得到第幾個檔、可以停）。只寫目的地與 `結案.json`。"""
+
+    def __init__(self, workdir: Path, location: Path, *, display: str | None = None, resume: bool = False,
+                 records_only: bool = False, fail_hook=None):
+        self.workdir, self.location = Path(workdir), Path(location)
+        self.display = display or str(location)
+        self.resume, self.records_only = resume, records_only
+        self.state = "等待"        # 等待／存檔中／核對中／已存好／停止／失敗
+        self.error: str | None = None
+        self.index, self.total = 0, 0
+        self.current: str | None = None
+        self.folder: Path | None = None
+        self._cancel = threading.Event()
+        self._fail_hook = fail_hook   # 測試用：fail_hook(相對路徑, 第幾次) → 回 True 就把目的地那個檔改壞一個位元組
+        self.thread: threading.Thread | None = None
+        self.purpose = "結案打包"
+
+    @property
+    def running(self) -> bool:
+        return self.state in ("等待", "存檔中", "核對中")
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def start(self) -> "PackJob":
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+        return self
+
+    def to_dict(self) -> dict:
+        return {"用途": self.purpose, "狀態": self.state, "第幾個": self.index, "共幾個": self.total,
+                "檔名": self.current, "錯誤": self.error, "位置顯示": self.display,
+                "資料夾": windows_display(self.folder) if self.folder else None}
+
+    # --- 主流程 ---
+    def run(self) -> None:
+        try:
+            self._run()
+        except PackError as e:
+            self.state, self.error = ("停止" if self._cancel.is_set() else "失敗"), str(e)
+        except OSError as e:
+            import errno
+
+            if e.errno == errno.ENOSPC:
+                msg = "存的地方滿了，清出空間或換個位置再按「繼續」。"
+            else:
+                msg = "存的地方讀不到了，是不是拔掉了？插回去再按「繼續」。"
+            self.state, self.error = "失敗", f"{msg}（{type(e).__name__}：{e.strerror or e}）"
+        except Exception as e:  # noqa: BLE001 — 背景執行緒要把失敗記下來給網頁看
+            self.state, self.error = "失敗", f"{type(e).__name__}：{e}"
+
+    def _entry(self, rec: dict) -> dict | None:
+        packs = rec.get("打包") or []
+        return packs[-1] if packs else None
+
+    def _run(self) -> None:
+        w = self.workdir
+        rec = read_record(w)
+        items = pack_items(w, records_only=self.records_only)
+        self.total = len(items) + 1   # ＋打包清單
+        last = self._entry(rec)
+        folder = None
+        if self.resume and last and last.get("核對") != "通過" and last.get("資料夾"):
+            p = Path(last["資料夾"])
+            if p.is_dir() and p.name.endswith(PACKING_SUFFIX):
+                folder = p
+        if self.resume and folder is None:
+            raise PackError("找不到上次存到一半的資料夾（換了位置、或已經移走了），請重新按「結案打包…」選位置。")
+        if folder is None:
+            day = datetime.now().strftime("%Y%m%d")
+            base = self.location / PACK_ROOT
+            base.mkdir(parents=True, exist_ok=True)
+            folder = _numbered_dir(base / f"{video_stem(w)}_{day}{PACKING_SUFFIX}")
+            folder.mkdir(parents=True)
+            entry = {"時間": _now(), "位置": str(self.location), "位置顯示": self.display,
+                     "版本號": export_version_info(w)["最後輸出版本"], "資料夾": str(folder), "檔案": [],
+                     "核對": "還沒", "只有紀錄": self.records_only}
+            rec.setdefault("打包", []).append(entry)
+        else:
+            entry = last
+        self.folder = folder
+        if rec.get("狀態") not in (CLEANING, CLOSED):
+            rec["狀態"] = PACKING
+        _write_record(w, rec)
+        self.state = "存檔中"
+        done: list[dict] = []
+        for i, it in enumerate(items, start=1):
+            if self._cancel.is_set():
+                raise PackError("停下來了：存好的留著，按「繼續」接著存。")
+            self.index, self.current = i, it["相對路徑"]
+            if not folder.is_dir():
+                raise OSError(2, "打包資料夾不見了")
+            done.append(self._one(folder, it))
+            entry["檔案"] = done + []
+        # 打包清單（現場產生的：寫完一樣重讀比對）
+        self.index, self.current = self.total, PACK_LIST_NAME
+        lst = {"相對路徑": PACK_LIST_NAME, "來源": None, "內容": pack_list_text(done).encode("utf-8")}
+        done.append(self._one(folder, lst))
+        self.state = "核對中"
+        for f in done:   # 最後整份再對一次大小（剛才每個檔都重讀算過檢查碼）
+            if (folder / f["相對路徑"]).stat().st_size != f["大小"]:
+                raise PackError(f"有 1 個檔存過去不一樣（{f['相對路徑']}），換個位置再試。")
+        final = _numbered_dir(folder.with_name(folder.name.removesuffix(PACKING_SUFFIX)))
+        os.rename(folder, final)
+        self.folder = final
+        rec = read_record(w)
+        entry = self._entry(rec) or entry
+        entry.update({"資料夾": str(final), "檔案": done, "核對": "通過", "完成時間": _now()})
+        if rec.get("狀態") not in (CLEANING, CLOSED):
+            rec["狀態"] = PACKED
+        _write_record(w, rec)
+        self.state = "已存好"
+
+    def _one(self, folder: Path, it: dict) -> dict:
+        """存一個檔、從目的地重讀核對；不一樣刪掉重存一次，第二次還不一樣就停。已經在（繼續）而且對得上的跳過。"""
+        rel = it["相對路徑"]
+        dst = folder / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        data = it.get("內容")
+        if data is None and it.get("來源") is None:
+            data = _gen_text(self.workdir, it["產生"])
+        src = it.get("來源")
+        size = len(data) if data is not None else src.stat().st_size
+        known = hashlib.sha256(data).hexdigest() if data is not None else None
+
+        def row(sha: str) -> dict:
+            return {"相對路徑": rel, "來源": str(src.relative_to(self.workdir)) if src else None, "大小": size,
+                    "sha256": sha}
+
+        if dst.is_file() and dst.stat().st_size == size:   # 繼續：已經在的重算，對得上就跳過
+            want = known or _sha(src)
+            if _sha(dst) == want:
+                return row(want)
+        want = known
+        for attempt in (1, 2):
+            tmp = dst.with_name(f".{dst.name}{PACK_TMP_SUFFIX}")
+            try:
+                got = self._copy(src, data, tmp)   # 一邊讀來源一邊算 SHA-256
+                os.replace(tmp, dst)
+            finally:
+                if tmp.exists():
+                    tmp.unlink()   # 只清自己寫的暫存檔
+            if want is None:
+                want = got
+            elif got != want:
+                raise PackError(f"來源檔在存的時候變了（{rel}），等第 4 步、輸出都停了再試。")
+            if self._fail_hook and self._fail_hook(rel, attempt):
+                with open(dst, "r+b") as f:   # 測試：模擬寫壞一個位元組
+                    b = f.read(1)
+                    f.seek(0)
+                    f.write(bytes([(b[0] ^ 0xFF) if b else 0]))
+            if dst.stat().st_size == size and _sha(dst) == want:   # 從目的地重讀一遍
+                return row(want)
+            dst.unlink()   # 存過去不一樣：刪掉重存（只刪這次自己存的那一份）
+        raise PackError(f"有 1 個檔存過去不一樣（{rel}），換個位置再試。")
+
+    def _copy(self, src: Path | None, data: bytes | None, tmp: Path) -> str:
+        h = hashlib.sha256()
+        with open(tmp, "wb") as fo:
+            if data is not None:
+                fo.write(data)
+                h.update(data)
+            else:
+                with open(src, "rb") as fi:   # 只讀來源：來源是硬連結也一樣，目的地是真的一份
+                    while True:
+                        if self._cancel.is_set():
+                            raise PackError("停下來了：存好的留著，按「繼續」接著存。")
+                        b = fi.read(HASH_CHUNK)
+                        if not b:
+                            break
+                        fo.write(b)
+                        h.update(b)
+            fo.flush()
+            os.fsync(fo.fileno())
+        return h.hexdigest()
+
+
+def pack_state(workdir: str | Path) -> dict:
+    """`GET /api/close/state` 跟工作區有關的那一半（伺服器另外補 可以打包／位置選項／工作）。只讀。"""
+    w = Path(workdir)
+    rec = read_record(w)
+    last = (rec.get("打包") or [None])[-1]
+    ok = next((p for p in reversed(rec.get("打包") or []) if p.get("核對") == "通過"), None)
+    exp = last_export(w)
+    st = rec.get("狀態")
+    records_only = st == CLOSED
+    items = pack_items(w, records_only=records_only) if exp or records_only else []
+    ver = export_version_info(w)
+    resumable = bool(last and last.get("核對") != "通過" and last.get("資料夾") and Path(last["資料夾"]).is_dir())
+    if ok:
+        ok = {**ok, "資料夾": windows_display(ok.get("資料夾") or ""), "檔案": len(ok.get("檔案") or [])}
+    return {"狀態": st, "輸出過": bool(exp), "打包大小": pack_size(items), "檔數": len(items) + (1 if items else 0),
+            "暫存大小": clean_estimate(w), "最後輸出版本": ver["最後輸出版本"], "最新版本": ver["最新版本"],
+            "不是最新版": bool(ver["最後輸出版本"] and ver["最新版本"] and ver["最後輸出版本"] != ver["最新版本"]),
+            "最近一次": {k: v for k, v in last.items() if k != "檔案"} if last else None, "核對通過的": ok, "可以繼續": resumable, "只有紀錄": records_only}
+
+
+def windows_display(p: Path | str) -> str:
+    """（純函式）WSL 的 `/mnt/d/讀書會剪輯結案` → `D:\\讀書會剪輯結案`；其他照原樣。"""
+    s = str(p)
+    parts = Path(s).parts
+    if len(parts) >= 3 and parts[0] == "/" and parts[1] == "mnt" and len(parts[2]) == 1 and parts[2].isalpha():
+        return parts[2].upper() + ":\\" + "\\".join(parts[3:])
+    return s
+
+
+def pack_locations(kind: str | None = None, *, ismount=os.path.ismount, downloads=None, usage=None) -> list[dict]:
+    """存到哪的選項（§1a 定案後畫面只有一顆鈕＋系統視窗；這份給 API／終端機用）：[{代號, 顯示名稱, 路徑, 剩餘位元組}]。
+    下載：WSL 是 Windows 的下載資料夾（`fileio.windows_downloads`），其他是 ~/Downloads；D 槽：只有 WSL、而且 /mnt/d 有掛上
+    （ismount 可以傳假的）；自己選：沒有路徑。找不到的選項不列。"""
+    from bookclub import fileio
+
+    kind = kind or fileio.platform_kind()
+    usage = usage or shutil.disk_usage
+    out: list[dict] = []
+
+    def add(code: str, name: str, p: Path | None) -> None:
+        free = None
+        if p is not None:
+            try:
+                free = usage(str(p)).free
+            except OSError:
+                return
+        out.append({"代號": code, "顯示名稱": name, "路徑": str(p) if p else None,
+                    "位置顯示": windows_display(p) if p and kind == "wsl" else (str(p) if p else None), "剩餘位元組": free})
+
+    try:
+        dl = downloads() if downloads else (fileio.windows_downloads() if kind == "wsl" else Path.home() / "Downloads")
+        if Path(dl).is_dir():
+            add("下載", "下載資料夾", Path(dl))
+    except Exception:  # noqa: BLE001 — 找不到下載資料夾：不列這一項
+        pass
+    if kind == "wsl" and ismount("/mnt/d"):
+        add("D", "D 槽", Path("/mnt/d"))
+    add("自己選", "自己選", None)
+    return out

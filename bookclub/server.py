@@ -934,6 +934,7 @@ class BookclubServer(ThreadingHTTPServer):
         self.copy_jobs: dict = {}            # 複製工作（Windows 的檔複製進 Ubuntu、成品複製到 Windows 的下載）
         self.pick_token: dict[tuple[str, str], str] = {}   # 每個 (用途, 去處) 最新的那一次選擇（見 accept_pick 上面的說明）
         self.exporting = False                     # 「複製成品到 Windows」正在準備（找下載資料夾）
+        self.close_job = None                      # 1015-8：結案打包（closing.PackJob；同時只有一個，佔 pick_lock）
         try:   # 上次複製到一半伺服器被關掉留下的暫存檔（只清這個工具自己取名的 .*.複製中）
             from bookclub import fileio
 
@@ -1204,6 +1205,8 @@ class BookclubServer(ThreadingHTTPServer):
         with self.pick_lock:   # 「有沒有在跑」與「佔位子」同一段鎖：連按兩下也只會有一個
             if self.exporting or any(j.purpose == "成品" and j.running for j in self.copy_jobs.values()):
                 raise ValueError("上一次的複製還沒做完")
+            if self.close_job is not None and self.close_job.running:   # 1015-8：結案打包在存，不同時複製
+                raise ValueError("結案打包正在存，等它存完再複製")
             self.exporting = True
         try:
             try:
@@ -1219,6 +1222,104 @@ class BookclubServer(ThreadingHTTPServer):
             with self.pick_lock:
                 self.exporting = False
         return {"ok": True, "成品是": what, "複製": job.to_dict()}
+
+    # ---------- 結案打包（1015-8，32 號設計 §3，以 §1a 為準） ----------
+
+    def _close_busy(self) -> str | None:
+        """不能開始打包的原因（§3.6）；沒有＝None。要在 pick_lock 外面呼叫（會拿 run_lock）。"""
+        if self.exec_running():
+            return "第 4 步正在跑，跑完才能結案打包。"
+        if self.run_status_running():
+            return "影片分析正在跑，跑完才能結案打包。"
+        with self.pick_lock:
+            if self.exporting or any(j.purpose == "成品" and j.running for j in self.copy_jobs.values()):
+                return "成品正在複製，複製完才能結案打包。"
+            if self.close_job is not None and self.close_job.running:
+                return "結案打包正在存，等它存完。"
+        return None
+
+    def close_state(self) -> dict:
+        """`GET /api/close/state`：狀態、可以打包＋不行的原因、位置選項、打包大小、最後輸出版本、最新版本、最近一次、工作。只讀。"""
+        from bookclub import closing, fileio
+
+        st = closing.pack_state(self.workdir)
+        why = self._close_busy()
+        job = self.close_job
+        if not st["輸出過"] and not st["只有紀錄"]:
+            why = why or "還沒輸出過成品：先在第 5 步按「輸出成品」。"
+        try:
+            locs = closing.pack_locations()
+        except Exception:  # noqa: BLE001
+            locs = []
+        return {**st, "可以打包": why is None, "不行的原因": why, "位置選項": locs, "系統": fileio.platform_kind(),
+                "系統視窗": fileio.folder_picker_enabled(),
+                "工作": job.to_dict() if job is not None and job.workdir == self.workdir else None}
+
+    def close_pick_folder(self) -> dict:
+        """`POST /api/close/pick-folder`：叫系統的選資料夾視窗。按取消 → {取消: True}（什麼都不動）；叫不起來 →
+        {退回網頁: True, 說明}（網頁改成打路徑的框）。"""
+        from bookclub import closing, fileio
+
+        try:
+            p = fileio.pick_folder("選要把成品和紀錄存到哪個資料夾")
+        except fileio.PickUnavailable as e:
+            return {"退回網頁": True, "說明": str(e)}
+        if p is None:
+            return {"取消": True}
+        disp = closing.windows_display(p) if fileio.platform_kind() == "wsl" else str(p)
+        return {"路徑": str(p), "位置顯示": disp}
+
+    def close_pack(self, body: dict) -> dict:
+        """`POST /api/close/pack` {位置: 下載｜D｜自己選, 路徑?, 繼續?}：先檢查（§3.6），通過就開背景工作，回 `工作`。"""
+        from bookclub import closing, fileio
+
+        why = self._close_busy()
+        if why:
+            raise ValueError(why)
+        rec = closing.read_record(self.workdir)
+        records_only = rec.get("狀態") == closing.CLOSED
+        if not closing.last_export(self.workdir) and not records_only:
+            raise ValueError("還沒輸出過成品：先在第 5 步按「輸出成品」。")
+        resume = bool(body.get("繼續"))
+        kind = fileio.platform_kind()
+        if resume:
+            last = (rec.get("打包") or [None])[-1] or {}
+            loc, disp = last.get("位置"), last.get("位置顯示")
+            if not loc:
+                raise ValueError("沒有存到一半的打包，請按「結案打包…」選位置。")
+        else:
+            code = str(body.get("位置") or "自己選")
+            if code == "自己選":
+                loc = str(body.get("路徑") or "").strip()
+                if not loc or not Path(loc).expanduser().is_absolute():
+                    raise ValueError("請選一個資料夾（要完整的路徑）。")
+            else:
+                hit = next((x for x in closing.pack_locations(kind) if x["代號"] == code and x["路徑"]), None)
+                if hit is None:
+                    raise ValueError("找不到這個位置（D 槽沒插？），換個位置再試。")
+                loc = hit["路徑"]
+            disp = closing.windows_display(loc) if kind == "wsl" else str(Path(loc).expanduser())
+        try:
+            items = closing.pack_items(self.workdir, records_only=records_only)
+            locp = closing.check_location(self.workdir, loc, closing.pack_size(items))
+        except closing.PackError as e:
+            raise ValueError(str(e)) from None
+        job = closing.PackJob(self.workdir, locp, display=disp, resume=resume, records_only=records_only)
+        with self.pick_lock:
+            if (self.close_job is not None and self.close_job.running) or self.exporting \
+                    or any(j.purpose == "成品" and j.running for j in self.copy_jobs.values()):
+                raise ValueError("上一個存檔的工作還沒做完")
+            self.close_job = job
+        job.start()
+        return {"ok": True, "工作": job.to_dict()}
+
+    def close_cancel(self) -> dict:
+        """`POST /api/close/cancel`：停止進行中的打包（存好的留著，下次「繼續」只補缺的）。"""
+        job = self.close_job
+        if job is None or not job.running:
+            raise ValueError("現在沒有在結案打包")
+        job.cancel()
+        return {"ok": True}
 
     def exec_running(self) -> bool:
         with self.run_lock:
@@ -1640,6 +1741,8 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub import finalcheck
 
             self._send_json(200, finalcheck.goto_output_time(server.workdir, float(query["src"][0])))
+        elif path == "/api/close/state":   # 1015-8：第 5 步「結案打包」框（只讀）
+            self._send_json(200, server.close_state())
         elif path == "/api/run/status":
             self._send_json(200, server.run_status())
         elif path == "/api/execute":
@@ -1734,6 +1837,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/final/reveal":   # 10-07：路徑都是伺服器自己算的，不收網頁傳來的路徑
             self._send_json(200, server.final_reveal())
+            return
+        if path == "/api/close/pick-folder":   # 1015-8：結案打包——叫系統的選資料夾視窗（會等到人選好或按取消）
+            self._send_json(200, server.close_pick_folder())
+            return
+        if path == "/api/close/pack":
+            self._send_json(200, server.close_pack(body))
+            return
+        if path == "/api/close/cancel":
+            self._send_json(200, server.close_cancel())
             return
         if path == "/api/final/to_windows":
             self._send_json(200, server.final_to_windows(confirm=bool(body.get("confirm"))))

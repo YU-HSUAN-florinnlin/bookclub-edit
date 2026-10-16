@@ -222,7 +222,7 @@ function foWhichLine(d, job) {
 async function fileOutInit(el) {
   if (!el) return;
   if (!el.querySelector("#foMain")) {   // 第一次：排好三塊（按鈕列每秒重畫時，片頭片尾與資料夾瀏覽不會被洗掉）
-    el.innerHTML = `<div id="foMain"></div><div id="feExtras"></div>
+    el.innerHTML = `<div id="foMain"></div><div id="clBox" class="cl-box" hidden></div><div id="feExtras"></div>
       <div id="pkFallback" hidden><p class="hint" id="pkFallbackWhy"></p><div id="picker"></div></div>`;
     if (SHOW_EXTRAS) pkRefresh();
   }
@@ -270,4 +270,91 @@ async function fileOutInit(el) {
   });
   clearTimeout(foPollTimer);
   if (running) foPollTimer = setTimeout(() => { if (document.body.contains(el)) fileOutInit(el); }, 1000);
+  closeBoxInit(el.querySelector("#clBox"));
+}
+
+// ---------------------------------------------------------------------------
+// 1015-8：第 5 步「結案打包」（32 號設計 §1a：一顆鈕、直接跳系統的選資料夾視窗、按取消什麼都不動；選好就開始存→逐檔核對）。
+// 後端 /api/close/state、/api/close/pick-folder、/api/close/pack、/api/close/cancel（bookclub/server.py、closing.py）
+// ---------------------------------------------------------------------------
+
+let clPollTimer = null;
+
+function clGB(n) { return `${(Number(n || 0) / 1e9).toFixed(1)} GB`; }
+
+// 框裡的文字（純函式）：標題下面那一句、紅字提醒、按鈕字、狀態列
+function clView(d) {
+  const job = d["工作"];
+  const running = !!(job && ["等待", "存檔中", "核對中"].includes(job["狀態"]));
+  const st = d["狀態"];
+  const line = d["只有紀錄"] ? "影片已經清掉了，這次只存逐字稿和紀錄。"
+    : `會把成品影片、逐字稿、修改紀錄存到你選的地方，然後刪掉這裡的暫存檔（共 ${clGB(d["暫存大小"])}${d["系統"] === "wsl" ? "，含複製進來的那支原始影片" : ""}）。`;
+  const warn = d["不是最新版"] ? `最後輸出的是第 ${d["最後輸出版本"]} 版，最新是第 ${d["最新版本"]} 版。` : "";
+  const btn = st === "已結案" ? "再存一份紀錄…" : (st === "已打包" ? "再存一份…" : "結案打包…");
+  let status = "", statusKind = "";
+  if (running) status = job["狀態"] === "核對中" ? "正在核對…" : `正在存…（第 ${job["第幾個"]}／${job["共幾個"]} 個檔）`;
+  else if (job && job["狀態"] === "失敗") { status = job["錯誤"] || "沒有存好"; statusKind = "error"; }
+  else if (job && job["狀態"] === "停止") status = "停下來了：存好的留著，按「繼續」接著存。";
+  else if ((job && job["狀態"] === "已存好") || (d["核對通過的"] && st !== "打包中")) {
+    const ok = d["核對通過的"] || {};
+    status = `已存好，每個檔都核對過了。存在：${(job && job["資料夾"]) || ok["資料夾"] || ok["位置顯示"] || ""}`;
+    statusKind = "done";
+  } else if (d["可以繼續"]) status = "上次存到一半。";
+  return { running, line, warn, btn, status, statusKind, resume: !running && !!d["可以繼續"] };
+}
+
+async function closeBoxInit(box) {
+  if (!box) return;
+  let d;
+  try { d = await apiGet("/api/close/state"); } catch (e) { box.hidden = true; return; }
+  if (!document.body.contains(box)) return;
+  if (!d["輸出過"] && !d["只有紀錄"]) { box.hidden = true; return; }   // 輸出過成品才出現
+  const v = clView(d);
+  box.hidden = false;
+  box.innerHTML = `<h3>結案打包</h3>
+    <p>${esc(v.line)}</p>
+    ${v.warn ? `<p class="rv-warnline">${esc(v.warn)}</p>` : ""}
+    <div class="fo-row">
+      ${v.running ? `<button class="secondary" id="cl-stop">停止</button>`
+        : `<button class="secondary" id="cl-go" ${d["可以打包"] ? "" : "disabled"}>${esc(v.btn)}</button>
+           ${v.resume ? `<button class="secondary" id="cl-resume" ${d["可以打包"] ? "" : "disabled"}>繼續</button>` : ""}`}
+      ${!d["可以打包"] && !v.running && d["不行的原因"] ? `<span class="muted">${esc(d["不行的原因"])}</span>` : ""}
+      <span id="cl-msg" role="status">${v.status ? (v.statusKind ? `<span class="badge ${v.statusKind}">${v.statusKind === "done" ? "已存好" : "沒有存好"}</span> ` : "") + esc(v.status) : ""}</span>
+    </div>
+    <div id="cl-typed" hidden><p class="hint" id="cl-typed-why"></p>
+      <input type="text" id="cl-path" size="50" placeholder="資料夾的完整路徑">
+      <button class="secondary" id="cl-typed-go">開始存</button> <button class="ghost" id="cl-typed-no">不存了</button></div>`;
+  const msg = box.querySelector("#cl-msg");
+  const start = async (body) => {
+    try { await apiPost("/api/close/pack", body, { quiet: true }); }
+    catch (e) { msg.innerHTML = `<span class="badge error">沒有開始</span> ${esc(e.message)}`; return; }
+    closeBoxInit(box);
+  };
+  const typed = (why) => {
+    box.querySelector("#cl-typed").hidden = false;
+    box.querySelector("#cl-typed-why").textContent = why || "打要存的資料夾路徑：";
+    box.querySelector("#cl-typed-go").onclick = () => start({ "位置": "自己選", "路徑": box.querySelector("#cl-path").value });
+    box.querySelector("#cl-typed-no").onclick = () => { box.querySelector("#cl-typed").hidden = true; };
+  };
+  const go = box.querySelector("#cl-go");
+  if (go) go.addEventListener("click", async () => {
+    if (!d["系統視窗"]) { typed("系統的選資料夾視窗關掉了，打要存的資料夾路徑："); return; }
+    go.disabled = true;
+    let r;
+    try { r = await apiPost("/api/close/pick-folder", {}, { quiet: true }); }
+    catch (e) { msg.innerHTML = `<span class="badge error">打不開選資料夾視窗</span> ${esc(e.message)}`; go.disabled = false; return; }
+    go.disabled = false;
+    if (r["取消"]) return;                   // 按取消＝恢復原狀，什麼都不動
+    if (r["退回網頁"]) { typed(r["說明"]); return; }
+    start({ "位置": "自己選", "路徑": r["路徑"] });
+  });
+  const res = box.querySelector("#cl-resume");
+  if (res) res.addEventListener("click", () => start({ "繼續": true }));
+  const stop = box.querySelector("#cl-stop");
+  if (stop) stop.addEventListener("click", async () => {
+    try { await apiPost("/api/close/cancel", {}, { quiet: true }); } catch (e) { /* 已經做完了 */ }
+    closeBoxInit(box);
+  });
+  clearTimeout(clPollTimer);
+  if (v.running) clPollTimer = setTimeout(() => { if (document.body.contains(box)) closeBoxInit(box); }, 1000);
 }
