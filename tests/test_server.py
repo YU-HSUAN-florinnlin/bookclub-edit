@@ -543,6 +543,38 @@ def test_step3_writes_blocked_while_executing():
             httpd.server_close()
 
 
+def test_run_status_reports_step4_running_read_only():
+    # 1015-8（#236 用）：/api/run/status 多回「第4步執行中」（更新指令判斷能不能自己關網頁）；只讀，不升級、不寫任何檔
+    import threading
+    import urllib.request
+
+    with _TmpWorkdir() as w:
+        httpd = srv.BookclubServer(("127.0.0.1", 0), srv.Handler, workdir=w, video=None)
+        th = threading.Thread(target=httpd.serve_forever, daemon=True)
+        th.start()
+        port = httpd.server_address[1]
+
+        def get():
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/run/status") as r:
+                return json.loads(r.read())
+
+        def files():
+            return {str(p.relative_to(w)): p.stat().st_mtime_ns for p in w.rglob("*")}
+
+        try:
+            before = files()
+            body = get()
+            assert body["第4步執行中"] is False and body["running"] is False
+            httpd.exec_state["running"] = True
+            assert get()["第4步執行中"] is True
+            httpd.exec_state["running"] = False
+            assert get()["第4步執行中"] is False
+            assert files() == before and not (w / "修改需求").exists()   # 沒觸發升級、沒寫檔
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

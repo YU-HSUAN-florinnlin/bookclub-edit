@@ -1237,6 +1237,8 @@ class BookclubServer(ThreadingHTTPServer):
             state = {k: v for k, v in self.run_state.items() if k != "messages"}
             state["messages"] = list(self.run_state["messages"][-50:])
         state.update(build_state(self.workdir, video=self.video))
+        # 1015-8（#236：更新指令判斷能不能自己關網頁）：第 4 步有沒有在跑。只讀記憶體裡的 exec_state，不升級、不寫檔
+        state["第4步執行中"] = self.exec_running()
         return state
 
     def start_execute(self, opts: dict) -> dict:
