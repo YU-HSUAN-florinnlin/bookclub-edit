@@ -184,6 +184,37 @@ def test_disk_report_empty_and_wsl_without_vhdx():
         assert any("縮小虛擬硬碟" in x for x in lines)
 
 
+def test_disk_report_wsl_layout_and_hardlinks_not_double_counted():
+    """審查必修 4：WSL 上工作區在 `影片/第一堂_剪輯工作區/` 底下——「影片副本」只算 `影片/` 最上層的影片檔；
+    硬連結（同一個檔兩個名字，例如更新前備份用 cp -l）整份報告只算一次；合計＝實際佔用。"""
+    with tempfile.TemporaryDirectory() as t:
+        home = Path(t) / "家"
+        data = home / "讀書會剪輯資料"
+        vids = data / "影片"
+        w = vids / "第一堂_剪輯工作區"
+        _mk(vids / "第一堂.mp4", 2_000_000)
+        _mk(vids / "說明.txt", 1_000)                                  # 不是影片：不算進影片副本
+        _mk(w / "輸出" / "成品.mp4", 3_000_000)
+        _mk(w / "生成" / "a.wav", 500_000)
+        wd.write_json(data / "專案清單.json", {"專案": [str(w)]})
+        bak = vids / "第一堂_剪輯工作區_更新前備份_1016"
+        (bak / "輸出").mkdir(parents=True)
+        os.link(w / "輸出" / "成品.mp4", bak / "輸出" / "成品.mp4")       # 硬連結：不佔新空間
+        _mk(bak / "b.json", 100_000)
+        lines = closing.disk_report(home, data, wsl=False)
+        text = "\n".join(lines)
+        wsz = closing.dir_size(w)
+        assert f"工作區（1 支）" in text and closing.human(wsz) in text
+        vline = next(x for x in lines if "影片/" in x and "影片副本" in x)
+        assert "2 MB" in vline, vline                                    # 只有最上層那支影片，不含工作區
+        bline = next(x for x in lines if "更新前備份" in x)
+        assert "100 KB" in bline, bline                                  # 硬連結那支已經算在工作區
+        real = sum(os.lstat(p).st_size for p in {(os.lstat(f).st_dev, os.lstat(f).st_ino): f
+                                                  for f in map(str, home.rglob("*")) if os.path.isfile(f)}.values())
+        total = next(x for x in lines if x.startswith("合計"))
+        assert closing.human(real - 1_000 - os.path.getsize(data / "專案清單.json")) in total, (total, real)
+
+
 def test_cli_disk_runs():
     import io
     from contextlib import redirect_stdout

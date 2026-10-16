@@ -38,14 +38,39 @@ T1, T2, T3 = "2026-10-12T10:00:00", "2026-10-12T12:00:00", "2026-10-12T14:00:00"
 _ROOT = None
 
 
-def _fresh() -> Path:
-    """每個測試一份新的假工作區（影片只做一次，複製比較快）。"""
-    global _ROOT
+def gen_logs(w: Path) -> None:
+    """假的生成紀錄（照現在排出來的計畫，三類都有；每句一個種子、記放回時間格、聲音檔都在）——生成程式看來全部做好了。
+    1015-8 #228 審查修正：`needs.redo_list` 照生成程式的判斷，沒有生成紀錄＝整類會重做（做進過成品的卡都是「已改，等重做」），
+    所以假工作區預設就有這份（`_fresh(gen=False)` 不要）。"""
+    for role, xs in fc._redo_ctx(w).items():
+        if not xs:
+            continue
+        lp, od = fc._role_paths(w, role)
+        od.mkdir(parents=True, exist_ok=True)
+        rel = od.relative_to(w)
+        wd.write_json(lp, {"句子": [{"id": x["id"], "text": x.get("text"), "slot": x["slot"], "嘗試": [{"種子": 7}],
+                                    "選定": 1, "第幾版": 1,
+                                    "放回時間格": {"檔案": str(rel / f"{x['id']}_放回時間格.wav")}} for x in xs]})
+        for x in xs:
+            (od / f"{x['id']}.wav").write_bytes(b"wav")
+            (od / f"{x['id']}_放回時間格.wav").write_bytes(b"wav")
+
+
+_ROOT_GEN = None
+
+
+def _fresh(gen: bool = True) -> Path:
+    """每個測試一份新的假工作區（影片只做一次，複製比較快）。gen：先放好假的生成紀錄（見 `gen_logs`）。"""
+    global _ROOT, _ROOT_GEN
     if _ROOT is None:
         _ROOT = Path(tempfile.mkdtemp()) / "base"
         fake_workdir.make(_ROOT)
+        _ROOT_GEN = Path(tempfile.mkdtemp()) / "base"
+        shutil.copytree(_ROOT, _ROOT_GEN)
+        gen_logs(_ROOT_GEN / "工作區")
+    src = _ROOT_GEN if gen else _ROOT
     d = Path(tempfile.mkdtemp())
-    shutil.copytree(_ROOT, d / "base")
+    shutil.copytree(src, d / "base")
     w = d / "base" / "工作區"
     data = json.loads((w / "分析結果.json").read_text(encoding="utf-8"))
     data["video"] = str(d / "base" / "假影片.mp4")

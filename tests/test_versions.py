@@ -185,6 +185,7 @@ def test_outside_passed_card_can_be_fixed_on_latest():
     plan = tn._quiet(fc.redo_plan, w)
     assert [e["卡號"] for e in plan if e.get("卡號")] == [n1["卡號"]]
     tn._quiet(fc.prepare_redo, w, log=lambda s: None)
+    _gen_logs(w)   # 1015-8 #228：生成程式把清掉的那一句重新生成了
     _assemble(w, _t(4), tn._records())
     tn._quiet(fc.finish_redo, w)
     st = needs.load(w)
@@ -724,23 +725,8 @@ def test_api_execute_start_base_version_developer_only():
 # ---------- 10-15 總檢查修正（1015-7）：要修改的分流、第 4 步拿得到原因、redo_cards 一份清單 ----------
 
 def _gen_logs(w: Path) -> None:
-    """假的生成紀錄（照現在排出來的計畫，每句一個種子、一個聲音檔）：第 4 步才算得出「文字和範圍都沒改＝換一種念法」。
-    1015-8 #228：每句也記「放回時間格」、檔案都在——生成程式看來是做好了的（不然 `needs.redo_list` 照生成程式的判斷
-    會把這幾張都列成「已改，等重做」）。"""
-    from bookclub import workdir as wd
-
-    for role, xs in fc._redo_ctx(w).items():
-        if not xs:
-            continue
-        lp, od = fc._role_paths(w, role)
-        od.mkdir(parents=True, exist_ok=True)
-        rel = od.relative_to(w)
-        wd.write_json(lp, {"句子": [{"id": x["id"], "text": x.get("text"), "slot": x["slot"], "嘗試": [{"種子": 7}],
-                                    "選定": 1, "第幾版": 1,
-                                    "放回時間格": {"檔案": str(rel / f"{x['id']}_放回時間格.wav")}} for x in xs]})
-        for x in xs:
-            (od / f"{x['id']}.wav").write_bytes(b"wav")
-            (od / f"{x['id']}_放回時間格.wav").write_bytes(b"wav")
+    """假的生成紀錄：照現在的計畫，全部做好（`test_needs.gen_logs`，1015-8 起假工作區預設就有）。"""
+    tn.gen_logs(w)
 
 
 def _gen_ids(w: Path, role: str) -> set:

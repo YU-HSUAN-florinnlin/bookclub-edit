@@ -141,8 +141,11 @@ def last_output_log(workdir: str | Path) -> tuple[int | None, dict | None]:
     if not rec:
         return None, None
     n = rec.get("版本號")
-    if isinstance(n, int) and needs.exists(w):
-        v = needs.load(w).versions.get(n)
+    if needs.exists(w):
+        st = needs.load(w)
+        # 沒記版本號的舊輸出紀錄：照處理紀錄產生時間找那一版（跟 `finalcards._export_info` 一樣）
+        v = st.versions.get(n) if isinstance(n, int) else st.version_at(rec.get("處理紀錄產生時間"))
+        n = v["版本號"] if v else n
         if v and v.get("處理紀錄"):
             log = wd.read_json(w / v["處理紀錄"], default=None)
             if log:
@@ -199,24 +202,52 @@ def export_transcripts(workdir: str | Path, folder: str | Path, intro_s: float =
 
 # ---------- 查佔用空間（§4.5，只讀） ----------
 
-def dir_size(p: Path) -> int:
-    """資料夾（或檔案）大小，位元組。不跟捷徑；讀不到的檔略過。"""
+def _file_size(fp: str, seen: set | None) -> int:
+    """一個檔的大小；seen 有給就用 (st_dev, st_ino) 去重（硬連結、同一個檔算過了就是 0）。捷徑不算。"""
+    try:
+        st = os.lstat(fp)
+    except OSError:
+        return 0
+    if not os.path.isfile(fp) or os.path.islink(fp):
+        return 0
+    if seen is not None:
+        key = (st.st_dev, st.st_ino)
+        if key in seen:
+            return 0
+        seen.add(key)
+    return st.st_size
+
+
+def dir_size(p: Path, seen: set | None = None) -> int:
+    """資料夾（或檔案）大小，位元組。不跟捷徑；讀不到的檔略過。
+    seen（審查必修 4）：整份報告共用一個 {(st_dev, st_ino)}，硬連結、重疊的資料夾只算一次。"""
     try:
         if p.is_symlink():
             return 0
         if p.is_file():
-            return p.stat().st_size
+            return _file_size(str(p), seen)
     except OSError:
         return 0
     total = 0
     for root, _dirs, files in os.walk(p, followlinks=False):
         for f in files:
-            try:
-                fp = os.path.join(root, f)
-                if not os.path.islink(fp):
-                    total += os.lstat(fp).st_size
-            except OSError:
-                pass
+            total += _file_size(os.path.join(root, f), seen)
+    return total
+
+
+def video_copies_size(vids: Path, seen: set | None = None) -> int:
+    """（審查必修 4）`~/讀書會剪輯資料/影片/` 最上層的影片檔（WSL 匯入的副本）；不進子資料夾——WSL 上工作區就建在
+    `影片/<影片>_剪輯工作區/`，那些已經算在工作區那一行。"""
+    from bookclub.fileio import VIDEO_EXTS
+
+    total = 0
+    try:
+        with os.scandir(vids) as it:
+            for e in it:
+                if e.name.lower().endswith(VIDEO_EXTS) and e.is_file(follow_symlinks=False):
+                    total += _file_size(e.path, seen)
+    except OSError:
+        pass
     return total
 
 
@@ -292,33 +323,46 @@ def disk_report(home: Path | None = None, data: Path | None = None, *, wsl: bool
 
         wsl = fileio.platform_kind() == "wsl"
     rows: list[tuple[int, str, str, str]] = []   # (縮排, 名稱, 大小, 說明)
+    seen: set = set()   # 整份報告共用：硬連結、重疊的資料夾只算一次，合計＝實際佔用
+    grand = 0
     projects = project_dirs(data)
-    sizes = [(d, dir_size(d)) for d in projects]
+    sizes = [(d, dir_size(d, seen)) for d in projects]
+    grand += sum(s for _d, s in sizes)
     if sizes:
         rows.append((1, f"工作區（{len(sizes)} 支）", human(sum(s for _d, s in sizes)), ""))
         for d, s in sorted(sizes, key=lambda x: -x[1]):
             rows.append((2, d.name, human(s), "已結案" if closed(d) else "進行中"))
     vids = data / "影片"
     if vids.is_dir():
-        rows.append((1, "~/讀書會剪輯資料/影片/", human(dir_size(vids)),
-                     "匯入的影片副本；已結案的那支可以刪（Windows 那邊有原檔）"))
+        n = video_copies_size(vids, seen)
+        grand += n
+        rows.append((1, "~/讀書會剪輯資料/影片/", human(n), "匯入的影片副本；已結案的那支可以刪（Windows 那邊有原檔）"))
     for sub, note in ((".cache/bookclub", "AI 聲音模型，別刪（刪了要重新下載）"),
                       (".cache/huggingface", "分析用的模型，別刪"),
                       (".cache/uv", "安裝工具時的下載暫存，可以清：uv cache clean")):
         p = home / sub
         if p.is_dir():
-            rows.append((1, f"~/{sub}", human(dir_size(p)), note))
+            n = dir_size(p, seen)
+            grand += n
+            rows.append((1, f"~/{sub}", human(n), note))
     old = sorted(p for p in home.glob("bookclub-edit-舊版*") if p.is_dir() and not p.is_symlink())
     if old:
-        rows.append((1, f"舊版工具資料夾（{len(old)} 份）", human(sum(dir_size(p) for p in old)), "下次更新會自動刪"))
+        n = sum(dir_size(p, seen) for p in old)
+        grand += n
+        rows.append((1, f"舊版工具資料夾（{len(old)} 份）", human(n), "下次更新會自動刪"))
     backs = _backups(home, projects)
     if backs:
-        rows.append((1, f"更新前備份（{len(backs)} 份）", human(sum(dir_size(p) for p in backs)), "下次更新會自動刪"))
+        n = sum(dir_size(p, seen) for p in backs)
+        grand += n
+        rows.append((1, f"更新前備份（{len(backs)} 份）", human(n), "下次更新會自動刪"))
     width = max([_width(name) + 2 * ind for ind, name, _s, _n in rows] + [20])
     lines = ["讀書會剪輯：佔用空間"]
     for ind, name, size, note in rows:
         pad = "  " * ind
         lines.append(f"{pad}{name}{' ' * (width - _width(name) - 2 * ind)}  {size:>8}" + (f"   {note}" if note else ""))
+    if rows:
+        name = "合計（同一個檔不重複算）"
+        lines.append(f"{name}{' ' * max(0, width - _width(name))}  {human(grand):>8}")
     if wsl:
         disks = _vhdx(mnt_c)
         if disks:

@@ -1576,11 +1576,14 @@ def _range_moved(c: dict, v: dict, row: dict, log: dict) -> bool:
     if o[0] is None:
         return False
     cs, ce = float(o[0]), float(o[1] if o[1] is not None else o[0])
-    rng = v.get("範圍")
-    if rng and rng[0] is not None and rng[1] is not None:
-        cs, ce = max(cs, float(rng[0])), min(ce, float(rng[1]))
     rs = min(float(r["原片"][0]) for r in mine)
     re_ = max(float(r["原片"][1] if r["原片"][1] is not None else r["原片"][0]) for r in mine)
+    rng = v.get("範圍")
+    if rng and rng[0] is not None and rng[1] is not None:
+        # 審查必修 1：兩邊都切到這一版的範圍再比——組裝時剪點只篩不切（`render.build_decisions`），
+        # 跨範圍邊界的刪除段落處理紀錄記的是整段，卡片那端切了就會一直誤報「改了」
+        lo, hi = float(rng[0]), float(rng[1])
+        cs, ce, rs, re_ = max(cs, lo), min(ce, hi), max(rs, lo), min(re_, hi)
     others = [r["原片"] for r in log.get("紀錄") or [] if record_key(r) not in keys and r.get("原片")
               and r["原片"][0] is not None]
 

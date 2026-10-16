@@ -143,6 +143,20 @@ def _stat_key(workdir: Path) -> tuple:
             if f.endswith((".json", ".jsonl")):
                 add(Path(root) / f)
     add(tts.pron_table_path())
+    from bookclub.config import data_dir
+
+    # 審查必修 3：名冊、敏感詞、名字排除清單、settings.toml 改了會改到要念的字或計畫（名字換成代號）——老師資料夾最上層的
+    # 設定檔都算（一定有這三個；專案清單切換專案時會變，不算）
+    for name in ("名冊.csv", "敏感詞.csv", "settings.toml"):
+        add(data_dir() / name)
+    try:
+        with os.scandir(data_dir()) as it:
+            for e in it:
+                if e.is_file(follow_symlinks=False) and e.name.endswith((".csv", ".toml")) \
+                        and e.name not in ("名冊.csv", "敏感詞.csv", "settings.toml"):
+                    add(Path(e.path))
+    except OSError:
+        pass
     try:
         vd = students.voice_dir()
         add(vd)
@@ -174,9 +188,8 @@ def stale_ids(workdir: str | Path, a: float | None = None, b: float | None = Non
             inp = fn()
         except Exception:  # noqa: BLE001 — 這一類排不出計畫：生成程式那一類也不會做
             continue
-        if inp.get("log") is None or not (inp.get("log") or {}).get("句子"):
-            # 這一類從來沒生成過（沒有生成紀錄）：判斷不了哪一張「做進成品之後又變了」，交給卡片指紋那幾條
-            continue
+        # 審查必修 2：沒有生成紀錄（被刪了）也照 `_stale` 判——生成程式會整類重做；`needs.redo_cards` 只列做進過成品的卡，
+        # 從沒生成過的不會因為這樣被列成「改了」
         out |= {(role, i) for i in _role_stale(inp, workdir)}
     if cache:
         _STALE_CACHE[ck] = (key, frozenset(out))

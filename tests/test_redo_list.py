@@ -34,12 +34,17 @@ def _records() -> list[dict]:
     return tn._records() + [tn._rec("名字整句換掉", 119.778, 123.6, ["名字:2"], "生成/老師/S002.wav")]
 
 
-def _write_gen(w: Path, shift: dict | None = None, skip: set | None = None) -> None:
+def _write_gen(w: Path, shift: dict | None = None, skip: set | None = None, rng=None) -> None:
     """假的生成紀錄（照現在的計畫，三類都有；每句記放回時間格、檔案都在）——生成程式看來全部做好了。
     shift={句id: 秒}：那一句的紀錄時間格往後移（＝在範圍改之前生成的）；skip：這幾句不寫紀錄。"""
     shift, skip = shift or {}, skip or set()
     ref = wd.ref_dir(w) / "ref.wav"
-    for role, xs in fc._redo_ctx(w).items():
+    ctx = fc._redo_ctx(w)
+    if rng is not None:   # 第 4 步照這個範圍跑：學員段落的時間格切在範圍邊界
+        from bookclub import students
+
+        ctx["學員"] = students.build_items(w, rng[0], rng[1])[0]
+    for role, xs in ctx.items():
         lp, od = fc._role_paths(w, role)
         od.mkdir(parents=True, exist_ok=True)
         rel = od.relative_to(w)
@@ -200,8 +205,7 @@ def test_8_closed_workdir_empty_no_errors():
     w = _upgraded(shift={"S002": 0.1})
     import shutil
 
-    shutil.rmtree(w / "生成" / "學員")
-    shutil.rmtree(w / "生成" / "老師")
+    shutil.rmtree(w / "生成")                           # 聲音檔和生成紀錄都清掉了
     assert len(_redo(w)) >= 3                           # 還沒結案：每一句都會重新生成
     wd.write_json(w / "結案.json", {"狀態": "已結案"})
     assert needs.redo_list(w) == [] and execute.redo_cards_view(w) == []
@@ -214,7 +218,8 @@ def test_8_closed_workdir_empty_no_errors():
 
 
 def _fake_generate(w: Path) -> set:
-    """假生成程式：每一類照生成程式挑句子的同一個判斷（`tts.needs_work`＋老師參考音整份換過就全部），挑到的寫新紀錄。
+    """假生成程式：每一類直接用生成程式挑句子的函式（`tts.needs_work`＋老師參考音整份換過就全部，跟 `tts.generate_teacher`
+    一樣），不經 `execcounts._stale`；挑到的寫新紀錄。
     回傳實際重新生成的 {(角色, 句id)}。參考音照第 4 步「做過沒有」那樣比（`execute.names_done`／`students_done`／
     `stunames_done`），不經 execcounts。"""
     from bookclub import studentgen, students
@@ -243,7 +248,7 @@ def _fake_generate(w: Path) -> set:
             rec = recs.get(x["id"])
             if rec is not None and rec.get("text") is None:
                 rec = {**rec, "text": x.get("text")}
-            if changed or not (rec or {}).get("放回時間格") or tts.needs_work(rec, it, ref_of(x), workdir=w):
+            if changed or tts.needs_work(rec, it, ref_of(x), workdir=w):
                 made.add((role, x["id"]))
                 rel = od.relative_to(w)
                 od.mkdir(parents=True, exist_ok=True)
@@ -296,9 +301,11 @@ def test_10_second_call_fast_with_cache():
         st.log(now, "K0001", 3, "改了第3步決定", None, {"欄位": ["tags"]})
     needs.save(w, st)
     first = needs.redo_list(w)
-    t0 = time.perf_counter()
-    second = needs.redo_list(w)
-    ms = (time.perf_counter() - t0) * 1000
+    ms = 1e9
+    for _ in range(3):   # 取最快的一次（整套測試平行跑時機器忙，單次會被拖慢）
+        t0 = time.perf_counter()
+        second = needs.redo_list(w)
+        ms = min(ms, (time.perf_counter() - t0) * 1000)
     assert second == first and _key(w, "名字:2") in {r["卡號"] for r in second}
     print(f"  redo_list 第二次 {ms:.1f} 毫秒（第一次含排計畫）")
     assert ms < 50, ms
@@ -343,6 +350,86 @@ def test_inspect_prints_stale_counts():
     out = buf.getvalue()
     assert "生成程式會重新生成 1 句（老師 1）；stale 但對不到卡的句子：0 句" in out
     assert "要重做的卡（needs.redo_list，第 4、5 步同一份）1 張：改了 1" in out
+
+
+# ---------- 1015-8 審查修正 ----------
+
+def test_fix_transcript_export_without_version_no_uses_version_at():
+    """建議：輸出紀錄沒記版本號（舊紀錄）時，照處理紀錄產生時間找版本表那一版（`st.version_at`，跟
+    `finalcards._export_info` 一樣），之後又組了新的一版也找得到。"""
+    from bookclub import closing
+
+    w = _upgraded()
+    tv._assemble(w, tv._t(2), _records())
+    chk = wd.read_json(fc.check_path(w))
+    chk["輸出成品"] = {"處理紀錄產生時間": tn.T1}
+    wd.write_json(fc.check_path(w), chk)
+    n, log = closing.last_output_log(w)
+    assert n == 1 and log["產生時間"] == tn.T1, n
+
+def _gen_cards_in_v(w: Path, roles: set | None = None) -> set[str]:
+    """生成句表裡有句子、而且做進過最新一版的卡（roles：只看這幾類）。"""
+    st = needs.load(w)
+    vn = max(st.versions)
+    return {k for (sid, role), g in st.gen.items() if roles is None or role in roles
+            for k in g.get("卡號") or [] if (k, vn) in st.states}
+
+
+def test_fix1_cut_across_range_start_not_edited():
+    """必修 1：部分範圍輸出（從 1.0 秒開始），刪除段落 0–3.6 跨過範圍開頭——組裝時剪點只篩不切，處理紀錄記 0–3.6；
+    卡片那端切到範圍是 1.0–3.6。兩邊都切到範圍再比 → 不算改了。"""
+    w = _upgraded()
+    tv._assemble(w, tv._t(1), _records(), rng=(1.0, 180.0))
+    assert needs.load(w).latest_version()["範圍"] == [1.0, 180.0]
+    assert _redo(w) == {}
+
+
+def test_fix2_missing_gen_logs_listed():
+    """必修 2：生成紀錄不見了（整個 生成/ 被刪、或只刪老師紀錄）——生成程式會整類重做，那幾張卡要列出（以前整類跳過）。"""
+    w = _upgraded()
+    import shutil
+
+    want_all = _gen_cards_in_v(w)
+    want_t = _gen_cards_in_v(w, {"老師"})
+    (w / "生成" / "老師紀錄.json").unlink()
+    got = _redo(w)
+    assert set(got) == want_t and len(want_t) == 2 and set(got.values()) == {needs.REDO_EDITED}, got
+    assert execute.names_done(w)[0] is False
+    shutil.rmtree(w / "生成")
+    got = _redo(w)
+    assert set(got) == want_all and len(want_all) == 4, (got, want_all)
+
+
+def test_fix3_roster_change_busts_cache():
+    """必修 3：快取熱了之後改名冊（學員句的文字會變：名冊上的名字才換成代號）→ redo_list、逐類統計馬上反映。"""
+    w = _upgraded()
+    assert _redo(w) == {}
+    roster = data_dir() / "名冊.csv"
+    old = roster.read_text(encoding="utf-8")
+    before = {x["id"]: x["text"] for x in fc._redo_ctx(w)["學員"]}
+    try:
+        roster.write_text("中文名,其他寫法,英文代號,聲線,性別\n阿明,,Tom,,男\n", encoding="utf-8")   # 拿掉小美
+        after = {x["id"]: x["text"] for x in fc._redo_ctx(w)["學員"]}
+        changed = {i for i in before if before[i] != after.get(i)}
+        assert changed, "名冊改了應該改到學員句的文字"
+        got = _redo(w)
+        assert set(got) == _cards_of(w, {("學員", i) for i in changed}) and got, got
+        row = {(r["類型"], r["做法"]): r for r in execcounts.counts(w)}[("學員段落", "學員重念（用替代聲音）")]
+        assert row["完成"] == row["總數"] - len(changed)
+    finally:
+        roster.write_text(old, encoding="utf-8")
+    assert _redo(w) == {}
+
+
+def test_fix_student_range_cut_by_version_range():
+    """自述第 3 點：第 4 步只做 0–100 秒，學員段落 T005（92–111.6）的時間格切在 100 秒——照最新一版的範圍排計畫，
+    不會一直顯示「改了」；用整支的計畫排就會（92–111.6 跟紀錄的 92–99.6 對不上）。"""
+    w = _upgraded()
+    _write_gen(w, rng=(0.0, 100.0))
+    tv._assemble(w, tv._t(1), _records(), rng=(0.0, 100.0))
+    assert _redo(w) == {}
+    assert ("學員", "T005_01") in execcounts.stale_ids(w)            # 整支的計畫：對不上
+    assert ("學員", "T005_01") not in execcounts.stale_ids(w, 0.0, 100.0)
 
 
 if __name__ == "__main__":

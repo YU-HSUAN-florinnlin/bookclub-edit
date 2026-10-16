@@ -139,6 +139,7 @@ def test_edited_then_next_version_clears():
         pass
     # 第 4 步組裝出新的一版 → 已改清掉（做進這一版了）。
     # 10-15 第2段審查修正：只清「改」早於處理紀錄產生時間的——處理紀錄的時間用現在（以前用 T2＝比改的時間早，現在不會清）
+    tn.gen_logs(w)   # 1015-8 #228：生成程式照改過的字重新生成（不然照生成程式的判斷還是「已改，等重做」）
     log2 = tn._log(stamp=_now())
     tn._setup(w, log2, None)
     tn._quiet(needs.add_version, w, log2)
@@ -326,6 +327,7 @@ def test_step3_edit_shows_edited_until_redone():
         raise AssertionError("已改的不能按通過")
     except ValueError:
         pass
+    tn.gen_logs(w)   # 1015-8 #228：生成程式照改過的字重新生成（不然照生成程式的判斷還是「已改，等重做」）
     log2 = tn._log(stamp=_now())
     tn._setup(w, log2, None)
     tn._quiet(needs.add_version, w, log2)
