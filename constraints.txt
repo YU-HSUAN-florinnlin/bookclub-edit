@@ -2,8 +2,8 @@
 #
 # 兩種晶片（Intel／Apple Silicon）一律套用同一組上限，不為 Apple Silicon 另外放寬。
 # 這是刻意的：如果 Apple Silicon 裝了更新版本，會出現「宇軒的 M1 測試都正常，夥伴的
-# Intel Mac 卻裝不起來或跑不出結果」的落差，事後很難查。安裝時用
-#   uv pip install -r requirements.txt -c constraints.txt
+# Intel Mac 卻裝不起來或跑不出結果」的落差，事後很難查。產生鎖定檔時用
+#   uv pip compile requirements.txt -c constraints.txt …（見 update-lock.sh）
 # 把這份也帶入，requirements.txt 裡沒特別寫版本的套件，版本不會超過這裡的上限。
 torch==2.2.2
 torchaudio==2.2.2

@@ -413,7 +413,7 @@ bash install.sh
 
 同一份腳本在 **macOS** 與 **Linux（含 Windows 的 WSL2 Ubuntu）** 都能跑，會自己判斷平台：macOS 用 Homebrew，Linux 用 apt-get 安裝 ffmpeg、sox、git、build-essential、curl、unzip，`uv` 用官方安裝指令。Linux 安裝系統套件那一步需要系統管理員權限，畫面上會跳出密碼提示。不是 Debian／Ubuntu 系統的話，腳本會列出需要的套件請你自行安裝。
 
-`install.sh` 會依序做：檢查系統與空間 → 裝 Homebrew 套件（ffmpeg、uv）→ 建立 Python 3.11 虛擬環境（`.venv/`）→ 裝 Python 套件與 `bookclub` 指令 → 抓聲音生成引擎 CosyVoice 原始碼 → 下載三個 AI 模型 → 建立 `~/讀書會剪輯資料/` 資料夾（並複製 `profile.example/` 的範例檔進去）→ 建 Claude Code 的 skill 捷徑 → 跑一次環境健檢。**可以重複執行**：已經做過的步驟會自動跳過，不會重複下載，也不會刪掉已經調整過的設定。第一次安裝依網路速度可能要半小時以上，大部分時間花在下載模型。
+`install.sh` 會依序做：檢查系統與空間 → 裝 Homebrew 套件（ffmpeg、uv）→ 建立 Python 3.11 虛擬環境（`.venv/`）→ 裝 Python 套件與 `bookclub` 指令 → 抓聲音生成引擎 CosyVoice 原始碼 → 下載三個 AI 模型 → 建立 `~/讀書會剪輯資料/` 資料夾（並複製 `profile.example/` 的範例檔進去）→ 建 Claude Code 的 skill 捷徑 → 跑一次環境健檢。**可以重複執行**：已經做過的步驟會自動跳過，不會重複下載，也不會刪掉已經調整過的設定。Python 套件照 `requirements.lock` 裝確切版本，已經裝好的再跑一次，版本不同的會換成鎖定檔的版本（開發者怎麼重產鎖定檔見 [`docs/套件版本鎖定.md`](docs/套件版本鎖定.md)）。第一次安裝依網路速度可能要半小時以上，大部分時間花在下載模型。
 
 **WSL2**：2026-09-29 用 0.1.8 在 Windows 11＋WSL2（Ubuntu 26.04）實測，4 分半全自動裝完、中間不用人介入。沒有 NVIDIA 顯示卡時，腳本會裝只用處理器的 torch（CUDA 版多下載約 2.8GB 用不到的套件）；**這一段是 0.1.8 之後才加的，還沒在真的 WSL2 上跑過**，第一次安裝就是它的第一次實測，出錯請把畫面上的訊息回報。`uv` 裝完如果找不到，開新終端機再重跑。ModelScope 限流時（`[403] 操作过于频繁`）腳本會重試後先略過，下一步 `models download` 會補上。
 
@@ -441,72 +441,76 @@ bash install.sh
 
 ### 更新到新版本
 
-每出一個新版本，請把程式**整個重新下載一次**，不要在舊的工具資料夾上更新。做法是：舊的工具資料夾改名留著 → 重新下載一份到原本的位置 → 再跑一次安裝。新版的變動寫在 [`CHANGELOG.md`](CHANGELOG.md)。
+更新是在原本的工具資料夾 `~/bookclub-edit` 裡，用 git 切到新版本的標籤（例如 `v0.2.2-beta4`），**不再改名、不再重新下載**。退回上一版也一樣用標籤切回去。新版的變動寫在 [`CHANGELOG.md`](CHANGELOG.md)。
+
+最省事的做法：每一版的更新說明裡有一段「貼給 Claude Code 的指令」，整段貼給 Claude Code，它會照下面的步驟做完，每一步回報結果。下面是那段指令背後的做法，自己在終端機做也可以照著走。
 
 **不會受影響的**（都不在工具資料夾裡）：
 
 - 設定與資料 `~/讀書會剪輯資料/`：名冊、敏感詞、名字排除清單、發音對照表、匿名聲線、`settings.toml`、專案清單（網頁「總覽」列的專案）
 - 每支影片的工作區：影片旁邊的 `<影片檔名>_剪輯工作區/`，做到一半的照樣接著做。第一次用新版打開舊工作區會自動升級紀錄（多一個 `修改需求/` 資料夾，裡面有升級報告），舊檔不動
-- AI 模型：`~/.cache/bookclub/`（聲音生成，約 5GB）、`~/.cache/huggingface/`（逐字對位）、`~/.cache/torch/pyannote/`（分辨誰在說話）。安裝時會認出已經下載好的，不會重新下載
+- AI 模型：`~/.cache/bookclub/`（聲音生成，約 5GB）、`~/.cache/huggingface/`（逐字對位）、`~/.cache/torch/pyannote/`（分辨誰在說話）
 - 各種登入與金鑰：Hugging Face 登入、Groq 金鑰（`~/.zshrc` 或 `~/.profile`）、Claude Code 登入，都不用重做
 
-**會重新做的**（都在工具資料夾裡）：
-
-- 程式本身
-- Python 執行環境 `.venv/`（Mac 上約 1.3GB）：重新建立、重新裝套件。套件第一次安裝時已經下載過，會留在 `~/.cache/uv/`，重裝時大多直接從這裡拿，不用再從網路下載
-- 聲音生成引擎的原始碼 `third_party/CosyVoice/`（約 10MB，重新從 GitHub 抓）
-
-**大概多久**：2026-09-29 在 WSL2 第一次安裝（套件全部要下載、模型沿用）花 4 分半。重新下載時套件多半已經在電腦裡，應該會比這個快，但還沒實測過。舊的工具資料夾刪掉之前，硬碟要多留約 2GB。
+**會變的**：只有工具資料夾裡的程式。套件有變（第 4 步列的檔案有改）才要重跑 `install.sh`，重建 Python 執行環境 `.venv/`；2026-09-29 在 WSL2 第一次安裝（套件全部要下載、模型沿用）花 4 分半，重跑時套件多半已經在 `~/.cache/uv/`，應該會比這個快。套件沒變就不用裝，切標籤幾秒鐘就好。每一版的更新說明會寫這次要不要裝。**從 0.2.2b3 更新到 0.2.2b4 一定要跑 `install.sh`**（這版開始所有套件鎖定版本，新增了 `requirements.lock`）。
 
 **步驟**（macOS 與 WSL2 一樣，差別寫在步驟裡）：
 
-1. **停掉網頁**：第 4 步正在跑的話，先按「停止」，等它停下來。再到跑網頁的那個終端機視窗按 `Ctrl＋C`（macOS 是雙擊「啟動.command」開出來的那個視窗）。
-2. **確認沒有上一次留下的舊版資料夾**：家目錄底下如果還有 `bookclub-edit-舊版`，先照第 7 步刪掉。
-3. **舊的工具資料夾改名留著**（新版有問題時還可以改回來）：
+1. **確認是用 git 下載的**：`~/bookclub-edit` 裡面要有 `.git` 資料夾。沒有的話先停下來問宇軒，不要往下做。
+2. **先確認第 4 步沒在跑，沒在跑才關網頁**：
+   - 看網頁第 4 步有沒有在跑；請 Claude Code 幫忙時，它會問使用者。（這一版的網頁沒有可以直接查「第 4 步在不在跑」的地方，要用看的。）
+   - 網頁本來就沒開：直接往下。
+   - 第 4 步正在跑：先停下來，等它跑完，或使用者自己按「停止」。Claude Code 不替使用者按停止。
+   - 沒在跑：把網頁關掉。macOS 在跑網頁的那個終端機視窗（雙擊「啟動.command」開出來的）按 `Ctrl＋C`；WSL2 在跑網頁的 Ubuntu 視窗按 `Ctrl＋C`，網頁是在背景跑的話，結束 `bookclub serve` 這個程序（先用一般的結束訊號，不要一開始就強制）。再開一次 <http://localhost:8766>（或 `curl -s http://localhost:8766`），沒有回應才算關好。
+3. **更新前備份（只備份紀錄，不備份大檔）**：
+   - 把 `~/讀書會剪輯資料` 複製成 `~/讀書會剪輯資料_更新前備份_<日期時間>_只有紀錄`，**跳過 `影片/`**。
+   - 每個工作區（`~/讀書會剪輯資料/專案清單.json` 裡列的）旁邊建一個 `<工作區名稱>_更新前備份_<日期時間>_只有紀錄`，**只複製**所有 `.json`、`.jsonl` 檔（含子資料夾裡的），以及 `修改需求/`、`校對/`、`覆核/`、`transcript/` 四個資料夾。影片、聲音檔（wav、flac）、`輸出/` 不複製。每支約幾 MB。
+   - 工作區裡是學員資料：只複製，不打開讀內容。空間不夠就停下來，不要為了騰空間刪東西。
+   - 為什麼不備份大檔：升級只改紀錄格式，不動影片和聲音；大檔壞了可以重新產生，原始影片也還在原本的電腦裡。
+4. **記下套件檔的檢查碼**，等一下比對要不要重裝（macOS 用 `shasum -a 256`，WSL2 用 `sha256sum`）：
+   - `requirements.lock`、`requirements.txt`、`constraints.txt`、`build-constraints.txt`、`install.sh`：整個檔案的檢查碼。舊版沒有、新版有的檔（例如從 0.2.2b3 更新時的 `requirements.lock`）也算有變。
+   - `pyproject.toml`：只比 `version` 那一行以外的內容（例如 `grep -v '^version' pyproject.toml | shasum -a 256`），只改版本號不算套件有變。
+5. **切到新版本**（`v新版` 換成更新說明裡寫的標籤，例如 `v0.2.2-beta4`）：
 
    ```bash
-   cd ~
-   mv bookclub-edit bookclub-edit-舊版
+   cd ~/bookclub-edit
+   git fetch --tags
+   git checkout v新版
    ```
 
-4. **重新下載**，放回原本的位置（位置不變，Claude Code 的 skill 捷徑才會繼續指到對的地方）：
-
-   ```bash
-   cd ~
-   git clone https://github.com/YU-HSUAN-florinnlin/bookclub-edit.git
-   ```
-
-5. **安裝**：
+   如果有本機改過的檔案擋住，停下來看是哪些檔，不要用 `git reset`、`git stash` 或 `git checkout --` 把它們丟掉。
+6. **套件有變才安裝**：照第 4 步再算一次檢查碼。都沒變就跳過；有變就跑（從 0.2.2b3 更新到 0.2.2b4 一定會有變）：
 
    ```bash
    cd ~/bookclub-edit
    bash install.sh
    ```
 
-   最後會自動跑一次環境健檢，第一行印出現在的工具版本，確認是新的版本號；必要項目要全部 ✅。WSL2 如果畫面跳出密碼提示，輸入 Ubuntu 的登入密碼。
-6. **開網頁確認**：macOS 雙擊工具資料夾裡的「啟動.command」；WSL2 打下面兩行，再用 Windows 的瀏覽器開 <http://localhost:8766>：
+   WSL2 如果畫面跳出密碼提示，輸入 Ubuntu 的登入密碼（請 Claude Code 幫忙時，這一步要使用者自己打，Claude 不代打）。
+7. **重開網頁、確認版本**：
+   - macOS：雙擊工具資料夾裡的「啟動.command」。
+   - WSL2：要用登入模式開，才讀得到 `~/.profile` 的 Groq 金鑰。自己開就照平常在 Ubuntu 視窗打 `cd ~/bookclub-edit` 和 `.venv/bin/bookclub serve`；Claude Code 幫忙時會用登入模式在背景開（例如 `wsl bash -lc "cd ~/bookclub-edit && nohup .venv/bin/bookclub serve > /tmp/bookclub-serve.log 2>&1 &"`），這樣開的網頁在原本的 Ubuntu 視窗看不到，關掉視窗也不會停；要關時跟 Claude Code 說「把讀書會剪輯的網頁關掉」，重開電腦也會關掉。
+   - 用瀏覽器（WSL2 用 Windows 的瀏覽器）開 <http://localhost:8766>，有畫面才算開好。「總覽」看得到原本的專案、第 0 步的名冊筆數跟以前一樣，就是設定與資料都接上了。
+   - 看版本號：`bookclub/__init__.py` 裡的版本號要是新的那一版。
+8. **健檢**：
 
    ```bash
    cd ~/bookclub-edit
-   .venv/bin/bookclub serve
+   .venv/bin/bookclub doctor
    ```
 
-   「總覽」看得到原本的專案、第 0 步的名冊筆數跟以前一樣，就是設定與資料都接上了。
-7. **用過一陣子確定新版沒問題，再刪掉舊版資料夾**：macOS 在 Finder 把家目錄底下的 `bookclub-edit-舊版` 丟到垃圾桶；WSL2 打下面這行（刪了就救不回來，確認名字是 `bookclub-edit-舊版` 再按 Enter）：
+   必要項目要全部 ✅。有沒過的，先照畫面上的「修法」處理。
 
-   ```bash
-   rm -rf ~/bookclub-edit-舊版
-   ```
+舊的工具資料夾（以前「改名留著」留下的 `bookclub-edit-舊版`）和以前的更新前備份先留著，之後的版本會說明怎麼清。
 
-**新版有問題、想先回到舊版**：停掉網頁，把新的改名、舊的改回來，再照第 6 步開網頁：
+**新版有問題、想先回到上一版**：照上面第 2 步關網頁，切回上一版的標籤，再照第 7 步開網頁。套件不用退，工作區不用還原。
 
 ```bash
-cd ~
-mv bookclub-edit bookclub-edit-新版有問題
-mv bookclub-edit-舊版 bookclub-edit
+cd ~/bookclub-edit
+git checkout v0.2.2-beta3
 ```
 
-新版本改過工作區的檔案格式時，回到舊版可能讀不懂新版存過的工作區；會不會這樣，看 `CHANGELOG.md` 那一版的說明。
+新版本改過工作區的檔案格式時，回到上一版可能讀不懂新版存過的工作區；會不會這樣、退回的代價是什麼，看 `CHANGELOG.md` 那一版的說明。真的要用回更新前的紀錄，第 3 步的「只有紀錄」備份還在。
 
 ## 5. 怎麼用
 
