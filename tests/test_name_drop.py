@@ -1,7 +1,8 @@
-"""10-17 #245：老師句子裡的名字沒有代號、被拿掉（換成空的）時，旁邊多出來的空格一起清掉。
+"""10-17 #245：老師句子裡的名字沒有代號、被拿掉（換成空的）時，在句首、句尾留下的空白去掉。
 
-以前「小安 來」→「 來」（開頭留空白）、「我跟 小安 說」→「我跟  說」（中間多兩個空格）；
-現在句首句尾的空格去掉、句中直接接起來，兩邊都是英文字母或數字才留一個空格。換成代號時空格照舊。
+以前「小安 來」→「 來」（開頭留空白）、「謝謝 小安」→「謝謝 」（結尾留空白）；現在句首、句尾的空白去掉
+（含全形空白、tab、換行）。10-18 宇軒：句中的空白一律不動（「我跟 小安 說」→「我跟  說」照原樣），
+所以兩邊不會接成名冊上另一個名字、英文代號也不會黏在一起。換成代號時空格照舊。
 
 10-17 #247：第 3 步卡片上名字被拿掉的地方標「（拿掉）」（只在畫面上，不進要念的文字、不送後端）；
 學員段落建議那一行寫「「小安」拿掉了」，不再出現「換成代號：；」的空冒號。
@@ -35,20 +36,32 @@ def _drop(word: str) -> dict:
 
 def test_drop_at_start():
     assert nameplan.replace_name("小安 來，我們開始", _drop("小安")) == "來，我們開始"
+    assert nameplan.replace_name("小安\u3000\t來", _drop("小安")) == "來"   # 全形空白、tab 也去掉
+    assert nameplan.replace_name(" \n小安 來", _drop("小安")) == "來"
 
 
-def test_drop_in_middle():
-    assert nameplan.replace_name("我跟 小安 說過了", _drop("小安")) == "我跟說過了"
+def test_drop_in_middle_keeps_spaces():
+    assert nameplan.replace_name("我跟 小安 說過了", _drop("小安")) == "我跟  說過了"   # 句中照原樣
     assert nameplan.replace_name("我跟小安說過了", _drop("小安")) == "我跟說過了"
+    assert nameplan.replace_name("Hi 小安 Bob 你好", _drop("小安")) == "Hi  Bob 你好"
 
 
 def test_drop_at_end():
     assert nameplan.replace_name("謝謝 小安 ", _drop("小安")) == "謝謝"
+    assert nameplan.replace_name("謝謝\u3000小安\n", _drop("小安")) == "謝謝"
 
 
-def test_drop_between_english_keeps_one_space():
-    assert nameplan.replace_name("Hi 小安 Bob 你好", _drop("小安")) == "Hi Bob 你好"
-    assert nameplan.replace_name("我跟 小安 Bob 說", _drop("小安")) == "我跟Bob 說"   # 一邊是中文：直接接起來
+def test_middle_drop_does_not_join_or_glue():
+    """句中不接起來：「王 小安 明」不會變成名冊上的「王明」；「A 小安 阿德 B」不會黏成「ATom」。"""
+    assert nameplan.replace_name("王 小安 明", _drop("小安")) == "王  明"
+    table = [{"寫法": "小安", "代號": "", "拿掉": True}, {"寫法": "王明", "代號": "Ben"}, {"寫法": "阿德", "代號": "Tom"},
+             {"寫法": "阿明", "代號": "Ben"}, {"寫法": "小華", "代號": "", "拿掉": True}]
+    for src, want in [("王 小安 明", "王  明"), ("A 小安 阿德 B", "A  Tom B"), ("阿德 小安 阿明", "Tom  Ben"),
+                      ("王 小安 小華 明", "王   明")]:
+        got, _ = review.replace_real_names(src, table)
+        assert got == want and "王明" not in got and "ATom" not in got and "TomBen" not in got, (src, got)
+    c = review._replace_each_at("A 小安 阿德 B", _drop("小安"), [{**_drop("阿德"), "代號": "Tom"}])
+    assert c == ("A  Tom B", [2]), c
 
 
 def test_code_keeps_spaces():
@@ -58,22 +71,26 @@ def test_code_keeps_spaces():
 
 
 def test_replace_name_at_positions():
-    new, at, end = nameplan.replace_name_at("我跟 小安 說", _drop("小安"))
-    assert (new, at, end) == ("我跟說", 2, 6), (new, at, end)
-    new, at, end = nameplan.replace_name_at("我跟 小安 說", {**_drop("小安"), "代號": "Amy"})
-    assert (new, at, end) == ("我跟 Amy 說", 3, 5)
+    assert nameplan.replace_name_at("我跟 小安 說", _drop("小安")) == ("我跟  說", 3)
+    assert nameplan.replace_name_at("小安 說", _drop("小安")) == ("說", 0)
+    assert nameplan.replace_name_at("謝謝 小安", _drop("小安")) == ("謝謝", 2)
+    assert nameplan.replace_name_at("我跟 小安 說", {**_drop("小安"), "代號": "Amy"}) == ("我跟 Amy 說", 3)
 
 
 def test_real_names_table_drop():
     table = [{"寫法": "小安", "代號": "", "拿掉": True}, {"寫法": "阿德", "代號": "Tom"}]
-    for src, want in [("小安 來", "來"), ("我跟 小安 說", "我跟說"), ("謝謝 小安", "謝謝"),
-                      ("Hi 小安 Bob", "Hi Bob"), ("我跟 阿德 說", "我跟 Tom 說"), ("阿德 跟 小安 說", "Tom 跟說")]:
+    for src, want in [("小安 來", "來"), ("我跟 小安 說", "我跟  說"), ("謝謝 小安", "謝謝"), ("\t小安\u3000來", "來"),
+                      ("Hi 小安 Bob", "Hi  Bob"), ("我跟 阿德 說", "我跟 Tom 說"), ("阿德 跟 小安 說", "Tom 跟  說")]:
         got, _ = review.replace_real_names(src, table)
         assert got == want, (src, got, want)
     got, ch = review.replace_real_names("我跟 阿德 和 小安 說", table)
-    assert got == "我跟 Tom 和說", got
-    assert [(c["原字"], c["換成"], c["位置"]) for c in ch] == [("阿德", "Tom", 3), ("小安", "", 8)], ch
+    assert got == "我跟 Tom 和  說", got
+    assert [(c["原字"], c["換成"], c["位置"]) for c in ch] == [("阿德", "Tom", 3), ("小安", "", 9)], ch
     assert got[ch[0]["位置"]:ch[0]["位置"] + 3] == "Tom"
+    got, ch = review.replace_real_names("謝謝 小安 小安", table)   # 結尾連兩個：前面記的位置不超過字尾
+    assert got == "謝謝" and [c["位置"] for c in ch] == [2, 2], (got, ch)
+    got, ch = review.replace_real_names("小安 小安 來", table)
+    assert got == "來" and [c["位置"] for c in ch] == [0, 0], (got, ch)
 
 
 def _make(says=("小美 你好，", "我跟 阿明 說過了。")) -> Path:
@@ -99,17 +116,18 @@ def _make(says=("小美 你好，", "我跟 阿明 說過了。")) -> Path:
     return w
 
 
-def test_compute_plan_text_has_no_extra_spaces():
-    w = _make()
+def test_compute_plan_text_has_no_edge_spaces():
+    """`compute_plan` 出來的 `生成`：名字在句首、句尾被拿掉不留頭尾空白。"""
+    w = _make(("小美 你好，", "我說過了，謝謝 阿明 "))
     plan = nameplan.compute_plan(w)
     gens = [g for g in plan["生成"] if str(g.get("id", "")).startswith("S")]
     assert gens, plan
     for g in gens:
         t = g["text"]
-        assert t == t.strip() and not re.search(r"\s\s", t), repr(t)
+        assert t == t.strip(), repr(t)
         assert "小美" not in t and "阿明" not in t, t
     joined = "".join(g["text"] for g in gens)
-    assert "我跟說過了" in joined, [g["text"] for g in gens]
+    assert "謝謝" in joined, [g["text"] for g in gens]
 
 
 # ---------- 10-17 #247：卡片標「（拿掉）」 ----------
@@ -119,12 +137,14 @@ def test_replace_each_at_drop_positions():
     got = review._replace_each_at("小安 跟 阿德 說", _drop("小安"), [{**_drop("阿德"), "代號": "Tom"}])
     assert got == ("跟 Tom 說", [0]), got
     got = review._replace_each_at("阿德 跟 小安 說", _drop("小安"), [{**_drop("阿德"), "代號": "Tom"}])
-    assert got == ("Tom 跟說", [5]), got
+    assert got == ("Tom 跟  說", [6]), got
     got = review._replace_each_at("我跟 小安 和 小安 說", _drop("小安"), [_drop("小安")])
-    assert got == ("我跟和說", [2, 3]), got
+    assert got == ("我跟  和  說", [3, 6]), got
+    got = review._replace_each_at("謝謝 小安 小安", _drop("小安"), [_drop("小安")])
+    assert got == ("謝謝", [2, 2]), got
     assert review._replace_each_at("我跟 Amy 說", _drop("小安"), []) is None
     _t, ch = review.replace_real_names("我跟 小安 說", [{"寫法": "小安", "代號": "", "拿掉": True}])
-    assert ch == [{"原字": "小安", "換成": "", "位置": 2}], ch   # 換成空的＝拿掉，畫面照這個標
+    assert ch == [{"原字": "小安", "換成": "", "位置": 3}], ch   # 換成空的＝拿掉，畫面照這個標
 
 
 _TABLE = [{"寫法": "小安", "代號": "", "拿掉": True}, {"寫法": "阿德", "代號": "Tom"}]
@@ -149,8 +169,8 @@ def _page(only_drop: bool) -> dict:
 def test_backend_card_fields():
     data = _page(True)
     stu = next(x for x in data["項目"] if x["類型"] == "學員段落" and "小安" in x["校對稿"])
-    assert stu["建議稿"] == "我覺得說得很好", stu["建議稿"]
-    assert stu["換過的字"] == [{"原字": "小安", "換成": "", "位置": 3}], stu["換過的字"]
+    assert stu["建議稿"] == "我覺得  說得很好", stu["建議稿"]   # 句中的空白照原樣
+    assert stu["換過的字"] == [{"原字": "小安", "換成": "", "位置": 4}], stu["換過的字"]
     why = stu["建議"]["原因"]
     assert why.startswith("「小安」拿掉了；") and "：；" not in why and "代號：" not in why, why
     both = next(x for x in _page(False)["項目"] if x["類型"] == "學員段落" and "小安" in x["校對稿"])
@@ -212,6 +232,7 @@ def test_web_card_shows_drop_mark_only_on_screen():
         sent = json.dumps(v["posts"], ensure_ascii=False)
         assert v["posts"] and "（拿掉）" not in sent, (k, v["posts"])
     assert "「小安」拿掉了" in got[keys[0]]["card"], got[keys[0]]["card"]
+    assert "我覺得 <mark class=\"rv-drop\"" in got[keys[0]]["card"] and "（拿掉）</mark> 說得很好" in got[keys[0]]["card"]
     assert re.search(r"會念成</span>我跟<mark class=\"rv-drop\"[^>]*>（拿掉）</mark>說過了", got[keys[1]]["card"]), got[keys[1]]["card"]
 
 

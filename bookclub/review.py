@@ -179,7 +179,7 @@ def replace_real_names(text: str, table: list[dict]) -> tuple[str, list[dict]]:
     """名冊上的本名、敏感詞換成代號／替代詞（純函式）。table：[{寫法, 代號}]，長的先換。
     回傳 (新文字, [{原字, 換成, 位置}])，位置是新文字裡的字元索引，給畫面標出換過的字。
     1017 總審查：標 `拿掉` 的列（名冊上的人在 ③ 選不用處理／不是名字、沒有代號）換成空字串，跟老師句子一樣把名字拿掉。
-    10-17 #245：換成空字串時旁邊多出來的空格一起清掉（跟 `nameplan.drop_span` 同一個規則）；`換成` 是空的就是拿掉。"""
+    10-17 #245：換成空字串時，句首、句尾留下的空白去掉、句中的空白不動（跟 `nameplan.drop_span` 同一個規則）；`換成` 是空的就是拿掉。"""
     rows = sorted((r for r in table if (r.get("代號") or r.get("拿掉")) and len(r["寫法"]) >= 2), key=lambda r: -len(r["寫法"]))
     out, changes, i = "", [], 0
     text = text or ""
@@ -188,14 +188,16 @@ def replace_real_names(text: str, table: list[dict]) -> tuple[str, list[dict]]:
         if hit:
             to = hit.get("代號") or ""
             i += len(hit["寫法"])
-            if not to:   # 10-17 #245：名字拿掉時旁邊多的空格一起清（句首句尾去掉、句中接起來；兩邊英數才留一個空格）
-                out = out.rstrip()
-                while i < len(text) and text[i].isspace():
-                    i += 1
-                at = len(out)
-                if out and i < len(text) and _ascii_word(out[-1]) and _ascii_word(text[i]):
-                    out += " "
-                changes.append({"原字": hit["寫法"], "換成": "", "位置": at})
+            if not to:   # 10-17 #245：名字拿掉時，在句首、句尾留下的空白去掉；句中的空白不動（10-18 宇軒）
+                if not out.strip():
+                    out = ""
+                    while i < len(text) and text[i].isspace():
+                        i += 1
+                if not text[i:].strip():
+                    out, i = out.rstrip(), len(text)
+                    for c in changes:   # 結尾的空白去掉了，前面記的位置不能超過字尾
+                        c["位置"] = min(c["位置"], len(out))
+                changes.append({"原字": hit["寫法"], "換成": "", "位置": len(out)})
                 continue
             changes.append({"原字": hit["寫法"], "換成": to, "位置": len(out)})
             out += to
@@ -203,10 +205,6 @@ def replace_real_names(text: str, table: list[dict]) -> tuple[str, list[dict]]:
             out += text[i]
             i += 1
     return out, changes
-
-
-def _ascii_word(ch: str) -> bool:
-    return ch.isascii() and ch.isalnum()
 
 
 def replace_table(workdir: Path | None = None) -> list[dict]:
@@ -1102,14 +1100,9 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     return items
 
 
-def _replace_each(text: str, c: dict, mates: list[dict]) -> str | None:
-    """名字換成代號，同一張卡的其他幾處（同一句同代號）也一起換（找不到的那一處跳過）；主卡自己的找不到回傳 None。"""
-    hit = _replace_each_at(text, c, mates)
-    return hit[0] if hit else None
-
-
 def _replace_each_at(text: str, c: dict, mates: list[dict]) -> tuple[str, list[int]] | None:
-    """`_replace_each` 加上名字被拿掉（沒有代號、換成空的）的位置（新文字裡的字元索引）。
+    """名字換成代號，同一張卡的其他幾處（同一句同代號）也一起換（找不到的那一處跳過）；主卡自己的找不到回傳 None。
+    回傳（新文字, 名字被拿掉（沒有代號、換成空的）的位置（新文字裡的字元索引））。
     10-17 #247：卡片「會念成」在這些位置標「（拿掉）」，只在畫面上，不進要念的文字。"""
     from bookclub import nameplan
 
@@ -1119,9 +1112,9 @@ def _replace_each_at(text: str, c: dict, mates: list[dict]) -> tuple[str, list[i
         hit = nameplan.replace_name_at(t, x)
         if hit is None:
             return None
-        new, at, end = hit
+        new, at = hit
         delta = len(new) - len(t)
-        drops[:] = [p if p <= at else p + delta for p in drops]   # 後面換掉的字，前面記的位置跟著移
+        drops[:] = [p if p <= at else max(at, p + delta) for p in drops]   # 後面換掉的字，前面記的位置跟著移
         if not (x.get("代號") or ""):
             drops.append(at)
         return new
