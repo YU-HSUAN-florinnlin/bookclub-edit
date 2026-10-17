@@ -169,7 +169,7 @@ def check_torch() -> Check:
             return Check("torch", True, f"{version}（{platform.machine()}）")
         return Check(
             "torch", False, f"{version}（預期 2.2.2）",
-            "跑 uv pip install --python .venv/bin/python -r requirements.txt -c constraints.txt 重新對齊版本",
+            "重跑 bash install.sh（會把套件版本對齊 requirements.lock）",
         )
     except Exception as exc:
         return Check("torch", False, f"無法匯入（{exc}）", "跑 install.sh 重新安裝套件")
@@ -184,7 +184,7 @@ def check_numpy() -> Check:
             return Check("numpy", True, version)
         return Check(
             "numpy", False, f"{version}（需要 <2）",
-            "跑 uv pip install --python .venv/bin/python -r requirements.txt -c constraints.txt 重新對齊版本",
+            "重跑 bash install.sh（會把套件版本對齊 requirements.lock）",
         )
     except Exception as exc:
         return Check("numpy", False, f"無法匯入（{exc}）", "跑 install.sh 重新安裝套件")
@@ -198,19 +198,155 @@ def check_import(name: str, module: str, fix: str) -> Check:
         return Check(name, False, f"匯入失敗：{exc}", fix)
 
 
+# 找不到模型設定檔時照這份載入（10-17 從 Fun-CosyVoice3-0.5B/cosyvoice3.yaml 抄的，#241）
+_COSYVOICE_FALLBACK_MODULES = (
+    "cosyvoice.dataset.processor",   # 10-16 壞的就是這支：載入時 import pyarrow
+    "cosyvoice.tokenizer.tokenizer",
+    "cosyvoice.utils.common",
+    "cosyvoice.flow.DiT.dit",
+    "cosyvoice.flow.flow",
+    "cosyvoice.flow.flow_matching",
+    "cosyvoice.hifigan.discriminator",
+    "cosyvoice.hifigan.f0_predictor",
+    "cosyvoice.hifigan.generator",
+    "cosyvoice.hifigan.hifigan",
+    "cosyvoice.llm.llm",
+    "cosyvoice.transformer.upsample_encoder",
+    "matcha.utils.audio",
+    "matcha.hifigan.models",
+    "omegaconf",
+)
+
+
+def cosyvoice_modules(yaml_path: Path | None = None) -> list[str]:
+    """第 4 步載入 CosyVoice 時會 import 到的模組：cosyvoice.cli.cosyvoice，加上模型設定檔
+    （cosyvoice3.yaml）用 `!name:`／`!new:` 引用到的每個模組。10-17 #241：以前只 import 第一個，
+    設定檔引用的 cosyvoice.dataset.processor（import pyarrow）壞了健檢照樣全過，到第 4 步才壞。"""
+    import re
+
+    if yaml_path is None:
+        yaml_path = cosyvoice_model_dir() / "cosyvoice3.yaml"
+    try:
+        text = Path(yaml_path).read_text(encoding="utf-8")
+        found = [m.rsplit(".", 1)[0] for m in re.findall(r"!(?:name|new):([A-Za-z_][\w.]*)", text)]
+    except OSError:
+        found = []
+    if not found:
+        found = list(_COSYVOICE_FALLBACK_MODULES)
+    mods = ["cosyvoice.cli.cosyvoice"]
+    for m in found:
+        if m and m not in mods:
+            mods.append(m)
+    if "cosyvoice.dataset.processor" not in mods:
+        mods.append("cosyvoice.dataset.processor")
+    return mods
+
+
+def _plain_import_error(module: str, exc: Exception) -> str:
+    msg = str(exc)
+    if "NumPy 2" in msg or "numpy 2" in msg.lower():
+        pkg = "pyarrow" if "pyarrow" in msg.lower() else "某個套件"
+        return f"聲音生成引擎載入失敗：{pkg} 版本不對（這版 {pkg} 需要 NumPy 2，工具用的是 NumPy 1）。卡在 {module}：{msg}"
+    return f"聲音生成引擎載入失敗：某個套件版本不對或沒裝好。卡在 {module}：{msg}"
+
+
 def check_cosyvoice_import() -> Check:
+    name = "可匯入 cosyvoice（聲音生成）"
     try:
         from bookclub._cosyvoice_compat import setup
 
         setup()
-        import cosyvoice.cli.cosyvoice  # noqa: F401
-
-        return Check("可匯入 cosyvoice（聲音生成）", True, "可以匯入（已套用相容性修補）")
     except Exception as exc:
         return Check(
-            "可匯入 cosyvoice（聲音生成）", False, f"匯入失敗：{exc}",
+            name, False, f"匯入失敗：{exc}",
             "確認 third_party/CosyVoice 是否存在（install.sh 會自動 clone），或重新安裝套件",
         )
+    import importlib
+
+    mods = cosyvoice_modules()
+    for module in mods:
+        try:
+            importlib.import_module(module)
+        except Exception as exc:
+            return Check(
+                name, False, _plain_import_error(module, exc),
+                "重跑 bash install.sh（會把套件版本對齊 requirements.lock），再跑一次 bookclub doctor",
+            )
+    return Check(name, True, f"可以匯入（已套用相容性修補；連同模型設定檔用到的共 {len(mods)} 個模組）")
+
+
+# ── 套件版本跟鎖定檔比對（只提醒）─────────────────────────
+
+
+def _norm_pkg(name: str) -> str:
+    import re
+
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def installed_versions() -> dict[str, str]:
+    """執行環境 site-packages 裡裝的套件版本。只看 site-packages：setuptools 會把它自己內建的舊版
+    packaging、zipp 等（setuptools/_vendor）加進 sys.path，混進來會誤報版本不一樣。"""
+    import sysconfig
+    from importlib import metadata
+
+    paths = list(dict.fromkeys([sysconfig.get_paths()["purelib"], sysconfig.get_paths()["platlib"]]))
+    out: dict[str, str] = {}
+    for dist in metadata.distributions(path=paths):
+        n = dist.metadata.get("Name")
+        if n:
+            out.setdefault(_norm_pkg(n), dist.version)
+    return out
+
+
+def lock_mismatches(lock_path: Path, installed: dict[str, str]) -> list[tuple[str, str, str | None]]:
+    """鎖定檔裡這台電腦要裝的套件（「; 條件」不符合的跳過），版本跟已裝的不一樣的：(名稱, 鎖定版本, 已裝版本或 None)。
+    版本只比 + 前面（torch 2.2.2+cpu 跟 2.2.2 算一樣）。"""
+    import re
+
+    from packaging.markers import Marker
+
+    have = {_norm_pkg(k): v for k, v in installed.items()}
+    diffs: list[tuple[str, str, str | None]] = []
+    for raw in Path(lock_path).read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        req, _, marker = line.partition(";")
+        m = re.match(r"([A-Za-z0-9_.\-]+)==(\S+)", req.strip())
+        if not m:
+            continue
+        if marker.strip():
+            try:
+                if not Marker(marker.strip()).evaluate():
+                    continue
+            except Exception:
+                continue
+        name, want = _norm_pkg(m.group(1)), m.group(2)
+        got = have.get(name)
+        if got is None or got.split("+", 1)[0] != want.split("+", 1)[0]:
+            diffs.append((name, want, got))
+    return diffs
+
+
+def check_lock_versions(lock_path: Path | None = None, installed: dict[str, str] | None = None) -> Check:
+    name = "套件版本跟鎖定檔一致"
+    if lock_path is None:
+        lock_path = repo_root() / "requirements.lock"
+    if not Path(lock_path).is_file():
+        return Check(name, True, "找不到 requirements.lock，跳過比對", required=False)
+    try:
+        diffs = lock_mismatches(lock_path, installed if installed is not None else installed_versions())
+    except Exception as exc:
+        return Check(name, False, f"比對不了（{exc}）", required=False)
+    if not diffs:
+        return Check(name, True, "已裝的版本都跟 requirements.lock 一樣", required=False)
+    shown = "、".join(f"{n} {got or '沒裝'}（鎖定 {want}）" for n, want, got in diffs[:8])
+    more = f" 等 {len(diffs)} 個" if len(diffs) > 8 else ""
+    return Check(
+        name, False, f"跟鎖定檔不一樣：{shown}{more}",
+        "重跑 bash install.sh（會換成鎖定檔的版本；設定、資料、模型不受影響）", required=False,
+    )
 
 
 def check_transformers_version() -> Check:
@@ -382,6 +518,7 @@ def run_checks(include_claude_call: bool) -> list[Check]:
         check_cosyvoice_import(),
         check_import("onnxruntime", "onnxruntime", "跑 install.sh 重新安裝套件"),
         check_transformers_version(),
+        check_lock_versions(),
         check_groq_key(),
         check_hf_login(),
         check_claude_cli(),

@@ -415,7 +415,7 @@ bash install.sh
 
 同一份腳本在 **macOS** 與 **Linux（含 Windows 的 WSL2 Ubuntu）** 都能跑，會自己判斷平台：macOS 用 Homebrew，Linux 用 apt-get 安裝 ffmpeg、sox、git、build-essential、curl、unzip，`uv` 用官方安裝指令。Linux 安裝系統套件那一步需要系統管理員權限，畫面上會跳出密碼提示。不是 Debian／Ubuntu 系統的話，腳本會列出需要的套件請你自行安裝。
 
-`install.sh` 會依序做：檢查系統與空間 → 裝 Homebrew 套件（ffmpeg、uv）→ 建立 Python 3.11 虛擬環境（`.venv/`）→ 裝 Python 套件與 `bookclub` 指令 → 抓聲音生成引擎 CosyVoice 原始碼 → 下載三個 AI 模型 → 建立 `~/讀書會剪輯資料/` 資料夾（並複製 `profile.example/` 的範例檔進去）→ 建 Claude Code 的 skill 捷徑 → 跑一次環境健檢。**可以重複執行**：已經做過的步驟會自動跳過，不會重複下載，也不會刪掉已經調整過的設定。第一次安裝依網路速度可能要半小時以上，大部分時間花在下載模型。
+`install.sh` 會依序做：檢查系統與空間 → 裝 Homebrew 套件（ffmpeg、uv）→ 建立 Python 3.11 虛擬環境（`.venv/`）→ 裝 Python 套件與 `bookclub` 指令 → 抓聲音生成引擎 CosyVoice 原始碼 → 下載三個 AI 模型 → 建立 `~/讀書會剪輯資料/` 資料夾（並複製 `profile.example/` 的範例檔進去）→ 建 Claude Code 的 skill 捷徑 → 跑一次環境健檢。**可以重複執行**：已經做過的步驟會自動跳過，不會重複下載，也不會刪掉已經調整過的設定。Python 套件照 `requirements.lock` 裝確切版本，已經裝好的再跑一次，版本不同的會換成鎖定檔的版本（開發者怎麼重產鎖定檔見 [`docs/套件版本鎖定.md`](docs/套件版本鎖定.md)）。第一次安裝依網路速度可能要半小時以上，大部分時間花在下載模型。
 
 **WSL2**：2026-09-29 用 0.1.8 在 Windows 11＋WSL2（Ubuntu 26.04）實測，4 分半全自動裝完、中間不用人介入。沒有 NVIDIA 顯示卡時，腳本會裝只用處理器的 torch（CUDA 版多下載約 2.8GB 用不到的套件）；**這一段是 0.1.8 之後才加的，還沒在真的 WSL2 上跑過**，第一次安裝就是它的第一次實測，出錯請把畫面上的訊息回報。`uv` 裝完如果找不到，開新終端機再重跑。ModelScope 限流時（`[403] 操作过于频繁`）腳本會重試後先略過，下一步 `models download` 會補上。
 
@@ -454,23 +454,25 @@ bash install.sh
 - AI 模型：`~/.cache/bookclub/`（聲音生成，約 5GB）、`~/.cache/huggingface/`（逐字對位）、`~/.cache/torch/pyannote/`（分辨誰在說話）
 - 各種登入與金鑰：Hugging Face 登入、Groq 金鑰（`~/.zshrc` 或 `~/.profile`）、Claude Code 登入，都不用重做
 
-**會變的**：只有工具資料夾裡的程式。套件有變（`requirements.txt`、`constraints.txt`、`build-constraints.txt`、`install.sh` 有改，或 `pyproject.toml` 版本號以外的行有改）才要重跑 `install.sh`，重建 Python 執行環境 `.venv/`；2026-09-29 在 WSL2 第一次安裝（套件全部要下載、模型沿用）花 4 分半，重跑時套件多半已經在 `~/.cache/uv/`，應該會比這個快。套件沒變就不用裝，切標籤幾秒鐘就好。每一版的更新說明會寫這次要不要裝。
+**會變的**：只有工具資料夾裡的程式。套件有變（`requirements.lock`、`requirements.txt`、`constraints.txt`、`build-constraints.txt`、`install.sh` 有改，舊版沒有、新版有也算；或 `pyproject.toml` 版本號以外的行有改）才要重跑 `install.sh`，重建 Python 執行環境 `.venv/`；2026-09-29 在 WSL2 第一次安裝（套件全部要下載、模型沿用）花 4 分半，重跑時套件多半已經在 `~/.cache/uv/`，應該會比這個快。套件沒變就不用裝，切標籤幾秒鐘就好。每一版的更新說明會寫這次要不要裝。從 0.2.2b3 更新到 0.2.2b4 一定要跑 `install.sh`（那版開始所有套件鎖定版本，新增了 `requirements.lock`）。
 
 **步驟**（macOS 與 WSL2 一樣，差別寫在步驟裡）：
 
 1. **確認是用 git 下載的**：`~/bookclub-edit` 裡面要有 `.git` 資料夾。沒有的話先停下來問宇軒，不要往下做。
 2. **看第 4 步有沒有在跑，沒在跑才關網頁**：
-   - 查 <http://localhost:8766/api/run/status>（例如 `curl -s http://localhost:8766/api/run/status`），看回應裡的 `第4步執行中`。（這一欄在 0.2.3 起才有。從更舊的版本更新時，正在跑的是舊版，回應裡沒有這一欄：請使用者自己看網頁第 4 步有沒有在跑。）
+   - 查 <http://localhost:8766/api/run/status>（例如 `curl -s http://localhost:8766/api/run/status`），看回應裡的 `第4步執行中`。（這一欄在 0.2.3 起才有。從 0.2.2b4 或更舊的版本更新時，正在跑的是舊版，回應裡沒有這一欄：問使用者第 4 步有沒有在跑。）
    - 沒有回應：網頁本來就沒開，直接往下。
-   - `第4步執行中` 是 `true`：先停下來，問使用者要等它跑完、還是自己按停止。不要替使用者按停止。
-   - 是 `false`：把網頁關掉。macOS 在跑網頁的那個終端機視窗（雙擊「啟動.command」開出來的）按 `Ctrl＋C`；WSL2 在跑網頁的 Ubuntu 視窗按 `Ctrl＋C`，網頁是在背景跑的話，結束 `bookclub serve` 這個程序（先用一般的結束訊號，不要一開始就強制）。再查一次 8766，沒有回應才算關好。
+   - `第4步執行中` 是 `true`（或使用者說在跑）：先停下來，問使用者要等它跑完、還是自己按停止。不要替使用者按停止。
+   - 是 `false`（或使用者說沒在跑）：把網頁關掉。macOS 在跑網頁的那個終端機視窗（雙擊「啟動.command」開出來的）按 `Ctrl＋C`；WSL2 在跑網頁的 Ubuntu 視窗按 `Ctrl＋C`，網頁是在背景跑的話，結束 `bookclub serve` 這個程序（先用一般的結束訊號，不要一開始就強制）。再查一次 8766，沒有回應才算關好。
 3. **更新前備份（只備份紀錄，不備份大檔）**：
    - 先記下現在已經有的「更新前備份」：家目錄底下、以及每個工作區旁邊，名字含 `_更新前備份_` 的資料夾。第 9 步會用到。
    - 把 `~/讀書會剪輯資料` 複製成 `~/讀書會剪輯資料_更新前備份_<日期時間>_只有紀錄`，**跳過 `影片/`**。
-   - 每個工作區（`~/讀書會剪輯資料/專案清單.json` 裡列的）旁邊建一個 `<工作區名稱>_更新前備份_<日期時間>_只有紀錄`，**只複製**所有 `.json`、`.jsonl` 檔，以及 `修改需求/`、`校對/`、`覆核/`、`transcript/` 四個資料夾。影片、聲音檔（wav、flac）、`輸出/` 不複製。每支約幾 MB。
+   - 每個工作區（`~/讀書會剪輯資料/專案清單.json` 裡列的）旁邊建一個 `<工作區名稱>_更新前備份_<日期時間>_只有紀錄`，**只複製**所有 `.json`、`.jsonl` 檔（含子資料夾裡的），以及 `修改需求/`、`校對/`、`覆核/`、`transcript/` 四個資料夾。影片、聲音檔（wav、flac）、`輸出/` 不複製。每支約幾 MB。
    - 工作區裡是學員資料：只複製，不打開讀內容。空間不夠就停下來，不要為了騰空間刪東西。
    - 為什麼不備份大檔：升級只改紀錄格式，不動影片和聲音；大檔壞了可以重新產生，原始影片也還在原本的電腦裡。
-4. **記下套件檔的檢查碼**：`requirements.txt`、`constraints.txt`、`build-constraints.txt`、`install.sh` 四個檔（例如 `shasum -a 256`，WSL2 用 `sha256sum`），等一下比對要不要重裝。`pyproject.toml` 每一版的版本號（`version` 那一行）都會變，不要比整個檔的檢查碼：把 `version` 以外的行另外存一份（例如 `grep -v '^version' pyproject.toml > /tmp/pyproject-舊.txt`），等一下比內容。
+4. **記下套件檔的檢查碼**，等一下比對要不要重裝（macOS 用 `shasum -a 256`，WSL2 用 `sha256sum`）：
+   - `requirements.lock`、`requirements.txt`、`constraints.txt`、`build-constraints.txt`、`install.sh` 五個檔：整個檔案的檢查碼。舊版沒有、新版有的檔（例如從 0.2.2b3 更新時的 `requirements.lock`）也算有變。
+   - `pyproject.toml` 每一版的版本號（`version` 那一行）都會變，不要比整個檔的檢查碼：把 `version` 以外的行另外存一份（例如 `grep -v '^version' pyproject.toml > /tmp/pyproject-舊.txt`），等一下比內容。只改版本號不算套件有變。
 5. **切到新版本**（`v新版` 換成更新說明裡寫的標籤）：
 
    ```bash
@@ -480,7 +482,7 @@ bash install.sh
    ```
 
    如果有本機改過的檔案擋住，停下來看是哪些檔，不要用 `git reset`、`git stash` 或 `git checkout --` 把它們丟掉。
-6. **套件有變才安裝**：再算一次第 4 步那四個檔的檢查碼，`pyproject.toml` 也再取一次 `version` 以外的行跟剛才存的比（例如 `grep -v '^version' pyproject.toml | diff - /tmp/pyproject-舊.txt`）。只有版本號變了不算套件有變。都沒變就跳過；有變就跑：
+6. **套件有變才安裝**：再算一次第 4 步那五個檔的檢查碼（舊版沒有、新版有也算有變），`pyproject.toml` 也再取一次 `version` 以外的行跟剛才存的比（例如 `grep -v '^version' pyproject.toml | diff - /tmp/pyproject-舊.txt`）。只有版本號變了不算套件有變。都沒變就跳過；有變就跑：
 
    ```bash
    cd ~/bookclub-edit

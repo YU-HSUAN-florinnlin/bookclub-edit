@@ -3,11 +3,13 @@
 # 版本都是實測跑得動的組合（在模擬 Intel Mac 的環境測過，見
 # spikes/phase0/）。兩種晶片（Intel／Apple Silicon）用同一份，不要因為
 # Apple Silicon 裝得到更新版本就手滑升級——夥伴的 Intel Mac 裝不起來。
-# 版本上限另外寫在 constraints.txt，安裝時兩份一起帶入。
+# 版本上限另外寫在 constraints.txt。
 #
+# 10-17 起 install.sh 不直接照這份裝，改照 requirements.lock（每個套件、連帶進來的相依都寫死版本）。
+# 改了這份或 constraints.txt，開發者要跑「bash update-lock.sh」重產鎖定檔、一起 commit。
 # 安裝方式（install.sh 會自動做，這裡記錄給人看）：
-#   uv pip install --python .venv/bin/python -r requirements.txt \
-#       -c constraints.txt --build-constraint build-constraints.txt
+#   uv pip install --python .venv/bin/python -r requirements.lock \
+#       --build-constraint build-constraints.txt
 
 # ── 逐字對位（把逐字稿對回聲音的正確時間）──────────────────
 # 主套件 qwen-asr 另外用 --no-deps 裝（見 install.sh），因為它預設會拉
@@ -46,7 +48,7 @@ einops
 matplotlib
 gdown==5.1.0
 wget==3.2
-pyarrow
+pyarrow==25.0.1          # 26.0.0（2026-10-09）起要 NumPy 2，跟上面的 numpy==1.26.4 不合；CosyVoice 載入時會 import（10-17 #241）
 
 # ── 共用（三個模型都會用到，或是環境本身需要）──────────────
 torch==2.2.2

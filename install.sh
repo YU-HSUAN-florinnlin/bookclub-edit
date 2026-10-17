@@ -285,7 +285,10 @@ if [ "$OS_KIND" = "Linux" ] && ! command -v nvidia-smi >/dev/null 2>&1; then
   esac
 fi
 
-uv pip install --python "$PYBIN" -r requirements.txt -c constraints.txt --build-constraint build-constraints.txt
+# 照鎖定檔 requirements.lock 裝確切版本（10-17 #241：requirements.txt 有沒寫版本的套件，
+# 10-16 從頭安裝裝到 pyarrow 26，要 NumPy 2，第 4 步載入聲音生成引擎就失敗）。
+# 已經裝好的環境再跑一次，版本不同的會換成鎖定檔的版本；鎖定檔沒列的（qwen-asr、bookclub 本身）不動。
+uv pip install --python "$PYBIN" -r requirements.lock --build-constraint build-constraints.txt
 
 if [ "$CPU_TORCH" = "1" ]; then
   # 之前裝過 CUDA 版留下的 nvidia-* 套件：只用處理器時用不到，移除省空間
