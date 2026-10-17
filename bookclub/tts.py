@@ -324,6 +324,15 @@ def fill_teacher_text(items: list[dict], merged: dict | None) -> list[dict]:
     return items
 
 
+def teacher_plan_items(workdir: str | Path, gen: list[dict]) -> list[dict]:
+    """名字處理計畫的「生成」整理成生成程式實際用的句子（`normalize_sentences`＋`fill_teacher_text`）。
+    10-17 #244：第 4 步「做過沒有」、第 4 步統計表都用這個，跟生成程式比的是同一份文字。
+    回傳的每一句保留計畫原本的其他欄位，只換 text、slot；編號不合法或沒文字又找不到原文時丟 ValueError（跟生成程式一樣）。"""
+    items = normalize_sentences([{k: g.get(k) for k in ("id", "text", "slot")} for g in gen])
+    fill_teacher_text(items, wd.read_json(wd.merged_transcript_path(Path(workdir)), default=None))
+    return [{**g, "text": it["text"], "slot": it["slot"]} for g, it in zip(gen, items)]
+
+
 # ---------- 重試策略（純函式） ----------
 
 @dataclass

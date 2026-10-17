@@ -197,6 +197,9 @@ def test_done_checks_on_fake_workdir():
         items = tts.normalize_sentences([{k: g.get(k) for k in ("id", "text", "slot")} for g in nameplan.compute_plan(w)["生成"]])
         recs = {r["id"]: r for r in wd.read_json(tts.teacher_log_path(w))["句子"]}
         assert not any(tts.needs_work(recs[it["id"]], it, workdir=w) for it in items)   # 生成程式也說都能沿用
+        from bookclub import execcounts   # 第 4 步統計表的「完成」也要對得起來（審查 B）
+        row = next(r for r in execcounts.counts(w) if r["總數"] == len(plan["生成"]) and "老師" in r["類型"] + r["做法"])
+        assert row["完成"] == row["總數"], row
         # 文字真的改了：兩邊都說要重做，訊息列出是哪一句
         nameplan.compute_plan = lambda wk, *a, **k: {**(p := real_plan(wk, *a, **k)), "生成": [
             {**g, "text": g["text"] + "改"} if g["id"] == sid else g for g in p["生成"]]}

@@ -1076,10 +1076,9 @@ def names_done(workdir: Path) -> tuple[bool, str]:
     table = tts.load_pron_table(workdir / tts.PRON_TABLE_NAME if (workdir / tts.PRON_TABLE_NAME).is_file() else None)
     # 10-17 #244：句子照生成程式的整理方式（去前後空白、沒文字改念原文）再比，不然名字拿掉後留下的空格
     # 會讓生成程式說「沿用」、這裡說「還沒做」，每次繼續執行都失敗
-    items = tts.normalize_sentences([{k: g.get(k) for k in ("id", "text", "slot")} for g in gen])
     try:
-        tts.fill_teacher_text(items, wd.read_json(wd.merged_transcript_path(workdir), default=None))
-    except ValueError as exc:   # 沒文字又找不到原文：生成程式也會在這裡停
+        items = tts.teacher_plan_items(workdir, gen)
+    except ValueError as exc:   # 編號不合法、沒文字又找不到原文：生成程式也會在這裡停，交給它標「失敗」
         return False, str(exc)
     left = [it["id"] for it in items if not (recs.get(it["id"]) or {}).get("放回時間格")
             or tts.record_stale(recs[it["id"]], {**it, "生成用文字": tts.apply_pron(it["text"], table)[0]})
