@@ -116,9 +116,10 @@ def whole_sentence(ordered: list[dict], pos: dict, c: dict, owner: dict) -> dict
     who = owner.get(sid)
     group = nameplan.expand_sentence(ordered, pos[sid], same=lambda s: owner.get(s.get("id")) == who)
     texts = {g["id"]: g["text"] for g in group}
-    new = nameplan.replace_name(texts[sid], c)
+    new = nameplan.mark_name(texts[sid], c)   # 10-18 #245：小段裡先留記號，接成整句後才去句首句尾的空白
     return {"start": group[0]["start"], "end": group[-1]["end"], "原文": "".join(g["text"] for g in group),
-            "換成代號": ("".join(new if g["id"] == sid else texts[g["id"]] for g in group)) if new is not None else None,
+            "換成代號": nameplan.finish_drops("".join(new if g["id"] == sid else texts[g["id"]] for g in group))[0]
+            if new is not None else None,
             "句子": [g["id"] for g in group]}
 
 
@@ -217,8 +218,8 @@ def plan(workdir: str | Path) -> dict:
         if len(g["_cands"]) > 1:   # 從原句重新換，每個名字都換成代號
             text = g["原文"]
             for c in g["_cands"]:
-                text = nameplan.replace_name(text, c) or text
-            g["text"] = text
+                text = nameplan.mark_name(text, c) or text
+            g["text"] = nameplan.finish_drops(text)[0]   # 10-18 #245：全部換完才去句首句尾的空白
         g.pop("_cands")
     out["生成"] = list(merged.values())
     return out

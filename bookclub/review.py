@@ -179,7 +179,7 @@ def replace_real_names(text: str, table: list[dict]) -> tuple[str, list[dict]]:
     """名冊上的本名、敏感詞換成代號／替代詞（純函式）。table：[{寫法, 代號}]，長的先換。
     回傳 (新文字, [{原字, 換成, 位置}])，位置是新文字裡的字元索引，給畫面標出換過的字。
     1017 總審查：標 `拿掉` 的列（名冊上的人在 ③ 選不用處理／不是名字、沒有代號）換成空字串，跟老師句子一樣把名字拿掉。
-    10-17 #245：換成空字串時，句首、句尾留下的空白去掉、句中的空白不動（跟 `nameplan.drop_span` 同一個規則）；`換成` 是空的就是拿掉。"""
+    10-17 #245：換成空字串時，句首、句尾留下的空白去掉、句中的空白不動（跟 `nameplan.finish_drops` 同一個規則）；`換成` 是空的就是拿掉。"""
     rows = sorted((r for r in table if (r.get("代號") or r.get("拿掉")) and len(r["寫法"]) >= 2), key=lambda r: -len(r["寫法"]))
     out, changes, i = "", [], 0
     text = text or ""
@@ -1045,11 +1045,9 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
         if group:
             texts = {g["id"]: g["text"] for g in group}
             hit = _replace_each_at(texts[c["sentence_id"]], c, mates)
-            if hit is not None:
-                texts[c["sentence_id"]] = hit[0]
-                replaced = "".join(texts[g["id"]] for g in group)
-                off = sum(len(texts[g["id"]]) for g in group[:[g["id"] for g in group].index(c["sentence_id"])])
-                drops = [off + p for p in hit[1]]   # 10-17 #247：拿掉的位置換算成整句裡的位置
+            if hit is not None:   # 10-18 #245：接成整句後才去句首句尾空白；#247 的位置是整句裡的位置
+                texts[c["sentence_id"]] = hit
+                replaced, drops = nameplan.finish_drops("".join(texts[g["id"]] for g in group))
         sentence = c.get("sentence") or (ordered[pos[c["sentence_id"]]]["text"] if c.get("sentence_id") in pos else "")
         whole = None
         if group:   # 10-01：重念範圍跟 nameplan.build_plan 同一個算法（整句太長只重念名字那一小句、人改過的照人改的）
@@ -1062,7 +1060,7 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
             if ws["範圍"]:
                 whole_text = nameplan.range_words(words, ws["start"], ws["end"])
                 hit = _replace_each_at(whole_text, c, mates)
-                replaced, drops = hit if hit else (None, [])
+                replaced, drops = nameplan.finish_drops(hit) if hit is not None else (None, [])
             whole = {"start": ws["start"], "end": ws["end"], "原文": whole_text, "換成代號": replaced,
                      "改稿": d.get("改稿", ""), "範圍": ws["範圍"], "原本整句": ws["整句"]}
             if replaced is not None and drops:   # 10-17 #247：只給畫面標「（拿掉）」，要念的字（換成代號）不動
@@ -1100,31 +1098,18 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
     return items
 
 
-def _replace_each_at(text: str, c: dict, mates: list[dict]) -> tuple[str, list[int]] | None:
+def _replace_each_at(text: str, c: dict, mates: list[dict]) -> str | None:
     """名字換成代號，同一張卡的其他幾處（同一句同代號）也一起換（找不到的那一處跳過）；主卡自己的找不到回傳 None。
-    回傳（新文字, 名字被拿掉（沒有代號、換成空的）的位置（新文字裡的字元索引））。
-    10-17 #247：卡片「會念成」在這些位置標「（拿掉）」，只在畫面上，不進要念的文字。"""
+    10-18 #245：名字拿掉的地方留 `nameplan.DROP_MARK`、空白不動；呼叫端接成整句後用 `nameplan.finish_drops`
+    整理（去句首句尾空白），同時拿到拿掉的位置（10-17 #247：卡片「會念成」標「（拿掉）」，只在畫面上）。"""
     from bookclub import nameplan
 
-    drops: list[int] = []
-
-    def one(t: str, x: dict) -> str | None:
-        hit = nameplan.replace_name_at(t, x)
-        if hit is None:
-            return None
-        new, at = hit
-        delta = len(new) - len(t)
-        drops[:] = [p if p <= at else max(at, p + delta) for p in drops]   # 後面換掉的字，前面記的位置跟著移
-        if not (x.get("代號") or ""):
-            drops.append(at)
-        return new
-
-    new = one(text, c)
+    new = nameplan.mark_name(text, c)
     if new is None:
         return None
     for m in mates:
-        new = one(new, m) or new
-    return new, sorted(drops)
+        new = nameplan.mark_name(new, m) or new
+    return new
 
 
 def mark_name_covers(items: list[dict], decisions: dict) -> None:

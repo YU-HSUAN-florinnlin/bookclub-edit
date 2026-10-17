@@ -38,37 +38,45 @@ def sentences_path(workdir: Path) -> Path:
     return workdir / "生成" / "名字句子.json"
 
 
-def drop_span(text: str, a: int, b: int) -> tuple[str, int]:
-    """10-17 #245：把 text[a:b]（名字）拿掉（純函式）。名字在句首：開頭的空白去掉；名字在句尾：結尾的空白去掉
-    （含全形空白、tab、換行）。10-18 宇軒：句中的空白一律不動（兩邊的空格照原樣留著，不接起來、不合併）。
-    回傳（新文字, 拿掉的地方在新文字裡的位置）。"""
-    left, right = text[:a], text[b:]
-    if not left.strip():
-        left, right = "", right.lstrip()
-    if not right.strip():
-        left, right = left.rstrip(), ""
-    return left + right, len(left)
+DROP_MARK = "\ue002"   # 10-18 #245：名字拿掉的地方先留這個記號（私用區字元，不會念出來），接成整句後再整理、拿掉
 
 
-def replace_name_at(sentence: str, cand: dict) -> tuple[str, int] | None:
-    """`replace_name` 加上換掉的地方：回傳（新文字, 換掉的地方在新文字裡的位置）。
-    10-17 #247：卡片要標出名字被拿掉的位置（只在畫面上），所以要知道換在哪裡。"""
+def mark_name(sentence: str, cand: dict) -> str | None:
+    """名字換成代號；沒有代號（名字拿掉）時先換成 `DROP_MARK`、空白一個都不動。找不到回傳 None。
+    10-18 #245：小段（Groq 切的半句）裡拿掉名字不能去空白——小段的頭尾是句中，接成整句之後才用 `finish_drops` 整理。"""
     for key in ("matched_text", "name", "canonical"):
         word = (cand.get(key) or "").strip()
         if word and word in sentence:
-            a = sentence.index(word)
-            code = cand.get("代號") or ""
-            if not code:   # 10-17 #245：沒有代號＝名字拿掉；在句首、句尾時旁邊的空白一起去掉（以前「小安 來」→「 來」）
-                return drop_span(sentence, a, a + len(word))
-            return sentence[:a] + code + sentence[a + len(word):], a
+            return sentence.replace(word, cand.get("代號") or DROP_MARK, 1)
     return None
+
+
+def finish_drops(text: str) -> tuple[str, list[int]]:
+    """整句裡的 `DROP_MARK` 拿掉，回傳（要念的文字, 名字被拿掉的位置）（純函式）。
+    10-17 #245、10-18 宇軒：名字在整句的句首被拿掉，開頭的空白去掉；在句尾，結尾的空白去掉（含全形空白、tab、換行）；
+    句中的空白一律不動。位置給 #247 卡片標「（拿掉）」用，已經扣掉開頭去掉的字數。"""
+    out, at = "", []
+    for ch in text or "":
+        if ch == DROP_MARK:
+            at.append(len(out))
+        else:
+            out += ch
+    if any(not out[:p].strip() for p in at):
+        lead = len(out) - len(out.lstrip())
+        out = out.lstrip()
+        at = [max(0, p - lead) for p in at]
+    if any(not out[p:].strip() for p in at):
+        out = out.rstrip()
+        at = [min(p, len(out)) for p in at]
+    return out, at
 
 
 def replace_name(sentence: str, cand: dict) -> str | None:
     """把句子裡的名字換成代號。依序試：比對到的字、名冊寫法、本名；都找不到回傳 None。
-    10-17 #245：沒有代號（名字拿掉）時，句首、句尾留下的空白去掉（見 `drop_span`）；句中、換成代號時空格照舊。"""
-    hit = replace_name_at(sentence, cand)
-    return hit[0] if hit else None
+    10-17 #245：沒有代號（名字拿掉）時，`sentence` 當成整句，句首、句尾留下的空白去掉（見 `finish_drops`）。
+    小段要再接成整句的，用 `mark_name` 再對整句 `finish_drops`。"""
+    new = mark_name(sentence, cand)
+    return None if new is None else finish_drops(new)[0]
 
 
 END_PUNCT = "。！？!?﹖﹗…"          # 句子結束
@@ -525,7 +533,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         item = whole.get(key)
         # 名字只在原本那一段裡換（避免換到前後段同音的字），再接成整句
         texts = item["_texts"] if item else {g["id"]: g["text"] for g in group}
-        new = replace_name(texts[sid], c)
+        new = mark_name(texts[sid], c)   # 10-18 #245：小段裡先留記號，接成整句後才去句首句尾的空白
         edited = (d.get("改稿") or "").strip()
         if new is None and not item and words:
             # 10-01（17 號 2-7）：找名字掃的是逐字時間的字，句子文字是另一份轉文字結果，寫法可能不一樣
@@ -544,7 +552,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             continue
         if new is not None:     # 找不到字但人已經改好要念的句子（09-30）：照人改的念，不算「要人處理」
             texts[sid] = new    # 10-03 第八批（#12）：同一句另一張卡已經整句改好（改稿）→ 併進那一句，跟縮小範圍的一樣
-        full = "".join(texts[g["id"]] for g in group)
+        full = finish_drops("".join(texts[g["id"]] for g in group))[0]
         lo = min(group[0]["start"], c["start"])   # 名字本身一定包進時間格（句首的字可能比句子早開始）
         hi = max(group[-1]["end"], c["end"])
         if item:
@@ -626,7 +634,7 @@ def _names_in(text: str, cands: list[dict]) -> str | None:
     10-03 補修：同一張卡（同一句同代號）的另一處已經換到的，這一處找不到不算（字已經換成代號了）。"""
     done: set[str] = set()
     for c in cands:
-        new = replace_name(text, c)
+        new = mark_name(text, c)
         if new is None:
             if c.get("同一張卡") and c["同一張卡"] in done:
                 continue
@@ -634,7 +642,7 @@ def _names_in(text: str, cands: list[dict]) -> str | None:
         text = new
         if c.get("同一張卡"):
             done.add(c["同一張卡"])
-    return text
+    return finish_drops(text)[0]   # 10-18 #245：範圍裡的字就是整句，換完才去句首句尾的空白
 
 
 def _add_ranged(ranged: list[dict], manual: list[dict], c: dict, i, d: dict, ws: dict, words: list[dict] | None) -> None:

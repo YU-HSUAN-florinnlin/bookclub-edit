@@ -34,6 +34,12 @@ def _drop(word: str) -> dict:
     return {"matched_text": word, "name": word, "canonical": word, "代號": ""}
 
 
+def _each(text: str, c: dict, mates: list[dict]):
+    """第 3 步卡片那條路：換完（留記號）再整理成整句，回傳（文字, 拿掉的位置）。"""
+    hit = review._replace_each_at(text, c, mates)
+    return None if hit is None else nameplan.finish_drops(hit)
+
+
 def test_drop_at_start():
     assert nameplan.replace_name("小安 來，我們開始", _drop("小安")) == "來，我們開始"
     assert nameplan.replace_name("小安\u3000\t來", _drop("小安")) == "來"   # 全形空白、tab 也去掉
@@ -60,7 +66,7 @@ def test_middle_drop_does_not_join_or_glue():
                       ("王 小安 小華 明", "王   明")]:
         got, _ = review.replace_real_names(src, table)
         assert got == want and "王明" not in got and "ATom" not in got and "TomBen" not in got, (src, got)
-    c = review._replace_each_at("A 小安 阿德 B", _drop("小安"), [{**_drop("阿德"), "代號": "Tom"}])
+    c = _each("A 小安 阿德 B", _drop("小安"), [{**_drop("阿德"), "代號": "Tom"}])
     assert c == ("A  Tom B", [2]), c
 
 
@@ -70,11 +76,58 @@ def test_code_keeps_spaces():
     assert nameplan.replace_name("小安 來", c) == "Amy 來"
 
 
-def test_replace_name_at_positions():
-    assert nameplan.replace_name_at("我跟 小安 說", _drop("小安")) == ("我跟  說", 3)
-    assert nameplan.replace_name_at("小安 說", _drop("小安")) == ("說", 0)
-    assert nameplan.replace_name_at("謝謝 小安", _drop("小安")) == ("謝謝", 2)
-    assert nameplan.replace_name_at("我跟 小安 說", {**_drop("小安"), "代號": "Amy"}) == ("我跟 Amy 說", 3)
+def test_finish_drops_positions():
+    fin = lambda t, c=_drop("小安"): nameplan.finish_drops(nameplan.mark_name(t, c))   # noqa: E731
+    assert fin("我跟 小安 說") == ("我跟  說", [3])
+    assert fin("  小安 說") == ("說", [0])   # 開頭去掉的字數扣掉
+    assert fin("謝謝 小安 ") == ("謝謝", [2])
+    assert fin("我跟 小安 說", {**_drop("小安"), "代號": "Amy"}) == ("我跟 Amy 說", [])
+    assert nameplan.finish_drops(" 前面 有空白") == (" 前面 有空白", [])   # 沒有拿掉名字：一個字都不動
+
+
+def test_segments_joined_before_trimming():
+    """10-18 複審：小段（Groq 切的半句）頭尾不是句首句尾。小段裡拿掉名字不去空白，接成整句後才去整句的頭尾空白。"""
+    fin = lambda parts: nameplan.finish_drops("".join(parts))   # noqa: E731
+    mk = lambda t: nameplan.mark_name(t, _drop("小安"))   # noqa: E731
+    assert fin(["王", mk(" 小安 明")]) == ("王  明", [2])
+    assert fin(["Hi", mk(" 小安 Bob")]) == ("Hi  Bob", [3])
+    assert fin([mk("Hi 小安 "), "Bob"]) == ("Hi  Bob", [3])
+    assert fin([mk("我跟 小安"), "說"]) == ("我跟 說", [3])
+    assert fin([mk(" 小安 來，"), "我們開始"]) == ("來，我們開始", [0])
+    assert fin(["好，", mk("謝謝 小安 ")]) == ("好，謝謝", [4])
+
+
+def _sent(sid, a, b, text):
+    return {"id": sid, "start": a, "end": b, "text": text, "label": "老師"}
+
+
+def test_build_plan_segments():
+    """nameplan.build_plan：名字在後一小段的開頭、前一小段的結尾（改過時間納進下一句），句中空白照原樣。"""
+    cases = [
+        ([_sent("a", 0, 1, "王，"), _sent("b", 1.2, 2, " 小安 明。")], "b", (1.3, 1.6), False, "王，  明。"),
+        ([_sent("a", 0, 1, "Hi,"), _sent("b", 1.2, 2, " 小安 Bob.")], "b", (1.3, 1.6), False, "Hi,  Bob."),
+        ([_sent("a", 0, 1, "Hi 小安 "), _sent("b", 1.2, 2, "Bob。")], "a", (0.4, 1.9), True, "Hi  Bob。"),
+        ([_sent("a", 0, 1, "我跟 小安"), _sent("b", 1.2, 2, "說。")], "a", (0.4, 1.9), True, "我跟 說。"),
+        ([_sent("a", 0, 1, " 小安 來，"), _sent("b", 1.2, 2, "我們開始。")], "a", (0.1, 0.4), False, "來，我們開始。"),
+    ]
+    for sents, sid, (a, b), moved, want in cases:
+        c = {**_drop("小安"), "sentence_id": sid, "start": a, "end": b, **({"改過時間": True} if moved else {})}
+        plan = nameplan.build_plan([c], {}, {x["id"]: x for x in sents})
+        got = [g["text"] for g in plan["生成"]]
+        assert got == [want], (sents, got, want)
+
+
+def test_student_whole_sentence_segments():
+    """studentnames.whole_sentence（保留原聲學員講到名字，這條路沒有最後一道名冊檢查）：一樣接成整句後才整理。"""
+    from bookclub import studentnames
+
+    ordered = [_sent("a", 0, 1, "王，"), _sent("b", 1.2, 2, " 小安 明。")]
+    owner = {"a": "學員1", "b": "學員1"}
+    got = studentnames.whole_sentence(ordered, {"a": 0, "b": 1}, {**_drop("小安"), "sentence_id": "b"}, owner)
+    assert got["換成代號"] == "王，  明。", got
+    ordered = [_sent("a", 0, 1, " 小安 來，"), _sent("b", 1.2, 2, "我們開始。")]
+    got = studentnames.whole_sentence(ordered, {"a": 0, "b": 1}, {**_drop("小安"), "sentence_id": "a"}, owner)
+    assert got["換成代號"] == "來，我們開始。", got
 
 
 def test_real_names_table_drop():
@@ -130,17 +183,43 @@ def test_compute_plan_text_has_no_edge_spaces():
     assert "謝謝" in joined, [g["text"] for g in gens]
 
 
+def test_card_segments_joined_before_trimming():
+    """第 3 步卡片（review.page_data 的名字卡）：前一小段「王，」＋名字那一小段「 阿明 明。」→ 會念成「王，  明。」，
+    拿掉的位置是整句裡的位置。沒有逐字時間（不走縮小範圍），只看句子文字。"""
+    w = _make(("小美 你好，", " 阿明 明。"))
+    sp = json.loads((w / "說話者判斷.json").read_text(encoding="utf-8"))
+    d = wd.read_json(wd.names_path(w))
+    k = next(n for n, x in enumerate(sp["sentences"]) if x["id"] == d["candidates"][1]["sentence_id"])
+    sp["sentences"][k - 1]["text"] = "王，"
+    (w / "說話者判斷.json").write_text(json.dumps(sp, ensure_ascii=False), encoding="utf-8")
+    m = json.loads((w / "transcript" / "merged.json").read_text(encoding="utf-8"))
+    m["words"] = []
+    (w / "transcript" / "merged.json").write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
+    real = review.replace_table
+    review.replace_table = lambda workdir=None: []
+    try:
+        data = review.page_data(w)
+    finally:
+        review.replace_table = real
+    name = next(x for x in data["項目"] if x["類型"] == "名字" and x["matched_text"] == "阿明")
+    whole = name["整句"]
+    assert whole["換成代號"].endswith("王，  明。"), whole
+    assert whole["拿掉的位置"] == [len(whole["換成代號"]) - 3], whole
+    plan = nameplan.compute_plan(w)
+    assert any(g["text"].endswith("王，  明。") for g in plan["生成"]), [g["text"] for g in plan["生成"]]
+
+
 # ---------- 10-17 #247：卡片標「（拿掉）」 ----------
 
 def test_replace_each_at_drop_positions():
     """後端純函式：拿掉的位置（新文字裡的索引）；同一張卡的另一處換成代號，前面記的位置跟著移。"""
-    got = review._replace_each_at("小安 跟 阿德 說", _drop("小安"), [{**_drop("阿德"), "代號": "Tom"}])
+    got = _each("小安 跟 阿德 說", _drop("小安"), [{**_drop("阿德"), "代號": "Tom"}])
     assert got == ("跟 Tom 說", [0]), got
-    got = review._replace_each_at("阿德 跟 小安 說", _drop("小安"), [{**_drop("阿德"), "代號": "Tom"}])
+    got = _each("阿德 跟 小安 說", _drop("小安"), [{**_drop("阿德"), "代號": "Tom"}])
     assert got == ("Tom 跟  說", [6]), got
-    got = review._replace_each_at("我跟 小安 和 小安 說", _drop("小安"), [_drop("小安")])
+    got = _each("我跟 小安 和 小安 說", _drop("小安"), [_drop("小安")])
     assert got == ("我跟  和  說", [3, 6]), got
-    got = review._replace_each_at("謝謝 小安 小安", _drop("小安"), [_drop("小安")])
+    got = _each("謝謝 小安 小安", _drop("小安"), [_drop("小安")])
     assert got == ("謝謝", [2, 2]), got
     assert review._replace_each_at("我跟 Amy 說", _drop("小安"), []) is None
     _t, ch = review.replace_real_names("我跟 小安 說", [{"寫法": "小安", "代號": "", "拿掉": True}])
