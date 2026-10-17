@@ -26,7 +26,9 @@ README 的例子用 `~/bookclub-edit`，夥伴放在別的位置時照查到的�
 ## 平常怎麼操作（0.2.1b3）
 
 1. **啟動**：macOS 雙擊工具資料夾裡的「啟動.command」，瀏覽器會自動開 <http://localhost:8766>。
-   WSL2 在終端機跑 `cd <工具資料夾> && .venv/bin/bookclub serve`，再請夥伴用 Windows 的瀏覽器開
+   WSL2 由你在 Ubuntu 裡用登入模式、脫離對話在背景啟動（例如
+   `wsl -d Ubuntu -- bash -lc 'cd <工具資料夾> && setsid nohup .venv/bin/bookclub serve >> ~/讀書會剪輯資料/serve.log 2>&1 < /dev/null &'`；
+   Windows 實機還沒驗過，待辦 #242），告訴夥伴「網頁在背景跑，關掉對話也不會停；要關跟我說」，再請夥伴用 Windows 的瀏覽器開
    <http://localhost:8766>（WSL2 不會自動開瀏覽器，終端機會印出網址；網頁在 WSL2 上還沒實測）。
    伺服器記得上次在做哪支影片，重開後自動接回。
 2. **總覽選影片**：按「選影片」會跳出電腦內建的選檔視窗，選好再按「開始分析」。會在影片旁邊建
@@ -88,7 +90,7 @@ README 的例子用 `~/bookclub-edit`，夥伴放在別的位置時照查到的�
    → 只備份紀錄（`~/讀書會剪輯資料` 跳過 `影片/`；每個工作區只複製所有 `.json`、`.jsonl`（含子資料夾）、`修改需求/`、`校對/`、`覆核/`、
    `transcript/`）→ 記套件檔檢查碼（`requirements.lock`、`requirements.txt`、`constraints.txt`、`build-constraints.txt`、`install.sh`；
    舊版沒有、新版有也算有變；`pyproject.toml` 只比 `version` 以外的行，版本號每版都變）→ `git fetch --tags`、`git checkout <新標籤>` → 套件有變才 `bash install.sh`
-   → 用登入模式重開網頁、確認 8766 有回應 → 看版本號 → `bookclub doctor` 全 ✅ → 照 README 的三項檢查刪
+   → 重開網頁（Mac 雙擊啟動.command；WSL2 照上面「啟動」的背景開法）、確認 8766 有回應 → 看版本號 → `bookclub doctor` 全 ✅ → 照 README 的三項檢查刪
    `bookclub-edit-舊版*`、四項檢查刪舊的更新前備份，只留這一次的小備份，做完說空出多少（不用問夥伴）。
    退回上一版也用標籤（`git checkout <上一版標籤>`，套件有變再跑 `install.sh`），工作區不用還原。
    `~/讀書會剪輯資料/`、影片旁邊的工作區、`~/.cache/` 底下的模型、各種登入與金鑰都不在工具資料夾裡，不受影響。

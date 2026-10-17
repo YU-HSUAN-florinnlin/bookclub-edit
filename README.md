@@ -172,7 +172,8 @@ WSL2 不能跳過：這個工具只在 Mac 與 WSL2 的 Ubuntu 上裝成功過�
 - **系統管理員的同意視窗**：安裝 WSL2 要用系統管理員身分（「Windows：第一次安裝 WSL2 與 Ubuntu」第 2、3 步）。Claude 多半沒辦法替您按「要允許此 App 變更您的裝置嗎？」，也可能沒辦法自己開系統管理員的 PowerShell；這一步請照它的說明自己開、自己打指令。
 - **重開機**：第 4 步要重新開機，Claude 的對話會中斷，請看下面「重開機之後怎麼接回去」。
 - **設定 Ubuntu 的使用者名稱與密碼**（第 5 步）：在 Ubuntu 視窗裡自己打。這組密碼不要告訴 Claude。
-- **要輸入系統管理員密碼的指令**（以 `sudo` 開頭的，例如安裝 git、`bash install.sh` 裡安裝系統套件那一步）：Claude 是在 Windows 那邊跑指令，密碼提示可能不會出現在您開的 Ubuntu 視窗，指令會卡住。所以這類指令請 Claude **只告訴您要打哪一行**，由您自己在 Ubuntu 視窗打、自己輸入密碼，打完跟它說結果。
+- **要輸入 Ubuntu 密碼的指令**（以 `sudo` 開頭的、`bash install.sh` 裡安裝系統套件那一步）：密碼提示不會出現在您的視窗，指令會卡住。這類指令請 Claude **只告訴您要打哪一行**，您自己在 Ubuntu 視窗打、自己輸入密碼，打完跟它說結果。
+- **不需要密碼的 Ubuntu 指令**（git、`bookclub doctor`、`bookclub inspect`、複製檔案、`uv pip install` 等）：Claude 會用 `wsl -d Ubuntu -- bash -lc "…"` **直接幫您執行**，不用您自己打。畫面跳出詢問時，您按「允許」。
 - **金鑰**：Groq 金鑰（第 9 步）、Hugging Face 金鑰（`hf auth login`）都由您自己在 Ubuntu 視窗輸入。**金鑰不要貼進和 Claude 的對話**；Claude 只需要知道「已經填好了」。
 - **登入**：Ubuntu 裡要另外裝一份 Claude Code 並登入一次（「準備什麼」第 5 項）；登入時會開瀏覽器或給網址，要您自己完成。
 
@@ -189,7 +190,8 @@ WSL2 不能跳過：這個工具只在 Mac 與 WSL2 的 Ubuntu 上裝成功過�
 2. 一次只做一步。每一步先用白話告訴我：要做什麼、為什麼、大概要多久，再動手。
 3. 需要我自己操作的時候，停下來，把我要做的事一條一條講清楚，等我說「好了」再繼續。包括：
    - 系統管理員的同意視窗、重新開機、設定 Ubuntu 的帳號密碼、輸入金鑰、登入
-   - 要輸入系統管理員密碼的指令（sudo 開頭的，包括 bash install.sh）：你不要自己跑，只告訴我要在 Ubuntu 視窗打哪一行，我自己打、自己輸入密碼，再把結果告訴你
+   - 要輸入密碼的指令（sudo 開頭的，包括 bash install.sh）：你不要自己跑，只告訴我要在 Ubuntu 視窗打哪一行，我自己打、自己輸入密碼，再把結果告訴你
+   - 不需要密碼的 Ubuntu 指令（git、bookclub doctor、bookclub inspect、複製檔案、uv pip install 等）：請你用 wsl -d Ubuntu -- bash -lc "…" 直接幫我執行，不用叫我自己打
    - 要執行 wsl --shutdown 之前（例如建好 .wslconfig 之後）：先說明這會把 Ubuntu 整個關掉，等我說好
    - 碰到 BIOS 虛擬化沒開、Windows 版本太舊、這台電腦沒有系統管理員權限：不要自己想辦法，停下來請我找開發者協助
 4. 不要叫我把任何金鑰或密碼貼進對話。需要金鑰的地方，告訴我在哪個視窗、打哪一行，我自己輸入。不要用任何方式繞過密碼（不把密碼寫進指令、不改成免密碼）。不要執行會把金鑰印出來的指令（例如印出環境變數、顯示 ~/.profile 等設定檔的內容）；要確認金鑰有沒有設好，只用數行數的方式（例如 grep -c GROQ_API_KEY ~/.profile）或 bookclub doctor。
@@ -197,6 +199,7 @@ WSL2 不能跳過：這個工具只在 Mac 與 WSL2 的 Ubuntu 上裝成功過�
 6. 不要刪除任何檔案，不要改工具資料夾裡的程式。新建檔案（例如 .wslconfig）或在設定檔最後加一行可以，但動手前先說明要建什麼、加什麼。
 7. 查影片工作區的資料只能用 bookclub inspect，不要打開逐字稿、名冊或工作區裡的檔案（規則在 docs/給AI助手-查工作區資料.md）。
 8. 每做完一步，告訴我目前做到 README 的哪一步；要重新開機前，先告訴我開機後要怎麼跟你說，才能接著做。
+9. 如果你因為任何規則或設定不能執行，直接告訴我是哪一條，原文引用。
 ```
 
 **重開機之後怎麼接回去**：開機後打開 Claude 桌面版，回到原本那個對話（如果找得到）或開一個新對話，貼上：
@@ -211,23 +214,21 @@ WSL2 不能跳過：這個工具只在 Mac 與 WSL2 的 Ubuntu 上裝成功過�
 
 **之後每次要用工具**：
 
-主要做法是**自己打開 Ubuntu 視窗**，打下面兩行（跟「怎麼用」一樣）：
-
-```bash
-cd ~/bookclub-edit
-.venv/bin/bookclub serve
-```
-
-再在 Windows 的瀏覽器（Edge 或 Chrome）打開 <http://localhost:8766>（**瀏覽器要您自己開**）。這個 Ubuntu 視窗要一直開著（可以縮小），關掉網頁就停了（見「Windows（WSL2）要注意的事」）。
-
-備用做法：請 Claude 代為啟動。可以跟它說：
+打開 Claude Code，請它啟動網頁。可以跟它說：
 
 ```text
-請幫我啟動讀書會剪輯工具的網頁：用登入模式在 Ubuntu 裡執行（例如 wsl bash -lc "cd ~/bookclub-edit && .venv/bin/bookclub serve"），讓它在背景一直跑，跑起來之後告訴我網址。不要把金鑰印出來。
+請幫我啟動讀書會剪輯工具的網頁。在 Ubuntu 裡用登入模式、脫離這個對話在背景啟動，例如：
+wsl -d Ubuntu -- bash -lc 'cd ~/bookclub-edit && setsid nohup .venv/bin/bookclub serve >> ~/讀書會剪輯資料/serve.log 2>&1 < /dev/null &'
+再確認 http://localhost:8766 有回應，跟我說網址。不要把金鑰印出來。
 ```
 
-- 要用登入模式（`bash -lc`）啟動，伺服器才會讀到寫在 `~/.profile` 的 Groq 金鑰；不用登入模式的話，可能讀不到金鑰（這是照程式推論的，還沒實測）。讀不到時網頁「總覽」會提醒。
-- 這樣啟動時沒有一個「要一直開著的 Ubuntu 視窗」：伺服器跟著 Claude 那邊跑，對話結束或關掉 Claude 時，網頁可能會跟著停（還沒驗過）。第 4 步要跑好幾個小時，請用上面的主要做法。
+再在 Windows 的瀏覽器（Edge 或 Chrome）打開 <http://localhost:8766>（**瀏覽器要您自己開**）。
+
+- 網頁在背景跑：關掉 Claude 的對話也不會停。要關網頁，跟 Claude 說「把讀書會剪輯的網頁關掉」；重開電腦也會關掉。
+- 這個做法 Windows 實機還沒驗過（待辦 #242）。
+- 要用登入模式（`bash -lc`）啟動，伺服器才會讀到寫在 `~/.profile` 的 Groq 金鑰。讀不到時網頁「總覽」會提醒。
+- 網頁的訊息記在 `~/讀書會剪輯資料/serve.log`。
+- 也可以自己開：打開 Ubuntu 視窗，打 `cd ~/bookclub-edit` 和 `.venv/bin/bookclub serve`，視窗要一直開著（可以縮小）。
 
 ### Windows：第一次安裝 WSL2 與 Ubuntu
 
@@ -492,7 +493,7 @@ bash install.sh
    WSL2 如果畫面跳出密碼提示，輸入 Ubuntu 的登入密碼（請 Claude Code 幫忙時，這一步要使用者自己打，Claude 不代打）。
 7. **重開網頁、確認版本**：
    - macOS：雙擊工具資料夾裡的「啟動.command」。
-   - WSL2：要用登入模式開，才讀得到 `~/.profile` 的 Groq 金鑰。自己開就照平常在 Ubuntu 視窗打 `cd ~/bookclub-edit` 和 `.venv/bin/bookclub serve`；Claude Code 幫忙時會用登入模式在背景開（例如 `wsl bash -lc "cd ~/bookclub-edit && nohup .venv/bin/bookclub serve > /tmp/bookclub-serve.log 2>&1 &"`），這樣開的網頁在原本的 Ubuntu 視窗看不到，關掉視窗也不會停；要關時跟 Claude Code 說「把讀書會剪輯的網頁關掉」，重開電腦也會關掉。
+   - WSL2：Claude Code 幫忙時，由它在 Ubuntu 裡用登入模式、脫離對話在背景啟動，例如 `wsl -d Ubuntu -- bash -lc 'cd ~/bookclub-edit && setsid nohup .venv/bin/bookclub serve >> ~/讀書會剪輯資料/serve.log 2>&1 < /dev/null &'`，再確認 8766 有回應，並告訴使用者：「網頁在背景跑，關掉 Claude 對話也不會停；要關網頁跟 Claude 說。」（這個做法 Windows 實機還沒驗過，待辦 #242。）自己開就在 Ubuntu 視窗打 `cd ~/bookclub-edit` 和 `.venv/bin/bookclub serve`，視窗開著不要關。
    - 用瀏覽器（WSL2 用 Windows 的瀏覽器）開 <http://localhost:8766>，有畫面才算開好。「總覽」看得到原本的專案、第 0 步的名冊筆數跟以前一樣，就是設定與資料都接上了。
    - 看版本號：`bookclub/__init__.py` 裡的版本號要是新的那一版。
 8. **健檢**：
