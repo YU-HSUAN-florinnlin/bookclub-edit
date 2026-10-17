@@ -222,4 +222,6 @@ def plan(workdir: str | Path) -> dict:
             g["text"] = nameplan.finish_drops(text)[0]   # 10-18 #245：全部換完才去句首句尾的空白
         g.pop("_cands")
     out["生成"] = list(merged.values())
+    for g in out["生成"]:   # 10-18 #245 小保險：要念的字裡不能留著拿掉名字的記號
+        nameplan.check_no_drop_mark(g.get("text"))
     return out

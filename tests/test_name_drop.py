@@ -209,6 +209,86 @@ def test_card_segments_joined_before_trimming():
     assert any(g["text"].endswith("王，  明。") for g in plan["生成"]), [g["text"] for g in plan["生成"]]
 
 
+# ---------- 10-18 #245 小保險：拿掉名字的記號不能漏出去 ----------
+
+def _student_setup(w: Path):
+    """學員1 保留原聲、講到「小安」（沒有代號、選換成代號＝拿掉名字），兩小段「王，」＋「 小安 明。」。
+    學員名字候選照樣用 studentnames.find 的格式（不跑找名字）。回傳還原用的函式。"""
+    from bookclub import studentnames
+
+    sp = json.loads((w / "說話者判斷.json").read_text(encoding="utf-8"))
+    td = json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))
+    t = next(x for x in td["段落"] if x["說話者"] == "學員1")
+    by = {x["id"]: x for x in sp["sentences"]}
+    a, b = by[t["句子"][0]], by[t["句子"][1]]
+    a["text"], b["text"] = "王，", " 小安 明。"
+    (w / "說話者判斷.json").write_text(json.dumps(sp, ensure_ascii=False), encoding="utf-8")
+    dec = review.load_decisions(w)
+    dec["學員聲音"] = {"學員1": "保留原聲"}
+    review._save_decisions(w, dec)
+    c = {**_drop("小安"), "sentence_id": b["id"], "sentence": b["text"], "start": b["start"] + 0.2, "end": b["start"] + 0.6,
+         "學員": "學員1", "位置": "句中", "信心": "高", "比對層級": "精確", "敏感詞": False}
+    c["id"] = studentnames.cand_id(c)
+    wd.write_json(studentnames.decisions_path(w), {c["id"]: {"做法": studentnames.CODE, "tags": [], "note": ""}})
+    real = studentnames.find
+    studentnames.find = lambda workdir, force=False: {"保留原聲學員": ["學員1"], "candidates": [dict(c)]}
+    return lambda: setattr(studentnames, "find", real)
+
+
+def test_no_drop_mark_leaks_anywhere():
+    """假工作區跑 compute_plan、review.page_data、studentnames.plan：回傳的 JSON 與工作區所有檔案都沒有記號。"""
+    from bookclub import studentnames
+
+    w = _make(("小美 你好，", "我跟 阿明 說過了，謝謝 阿明 "))
+    undo = _student_setup(w)
+    try:
+        outs = {"compute_plan": nameplan.compute_plan(w), "make_plan": nameplan.make_plan(w),
+                "page_data": review.page_data(w), "studentnames.plan": studentnames.plan(w)}
+    finally:
+        undo()
+    stu = outs["studentnames.plan"]["生成"]
+    assert stu and stu[0]["text"] == "王，  明。", stu   # 這條路有真的走到拿掉名字
+    assert any(not (c.get("代號") or "") for c in wd.read_json(wd.names_path(w))["candidates"])
+    for k, v in outs.items():
+        assert nameplan.DROP_MARK not in json.dumps(v, ensure_ascii=False), k
+    for f in w.rglob("*"):
+        if f.is_file() and f.suffix in (".json", ".txt", ".md", ".csv", ".srt"):
+            assert nameplan.DROP_MARK not in f.read_text(encoding="utf-8", errors="ignore"), f
+
+
+def test_drop_mark_left_raises():
+    """故意讓記號漏進要念的字：compute_plan、studentnames.plan 都丟錯（白話訊息），不靜默清掉。"""
+    from bookclub import studentnames
+
+    w = _make()
+    real_build = nameplan.build_plan
+
+    def leaky(*a, **k):
+        plan = real_build(*a, **k)
+        plan["生成"][0]["text"] += nameplan.DROP_MARK
+        return plan
+
+    nameplan.build_plan = leaky
+    try:
+        nameplan.compute_plan(w)
+        raise AssertionError("記號漏出去卻沒丟錯")
+    except RuntimeError as e:
+        assert "名字拿掉的記號沒清掉" in str(e) and "請回報開發者" in str(e), e
+    finally:
+        nameplan.build_plan = real_build
+    undo = _student_setup(w)
+    real_fin = nameplan.finish_drops
+    nameplan.finish_drops = lambda text: (text, [])   # 漏整理
+    try:
+        studentnames.plan(w)
+        raise AssertionError("記號漏出去卻沒丟錯")
+    except RuntimeError as e:
+        assert "名字拿掉的記號沒清掉" in str(e), e
+    finally:
+        nameplan.finish_drops = real_fin
+        undo()
+
+
 # ---------- 10-17 #247：卡片標「（拿掉）」 ----------
 
 def test_replace_each_at_drop_positions():

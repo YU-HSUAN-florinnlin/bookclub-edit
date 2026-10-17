@@ -71,6 +71,15 @@ def finish_drops(text: str) -> tuple[str, list[int]]:
     return out, at
 
 
+DROP_MARK_LEFT = "程式內部錯誤：名字拿掉的記號沒清掉（要念的字裡還有），請回報開發者"
+
+
+def check_no_drop_mark(text: str) -> None:
+    """10-18 #245 小保險：要念的字裡還有 `DROP_MARK` 就丟錯，不要靜默清掉（清掉會藏住漏整理的那條路）。"""
+    if DROP_MARK in (text or ""):
+        raise RuntimeError(DROP_MARK_LEFT)
+
+
 def replace_name(sentence: str, cand: dict) -> str | None:
     """把句子裡的名字換成代號。依序試：比對到的字、名冊寫法、本名；都找不到回傳 None。
     10-17 #245：沒有代號（名字拿掉）時，`sentence` 當成整句，句首、句尾留下的空白去掉（見 `finish_drops`）。
@@ -859,6 +868,7 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     table = review.replace_table(workdir)
     for g in plan["生成"]:
         g["text"], _changes = review.replace_real_names(g["text"], table)
+        check_no_drop_mark(g["text"])   # 10-18 #245：要念的字裡不能留著拿掉名字的記號
     if only:
         plan["略過"] = [s for s in plan["略過"] if s["候選"] in set(only)]
         plan["只處理"] = sorted(set(only))
