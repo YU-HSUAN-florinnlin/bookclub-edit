@@ -413,7 +413,7 @@ bash install.sh
 
 同一份腳本在 **macOS** 與 **Linux（含 Windows 的 WSL2 Ubuntu）** 都能跑，會自己判斷平台：macOS 用 Homebrew，Linux 用 apt-get 安裝 ffmpeg、sox、git、build-essential、curl、unzip，`uv` 用官方安裝指令。Linux 安裝系統套件那一步需要系統管理員權限，畫面上會跳出密碼提示。不是 Debian／Ubuntu 系統的話，腳本會列出需要的套件請你自行安裝。
 
-`install.sh` 會依序做：檢查系統與空間 → 裝 Homebrew 套件（ffmpeg、uv）→ 建立 Python 3.11 虛擬環境（`.venv/`）→ 裝 Python 套件與 `bookclub` 指令 → 抓聲音生成引擎 CosyVoice 原始碼 → 下載三個 AI 模型 → 建立 `~/讀書會剪輯資料/` 資料夾（並複製 `profile.example/` 的範例檔進去）→ 建 Claude Code 的 skill 捷徑 → 跑一次環境健檢。**可以重複執行**：已經做過的步驟會自動跳過，不會重複下載，也不會刪掉已經調整過的設定。第一次安裝依網路速度可能要半小時以上，大部分時間花在下載模型。
+`install.sh` 會依序做：檢查系統與空間 → 裝 Homebrew 套件（ffmpeg、uv）→ 建立 Python 3.11 虛擬環境（`.venv/`）→ 裝 Python 套件與 `bookclub` 指令 → 抓聲音生成引擎 CosyVoice 原始碼 → 下載三個 AI 模型 → 建立 `~/讀書會剪輯資料/` 資料夾（並複製 `profile.example/` 的範例檔進去）→ 建 Claude Code 的 skill 捷徑 → 跑一次環境健檢。**可以重複執行**：已經做過的步驟會自動跳過，不會重複下載，也不會刪掉已經調整過的設定。Python 套件照 `requirements.lock` 裝確切版本，已經裝好的再跑一次，版本不同的會換成鎖定檔的版本（開發者怎麼重產鎖定檔見 [`docs/套件版本鎖定.md`](docs/套件版本鎖定.md)）。第一次安裝依網路速度可能要半小時以上，大部分時間花在下載模型。
 
 **WSL2**：2026-09-29 用 0.1.8 在 Windows 11＋WSL2（Ubuntu 26.04）實測，4 分半全自動裝完、中間不用人介入。沒有 NVIDIA 顯示卡時，腳本會裝只用處理器的 torch（CUDA 版多下載約 2.8GB 用不到的套件）；**這一段是 0.1.8 之後才加的，還沒在真的 WSL2 上跑過**，第一次安裝就是它的第一次實測，出錯請把畫面上的訊息回報。`uv` 裝完如果找不到，開新終端機再重跑。ModelScope 限流時（`[403] 操作过于频繁`）腳本會重試後先略過，下一步 `models download` 會補上。
 

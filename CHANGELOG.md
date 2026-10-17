@@ -2,6 +2,11 @@
 
 版本號用 `主.次.修`，主版本 0 代表還在開發、介面與檔案格式可能改變。
 
+## 未發布
+
+- **所有套件鎖定版本（‼️ 這版更新要重跑 `bash install.sh`）**：不管什麼時候、在哪台電腦從頭安裝，裝到的套件版本都一樣，不會再像 10-16 那樣裝到太新的 pyarrow、第 4 步生成老師聲音一開始就中斷。已經裝好的電腦重跑 install.sh，版本不同的套件會自動換回來（例如 pyarrow 26 換成 25.0.1），設定、資料、模型不受影響。技術：新增 `requirements.lock`（`uv pip compile --universal` 產生，Mac 與 Linux 共用；版本＝2026-10-16 22:00 前發布的，只有 pyarrow 固定 25.0.1；不列 `nvidia-*`、`triton`），`install.sh` 改照它裝；開發者改了 requirements.txt 或 constraints.txt 要跑 `bash update-lock.sh` 重產（待辦 #241）
+- `bookclub doctor` 的「可匯入 cosyvoice」除了 `cosyvoice.cli.cosyvoice`，也載入模型設定檔 `cosyvoice3.yaml` 用到的模組（含這次壞的 `cosyvoice.dataset.processor`），載入失敗時用白話講是哪個套件版本不對；新增「套件版本跟鎖定檔一致」（只提醒），列出跟 `requirements.lock` 不一樣的套件（#241）
+
 ## 0.2.2b3（2026-10-16，測試版 beta3）
 
 畫面操作調整（批次 1016-2，待辦 #231、#232、#233）。
