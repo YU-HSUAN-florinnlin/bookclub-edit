@@ -178,24 +178,35 @@ def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict, s
 def replace_real_names(text: str, table: list[dict]) -> tuple[str, list[dict]]:
     """名冊上的本名、敏感詞換成代號／替代詞（純函式）。table：[{寫法, 代號}]，長的先換。
     回傳 (新文字, [{原字, 換成, 位置}])，位置是新文字裡的字元索引，給畫面標出換過的字。
-    1017 總審查：標 `拿掉` 的列（名冊上的人在 ③ 選不用處理／不是名字、沒有代號）換成空字串，跟老師句子一樣把名字拿掉。"""
+    1017 總審查：標 `拿掉` 的列（名冊上的人在 ③ 選不用處理／不是名字、沒有代號）換成空字串，跟老師句子一樣把名字拿掉。
+    10-17 #245：換成空字串時旁邊多出來的空格一起清掉（跟 `nameplan.drop_span` 同一個規則）；`換成` 是空的就是拿掉。"""
     rows = sorted((r for r in table if (r.get("代號") or r.get("拿掉")) and len(r["寫法"]) >= 2), key=lambda r: -len(r["寫法"]))
-    out, changes, i = [], [], 0
+    out, changes, i = "", [], 0
     text = text or ""
-    pos = 0
     while i < len(text):
         hit = next((r for r in rows if text.startswith(r["寫法"], i)), None)
         if hit:
             to = hit.get("代號") or ""
-            out.append(to)
-            changes.append({"原字": hit["寫法"], "換成": to, "位置": pos})
-            pos += len(to)
             i += len(hit["寫法"])
+            if not to:   # 10-17 #245：名字拿掉時旁邊多的空格一起清（句首句尾去掉、句中接起來；兩邊英數才留一個空格）
+                out = out.rstrip()
+                while i < len(text) and text[i].isspace():
+                    i += 1
+                at = len(out)
+                if out and i < len(text) and _ascii_word(out[-1]) and _ascii_word(text[i]):
+                    out += " "
+                changes.append({"原字": hit["寫法"], "換成": "", "位置": at})
+                continue
+            changes.append({"原字": hit["寫法"], "換成": to, "位置": len(out)})
+            out += to
         else:
-            out.append(text[i])
-            pos += 1
+            out += text[i]
             i += 1
-    return "".join(out), changes
+    return out, changes
+
+
+def _ascii_word(ch: str) -> bool:
+    return ch.isascii() and ch.isalnum()
 
 
 def replace_table(workdir: Path | None = None) -> list[dict]:

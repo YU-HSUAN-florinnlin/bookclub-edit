@@ -38,13 +38,41 @@ def sentences_path(workdir: Path) -> Path:
     return workdir / "生成" / "名字句子.json"
 
 
-def replace_name(sentence: str, cand: dict) -> str | None:
-    """把句子裡的名字換成代號。依序試：比對到的字、名冊寫法、本名；都找不到回傳 None。"""
+def _ascii_word(ch: str) -> bool:
+    return ch.isascii() and ch.isalnum()
+
+
+def drop_span(text: str, a: int, b: int) -> tuple[str, int]:
+    """10-17 #245：把 text[a:b]（名字）拿掉，旁邊多出來的空格一起清掉（純函式）。
+    句首、句尾的空格去掉；句中兩邊直接接起來（中文不需要空格），兩邊都是英文字母或數字才留一個空格，免得黏成一個字。
+    回傳（新文字, 拿掉的地方在新文字裡的位置）。"""
+    left, right = text[:a].rstrip(), text[b:].lstrip()
+    gap = " " if left and right and _ascii_word(left[-1]) and _ascii_word(right[0]) else ""
+    return left + gap + right, len(left)
+
+
+def replace_name_at(sentence: str, cand: dict) -> tuple[str, int, int] | None:
+    """`replace_name` 加上換掉的地方：回傳（新文字, 換掉的地方在新文字裡從哪裡開始, 原文字裡改到哪裡為止）。
+    10-17 #247：卡片要標出名字被拿掉的位置（只在畫面上），所以要知道換在哪裡。"""
     for key in ("matched_text", "name", "canonical"):
         word = (cand.get(key) or "").strip()
         if word and word in sentence:
-            return sentence.replace(word, cand["代號"], 1)
+            a = sentence.index(word)
+            b = a + len(word)
+            code = cand.get("代號") or ""
+            if not code:   # 10-17 #245：沒有代號＝名字拿掉，旁邊多的空格一起清（以前「小安 來」→「 來」留下空白）
+                new, at = drop_span(sentence, a, b)
+                end = len(sentence) - len(sentence[b:].lstrip())
+                return new, at, end
+            return sentence[:a] + code + sentence[b:], a, b
     return None
+
+
+def replace_name(sentence: str, cand: dict) -> str | None:
+    """把句子裡的名字換成代號。依序試：比對到的字、名冊寫法、本名；都找不到回傳 None。
+    10-17 #245：沒有代號（名字拿掉）時，旁邊多出來的空格一起清掉（見 `drop_span`）；換成代號時空格照舊。"""
+    hit = replace_name_at(sentence, cand)
+    return hit[0] if hit else None
 
 
 END_PUNCT = "。！？!?﹖﹗…"          # 句子結束
