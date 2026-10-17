@@ -1043,12 +1043,15 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
                      and (g in group or nameplan.ok_teacher(g))] or group
         whole_text = "".join(g["text"] for g in group)
         replaced = None
+        drops: list[int] = []   # 10-17 #247：名字被拿掉的位置（「換成代號」裡的字元索引），卡片標「（拿掉）」用
         if group:
             texts = {g["id"]: g["text"] for g in group}
-            new = _replace_each(texts[c["sentence_id"]], c, mates)
-            if new is not None:
-                texts[c["sentence_id"]] = new
+            hit = _replace_each_at(texts[c["sentence_id"]], c, mates)
+            if hit is not None:
+                texts[c["sentence_id"]] = hit[0]
                 replaced = "".join(texts[g["id"]] for g in group)
+                off = sum(len(texts[g["id"]]) for g in group[:[g["id"] for g in group].index(c["sentence_id"])])
+                drops = [off + p for p in hit[1]]   # 10-17 #247：拿掉的位置換算成整句裡的位置
         sentence = c.get("sentence") or (ordered[pos[c["sentence_id"]]]["text"] if c.get("sentence_id") in pos else "")
         whole = None
         if group:   # 10-01：重念範圍跟 nameplan.build_plan 同一個算法（整句太長只重念名字那一小句、人改過的照人改的）
@@ -1060,9 +1063,12 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
                 ws["範圍"] = "逐字"   # 跟 nameplan.build_plan 一樣：句子裡找不到，改用逐字時間的字（17 號 2-7）
             if ws["範圍"]:
                 whole_text = nameplan.range_words(words, ws["start"], ws["end"])
-                replaced = _replace_each(whole_text, c, mates)
+                hit = _replace_each_at(whole_text, c, mates)
+                replaced, drops = hit if hit else (None, [])
             whole = {"start": ws["start"], "end": ws["end"], "原文": whole_text, "換成代號": replaced,
                      "改稿": d.get("改稿", ""), "範圍": ws["範圍"], "原本整句": ws["整句"]}
+            if replaced is not None and drops:   # 10-17 #247：只給畫面標「（拿掉）」，要念的字（換成代號）不動
+                whole["拿掉的位置"] = drops
         if c.get("老師整段"):
             sentence = c.get("整段文字", "")
             whole = {"start": c["start"], "end": c["end"], "原文": sentence, "換成代號": sentence, "改稿": d.get("改稿", "")}
@@ -1070,6 +1076,8 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
             shown = whole["改稿"] or whole["換成代號"] or ""
             said, _ch = replace_real_names(shown, table)
             whole["實際會念"] = said if shown and said != shown else ""
+            if whole["實際會念"] and any(not x["換成"] for x in _ch):   # 10-17 #247：名冊那一道拿掉的名字也標出來
+                whole["實際會念拿掉"] = [x["位置"] for x in _ch if not x["換成"]]
             src = nameplan.range_words(words, whole["start"], whole["end"]) if words else whole["原文"]
             whole["字數"] = [nameplan.say_count(shown), nameplan.say_count(src)]   # 要念的／這段時間逐字稿的
             whole["字太少"] = bool(shown) and nameplan.too_short(shown, src)
@@ -1096,14 +1104,34 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
 
 def _replace_each(text: str, c: dict, mates: list[dict]) -> str | None:
     """名字換成代號，同一張卡的其他幾處（同一句同代號）也一起換（找不到的那一處跳過）；主卡自己的找不到回傳 None。"""
+    hit = _replace_each_at(text, c, mates)
+    return hit[0] if hit else None
+
+
+def _replace_each_at(text: str, c: dict, mates: list[dict]) -> tuple[str, list[int]] | None:
+    """`_replace_each` 加上名字被拿掉（沒有代號、換成空的）的位置（新文字裡的字元索引）。
+    10-17 #247：卡片「會念成」在這些位置標「（拿掉）」，只在畫面上，不進要念的文字。"""
     from bookclub import nameplan
 
-    new = nameplan.replace_name(text, c)
+    drops: list[int] = []
+
+    def one(t: str, x: dict) -> str | None:
+        hit = nameplan.replace_name_at(t, x)
+        if hit is None:
+            return None
+        new, at, end = hit
+        delta = len(new) - len(t)
+        drops[:] = [p if p <= at else p + delta for p in drops]   # 後面換掉的字，前面記的位置跟著移
+        if not (x.get("代號") or ""):
+            drops.append(at)
+        return new
+
+    new = one(text, c)
     if new is None:
         return None
     for m in mates:
-        new = nameplan.replace_name(new, m) or new
-    return new
+        new = one(new, m) or new
+    return new, sorted(drops)
 
 
 def mark_name_covers(items: list[dict], decisions: dict) -> None:
@@ -1225,8 +1253,12 @@ def page_data(workdir: str | Path, video: str | Path | None = None) -> dict:
         draft, changes = (t["校對稿"], []) if t["已確認"] else replace_real_names(t["校對稿"], table)
         keep = voices.get(t["說話者"]) == "保留原聲"
         why = "逐字稿沒錯字就按通過"   # 10-16 #225：原本「逐字稿看過、沒有錯字就通過（成品會照這份文字重念）」跟建議那一行重複
-        if changes:
-            why = f"已把名冊上的名字換成代號：{'、'.join(sorted({c['換成'] for c in changes}))}；" + why
+        if changes:   # 10-17 #247：拿掉的名字（沒有代號）寫白話「『小安』拿掉了」，不再出現「換成代號：；」的空冒號
+            codes = sorted({c["換成"] for c in changes if c["換成"]})
+            gone = list(dict.fromkeys(c["原字"] for c in changes if not c["換成"]))
+            said = ([f"已把名冊上的名字換成代號：{'、'.join(codes)}"] if codes else []) + \
+                ([f"{'、'.join(f'「{n}」' for n in gone)}拿掉了"] if gone else [])
+            why = "；".join(said) + "；" + why
         if t.get("學員是猜的"):
             why = "這段太短、學員是猜的，聽一下是誰；" + why
         items.append({"類型": "學員段落", "id": t["id"], "序": k + 1, "start": t["start"], "end": t["end"],

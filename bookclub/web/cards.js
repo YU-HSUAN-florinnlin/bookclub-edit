@@ -514,14 +514,25 @@ function rvGenBoxHtml(it) {
     <p class="rv-meta">照你填的時間存，不會自動對齊。這段時間整段換成學員的生成聲音，裡面老師的聲音不保留。</p>`;
 }
 
+// 10-17 #247：名字被拿掉（沒有代號、換成空的）的地方畫面上標「（拿掉）」——只在畫面上，不進要念的文字、不送後端
+const RV_DROP_MARK = "（拿掉）";
+
 function rvMarkChanges(text, changes) {
-  // 標出自動換成代號的字（位置是新文字裡的索引）
+  // 標出自動換成代號的字（位置是新文字裡的索引）；換成空的（名字拿掉）標「（拿掉）」
   let out = "", i = 0;
   for (const c of changes || []) {
-    out += esc(text.slice(i, c["位置"])) + `<mark title="原本是「${esc(c["原字"])}」">${esc(c["換成"])}</mark>`;
+    out += esc(text.slice(i, c["位置"])) + (c["換成"]
+      ? `<mark title="原本是「${esc(c["原字"])}」">${esc(c["換成"])}</mark>`
+      : `<mark class="rv-drop" title="${c["原字"] ? `原本是「${esc(c["原字"])}」，` : ""}名字拿掉了">${RV_DROP_MARK}</mark>`);
     i = c["位置"] + c["換成"].length;
   }
   return out + esc(text.slice(i));
+}
+
+function rvMarkDrops(text, at) {
+  // 10-17 #247：老師名字卡「會念成」：在名字被拿掉的位置（新文字裡的索引）插入「（拿掉）」標記，其他字照樣跳脫
+  if (!(at || []).length) return esc(text);
+  return rvMarkChanges(text, at.map((p) => ({ "位置": p, "原字": "", "換成": "" })));
 }
 
 function rvBodyHtml(it) {
@@ -539,7 +550,7 @@ function rvBodyHtml(it) {
       <textarea id="rv-text" rows="${rows}" aria-label="學員重念要念的字（可以直接改）">${esc(text)}</textarea>`;
     return `<p class="rv-who"><span class="rv-lab">學員</span>${who}${it["手動標記"] ? "　（人工標記的段落）" : ""}</p>
       ${say}
-      ${(it["換過的字"] || []).length && !it["已確認"] ? `<p class="rv-note">自動換成代號的地方：${rvMarkChanges(it["建議稿"], it["換過的字"])}</p>` : ""}
+      ${(it["換過的字"] || []).length && !it["已確認"] ? `<p class="rv-note">${(it["換過的字"]).some((c) => !c["換成"]) ? "自動換掉的地方" : "自動換成代號的地方"}：${rvMarkChanges(it["建議稿"], it["換過的字"])}</p>` : ""}
       ${it["代號改過"] ? `<p class="rv-warnline">代號改過，請再看一次（原本的代號：${esc(it["代號改過"])}，別人也在用，沒有自動換）。</p>` : ""}
       ${it["含本名"] ? `<p class="rv-warnline">文字裡還有名冊上的本名，要換成代號。</p>` : ""}
       ${it["聲紋多半是老師"] ? `<p class="rv-warnline">${esc(it["聲紋多半是老師"]["提醒"])}</p>` : ""}
@@ -558,7 +569,7 @@ function rvBodyHtml(it) {
       <div class="rv-field"><label>要念的字（名字要寫成代號；範圍內老師講的話都要寫進來，學員的話不要寫）
         <textarea id="rv-namesay" rows="2" data-auto="${esc(w["換成代號"] || "")}">${esc(w["改稿"] || w["換成代號"] || "")}</textarea></label>
         <span class="rv-meta" id="rv-namesay-st">${w["改稿"] ? RV_ST_EDITED : w["換成代號"] ? "狀態：照逐字稿自動排的（名冊上的本名已換成代號），請對照聲音確認" : "逐字稿這段沒有字，請打上要念的字；空白的話整段會消音"}</span>
-        ${w["實際會念"] ? `<p class="rv-warnline">文字裡還有名冊上的名字，生成時會自動換成代號。實際會念：${esc(w["實際會念"])}</p>` : ""}</div>
+        ${w["實際會念"] ? `<p class="rv-warnline">文字裡還有名冊上的名字，生成時會自動${(w["實際會念拿掉"] || []).length ? "換成代號或拿掉" : "換成代號"}。實際會念：${rvMarkDrops(w["實際會念"], w["實際會念拿掉"])}</p>` : ""}</div>
       <p class="rv-meta">這一段不用重念、要保留老師原聲：按「不用改，保留老師原聲」。</p>`;
   }
   if (t === "名字") {
@@ -572,7 +583,7 @@ function rvBodyHtml(it) {
     const open = step5 || problem || (cv.nameFold || {})[key];
     const low = it["信心"] === "低" ? `<p class="rv-warnline">低信心，先聽清楚是不是名字</p>` : "";
     const speak = !skip && w && rvChosen(it) === "整句換掉"
-      ? `<p class="rv-quote rv-say"><span class="rv-lab">會念成</span>${w["改稿"] || w["換成代號"] ? esc(say) : `<span class="rv-warnline">（還沒換成代號）</span>`}<span class="rv-meta">（代號 ${esc(it["代號"] || "（沒有）")}）</span></p>` : "";   // 審查建議 7：沒換成代號時不顯示含本名的原文
+      ? `<p class="rv-quote rv-say"><span class="rv-lab">會念成</span>${w["改稿"] ? esc(say) : w["換成代號"] ? rvMarkDrops(say, w["拿掉的位置"]) : `<span class="rv-warnline">（還沒換成代號）</span>`}<span class="rv-meta">（代號 ${esc(it["代號"] || "（沒有）")}）</span></p>` : "";   // 審查建議 7：沒換成代號時不顯示含本名的原文
     const fold = w && !skip ? `<details class="rv-namefold" data-key="${esc(key)}" ${open ? "open" : ""}>
         <summary>調整重念的字和範圍${w["改稿"] || w["範圍"] === "人選" ? ` <span class="rv-tag">已改過</span>` : ""}</summary>
         ${rvRangeHtml(it)}
@@ -581,7 +592,7 @@ function rvBodyHtml(it) {
           <p class="rv-meta">原本逐字稿：${esc(w["原文"])}</p>
           <span class="rv-meta" id="rv-namesay-st">${w["改稿"] ? RV_ST_EDITED : w["換成代號"] ? "" : "句子裡找不到比對到的字，要人改（把名字改成代號才能通過）"}</span>
           ${w["字太少"] ? `<p class="rv-warnline">要念 ${w["字數"][0]} 個字，重念範圍的逐字稿有 ${w["字數"][1]} 個字：這一段其他的話會不見。請把重念範圍改小，或把話補齊（不然不能通過）。</p>` : ""}
-          ${w["實際會念"] ? `<p class="rv-warnline">句子裡還有名冊上的名字，生成時會自動換成代號。實際會念：${esc(w["實際會念"])}</p>` : ""}</div>
+          ${w["實際會念"] ? `<p class="rv-warnline">句子裡還有名冊上的名字，生成時會自動${(w["實際會念拿掉"] || []).length ? "換成代號或拿掉" : "換成代號"}。實際會念：${rvMarkDrops(w["實際會念"], w["實際會念拿掉"])}</p>` : ""}</div>
       </details>` : "";
     return `<p class="rv-quote"><span class="rv-lab">原句</span>${it.sentence_html}</p>
       ${speak}${low}
