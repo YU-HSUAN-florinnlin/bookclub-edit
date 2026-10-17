@@ -281,7 +281,12 @@ def load_sentences(path: str | Path) -> list[dict]:
     else:
         lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
         items = [{"id": f"{i:02d}", "text": ln} for i, ln in enumerate(lines, 1)]
+    return normalize_sentences(items)
 
+
+def normalize_sentences(items: list[dict]) -> list[dict]:
+    """句子清單整理成生成程式用的樣子（編號檢查、文字去掉前後空白、時間格轉成數字）。
+    10-17 #244：第 4 步「做過沒有」（`execute.names_done`）也走這一個，兩邊才不會一邊去了空白、一邊沒去。"""
     out = []
     seen = set()
     for i, it in enumerate(items, 1):
@@ -301,6 +306,22 @@ def load_sentences(path: str | Path) -> list[dict]:
             raise ValueError(f"第 {sid} 句沒有文字（有給原片時間格 slot 才能省略，會改用原片那段的逐字稿）")
         out.append({"id": sid, "text": text, "slot": slot, "slot_s": float(slot_s) if slot_s else None})
     return out
+
+
+def fill_teacher_text(items: list[dict], merged: dict | None) -> list[dict]:
+    """老師句子補上原片那段的文字（`原文`，插入停頓對位用）；沒有文字的句子改念原文。
+    10-17 #244：生成程式和第 4 步「做過沒有」共用，兩邊比對的文字才一樣。"""
+    for it in items:
+        if it["slot"] and merged:
+            it["原文"] = slot_text(merged, *it["slot"])
+        elif it["slot"] and it["text"]:
+            # 匯入的工作區沒有逐字稿（不帶學員本名出去）：插入停頓的對位改用代號版的句子，名字那幾個字對不準，其他字照常
+            it["原文"] = it["text"]
+        if not it["text"]:
+            if not it.get("原文"):
+                raise ValueError(f"第 {it['id']} 句沒有文字，工作區裡也找不到原片那段的逐字稿（transcript/merged.json）")
+            it["text"] = it["原文"]
+    return items
 
 
 # ---------- 重試策略（純函式） ----------
@@ -1306,17 +1327,7 @@ def generate_teacher(
     items = load_sentences(sentences_path)
     tolerance = load_settings().thresholds.length_tolerance
 
-    merged = wd.read_json(wd.merged_transcript_path(workdir))
-    for it in items:
-        if it["slot"] and merged:
-            it["原文"] = slot_text(merged, *it["slot"])
-        elif it["slot"] and it["text"]:
-            # 匯入的工作區沒有逐字稿（不帶學員本名出去）：插入停頓的對位改用代號版的句子，名字那幾個字對不準，其他字照常
-            it["原文"] = it["text"]
-        if not it["text"]:
-            if not it.get("原文"):
-                raise ValueError(f"第 {it['id']} 句沒有文字，工作區裡也找不到原片那段的逐字稿（transcript/merged.json）")
-            it["text"] = it["原文"]
+    fill_teacher_text(items, wd.read_json(wd.merged_transcript_path(workdir)))
     if pron_table is None and (workdir / PRON_TABLE_NAME).is_file():
         pron_table = workdir / PRON_TABLE_NAME     # 匯入的工作區：用匯出時一起帶過來的那份
     table = load_pron_table(pron_table)

@@ -1074,10 +1074,23 @@ def names_done(workdir: Path) -> tuple[bool, str]:
     if tts.teacher_ref_changed(workdir, tlog):
         return False, f"老師參考音換過了，{len(gen)} 句都要重新生成"
     table = tts.load_pron_table(workdir / tts.PRON_TABLE_NAME if (workdir / tts.PRON_TABLE_NAME).is_file() else None)
-    left = [g["id"] for g in gen if not (recs.get(g["id"]) or {}).get("放回時間格")
-            or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]})
-            or tts.output_missing(recs[g["id"]], workdir)]   # 10-03 第九批 #19：聲音檔不在當作沒做過
-    return (not left), (f"{len(gen)} 句都生成好了" if not left else f"還有 {len(left)}／{len(gen)} 句要生成")
+    # 10-17 #244：句子照生成程式的整理方式（去前後空白、沒文字改念原文）再比，不然名字拿掉後留下的空格
+    # 會讓生成程式說「沿用」、這裡說「還沒做」，每次繼續執行都失敗
+    items = tts.normalize_sentences([{k: g.get(k) for k in ("id", "text", "slot")} for g in gen])
+    try:
+        tts.fill_teacher_text(items, wd.read_json(wd.merged_transcript_path(workdir), default=None))
+    except ValueError as exc:   # 沒文字又找不到原文：生成程式也會在這裡停
+        return False, str(exc)
+    left = [it["id"] for it in items if not (recs.get(it["id"]) or {}).get("放回時間格")
+            or tts.record_stale(recs[it["id"]], {**it, "生成用文字": tts.apply_pron(it["text"], table)[0]})
+            or tts.output_missing(recs[it["id"]], workdir)]   # 10-03 第九批 #19：聲音檔不在當作沒做過
+    return (not left), (f"{len(gen)} 句都生成好了" if not left
+                        else f"還有 {len(left)}／{len(gen)} 句要生成（{_ids_note(left)}）")
+
+
+def _ids_note(ids: list[str], n: int = 5) -> str:
+    """10-17 #244：「還有幾句要生成」後面列出是哪幾句，卡住時直接看得到，不用另外查。"""
+    return "、".join(ids[:n]) + (f" 等 {len(ids)} 句" if len(ids) > n else "")
 
 
 def students_done(workdir: Path, a: float | None, b: float | None) -> tuple[bool, str]:
