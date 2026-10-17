@@ -28,7 +28,9 @@ README 的例子用 `~/bookclub-edit`，夥伴放在別的位置時照查到的�
 1. **啟動**：macOS 雙擊工具資料夾裡的「啟動.command」，瀏覽器會自動開 <http://localhost:8766>。
    WSL2 由你在 Ubuntu 裡用登入模式、脫離對話在背景啟動（例如
    `wsl -d Ubuntu -- bash -lc 'cd <工具資料夾> && setsid nohup .venv/bin/bookclub serve >> ~/讀書會剪輯資料/serve.log 2>&1 < /dev/null &'`；
-   Windows 實機還沒驗過，待辦 #242），告訴夥伴「網頁在背景跑，關掉對話也不會停；要關跟我說」，再請夥伴用 Windows 的瀏覽器開
+   Windows 實機還沒驗過，待辦 #242），告訴夥伴「網頁在背景跑，關掉對話也不會停；要關跟我說」。
+   開不起來、或夥伴想自己開：請夥伴開 Ubuntu 視窗打 `cd <工具資料夾>` 和 `.venv/bin/bookclub serve`，視窗開著不要關。
+   再請夥伴用 Windows 的瀏覽器開
    <http://localhost:8766>（WSL2 不會自動開瀏覽器，終端機會印出網址；網頁在 WSL2 上還沒實測）。
    伺服器記得上次在做哪支影片，重開後自動接回。
 2. **總覽選影片**：按「選影片」會跳出電腦內建的選檔視窗，選好再按「開始分析」。會在影片旁邊建

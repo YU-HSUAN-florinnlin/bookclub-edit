@@ -228,7 +228,15 @@ wsl -d Ubuntu -- bash -lc 'cd ~/bookclub-edit && setsid nohup .venv/bin/bookclub
 - 這個做法 Windows 實機還沒驗過（待辦 #242）。
 - 要用登入模式（`bash -lc`）啟動，伺服器才會讀到寫在 `~/.profile` 的 Groq 金鑰。讀不到時網頁「總覽」會提醒。
 - 網頁的訊息記在 `~/讀書會剪輯資料/serve.log`。
-- 也可以自己開：打開 Ubuntu 視窗，打 `cd ~/bookclub-edit` 和 `.venv/bin/bookclub serve`，視窗要一直開著（可以縮小）。
+
+備用做法：**自己打開 Ubuntu 視窗**啟動（Claude 開不起來，或想自己開時）。打下面兩行（跟「怎麼用」一樣）：
+
+```bash
+cd ~/bookclub-edit
+.venv/bin/bookclub serve
+```
+
+再在 Windows 的瀏覽器打開 <http://localhost:8766>。這個 Ubuntu 視窗要一直開著（可以縮小），關掉網頁就停了（見「Windows（WSL2）要注意的事」）。
 
 ### Windows：第一次安裝 WSL2 與 Ubuntu
 
@@ -493,7 +501,7 @@ bash install.sh
    WSL2 如果畫面跳出密碼提示，輸入 Ubuntu 的登入密碼（請 Claude Code 幫忙時，這一步要使用者自己打，Claude 不代打）。
 7. **重開網頁、確認版本**：
    - macOS：雙擊工具資料夾裡的「啟動.command」。
-   - WSL2：Claude Code 幫忙時，由它在 Ubuntu 裡用登入模式、脫離對話在背景啟動，例如 `wsl -d Ubuntu -- bash -lc 'cd ~/bookclub-edit && setsid nohup .venv/bin/bookclub serve >> ~/讀書會剪輯資料/serve.log 2>&1 < /dev/null &'`，再確認 8766 有回應，並告訴使用者：「網頁在背景跑，關掉 Claude 對話也不會停；要關網頁跟 Claude 說。」（這個做法 Windows 實機還沒驗過，待辦 #242。）自己開就在 Ubuntu 視窗打 `cd ~/bookclub-edit` 和 `.venv/bin/bookclub serve`，視窗開著不要關。
+   - WSL2：Claude Code 幫忙時，由它在 Ubuntu 裡用登入模式、脫離對話在背景啟動，例如 `wsl -d Ubuntu -- bash -lc 'cd ~/bookclub-edit && setsid nohup .venv/bin/bookclub serve >> ~/讀書會剪輯資料/serve.log 2>&1 < /dev/null &'`，再確認 8766 有回應，並告訴使用者：「網頁在背景跑，關掉 Claude 對話也不會停；要關網頁跟 Claude 說。」（這個做法 Windows 實機還沒驗過，待辦 #242。）Claude 開不起來、或使用者想自己開：在 Ubuntu 視窗打 `cd ~/bookclub-edit` 和 `.venv/bin/bookclub serve`，視窗開著不要關。
    - 用瀏覽器（WSL2 用 Windows 的瀏覽器）開 <http://localhost:8766>，有畫面才算開好。「總覽」看得到原本的專案、第 0 步的名冊筆數跟以前一樣，就是設定與資料都接上了。
    - 看版本號：`bookclub/__init__.py` 裡的版本號要是新的那一版。
 8. **健檢**：
