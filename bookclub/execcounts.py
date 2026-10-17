@@ -108,7 +108,12 @@ def counts(workdir: str | Path, a: float | None = None, b: float | None = None,
         from bookclub import tts
 
         gen = tplan().get("生成", [])
-        table = tts.load_pron_table()
+        try:   # 10-17 #244：跟生成程式、第 4 步「做過沒有」比同一份文字（去前後空白、沒文字改念原文）
+            gen = tts.teacher_plan_items(workdir, gen)
+        except ValueError:
+            pass
+        pron = workdir / tts.PRON_TABLE_NAME   # 匯入的工作區用帶過來的那份（跟 names_done 一樣）
+        table = tts.load_pron_table(pron if pron.is_file() else None)
         gen = [{**g, "生成用文字": tts.apply_pron(g["text"], table)[0]} for g in gen]
         tlog = wd.read_json(tts.teacher_log_path(workdir), default=None)
         changed = tts.teacher_ref_changed(workdir, tlog)

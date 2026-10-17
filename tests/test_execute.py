@@ -185,6 +185,29 @@ def test_done_checks_on_fake_workdir():
     assert not execute.names_done(w)[0]          # 10-03 第九批 #19：紀錄說做過了、聲音檔不在 → 沒做過
     (w / "x.wav").write_bytes(b"RIFF")
     assert execute.names_done(w)[0]
+    # 10-17 #244：計畫裡的文字開頭多一個空白（名字拿掉後留下的空格）。生成程式讀句子清單時會去空白、紀錄存去掉空白的，
+    # 第 4 步「做過沒有」也要照同一套比，不然生成程式說「沿用」、這裡說「還沒做」，每次繼續執行都失敗
+    real_plan = nameplan.compute_plan
+    sid = plan["生成"][0]["id"]
+    try:
+        nameplan.compute_plan = lambda wk, *a, **k: {**(p := real_plan(wk, *a, **k)), "生成": [
+            {**g, "text": " " + g["text"] + "\n"} if g["id"] == sid else g for g in p["生成"]]}
+        done, why = execute.names_done(w)
+        assert done, why
+        items = tts.normalize_sentences([{k: g.get(k) for k in ("id", "text", "slot")} for g in nameplan.compute_plan(w)["生成"]])
+        recs = {r["id"]: r for r in wd.read_json(tts.teacher_log_path(w))["句子"]}
+        assert not any(tts.needs_work(recs[it["id"]], it, workdir=w) for it in items)   # 生成程式也說都能沿用
+        from bookclub import execcounts   # 第 4 步統計表的「完成」也要對得起來（審查 B）
+        row = next(r for r in execcounts.counts(w) if r["總數"] == len(plan["生成"]) and "老師" in r["類型"] + r["做法"])
+        assert row["完成"] == row["總數"], row
+        # 文字真的改了：兩邊都說要重做，訊息列出是哪一句
+        nameplan.compute_plan = lambda wk, *a, **k: {**(p := real_plan(wk, *a, **k)), "生成": [
+            {**g, "text": g["text"] + "改"} if g["id"] == sid else g for g in p["生成"]]}
+        done, why = execute.names_done(w)
+        assert not done and f"還有 1／{len(plan['生成'])} 句要生成（{sid}）" == why, why
+        assert execute._left_count(why) == 1
+    finally:
+        nameplan.compute_plan = real_plan
     done, why = execute.students_done(w, None, None)
     assert not done
     items, _ = students.build_items(w)
