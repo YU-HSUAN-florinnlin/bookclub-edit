@@ -338,6 +338,29 @@ def test_web_row_text_for_english_name():
     assert "這位這一集有英文名，照樣換成 艾瑪" in out and "不用處理（照樣換成 艾瑪）" in out and "照原聲留著" not in out, out
 
 
+def test_same_person_then_not_needed_keeps_original_even_with_english_name():
+    """10-18 宇軒（審查題 1）：名冊「小美：美美、阿德」、小美這一集有英文名（艾瑪）。③ 阿德先選「同一人：小美」、後來改回
+    「不用處理」→ 照原聲（老師明確說不是小美）；直接選「不用處理」（沒有先選同一人）→ 照樣換成艾瑪。"""
+    for undo_same in (True, False):
+        w = T._make()
+        T._two(w)
+        (T._DATA / "名冊.csv").write_text("中文名,其他寫法,性別\n小美,美美、阿德,女\n阿明,,男\n", encoding="utf-8")
+        personnames.request_rescan(w)
+        personnames.wait_rescan(w)
+        if undo_same:
+            personnames.decide(w, "阿德", "是上面的學員", same_as="小美")
+            personnames.wait_rescan(w)
+        personnames.decide(w, "阿德", "不用處理")
+        personnames.wait_rescan(w)
+        said, _ = review.replace_real_names("阿德說得對", epcodes.replace_table(w))
+        ade = next(u for u in personnames.mentioned(w, chosen={"小美", "阿明"}) if u["名字"] == "阿德")
+        if undo_same:
+            assert said == "阿德說得對" and ade["名冊上的人照原聲"] and not ade["照樣換成英文名"], (said, ade)
+        else:
+            assert said == "艾瑪說得對" and ade["照樣換成英文名"] == "艾瑪", (said, ade)
+    (T._DATA / "名冊.csv").write_text(T._ROSTER, encoding="utf-8")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

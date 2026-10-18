@@ -228,7 +228,7 @@ def _student_setup(w: Path):
     dec["學員聲音"] = {"學員1": "保留原聲"}
     review._save_decisions(w, dec)
     c = {**_drop("小安"), "sentence_id": b["id"], "sentence": b["text"], "start": b["start"] + 0.2, "end": b["start"] + 0.6,
-         "學員": "學員1", "位置": "句中", "信心": "高", "比對層級": "精確", "敏感詞": False}
+         "學員": "學員1", "位置": "句中", "信心": "高", "比對層級": "精確", "敏感詞": True}   # 替代詞空的敏感詞才會拿掉（沒英文名的名字照原聲）
     c["id"] = studentnames.cand_id(c)
     wd.write_json(studentnames.decisions_path(w), {c["id"]: {"做法": studentnames.CODE, "tags": [], "note": ""}})
     real = studentnames.find

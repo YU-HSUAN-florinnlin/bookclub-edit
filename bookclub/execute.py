@@ -1849,6 +1849,12 @@ def no_code_rows(workdir: str | Path, plan: dict | None = None) -> list[dict]:
                 seen[card] = {"key": f"{KEPT_NAME_KIND}:沒英文名:名字:{card}", "類別": KEPT_NAME_KIND, "start": float(c["start"]),
                               "end": float(c["end"]), "第3步": f"名字:{card}", "沒英文名": True}
                 rows.append(seen[card])
+    from bookclub import studentnames
+
+    for it in studentnames.items(workdir):   # 10-18 宇軒（審查題 4）：保留原聲學員講到名字、選換成代號但沒有英文名 → 照原聲
+        if it["做法"] == studentnames.CODE and studentnames.no_code_keep(it) and not set(it.get("tags") or []) & studentnames.SKIP_TAGS:
+            rows.append({"key": f"{KEPT_NAME_KIND}:沒英文名:學員名字:{it['id']}", "類別": KEPT_NAME_KIND,
+                         "start": float(it["start"]), "end": float(it["end"]), "第3步": f"學員名字:{it['id']}", "沒英文名": True})
     words = sorted({r["寫法"] for r in epcodes.replace_table(workdir) if not r.get("代號") and not r.get("拿掉")
                     and len(r["寫法"]) >= 2}, key=len, reverse=True)
     if words:

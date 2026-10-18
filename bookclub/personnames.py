@@ -335,7 +335,10 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
     def same_pick(p: dict) -> bool:
         """③ 這一集自己決定的（「同一人：某某」，或這一集蓋過名冊對法的）：名冊比對到的本名不算這一列本身，
         這一列照樣列在 ③、可以改（1016-3）。"""
-        return (dec.get(p["名字"]) or {}).get("做法") == "是上面的學員" or p["名字"] in spell
+        d = dec.get(p["名字"]) or {}
+        # 10-18 #250 題 1：人親手選了不用處理／不是名字的列（就算這位有英文名、照樣換）照樣留在 ③，那列才看得到說明
+        return d.get("做法") == "是上面的學員" or p["名字"] in spell or (
+            d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配"))
 
     def row_canon(p: dict) -> str:
         """這一列在這一集算誰（跟下面 `canon` 同一套）：同一人 → 那位；這一集自己決定的寫法 → 名字本身；其他 → 名冊本名或名字。"""
@@ -526,6 +529,10 @@ def _decide(workdir: str | Path, name: str, how: str, code: str | None = None, s
         dec[name]["加進名冊的其他寫法"] = prev["加進名冊的其他寫法"]
     if at is not None:
         dec[name][epcodes.AT_KEY] = at
+    if how in ("不用處理", "不是名字"):   # 10-18 宇軒：先選同一人、後來改回 → 照原聲（老師說不是那個人；epcodes.kept_spellings）
+        was = prev.get(epcodes.FROM_SAME_KEY) or (prev.get("同一人") if prev.get("做法") == "是上面的學員" else None)
+        if was:
+            dec[name][epcodes.FROM_SAME_KEY] = was
     wd.write_json(decisions_path(workdir), dec)
     from bookclub import epcodes
 

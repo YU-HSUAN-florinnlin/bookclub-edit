@@ -119,6 +119,39 @@ def test_3_no_code_keeps_original_and_is_listed():
     assert any("阿明" in it["text"] for it in items)   # 學員重念稿照字念（交給第 5 步）
 
 
+def test_4_student_name_code_without_english_name_keeps_original():
+    """10-18 宇軒（審查題 4）：保留原聲學員講到名字、人選「換成代號」但這一集沒有英文名 → 照原聲（不生成名字被拿掉的句子、
+    不消音），第 4 步提醒（時間＋學員提到名字）、第 5 步「需留意」列出。"""
+    from bookclub import studentnames
+
+    w = T._make()
+    td = json.loads(turns_mod.turns_path(w).read_text(encoding="utf-8"))
+    t2 = next(x for x in td["段落"] if x["說話者"] == "學員2")
+    dec = review.load_decisions(w)
+    dec["學員聲音"] = {"學員2": "保留原聲"}
+    review._save_decisions(w, dec)
+    sp = json.loads((w / "說話者判斷.json").read_text(encoding="utf-8"))
+    s2 = next(x for x in sp["sentences"] if x["id"] == t2["句子"][0])
+    c = {"matched_text": "阿明", "name": "阿明", "canonical": "阿明", "代號": "", "sentence_id": s2["id"], "sentence": s2["text"],
+         "start": s2["start"] + 0.2, "end": s2["start"] + 0.6, "學員": "學員2", "位置": "句中", "信心": "高",
+         "比對層級": "精確", "敏感詞": False}
+    c["id"] = studentnames.cand_id(c)
+    wd.write_json(studentnames.decisions_path(w), {c["id"]: {"做法": studentnames.CODE, "tags": [], "note": ""}})
+    real = studentnames.find
+    studentnames.find = lambda workdir, force=False: {"保留原聲學員": ["學員2"], "candidates": [dict(c)]}
+    try:
+        sp_ = studentnames.plan(w)
+        rows = execute.no_code_rows(w)
+        note = next(n for n in execute.precheck(w)["提醒"] if "還沒有英文名，照原聲留著" in n)
+        done = execute.stunames_done(w)
+    finally:
+        studentnames.find = real
+    assert not sp_["生成"] and not any(m["id"] == c["id"] for m in sp_["消音"]) and sp_["照原聲"] == [c["id"]], sp_
+    assert any(r["第3步"] == f"學員名字:{c['id']}" for r in rows), rows
+    assert f"{execute.fmt_card_time(c['start'])}（學員提到名字）" in note, note
+    assert done[0], done   # 不用生成：第 4 步這一步算做好
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

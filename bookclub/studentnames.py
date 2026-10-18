@@ -192,6 +192,11 @@ def save(workdir: str | Path, cid: str, fields: dict) -> dict:
     return {"ok": True, "id": str(cid), "決定": d}
 
 
+def no_code_keep(it: dict) -> bool:
+    """學員名字卡選了換成代號、這一集沒有英文名（不是敏感詞）→ 照原聲（10-18 宇軒）。"""
+    return not (it.get("代號") or "").strip() and not it.get("敏感詞")
+
+
 def plan(workdir: str | Path) -> dict:
     """第 4 步要做的：{"消音": [{id, start, end, 學員}], "生成": [{id, 學員, text, 原文, slot, 候選}], "要人處理": [...]}。
     標「不是名字」「是地名」的略過；換成代號但句子裡找不到比對到的字 → 退回直接消音，列在要人處理。"""
@@ -204,6 +209,11 @@ def plan(workdir: str | Path) -> dict:
             continue
         pad = names_mod.DEFAULT_BUFFER_S
         mute = {"id": it["id"], "start": round(it["start"] - pad, 3), "end": round(it["end"] + pad, 3), "學員": it["學員"]}
+        if it["做法"] == CODE and no_code_keep(it):
+            # 10-18 宇軒（審查題 4）：選換成代號、這一集沒有英文名 → 照原聲（不生成名字被拿掉的句子、不消音），
+            # 跟老師名字卡同一套（nameplan.no_code_keep）：第 4 步提醒、第 5 步「需留意」列出（execute.no_code_rows）
+            out.setdefault("照原聲", []).append(it["id"])
+            continue
         if it["做法"] == CODE:
             w = it["整句"]
             if w and w.get("換成代號"):
