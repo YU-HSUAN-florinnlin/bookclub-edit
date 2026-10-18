@@ -215,6 +215,129 @@ def test_short_name_still_listed():
     assert got == ["照原聲名字:名字:1"], got
 
 
+def _nickname_case(coded: bool, alts: list[str]):
+    """③ 一列「美美」（名冊：小美 其他寫法 美美），人名清單其他寫法 alts；老師句子「美美來，」、學員1 重念稿講到美美與小美、
+    學員2 保留原聲講到美美。coded＝② 小美 → 艾瑪。③ 美美選不用處理。"""
+    w = T._make()
+    if coded:
+        turns_mod.set_name_code(w, "小美", "艾瑪", add_roster=False)
+    pp = personnames.people_path(w)
+    d = json.loads(pp.read_text(encoding="utf-8"))
+    d["人名"].append({"id": "P060", "名字": "美美", "其他寫法": alts, "是誰": "其他人", "說明": "", "句子": [],
+                    "次數": 1, "老師說": 1, "學員說": 0, "第一次": 76.3})
+    pp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    sp = json.loads((w / "說話者判斷.json").read_text(encoding="utf-8"))
+    nd = wd.read_json(wd.names_path(w))
+    c0 = nd["candidates"][0]
+    next(x for x in sp["sentences"] if x["id"] == c0["sentence_id"])["text"] = "美美來，"
+    c0.update({"name": "美美", "matched_text": "美美", "canonical": "小美", "sentence": "美美來，"})
+    (w / "說話者判斷.json").write_text(json.dumps(sp, ensure_ascii=False), encoding="utf-8")
+    wd.write_json(wd.names_path(w), nd)
+    tp = turns_mod.turns_path(w)
+    td = json.loads(tp.read_text(encoding="utf-8"))
+    next(x for x in td["段落"] if x["說話者"] == "學員1")["校對稿"] = "我覺得美美說得對，小美也是"
+    t2 = next(x for x in td["段落"] if x["說話者"] == "學員2")
+    tp.write_text(json.dumps(td, ensure_ascii=False), encoding="utf-8")
+    dec = review.load_decisions(w)
+    dec["學員聲音"] = {"學員2": "保留原聲"}
+    review._save_decisions(w, dec)
+    s2 = next(x for x in sp["sentences"] if x["id"] == t2["句子"][0])
+    sc = {"matched_text": "美美", "name": "美美", "canonical": "小美", "代號": "", "sentence_id": s2["id"], "sentence": s2["text"],
+          "start": s2["start"] + 0.2, "end": s2["start"] + 0.6, "學員": "學員2", "位置": "句中", "信心": "高",
+          "比對層級": "精確", "敏感詞": False}
+    sc["id"] = studentnames.cand_id(sc)
+    real = studentnames.find
+    def fake_find(workdir, force=False):   # 跟真的 find 一樣過一次 epcodes.sync 的對齊（本名照這一集的決定、代號照代號表）
+        canon = (epcodes.episode_spellings(workdir).get("美美") or ("小美",))[0]
+        return {"保留原聲學員": ["學員2"], "candidates": [
+            {**sc, "canonical": canon, "代號": epcodes.episode_codes(workdir).get(canon) or ""}]}
+
+    studentnames.find = fake_find
+    personnames.decide(w, "美美", "不用處理")
+    personnames.wait_rescan(w)
+    epcodes.sync(w)
+    return w, (lambda: setattr(studentnames, "find", real)), sc["id"]
+
+
+def _paths(w: Path, sid: str) -> dict:
+    cands = wd.read_json(wd.names_path(w))["candidates"]
+    idx = {k for k, x in enumerate(cands, start=1) if x.get("name") == "美美"}
+    plan = nameplan.compute_plan(w)
+    gen = [g for g in plan["生成"] if set(g.get("候選", [])) & idx]
+    items, _ = students.build_items(w)
+    stu = next(it["text"] for it in items if "說得對" in it["text"])
+    card = next(x for x in studentnames.items(w) if x["id"] == sid)
+    row = next(u for u in personnames.mentioned(w) if u["名字"] == "美美")
+    return {"老師": gen, "學員重念": stu, "保留原聲": card, "③": row, "需留意": execute.kept_name_rows(w)}
+
+
+def test_rule_b_nickname_with_or_without_english_name():
+    """10-18 #250 題 1（宇軒選 B）：(a) 小美這一集有英文名，③ 暱稱美美選不用處理 → 三條路照樣換成艾瑪、③ 寫「照樣換成 艾瑪」、
+    需留意不列；(b) 小美沒有英文名 → 照原聲。"""
+    w, undo, sid = _nickname_case(True, [])
+    try:
+        got = _paths(w, sid)
+    finally:
+        undo()
+    assert got["老師"] and all("艾瑪" in g["text"] and "美美" not in g["text"] for g in got["老師"]), got["老師"]
+    assert got["學員重念"] == "我覺得艾瑪說得對，艾瑪也是", got["學員重念"]
+    assert not got["保留原聲"].get("照原聲留著") and "不是名字" not in got["保留原聲"]["tags"], got["保留原聲"]
+    assert got["③"]["照樣換成英文名"] == "艾瑪" and got["③"]["名冊上的英文名"] == "艾瑪" and not got["③"]["名冊上的人照原聲"], got["③"]
+    assert not got["需留意"], got["需留意"]
+    w, undo, sid = _nickname_case(False, [])
+    try:
+        got = _paths(w, sid)
+    finally:
+        undo()
+    assert not got["老師"] and got["學員重念"] == "我覺得美美說得對，小美也是", got
+    assert got["保留原聲"].get("照原聲留著"), got["保留原聲"]
+    assert got["③"]["名冊上的人照原聲"] and not got["③"]["照樣換成英文名"], got["③"]
+    assert {r["第3步"].split(":", 1)[0] for r in got["需留意"]} >= {"名字", "學員段落", "學員名字"}, got["需留意"]
+
+
+def test_rule_a_real_name_merged_into_nickname_row():
+    """題 2（宇軒選 A，維持）：人名清單把本名「小美」併進暱稱「美美」那列 → 有英文名的照換、沒有的跟著照原聲。"""
+    for coded in (True, False):
+        w, undo, sid = _nickname_case(coded, ["小美"])
+        try:
+            got = _paths(w, sid)
+            keep = epcodes.keep_original_names(w)
+        finally:
+            undo()
+        if coded:
+            assert got["學員重念"] == "我覺得艾瑪說得對，艾瑪也是" and got["老師"], got
+            assert not keep.get("美美"), keep
+        else:
+            assert got["學員重念"] == "我覺得美美說得對，小美也是" and not got["老師"], got
+            assert keep.get("美美") >= {"美美", "小美"}, keep
+
+
+def test_web_row_text_for_english_name():
+    """③ 那列：有英文名的寫「這位這一集有英文名，照樣換成 艾瑪」，選單「不用處理（照樣換成 艾瑪）」；不寫「照原聲留著」。"""
+    import shutil
+    import subprocess
+    import tempfile
+
+    node = shutil.which("node")
+    if not node:
+        print("（沒有 node，略過）")
+        return
+    web = REPO_ROOT / "bookclub" / "web"
+    row = {"id": "P", "名字": "美美", "其他寫法": [], "是誰": "其他人", "說明": "", "名冊本名": "小美", "次數": 1, "老師說": 1, "學員說": 0,
+           "第一次": 1, "刪除段落外次數": 1, "都在刪除段落": False, "② 已決定": False, "做法": "不用處理", "代號": None, "同一人": None,
+           "自動配": False, "已決定": True, "名冊上的人": True, "名冊上的英文名": "艾瑪", "照樣換成英文名": "艾瑪", "名冊上的人照原聲": False}
+    spec = {"前置": "", "情境": [{"名稱": "row", "程式": f"""
+        rv.data = {{"提到的名字": [{json.dumps(row, ensure_ascii=False)}], "學員": {{}}, "這一集代號": {{}},
+          "代號分組": {{"女": ["艾瑪"], "男": [], "這一集用到的其他代號": []}}, "代號對照": {{"代號給了": {{}}, "撞名": {{}}}}}};
+        return rvNameRowHtml(rv.data["提到的名字"][0]);"""}]}
+    d = Path(tempfile.mkdtemp())
+    (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    files = ",".join(str(web / f) for f in ("cards.js", "review.js"))
+    out = json.loads(subprocess.run([node, str(REPO_ROOT / "tests" / "web_harness.js"), files, str(d / "spec.json")],
+                                    capture_output=True, text=True, check=True).stdout)["row"]
+    assert "這位這一集有英文名，照樣換成 艾瑪" in out and "不用處理（照樣換成 艾瑪）" in out and "照原聲留著" not in out, out
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

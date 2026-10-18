@@ -326,6 +326,8 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
     spell = epcodes.episode_spellings(workdir, roster=roster, dec=dec)
     keep = epcodes.keep_original_names(workdir, dec=dec)
     spellings = {r["寫法"] for r in roster} | {r["canonical"] for r in roster}
+    owners = epcodes.roster_owners(roster)
+    coded = epcodes.coded_people(workdir, roster, dec)
 
     def ws_of(p: dict) -> list[str]:
         return [p["名字"], *p["其他寫法"]]
@@ -393,6 +395,14 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
                 continue
             shown[c["matched_text"]] = shown.get(c["matched_text"], False) or c.get("比對層級") in ("A1", "A2")
         card_words = [w + ("（讀音相近）" if near else "") for w, near in shown.items()]
+        # 10-18 #250 題 1（宇軒選 B）：名冊上對到的人這一集有英文名 → 選不用處理／不是名字也照樣換成那個英文名
+        # 「這位」只看名字本身對到誰（名冊上沒有就看人名清單對到的名冊本名），不看其他寫法是誰的
+        who = owners.get(p["名字"]) or ({p["名冊本名"]} if p.get("名冊本名") else set())
+        own_code = next((codes.get(o) for o in sorted(who) if codes.get(o)), None)
+        if own_code:   # 決定時名冊上還沒有、這一集自己加進名冊的寫法選這兩個照原聲（epcodes.kept_spellings），不寫「照樣換成」
+            hyp = {k: v for k, v in d.items() if k != "自動配"} | {"做法": "不用處理"}
+            if p["名字"] in epcodes.kept_spellings(p["名字"], hyp, [p["名字"]], owners, coded):
+                own_code = None
         out.append({"id": p["id"], "名字": p["名字"], "其他寫法": p["其他寫法"], "是誰": p["是誰"], "說明": p.get("說明", ""),
                     "名冊本名": p.get("名冊本名"), "卡片上寫成": card_words, "次數": p["次數"], "老師說": p["老師說"], "學員說": p["學員說"],
                     "第一次": p["第一次"],
@@ -407,8 +417,10 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
                     # ③ 那列寫灰字「照原聲留著，第 5 步『需留意』會列出來」
                     "名冊上的人照原聲": bool(d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配")
                                         and any(w in spellings and w in keep.get(p["名字"], ()) for w in ws_of(p))),
-                    # 名冊上的人：③ 下拉選單「不用處理」「不是名字」後面標「（照原聲留著）」
+                    # 名冊上的人：③ 下拉選單「不用處理」「不是名字」後面標「（照原聲留著）」；這一集有英文名的標「（照樣換成 X）」
                     "名冊上的人": any(w in spellings for w in ws_of(p)),
+                    "名冊上的英文名": own_code,
+                    "照樣換成英文名": own_code if d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配") else None,
                     "名冊現在有": bool(d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配")
                                      and any(w in spellings and epcodes.at_map(p["名字"], d, ws_of(p)).get(w) == "" for w in ws_of(p))),   # 1016-3：③ 那列提醒（選不用處理會念出原名）
                     "自動配": bool(d.get("自動配")) and not in_two,   # 10-07：程式自動配的代號（算決定好，人沒改過）

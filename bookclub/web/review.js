@@ -1136,7 +1136,8 @@ function rvNamePickOpts(u) {
     `<option value="${esc(`code:${c}`)}" ${sel(`code:${c}`)}>${esc(c + note(c))}</option>`).join("")}</optgroup>`));
   if (curCode && !all.includes(curCode)) out.push(`<option value="${esc(`code:${curCode}`)}" selected>${esc(curCode)}</option>`);
   out.push('<option value="code:__new">自己打一個英文名…</option>');
-  const drop = u["名冊上的人"] ? "（照原聲留著）" : "";   // 10-18 #250：名冊上的人選這兩個也照原聲留著（推翻 1016-3「名字照樣拿掉」）
+  // 10-18 #250：名冊上的人選這兩個也照原聲留著（推翻 1016-3「名字照樣拿掉」）；這一集有英文名的照樣換（題 1 選 B）
+  const drop = u["名冊上的英文名"] ? `（照樣換成 ${esc(u["名冊上的英文名"])}）` : u["名冊上的人"] ? "（照原聲留著）" : "";
   out.push(`<option value="how:不是名字" ${sel("how:不是名字")}>不是名字${drop}</option>`);
   out.push(`<option value="how:不用處理" ${sel("how:不用處理")}>不用處理${drop}</option>`);
   return out.join("");
@@ -1155,7 +1156,7 @@ function rvNameRowHtml(u) {
       <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
         <select class="rv-unpick" data-name="${esc(u["名字"])}" data-cur="${esc(rvNamePickValue(u))}" aria-label="${esc(u["名字"])}要怎麼換" ${saving ? "disabled" : ""}>${rvNamePickOpts(u)}</select>
         ${state}</div>
-      ${u["名冊上的人照原聲"] ? '<p class="rv-meta rv-ownwarn">照原聲留著，第 5 步「需留意」會列出來</p>' : ""}${u["名冊現在有"] ? '<p class="rv-meta">選的時候名冊還沒有，現在有了；這一集照原聲留著</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
+      ${u["名冊上的人照原聲"] ? '<p class="rv-meta rv-ownwarn">照原聲留著，第 5 步「需留意」會列出來</p>' : ""}${u["照樣換成英文名"] ? `<p class="rv-meta rv-ownwarn">這位這一集有英文名，照樣換成 ${esc(u["照樣換成英文名"])}</p>` : ""}${u["名冊現在有"] ? '<p class="rv-meta">選的時候名冊還沒有，現在有了；這一集照原聲留著</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
 }
 
 function rvNameCountHtml() {
