@@ -361,6 +361,84 @@ def test_same_person_then_not_needed_keeps_original_even_with_english_name():
     (T._DATA / "名冊.csv").write_text(T._ROSTER, encoding="utf-8")
 
 
+def _direct_case(roster: str):
+    """③ 小美這一列（人名清單其他寫法有名冊上同一人的暱稱「美美」）直接選不用處理（沒有先選同一人）；② 小美 → Amy。
+    老師句子「美美來，」、學員1 重念稿「我跟小美和美美說」、學員2 保留原聲講到美美。"""
+    w = T._make()
+    turns_mod.set_name_code(w, "小美", "Amy", add_roster=False)
+    (T._DATA / "名冊.csv").write_text(roster, encoding="utf-8")
+    pp = personnames.people_path(w)
+    d = json.loads(pp.read_text(encoding="utf-8"))
+    d["人名"].append({"id": "P070", "名字": "小美", "其他寫法": ["美美"], "是誰": "其他人", "說明": "", "句子": [],
+                    "次數": 1, "老師說": 1, "學員說": 0, "第一次": 76.3})
+    pp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    sp = json.loads((w / "說話者判斷.json").read_text(encoding="utf-8"))
+    nd = wd.read_json(wd.names_path(w))
+    c0 = nd["candidates"][0]
+    next(x for x in sp["sentences"] if x["id"] == c0["sentence_id"])["text"] = "美美來，"
+    c0.update({"name": "美美", "matched_text": "美美", "canonical": "小美", "sentence": "美美來，"})
+    (w / "說話者判斷.json").write_text(json.dumps(sp, ensure_ascii=False), encoding="utf-8")
+    wd.write_json(wd.names_path(w), nd)
+    tp = turns_mod.turns_path(w)
+    td = json.loads(tp.read_text(encoding="utf-8"))
+    next(x for x in td["段落"] if x["說話者"] == "學員1")["校對稿"] = "我跟小美和美美說"
+    tp.write_text(json.dumps(td, ensure_ascii=False), encoding="utf-8")
+    personnames.decide(w, "小美", "不用處理")
+    personnames.wait_rescan(w)
+    epcodes.sync(w)
+    return w
+
+
+def test_direct_not_needed_with_roster_nickname_still_replaced():
+    """10-18 複審（隱私）：直接選不用處理時「決定時名冊對到」也會記 {美美: 小美}，不能誤判成「改回前是同一人」。
+    小美這一集有英文名 → 美美照換、③ 不出現「照原聲」；美美同時是小美和阿明（Kevin）的寫法時，三條路也一致換掉。"""
+    try:
+        for roster in ("中文名,其他寫法,性別\n小美,美美,女\n阿明,,男\n",
+                       "中文名,其他寫法,性別,英文代號\n阿明,美美,男,Kevin\n小美,美美,女,\n"):
+            w = _direct_case(roster)
+            keep = epcodes.keep_original_names(w)
+            assert not keep.get("小美"), (roster, keep)
+            row = next(u for u in personnames.mentioned(w, chosen=set()) if u["名字"] == "小美")
+            assert not row["名冊上的人照原聲"] and row["照樣換成英文名"] == "Amy", (roster, row)
+            said, _ = review.replace_real_names("我跟小美和美美說", epcodes.replace_table(w))
+            assert "小美" not in said and "美美" not in said and said.startswith("我跟Amy和"), (roster, said)
+            items, _ = students.build_items(w)
+            stu = next(it["text"] for it in items if it["text"].startswith("我跟"))
+            assert "美美" not in stu and "小美" not in stu, (roster, stu)
+            plan = nameplan.compute_plan(w)
+            assert any(g["text"].startswith("Amy來") or "Amy來" in g["text"] for g in plan["生成"]), (roster, plan["生成"])
+            assert not epcodes.is_kept_original({"name": "美美", "canonical": "小美", "代號": ""}, keep)   # 保留原聲學員那條路
+    finally:
+        (T._DATA / "名冊.csv").write_text(T._ROSTER, encoding="utf-8")
+
+
+def test_student_name_card_without_english_name_says_keep():
+    """10-18 複審：保留原聲學員卡選換成代號、沒有英文名 → 後端帶「沒英文名照原聲」，卡片寫照原聲留著（不寫名字被拿掉的句子）。"""
+    import shutil
+    import subprocess
+    import tempfile
+
+    w, undo, sid = _setup()
+    try:
+        wd.write_json(studentnames.decisions_path(w), {sid: {"做法": studentnames.CODE, "tags": [], "note": ""}})
+        card = next(x for x in studentnames.items(w) if x["id"] == sid)
+    finally:
+        undo()
+    assert card.get("沒英文名照原聲") and card["做法"] == studentnames.CODE, card
+    node = shutil.which("node")
+    if not node:
+        return
+    web = REPO_ROOT / "bookclub" / "web"
+    spec = {"前置": "", "情境": [{"名稱": "c", "程式": f"""const it = {json.dumps(card, ensure_ascii=False)};
+        rv.data = {{"項目": [it], "學員": {{}}}}; if (typeof rvUseCardCtx === "function") rvUseCardCtx();
+        return rvBodyHtml(it);"""}]}
+    d = Path(tempfile.mkdtemp())
+    (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    out = json.loads(subprocess.run([node, str(REPO_ROOT / "tests" / "web_harness.js"), ",".join(str(web / f) for f in ("cards.js", "review.js")),
+                                     str(d / "spec.json")], capture_output=True, text=True, check=True).stdout)["c"]
+    assert "照原聲留著：這個名字這一集還沒有英文名，到「開始前 4 件事」③ 選" in out and "自己的聲音重念這句" not in out, out
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

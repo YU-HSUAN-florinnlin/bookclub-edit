@@ -261,7 +261,11 @@ def kept_spellings(name: str, d: dict, spellings: list[str], every: dict[str, se
     undone = bool(d.get(FROM_SAME_KEY))   # 這一集先選同一人、後來改回：老師說不是那個人 → 照原聲
 
     def from_same(w: str) -> bool:
-        return undone or w in rec or (w != name and m.get(w) == name)   # 舊決定沒有記號：決定時記成算它自己＝以前選過同一人
+        # 舊決定沒有記號：決定時記成算它自己、**而且**名冊上這個寫法不是這個人的（以前選同一人時加到別人名下）＝以前選過同一人。
+        # 10-18 複審（隱私）：名冊本來就把 w 對到這個人的（直接選不用處理時也會這樣記），不算改回前是同一人
+        own = (every or {}).get(w, set())
+        old_same = w != name and m.get(w) == name and bool(own) and name not in own
+        return undone or w in rec or old_same
 
     return {w for w in spellings
             if from_same(w) or (not has_code(w) and (w == name or m.get(w) == "" or not ((every or {}).get(w, set()) - me - {w})))}

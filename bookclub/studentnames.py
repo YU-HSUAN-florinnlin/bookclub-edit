@@ -164,6 +164,8 @@ def items(workdir: str | Path, cut_ranges: list[tuple[float, float]] = ()) -> li
                                          "要消音或換成代號，把標記拿掉再選" if orig else
                      f"{c.get('學員')} 保留原聲，講到名字預設直接消音；也可以選換成代號，用他自己的聲音生成"},
             **({"照原聲留著": True} if orig else {}),
+            # 10-18 複審：選「換成代號」但這一集沒有英文名 → 照原聲（plan 不生成），卡片照實寫
+            **({"沒英文名照原聲": True} if no_code_keep(c) else {}),
             "不用處理": "落在剪掉的片段裡（聲音和畫面都拿掉）" if review._in_ranges(c["start"], c["end"], list(cut_ranges)) else None,
         })
     return out
