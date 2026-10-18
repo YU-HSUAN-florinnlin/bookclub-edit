@@ -1083,13 +1083,64 @@ def names_done(workdir: Path) -> tuple[bool, str]:
     left = [it["id"] for it in items if not (recs.get(it["id"]) or {}).get("放回時間格")
             or tts.record_stale(recs[it["id"]], {**it, "生成用文字": tts.apply_pron(it["text"], table)[0]})
             or tts.output_missing(recs[it["id"]], workdir)]   # 10-03 第九批 #19：聲音檔不在當作沒做過
-    return (not left), (f"{len(gen)} 句都生成好了" if not left
-                        else f"還有 {len(left)}／{len(gen)} 句要生成（{_ids_note(left)}）")
+    if not left:
+        return True, f"{len(gen)} 句都生成好了"
+    by_id = {g["id"]: g for g in gen}
+    starts = _teacher_card_starts(workdir)
+    return False, f"還有 {len(left)}／{len(gen)} 句要生成：{_where_note([_teacher_where(by_id[k], starts) for k in left])}"
 
 
-def _ids_note(ids: list[str], n: int = 5) -> str:
-    """10-17 #244：「還有幾句要生成」後面列出是哪幾句，卡住時直接看得到，不用另外查。"""
-    return "、".join(ids[:n]) + (f" 等 {len(ids)} 句" if len(ids) > n else "")
+# 10-18 #244：「還有幾句要生成」後面寫原片時間＋第 3 步畫面上的卡片類型（`cards.js` 的 RV_TYPE），
+# 不寫 S018 這種畫面上看不到的編號
+CARD_LABEL = {"名字": "老師提到名字", "學員段落": "學員段落", "學員名字": "學員提到名字", "重疊": "重疊"}
+WHERE_MAX = 5
+
+
+def fmt_card_time(sec: float) -> str:
+    """跟第 3 步卡片清單的時間一樣（`cards.js` 的 `rvFmt(秒)`）：有小時寫 1:11:52，沒有寫 3:05，秒無條件捨去。"""
+    sec = max(0.0, float(sec or 0.0))
+    h, m, s = int(sec // 3600), int(sec % 3600 // 60), int(sec % 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def _where_note(rows: list[tuple[float, str]], n: int = WHERE_MAX) -> str:
+    """[(原片秒數, 卡片類型)] → 「1:11:52（老師提到名字）、1:20:03（重疊）」，照時間排；超過 n 筆寫「…等 N 句」。"""
+    rows = sorted(rows, key=lambda r: r[0])
+    out = "、".join(f"{fmt_card_time(t)}（{label}）" for t, label in rows[:n])
+    return out + (f"…等 {len(rows)} 句" if len(rows) > n else "")
+
+
+def _teacher_card_starts(workdir: Path) -> dict[str, float]:
+    """老師名字卡的原片時間：計畫 `候選` 編號（字串）→ 第 3 步那張卡的起點（同一句同代號併成一張卡的，用主卡的）。"""
+    from bookclub import nameplan, review
+
+    names = wd.read_json(wd.names_path(workdir), default=None) or {}
+    try:
+        decisions = wd.read_json(workdir / nameplan.DECISIONS_FILE_NAME, default={}) or {}
+        cands = review.effective_name_candidates(workdir, names.get("candidates", []), decisions)
+    except Exception:  # noqa: BLE001 — 算不出來就用生成項目自己的時間格
+        return {}
+    by = {str(c.get("id") or k): c for k, c in enumerate(cands, start=1)}
+    return {k: float((by.get(str(c.get("同一張卡"))) or c)["start"]) for k, c in by.items()}
+
+
+def _teacher_where(g: dict, starts: dict[str, float]) -> tuple[float, str]:
+    """老師生成項目 → (卡片時間, 卡片類型)。名字（S／N）→ 老師提到名字；只有重疊（V／W）→ 重疊。"""
+    keys = [str(k) for k in g.get("候選") or []]
+    if keys:
+        ts = [starts[k] for k in keys if k in starts]
+        return (min(ts) if ts else g["slot"][0]), CARD_LABEL["名字"]
+    if g.get("重疊項目"):
+        return _overlap_start(g["重疊項目"][0], g["slot"][0]), CARD_LABEL["重疊"]
+    return g["slot"][0], CARD_LABEL["名字"]
+
+
+def _overlap_start(oid: str, fallback: float) -> float:
+    """重疊卡的編號是 `O<起點秒數>`（`review._ov_key`）；認不得就用時間格。"""
+    try:
+        return float(str(oid)[1:]) if str(oid).startswith("O") else float(fallback)
+    except ValueError:
+        return float(fallback)
 
 
 def students_done(workdir: Path, a: float | None, b: float | None) -> tuple[bool, str]:
@@ -1110,7 +1161,17 @@ def students_done(workdir: Path, a: float | None, b: float | None) -> tuple[bool
             or tts.record_stale(recs[it["id"]], {**it, "生成用文字": tts.apply_pron(it["text"], table)[0]},
                                 now.get(it["學員"]) or wd.localize(recs[it["id"]].get("參考音"), workdir))   # 10-02 第五批
             or tts.output_missing(recs[it["id"]], workdir)]   # 10-03 第九批 #19：聲音檔不在當作沒做過
-    return (not left), (f"{len(items)} 段都生成好了" if not left else f"還有 {len(left)}／{len(items)} 段要生成")
+    if not left:
+        return True, f"{len(items)} 段都生成好了"
+    # 10-18 #244：寫第 3 步卡片的時間＋類型（學員段落照段落起點；重疊卡片的學員那一句照重疊卡）
+    from bookclub import turns as turns_mod
+
+    tdata = turns_mod.page_data(workdir)
+    tstart = {t["id"]: t["start"] for t in (tdata.get("段落") or [])} if not tdata.get("尚未準備") else {}
+    by_id = {it["id"]: it for it in items}
+    rows = [(_overlap_start(by_id[k]["重疊"], by_id[k]["slot"][0]), CARD_LABEL["重疊"]) if by_id[k].get("重疊")
+            else (tstart.get(by_id[k].get("段落"), by_id[k]["slot"][0]), CARD_LABEL["學員段落"]) for k in left]
+    return False, f"還有 {len(left)}／{len(items)} 段要生成：{_where_note(rows).replace(' 句', ' 段')}"
 
 
 def stunames_done(workdir: Path) -> tuple[bool, str]:
@@ -1130,7 +1191,19 @@ def stunames_done(workdir: Path) -> tuple[bool, str]:
                  or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]},
                                      studentgen.current_ref(workdir, g["學員"], recs[g["id"]]))
                  or tts.output_missing(recs[g["id"]], workdir))]   # 10-03 第九批 #19：聲音檔不在當作沒做過
-    return (not left), (f"{len(sp['生成'])} 句都處理好了" if not left else f"還有 {len(left)}／{len(sp['生成'])} 句要生成")
+    if not left:
+        return True, f"{len(sp['生成'])} 句都處理好了"
+    by_id = {g["id"]: g for g in sp["生成"]}   # 10-18 #244：卡片編號是「句子@起點」，時間照第 3 步那張學員名字卡
+    rows = [(min((_stuname_start(k, by_id[g]["slot"][0]) for k in by_id[g].get("候選") or []),
+                 default=by_id[g]["slot"][0]), CARD_LABEL["學員名字"]) for g in left]
+    return False, f"還有 {len(left)}／{len(sp['生成'])} 句要生成：{_where_note(rows)}"
+
+
+def _stuname_start(cid: str, fallback: float) -> float:
+    try:
+        return float(str(cid).rsplit("@", 1)[1])
+    except (IndexError, ValueError):
+        return float(fallback)
 
 
 def render_inputs(workdir: Path) -> list[Path]:
