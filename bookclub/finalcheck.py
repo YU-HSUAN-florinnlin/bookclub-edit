@@ -1210,6 +1210,7 @@ ATTENTION_NAME = "名字換不了代號"
 # 那一句「有被處理」，照原聲類算會被扣光、列不出來（設計草稿風險 5）
 ATTENTION_TEXT_KINDS = ("英文代號", "字太少", "照原聲名字")
 ATTENTION_MIN_S = 0.3   # 扣掉被處理蓋到的地方之後剩不到這麼久就不列（跟「不修改」一樣）
+ATTENTION_NO_MIN_KINDS = ("照原聲名字",)   # 不套 0.3 秒門檻的類別（名字本身很短）
 
 
 def place_attention(rows: list[dict], log: dict | None) -> list[dict]:
@@ -1240,7 +1241,8 @@ def place_attention(rows: list[dict], log: dict | None) -> list[dict]:
             left = [[max(x, rng[0]), min(y, rng[1])] for x, y in left if min(y, rng[1]) > max(x, rng[0])]
         left = [seg for seg in subtract_ranges(left, cuts if kind in ATTENTION_TEXT_KINDS else holes) if seg[1] - seg[0] > 1e-6]
         secs = round(sum(y - x for x, y in left), 3)
-        if secs < ATTENTION_MIN_S:
+        # 10-18 審查：照原聲留著的名字只有名字那幾個字（兩個字的名字常常不到 0.3 秒），不套門檻，剩下有一點就列
+        if secs < (1e-6 if kind in ATTENTION_NO_MIN_KINDS else ATTENTION_MIN_S):
             continue
         segs = [[round(near_output_time(x, plist), 3), round(near_output_time(y, plist), 3)] for x, y in left]
         out.append({"鍵": r.get("key"), "類別": kind, "第3步": r.get("第3步"), "原片": [round(a, 3), round(b, 3)],

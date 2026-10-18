@@ -149,6 +149,72 @@ def test_no_rows_when_nothing_kept():
     assert execute.kept_name_rows(w) == []
 
 
+def test_name_also_someone_elses_alias_privacy():
+    """10-18 審查（隱私）：名冊 小美（本名、沒英文名）；阿明（Kevin，其他寫法有「小美」「阿強」）；人名清單把「阿強」併進小美這列，
+    ③ 小美選不用處理 → 只有小美照原聲；阿強是阿明的，三條路都換成 Kevin（不能因為小美也是阿明的寫法，就把阿明算成自己）。"""
+    try:
+        w, undo, sid = _setup_alias_case()
+        try:
+            keep = epcodes.keep_original_names(w)
+            assert keep.get("小美") == {"小美"}, keep
+            said, _ = review.replace_real_names("阿強跟小美說", epcodes.replace_table(w))   # 學員重念
+            assert said == "Kevin跟小美說", said
+            cands = wd.read_json(wd.names_path(w))["candidates"]
+            q = [c for c in cands if c.get("name") == "阿強"]
+            assert q and all((c["canonical"], c["代號"]) == ("阿明", "Kevin") for c in q), q
+            plan = nameplan.compute_plan(w)   # 老師句子
+            assert any("Kevin" in g["text"] for g in plan["生成"]) and not any("阿強" in g["text"] for g in plan["生成"]), plan
+            card = next(x for x in studentnames.items(w) if x["id"] == sid)   # 保留原聲學員：不照原聲，換成代號時念 Kevin
+            assert not card.get("照原聲留著") and "不是名字" not in card["tags"], card
+            wd.write_json(studentnames.decisions_path(w), {sid: {"做法": studentnames.CODE, "tags": [], "note": ""}})
+            g = studentnames.plan(w)["生成"]
+            assert g and "Kevin" in g[0]["text"] and "阿強" not in g[0]["text"], g
+        finally:
+            undo()
+    finally:
+        (T._DATA / "名冊.csv").write_text(T._ROSTER, encoding="utf-8")
+
+
+def _setup_alias_case():
+    w = T._make()
+    (T._DATA / "名冊.csv").write_text("中文名,其他寫法,性別,英文代號\n小美,,女,\n阿明,小美、阿強,男,Kevin\n", encoding="utf-8")
+    pp = personnames.people_path(w)
+    d = json.loads(pp.read_text(encoding="utf-8"))
+    d["人名"] = [p for p in d["人名"] if p["名字"] != "阿強"]
+    d["人名"].append({"id": "P050", "名字": "小美", "其他寫法": ["阿強"], "是誰": "其他人", "說明": "", "句子": [],
+                    "次數": 1, "老師說": 1, "學員說": 0, "第一次": 76.3})
+    pp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    personnames.request_rescan(w)
+    personnames.wait_rescan(w)
+    td = json.loads(turns_mod.turns_path(w).read_text(encoding="utf-8"))
+    t2 = next(x for x in td["段落"] if x["說話者"] == "學員2")
+    dec = review.load_decisions(w)
+    dec["學員聲音"] = {"學員2": "保留原聲"}
+    review._save_decisions(w, dec)
+    sp = json.loads((w / "說話者判斷.json").read_text(encoding="utf-8"))
+    s2 = next(x for x in sp["sentences"] if x["id"] == t2["句子"][0])
+    s2["text"] = "阿強說得對。"
+    (w / "說話者判斷.json").write_text(json.dumps(sp, ensure_ascii=False), encoding="utf-8")
+    c = {"matched_text": "阿強", "name": "阿強", "canonical": "阿明", "代號": "Kevin", "sentence_id": s2["id"], "sentence": s2["text"],
+         "start": s2["start"] + 0.2, "end": s2["start"] + 0.6, "學員": "學員2", "位置": "句首", "信心": "高",
+         "比對層級": "精確", "敏感詞": False}
+    c["id"] = studentnames.cand_id(c)
+    real = studentnames.find
+    studentnames.find = lambda workdir, force=False: {"保留原聲學員": ["學員2"], "candidates": [dict(c)]}
+    personnames.decide(w, "小美", "不用處理")
+    personnames.wait_rescan(w)
+    return w, (lambda: setattr(studentnames, "find", real)), c["id"]
+
+
+def test_short_name_still_listed():
+    """10-18 審查：照原聲名字只有名字那幾個字，0.25 秒也要列（不套 0.3 秒門檻）；別的類別照舊套。"""
+    log = {"片段": [{"src": [0.0, 100.0], "freeze": 0.0}], "範圍": [0.0, 100.0], "紀錄": []}
+    rows = [{"key": "照原聲名字:名字:1", "類別": "照原聲名字", "start": 10.0, "end": 10.25, "第3步": "名字:1"},
+            {"key": "聲紋:S1", "類別": "聲紋", "start": 20.0, "end": 20.25, "第3步": None}]
+    got = [x["鍵"] for x in finalcheck.place_attention(rows, log)]
+    assert got == ["照原聲名字:名字:1"], got
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

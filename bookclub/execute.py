@@ -1143,7 +1143,7 @@ def _teacher_where(g: dict, starts: dict[str, float]) -> tuple[float, str]:
 
 
 def _overlap_start(oid: str, fallback: float) -> float:
-    """重疊卡的編號是 `O<起點秒數>`（`review._ov_key`）；認不得就用時間格。"""
+    """重疊卡的編號是 `O<起點秒數>`（`review.overlap_id`）；認不得就用時間格。"""
     try:
         return float(str(oid)[1:]) if str(oid).startswith("O") else float(fallback)
     except ValueError:

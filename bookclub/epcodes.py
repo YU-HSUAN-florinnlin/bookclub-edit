@@ -230,8 +230,13 @@ def kept_spellings(name: str, d: dict, spellings: list[str], every: dict[str, se
         return set()
     m = at_map(name, d, spellings)
     rec = set((d.get("加進名冊的其他寫法") or {}).get("寫法") or [])
-    me = {name, *(every or {}).get(name, set())}   # 只看名字本身對到誰（不看人名清單其他寫法對到誰，免得別人的暱稱被算成自己）
-    return {w for w in spellings if m.get(w) == "" or w in rec or not ((every or {}).get(w, set()) - me - {w})}
+    # 「自己」是誰：只看名字本身（不看人名清單其他寫法對到誰，免得別人的暱稱被算成自己）。
+    # 10-18 審查（隱私）：名字是名冊上某一列的本名 → 只有自己；名字只是別人的其他寫法、而且只對到一個人 → 那個人也算自己；
+    # 對到好幾個人 → 只有自己（不然名字剛好也是別人的暱稱時，那個人的其他寫法也會跟著照原聲）
+    owners = (every or {}).get(name, set())
+    me = {name} if name in owners or len(owners) != 1 else {name, *owners}
+    return {w for w in spellings
+            if w == name or m.get(w) == "" or w in rec or not ((every or {}).get(w, set()) - me - {w})}
 
 
 def keep_original_names(workdir: str | Path, dec: dict | None = None) -> dict[str, set[str]]:
