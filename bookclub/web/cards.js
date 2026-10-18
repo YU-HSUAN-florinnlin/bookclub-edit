@@ -582,7 +582,11 @@ function rvBodyHtml(it) {
     const key = rvKey(it);
     const open = step5 || problem || (cv.nameFold || {})[key];
     const low = it["信心"] === "低" ? `<p class="rv-warnline">低信心，先聽清楚是不是名字</p>` : "";
-    const speak = !skip && w && rvChosen(it) === "整句換掉"
+    // 10-18 #246 修法 5：沒有英文名的卡照原聲留著（不重念、名字不會被拿掉）；人改了要念的字就照人改的
+    const keepOrig = !skip && w && it["沒英文名照原聲"] && !w["改稿"] && rvChosen(it) !== "直接消音";
+    const speak = keepOrig
+      ? `<p class="rv-quote rv-say"><span class="rv-lab">會念成</span><span class="rv-warnline">照原聲留著：這個名字這一集還沒有英文名，到「開始前 4 件事」③ 選</span></p>`
+      : !skip && w && rvChosen(it) === "整句換掉"
       ? `<p class="rv-quote rv-say"><span class="rv-lab">會念成</span>${w["改稿"] ? esc(say) : w["換成代號"] ? rvMarkDrops(say, w["拿掉的位置"]) : `<span class="rv-warnline">（還沒換成代號）</span>`}<span class="rv-meta">（代號 ${esc(it["代號"] || "（沒有）")}）</span></p>` : "";   // 審查建議 7：沒換成代號時不顯示含本名的原文
     const fold = w && !skip ? `<details class="rv-namefold" data-key="${esc(key)}" ${open ? "open" : ""}>
         <summary>調整重念的字和範圍${w["改稿"] || w["範圍"] === "人選" ? ` <span class="rv-tag">已改過</span>` : ""}</summary>

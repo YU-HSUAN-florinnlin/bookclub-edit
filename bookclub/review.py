@@ -1079,6 +1079,7 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
             whole["字太少"] = bool(shown) and nameplan.too_short(shown, src)
         items.append({
             "類型": "名字", "id": cid, "start": c["start"], "end": c["end"],
+            **({"沒英文名照原聲": True} if nameplan.no_code_keep(c, d) else {}),   # 10-18 #246 修法 5：卡片寫照原聲留著
             "sentence_html": _highlight_sentence(sentence, c.get("matched_text", ""), c.get("位置", "")),
             "整句": whole, "老師整段": bool(c.get("老師整段")),
             "matched_text": c.get("matched_text", ""), "代號": c.get("代號", ""), "位置": c.get("位置", ""),

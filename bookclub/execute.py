@@ -184,8 +184,15 @@ def precheck(workdir: str | Path) -> dict:
     from bookclub import epcodes
 
     lack_codes = epcodes.missing(workdir)
-    if lack_codes:
-        notes.append(f"有 {len(lack_codes)} 個名字這一集還沒有代號（不擋）：沒代號的名字換不了、成品裡照原聲留著。"
+    try:   # 10-18 #246 修法 5：沒有英文名的照原聲留著（真的不重念、不拿掉），寫清楚是哪幾處
+        no_code = no_code_rows(workdir)
+    except Exception:  # noqa: BLE001 — 算不出來就照名字數提醒
+        no_code = []
+    if no_code:
+        notes.append(f"有 {len(no_code)} 處名字這一集還沒有英文名，照原聲留著（不擋）：{_where_note([_row_where(r) for r in no_code]).replace(' 句', ' 處')}。"
+                     "要換的話到第 3 步 ③ 選英文名，或按第 4 步的「幫還沒代號的自動配」；做完到第 5 步「需留意」聽一次")
+    elif lack_codes:
+        notes.append(f"有 {len(lack_codes)} 個名字這一集還沒有代號（不擋）：用到的地方照原聲留著。"
                      "要換的話到第 3 步 ③ 選，或按第 4 步的「幫還沒代號的自動配」")
     if wd.read_json(wd.names_path(workdir), default=None):
         from bookclub import nameplan
@@ -1813,6 +1820,52 @@ def kept_name_rows(workdir: str | Path) -> list[dict]:
     return rows
 
 
+def no_code_rows(workdir: str | Path, plan: dict | None = None) -> list[dict]:
+    """10-18 #246 修法 5：沒有英文名、照原聲留著的地方（只讀），每一處一列（跟 `kept_name_rows` 同一個類別）：
+    - 老師名字卡：計畫裡 `略過` 原因是 `nameplan.NO_CODE_SKIP` 的（同一句同代號併成一張的照一張卡列）
+    - 學員重念：要重念的文字裡還有名冊上、這一集沒有英文名的寫法（AI 會照字念）"""
+    from bookclub import epcodes, nameplan, review, students
+
+    workdir = Path(workdir)
+    rows: list[dict] = []
+    if wd.read_json(wd.names_path(workdir), default=None):
+        plan = plan if plan is not None else nameplan.compute_plan(workdir)
+        ids = {str(x["候選"]) for x in plan.get("略過", []) if x.get("原因") == nameplan.NO_CODE_SKIP}
+        if ids:
+            data = wd.read_json(wd.names_path(workdir), default=None) or {}
+            ndec = wd.read_json(review.name_decisions_path(workdir), default={}) or {}
+            cands = review.effective_name_candidates(workdir, data.get("candidates", []), ndec)
+            cards = review.card_of(cands)
+            seen: dict[str, dict] = {}
+            for i, c in enumerate(cands, start=1):
+                cid = str(c.get("id") or i)
+                if cid not in ids:
+                    continue
+                card = cards.get(cid, cid)
+                if card in seen:
+                    r = seen[card]
+                    r["start"], r["end"] = min(r["start"], float(c["start"])), max(r["end"], float(c["end"]))
+                    continue
+                seen[card] = {"key": f"{KEPT_NAME_KIND}:沒英文名:名字:{card}", "類別": KEPT_NAME_KIND, "start": float(c["start"]),
+                              "end": float(c["end"]), "第3步": f"名字:{card}", "沒英文名": True}
+                rows.append(seen[card])
+    words = sorted({r["寫法"] for r in epcodes.replace_table(workdir) if not r.get("代號") and not r.get("拿掉")
+                    and len(r["寫法"]) >= 2}, key=len, reverse=True)
+    if words:
+        items, _ = students.build_items(workdir)
+        for it in items:
+            if any(w in (it.get("text") or "") for w in words):
+                card = f"重疊:{it['重疊']}" if it.get("重疊") else f"學員段落:{it.get('段落')}"
+                rows.append({"key": f"{KEPT_NAME_KIND}:沒英文名:學員重念:{it['id']}", "類別": KEPT_NAME_KIND,
+                             "start": float(it["slot"][0]), "end": float(it["slot"][1]), "第3步": card, "沒英文名": True})
+    return rows
+
+
+def _row_where(r: dict) -> tuple[float, str]:
+    kind = r["第3步"].split(":", 1)[0]
+    return r["start"], CARD_LABEL.get(kind, kind)
+
+
 def skipped_snapshot(workdir: str | Path) -> dict | None:
     """開始執行當下的總檢查沒處理的列（skipped_rows），加上記下的時間、保留原聲又是猜的學員段落（列在需留意）、
     人名清單有沒有跑成功（沒有＝名冊外的名字這次沒有找）；算不出來回 None（不擋執行）。"""
@@ -1829,8 +1882,8 @@ def skipped_snapshot(workdir: str | Path) -> dict | None:
             guess = []
         snap["列"] += guess
         snap["猜的學員"] = len(guess)
-        try:   # 10-18 #250：照原聲留著的名字
-            kept_rows = kept_name_rows(workdir)
+        try:   # 10-18 #250：照原聲留著的名字；#246：沒有英文名、照原聲留著的地方
+            kept_rows = kept_name_rows(workdir) + no_code_rows(workdir)
         except Exception as e:  # noqa: BLE001 — 算不出來不擋執行；第 5 步就少這一類
             print(f"[AI 執行] ⚠️ 照原聲留著的名字算不出來（第 5 步「需留意」這次不會列）：{type(e).__name__}")
             kept_rows = []

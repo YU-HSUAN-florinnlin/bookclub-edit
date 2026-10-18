@@ -125,7 +125,7 @@ def test_step5_attention_lists_kept_names():
     assert cards == {"名字", "學員段落", "學員名字"}, rows
     assert all(r["類別"] == "照原聲名字" for r in rows)
     assert any(r["第3步"] == f"學員名字:{sid}" for r in rows)
-    assert snap and snap["照原聲名字"] == len(rows) and all(r in snap["列"] for r in rows), snap
+    assert snap and snap["照原聲名字"] >= len(rows) and all(r in snap["列"] for r in rows), snap   # #246 沒英文名的也算在這一類
     assert "照原聲名字" in finalcheck.ATTENTION_TEXT_KINDS and any(k == "照原聲名字" for k, _n, _x in finalcheck.ATTENTION_KINDS)
     # 需留意：被重念蓋到的照樣列（文字類），剪掉的扣掉
     teacher = next(r for r in rows if r["第3步"].startswith("名字:"))

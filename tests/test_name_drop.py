@@ -31,7 +31,8 @@ from bookclub import workdir as wd  # noqa: E402
 
 
 def _drop(word: str) -> dict:
-    return {"matched_text": word, "name": word, "canonical": word, "代號": ""}
+    # 10-18 #246 修法 5：老師名字沒有英文名改成照原聲（不再拿掉）；會被拿掉的只剩替代詞空的敏感詞，測試用這種
+    return {"matched_text": word, "name": word, "canonical": word, "代號": "", "敏感詞": True}
 
 
 def _each(text: str, c: dict, mates: list[dict]):
@@ -158,7 +159,7 @@ def _make(says=("小美 你好，", "我跟 阿明 說過了。")) -> Path:
     for c, text in zip(d["candidates"], says):
         by[c["sentence_id"]]["text"] = text
         texts[c["sentence_id"]] = text
-        c.update({"代號": "", "sentence": text, "建議做法": "整句換掉"})
+        c.update({"代號": "", "sentence": text, "建議做法": "整句換掉", "敏感詞": True})   # 替代詞空的敏感詞＝拿掉（#246 之後只剩這種）
     (w / "說話者判斷.json").write_text(json.dumps(sp, ensure_ascii=False), encoding="utf-8")
     m = json.loads((w / "transcript" / "merged.json").read_text(encoding="utf-8"))
     for s in m["sentences"]:

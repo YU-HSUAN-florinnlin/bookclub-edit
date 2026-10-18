@@ -463,6 +463,14 @@ def whole_slot(c: dict, d: dict, group: list[dict], words: list[dict] | None,
 
 
 CUT_SKIP = "落在剪掉的片段裡（聲音和畫面都拿掉，不用處理）"
+NO_CODE_SKIP = "這個名字這一集還沒有英文名：照原聲留著（第 3 步「開始前 4 件事」③ 選英文名）"
+
+
+def no_code_keep(c: dict, d: dict | None = None) -> bool:
+    """10-18 #246 修法 5（宇軒）：老師名字卡沒有英文名（代號空的）→ 照原聲留著，不生成成空的（以前名字被拿掉、只剩「來」）。
+    敏感詞（替代詞空的＝刻意拿掉）、人工標的老師整段、人自己改過要念的字（改稿）照舊。"""
+    return (not (c.get("代號") or "").strip() and not c.get("敏感詞") and not c.get("老師整段")
+            and not ((d or {}).get("改稿") or "").strip())
 
 
 def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dict],
@@ -518,6 +526,10 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
 
         if how == MUTE:
             mutes.append({"候選": i, "start": round(c["start"] - pad, 3), "end": round(c["end"] + pad, 3)})
+            continue
+
+        if no_code_keep(c, d):   # 10-18 #246 修法 5：沒有英文名不生成成空的，照原聲留著（第 4 步提醒、第 5 步「需留意」列出）
+            skipped.append({"候選": i, "原因": NO_CODE_SKIP})
             continue
 
         if how == NAME_ONLY:

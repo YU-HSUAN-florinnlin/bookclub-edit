@@ -97,8 +97,11 @@ def episode_codes(workdir: str | Path) -> dict[str, str]:
               for p in (wd.read_json(personnames.people_path(workdir), default={}) or {}).get("人名", [])]
     for real, code in (tdata.get("本名代號") or {}).items():
         if code:
+            me = canon.get(real, real)
             for g in [g for g in groups if real in g] or [{real}]:
                 for n in g | {real}:
+                    if canon.get(n, me) != me:   # 10-18 #246 修法 1：名冊上是別人的寫法不跟著套（人名清單把別人的暱稱併進來）
+                        continue
                     out[canon.get(n, n)] = code
     for name, d in dec.items():
         if d.get("做法") == "是上面的學員" and out.get(d.get("同一人")):   # 同一個人：跟著那位的代號走
@@ -533,9 +536,17 @@ def _save_auto(workdir: Path, d: dict) -> None:
 def _people_groups(workdir: Path) -> list[set[str]]:
     from bookclub import personnames
 
+    from bookclub import names
+    from bookclub.config import data_dir
+
     spell = episode_spellings(workdir)   # 1016-3：這一集自己決定的寫法不跟名冊那個人同一組
-    return [{p["名字"], *p["其他寫法"], *([p["名冊本名"]] if p.get("名冊本名") and p["名字"] not in spell else [])}
-            for p in (wd.read_json(personnames.people_path(workdir), default={}) or {}).get("人名", [])]
+    canon = roster_canon(names.load_roster(data_dir() / "名冊.csv"))
+    out = []
+    for p in (wd.read_json(personnames.people_path(workdir), default={}) or {}).get("人名", []):
+        g = {p["名字"], *p["其他寫法"], *([p["名冊本名"]] if p.get("名冊本名") and p["名字"] not in spell else [])}
+        me = canon.get(p["名字"]) or p.get("名冊本名") or p["名字"]
+        out.append({w for w in g if canon.get(w, me) == me})   # 10-18 #246 修法 1：名冊上是別人的寫法不算同一組
+    return out
 
 
 def name_spellings(workdir: str | Path) -> dict[str, str]:

@@ -335,12 +335,29 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
         這一列照樣列在 ③、可以改（1016-3）。"""
         return (dec.get(p["名字"]) or {}).get("做法") == "是上面的學員" or p["名字"] in spell
 
-    spells = {w for p in people for w in (p["名字"], *p["其他寫法"])}
-    seen = {p.get("名冊本名") or p["名字"] for p in people if not same_pick(p)} | spells
+    def row_canon(p: dict) -> str:
+        """這一列在這一集算誰（跟下面 `canon` 同一套）：同一人 → 那位；這一集自己決定的寫法 → 名字本身；其他 → 名冊本名或名字。"""
+        d = dec.get(p["名字"]) or {}
+        if d.get("做法") == "是上面的學員" and d.get("同一人"):
+            return d["同一人"]
+        if p["名字"] in spell:
+            return p["名字"]
+        return roster_canon.get(p["名字"]) or p.get("名冊本名") or p["名字"]
+
+    roster_canon = epcodes.roster_canon(roster)
+    # 10-18 #246 修法 1：寫法 → 那一列的本名。卡片比對到的寫法在人名清單某一列，**而且那一列的本名就是卡片的本名**才算在那列；
+    # 人名清單把暱稱併到別人名下（「陳大同」其他寫法有「阿美」）時，卡片的本名（林美美）照樣補一列，不然 ③ 找不到這個人
+    spell_row: dict[str, set[str]] = {}
+    for p in people:
+        for w in (p["名字"], *p["其他寫法"]):
+            spell_row.setdefault(w, set()).add(row_canon(p))
+    # 1016-3：「同一人」或這一集自己決定的列，名冊比對到的本名不算這一列本身（那位照樣可以有自己的一列）
+    seen = {row_canon(p) for p in people if not same_pick(p)} | {w for w, cs in spell_row.items() if w in cs}
+    cands_all = (wd.read_json(wd.names_path(workdir), default={}) or {}).get("candidates", [])
     extra: dict[str, dict] = {}   # 名字候選裡有、人名清單沒抓到的名冊名字
-    for c in (wd.read_json(wd.names_path(workdir), default={}) or {}).get("candidates", []):
+    for c in cands_all:
         k = c.get("canonical")
-        if not k or c.get("敏感詞") or k in seen or c.get("name") in spells:   # 1016-3：比對到的寫法是人名清單上那列的，算在那列
+        if not k or c.get("敏感詞") or k in seen or k in spell_row.get(c.get("name"), ()):
             continue
         e = extra.setdefault(k, {"id": f"R{len(extra) + 1:03d}", "名字": k, "其他寫法": [], "是誰": "名冊上的人", "說明": "",
                                  "名冊本名": k, "句子": [], "次數": 0, "老師說": 0, "學員說": 0, "第一次": c["start"]})
@@ -368,8 +385,16 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
         else:
             how = None
         left = [sid for sid in p.get("句子", []) if not in_cut(sid)]
+        # 10-18 #246 修法 2：卡片上實際抓到的字（本名是這一列的卡片），跟列名、也寫成不一樣的才列；讀音比對配到的加註
+        own = {p["名字"], *p["其他寫法"]}
+        shown: dict[str, bool] = {}
+        for c in cands_all:
+            if c.get("敏感詞") or c.get("canonical") != canon or not c.get("matched_text") or c["matched_text"] in own:
+                continue
+            shown[c["matched_text"]] = shown.get(c["matched_text"], False) or c.get("比對層級") in ("A1", "A2")
+        card_words = [w + ("（讀音相近）" if near else "") for w, near in shown.items()]
         out.append({"id": p["id"], "名字": p["名字"], "其他寫法": p["其他寫法"], "是誰": p["是誰"], "說明": p.get("說明", ""),
-                    "名冊本名": p.get("名冊本名"), "次數": p["次數"], "老師說": p["老師說"], "學員說": p["學員說"],
+                    "名冊本名": p.get("名冊本名"), "卡片上寫成": card_words, "次數": p["次數"], "老師說": p["老師說"], "學員說": p["學員說"],
                     "第一次": p["第一次"],
                     "刪除段落外次數": len(left) if p.get("句子") else p["次數"],
                     "都在刪除段落": bool(cuts) and bool(p.get("句子")) and not left,
