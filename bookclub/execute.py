@@ -1766,6 +1766,53 @@ def guessed_kept_rows(turns: list[dict], voices: dict) -> list[dict]:
             for t in turns if t.get("學員是猜的") and t.get("說話者") in kept]
 
 
+KEPT_NAME_KIND = "照原聲名字"   # 10-18 #250：第 5 步「需留意」的類別（finalcheck.ATTENTION_KINDS）
+
+
+def kept_name_rows(workdir: str | Path) -> list[dict]:
+    """10-18 #250：③ 選了不用處理／不是名字、照原聲留著的名字，每一處一列（第 5 步「需留意」）。只讀檔。
+    - 老師句子：第 3 步名字卡（同一句同代號併成一張的照一張卡列）
+    - 學員重念：要重念的那一段文字裡還有照原聲的寫法（`students.build_items` 換完名冊之後的字）
+    - 保留原聲學員講到的：學員名字卡預設照原聲的（`studentnames.items` 的 `照原聲留著`）
+    剪掉的地方由 `finalcheck.place_attention` 扣掉（文字類）。"""
+    from bookclub import epcodes, review, studentnames, students
+
+    workdir = Path(workdir)
+    keep = epcodes.keep_original_names(workdir)
+    if not keep:
+        return []
+    rows: list[dict] = []
+    data = wd.read_json(wd.names_path(workdir), default=None) or {}
+    ndec = wd.read_json(review.name_decisions_path(workdir), default={}) or {}
+    cands = review.effective_name_candidates(workdir, data.get("candidates", []), ndec)
+    cards = review.card_of(cands)
+    seen: dict[str, dict] = {}
+    for i, c in enumerate(cands, start=1):
+        cid = str(c.get("id") or i)
+        if c.get("同一處") or not epcodes.is_kept_original(c, keep):
+            continue
+        card = cards.get(cid, cid)
+        if card in seen:
+            r = seen[card]
+            r["start"], r["end"] = min(r["start"], float(c["start"])), max(r["end"], float(c["end"]))
+            continue
+        seen[card] = {"key": f"{KEPT_NAME_KIND}:名字:{card}", "類別": KEPT_NAME_KIND, "start": float(c["start"]),
+                      "end": float(c["end"]), "第3步": f"名字:{card}"}
+        rows.append(seen[card])
+    words = sorted({w for ws in keep.values() for w in ws}, key=len, reverse=True)
+    items, _ = students.build_items(workdir)
+    for it in items:
+        if any(w in (it.get("text") or "") for w in words):
+            card = f"重疊:{it['重疊']}" if it.get("重疊") else f"學員段落:{it.get('段落')}"
+            rows.append({"key": f"{KEPT_NAME_KIND}:學員重念:{it['id']}", "類別": KEPT_NAME_KIND,
+                         "start": float(it["slot"][0]), "end": float(it["slot"][1]), "第3步": card})
+    for it in studentnames.items(workdir):
+        if it.get("照原聲留著") and set(it.get("tags") or []) & studentnames.SKIP_TAGS:
+            rows.append({"key": f"{KEPT_NAME_KIND}:學員名字:{it['id']}", "類別": KEPT_NAME_KIND,
+                         "start": float(it["start"]), "end": float(it["end"]), "第3步": f"學員名字:{it['id']}"})
+    return rows
+
+
 def skipped_snapshot(workdir: str | Path) -> dict | None:
     """開始執行當下的總檢查沒處理的列（skipped_rows），加上記下的時間、保留原聲又是猜的學員段落（列在需留意）、
     人名清單有沒有跑成功（沒有＝名冊外的名字這次沒有找）；算不出來回 None（不擋執行）。"""
@@ -1782,6 +1829,13 @@ def skipped_snapshot(workdir: str | Path) -> dict | None:
             guess = []
         snap["列"] += guess
         snap["猜的學員"] = len(guess)
+        try:   # 10-18 #250：照原聲留著的名字
+            kept_rows = kept_name_rows(workdir)
+        except Exception as e:  # noqa: BLE001 — 算不出來不擋執行；第 5 步就少這一類
+            print(f"[AI 執行] ⚠️ 照原聲留著的名字算不出來（第 5 步「需留意」這次不會列）：{type(e).__name__}")
+            kept_rows = []
+        snap["列"] += kept_rows
+        snap["照原聲名字"] = len(kept_rows)
         snap["人名清單沒跑成功"] = bool(review.people_list_missing(Path(workdir)))
         return snap
     except Exception as e:  # noqa: BLE001 — 算不出來不擋執行，第 5 步「需留意」會寫沒有紀錄

@@ -378,12 +378,12 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
                     "代號": codes.get(canon) if (in_two or how in ("換成代號", "是上面的學員")) else None,
                     "同一人": d.get("同一人"),
                     "名冊上是別人": spell[p["名字"]][2] if p["名字"] in spell and d.get("做法") != "是上面的學員" else None,
-                    # 第四輪審查：選了不用處理／不是名字、名冊上有這個寫法 → 照舊拿掉重念（警告）；決定時名冊沒有、現在才有 → 照原聲（提醒）
-                    # 第五輪審查：一個寫法一個寫法看（名字本身、人名清單的其他寫法）
-                    "名冊上的人會拿掉": bool(d.get("做法") in ("不用處理", "不是名字")
-                                       and any(w in spellings and w not in keep.get(p["名字"], ()) for w in ws_of(p))),
-                    # 1017 總審查：名冊上的人（選不用處理／不是名字也會把名字拿掉）——③ 下拉選單標「（名字照樣拿掉）」
-                    "名冊上的人": any(w in spellings and w not in keep.get(p["名字"], ()) for w in ws_of(p)),
+                    # 10-18 #250（推翻 1016-3「名冊上的人照樣拿掉」）：名冊上的人選不用處理／不是名字也照原聲留著，
+                    # ③ 那列寫灰字「照原聲留著，第 5 步『需留意』會列出來」
+                    "名冊上的人照原聲": bool(d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配")
+                                        and any(w in spellings and w in keep.get(p["名字"], ()) for w in ws_of(p))),
+                    # 名冊上的人：③ 下拉選單「不用處理」「不是名字」後面標「（照原聲留著）」
+                    "名冊上的人": any(w in spellings for w in ws_of(p)),
                     "名冊現在有": bool(d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配")
                                      and any(w in spellings and epcodes.at_map(p["名字"], d, ws_of(p)).get(w) == "" for w in ws_of(p))),   # 1016-3：③ 那列提醒（選不用處理會念出原名）
                     "自動配": bool(d.get("自動配")) and not in_two,   # 10-07：程式自動配的代號（算決定好，人沒改過）

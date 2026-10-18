@@ -139,11 +139,19 @@ def items(workdir: str | Path, cut_ranges: list[tuple[float, float]] = ()) -> li
     owner = sentence_owner(tdata.get("段落", []), sorted(kept))
     ordered = _ordered_sentences(workdir)
     pos = {s["id"]: k for k, s in enumerate(ordered)}
+    from bookclub import epcodes
+
+    keep = epcodes.keep_original_names(workdir)
     out = []
     for c in res["candidates"]:
         if c.get("學員") not in kept or owner.get(c.get("sentence_id")) != c.get("學員"):
             continue
         d = decisions.get(c["id"], {}) or {}
+        # 10-18 #250：③ 選了不用處理／不是名字的名字，保留原聲學員講到時預設也照原聲（標「不是名字」，不消音）；
+        # 人在這張卡上自己選過做法或標記的照人選的（預設直接消音的規則其他名字不變，設計第 5 題 A）
+        orig = epcodes.is_kept_original(c, keep) and not d.get("做法") and "tags" not in d
+        if orig:
+            d = {**d, "tags": ["不是名字"]}
         out.append({
             "類型": "學員名字", "id": c["id"], "start": c["start"], "end": c["end"], "學員": c.get("學員"),
             "sentence_html": _highlight_sentence(c.get("sentence", ""), c.get("matched_text", ""), c.get("位置", "")),
@@ -152,7 +160,10 @@ def items(workdir: str | Path, cut_ranges: list[tuple[float, float]] = ()) -> li
             "比對層級": c.get("比對層級", ""), "敏感詞": bool(c.get("敏感詞")),
             "做法": d.get("做法") or MUTE, "tags": d.get("tags", []), "note": d.get("note", ""),
             "已確認": bool(d.get("已確認")),
-            "建議": {"做法": MUTE, "原因": f"{c.get('學員')} 保留原聲，講到名字預設直接消音；也可以選換成代號，用他自己的聲音生成"},
+            "建議": {"做法": MUTE, "原因": f"③ 選了「不用處理」或「不是名字」，{c.get('學員')} 講到這個名字照原聲留著（第 5 步「需留意」會列出來）；"
+                                         "要消音或換成代號，把標記拿掉再選" if orig else
+                     f"{c.get('學員')} 保留原聲，講到名字預設直接消音；也可以選換成代號，用他自己的聲音生成"},
+            **({"照原聲留著": True} if orig else {}),
             "不用處理": "落在剪掉的片段裡（聲音和畫面都拿掉）" if review._in_ranges(c["start"], c["end"], list(cut_ranges)) else None,
         })
     return out

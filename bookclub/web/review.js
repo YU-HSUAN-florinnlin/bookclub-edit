@@ -1136,7 +1136,7 @@ function rvNamePickOpts(u) {
     `<option value="${esc(`code:${c}`)}" ${sel(`code:${c}`)}>${esc(c + note(c))}</option>`).join("")}</optgroup>`));
   if (curCode && !all.includes(curCode)) out.push(`<option value="${esc(`code:${curCode}`)}" selected>${esc(curCode)}</option>`);
   out.push('<option value="code:__new">自己打一個英文名…</option>');
-  const drop = u["名冊上的人"] ? "（名字照樣拿掉）" : "";   // 1017 總審查：名冊上的人選這兩個，成品照樣把名字拿掉
+  const drop = u["名冊上的人"] ? "（照原聲留著）" : "";   // 10-18 #250：名冊上的人選這兩個也照原聲留著（推翻 1016-3「名字照樣拿掉」）
   out.push(`<option value="how:不是名字" ${sel("how:不是名字")}>不是名字${drop}</option>`);
   out.push(`<option value="how:不用處理" ${sel("how:不用處理")}>不用處理${drop}</option>`);
   return out.join("");
@@ -1155,7 +1155,7 @@ function rvNameRowHtml(u) {
       <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
         <select class="rv-unpick" data-name="${esc(u["名字"])}" data-cur="${esc(rvNamePickValue(u))}" aria-label="${esc(u["名字"])}要怎麼換" ${saving ? "disabled" : ""}>${rvNamePickOpts(u)}</select>
         ${state}</div>
-      ${u["名冊上的人會拿掉"] ? '<p class="rv-warnline rv-ownwarn">這是名冊上的人，成品會把名字拿掉重念</p>' : ""}${u["名冊現在有"] ? '<p class="rv-meta">選的時候名冊還沒有，現在有了；這一集照原聲留著</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
+      ${u["名冊上的人照原聲"] ? '<p class="rv-meta rv-ownwarn">照原聲留著，第 5 步「需留意」會列出來</p>' : ""}${u["名冊現在有"] ? '<p class="rv-meta">選的時候名冊還沒有，現在有了；這一集照原聲留著</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
 }
 
 function rvNameCountHtml() {
@@ -1191,7 +1191,7 @@ function rvPrepNamesHtml() {
   return `${peopleWarn}${rvDupHtml()}${rvAutoHtml()}<div class="rv-meta">每個名字選一項：<ul class="rv-bullets">
     <li>是 ② 的學員（轉錯字、暱稱）→「同一人：…」</li>
     <li>其他人（家人朋友、沒登記的人）→ 挑一個英文名</li>
-    <li>書中人物、公眾人物 →「不用處理」（名冊上的人會把名字拿掉）</li>
+    <li>書中人物、公眾人物 →「不用處理」（照原聲留著）</li>
     <li>抓錯的 →「不是名字」</li></ul></div>
     ${rvRescanLineHtml()}
     <p class="rv-meta" id="rvNameCount">${rvNameCountHtml()}</p>
