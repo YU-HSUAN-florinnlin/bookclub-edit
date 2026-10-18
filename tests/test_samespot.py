@@ -45,6 +45,11 @@ def _fresh() -> Path:
     data = json.loads((w / "分析結果.json").read_text(encoding="utf-8"))
     data["video"] = str(d / "base" / "假影片.mp4")
     (w / "分析結果.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    from bookclub import turns as turns_mod
+
+    # 10-18 #246：名字沒有英文名改成照原聲（不生成）；這裡測的是整句換掉，先給這一集的英文名（跟名字候選一樣）
+    for real, code in (("小美", "Amy"), ("阿明", "Tom"), ("在多", "Zed")):
+        turns_mod.set_name_code(w, real, code, add_roster=False)
     return w
 
 
