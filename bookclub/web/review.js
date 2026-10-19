@@ -1111,6 +1111,16 @@ function rvNamePickValue(u) {
   return "";
 }
 
+// 10-19 宇軒：「也寫成」「卡片上寫成」合成一句「逐字稿中出現的相似名稱：」（其他寫法在前、卡片上抓到的字在後，不重複；讀音比對配到的保留「（讀音相近）」）
+function rvSimilarNames(u) {
+  const seen = new Set(), out = [];
+  for (const w of [...(u["其他寫法"] || []), ...(u["卡片上寫成"] || [])]) {
+    const key = String(w).replace(/（讀音相近）$/, "");
+    if (!seen.has(key)) { seen.add(key); out.push(w); }
+  }
+  return out.length ? "・逐字稿中出現的相似名稱：" + esc(out.join("、")) : "";
+}
+
 function rvNamePickOpts(u) {
   const cur = rvNamePickValue(u);
   const curCode = u["做法"] === "換成代號" ? (u["代號"] || "") : "";
@@ -1152,7 +1162,7 @@ function rvNameRowHtml(u) {
   const state = saving ? '<span class="rv-meta rv-saving">存檔中…</span>'
     : u["已決定"] ? (u["自動配"] ? '<span class="rv-tag" title="程式自動配的，不用改就不用動">自動配</span>' : "")
     : u["做法"] ? `<span class="rv-meta">（建議，還沒確認）</span>${confirmBtn}` : '<span class="rv-warnline">還沒決定</span>';
-  return `<li class="rv-person" data-unname="${esc(u["名字"])}"><div class="nm"><b>${esc(u["名字"])}</b><span class="rv-meta">${who(u)}・${cntOf(u)}（老師 ${u["老師說"]}、學員 ${u["學員說"]}）${u["其他寫法"].length ? "・也寫成 " + esc(u["其他寫法"].join("、")) : ""}${(u["卡片上寫成"] || []).length ? "・卡片上寫成 " + esc(u["卡片上寫成"].join("、")) : ""}</span></div>
+  return `<li class="rv-person" data-unname="${esc(u["名字"])}"><div class="nm"><b>${esc(u["名字"])}</b><span class="rv-meta">${who(u)}・${cntOf(u)}（老師 ${u["老師說"]}、學員 ${u["學員說"]}）${rvSimilarNames(u)}</span></div>
       <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
         <select class="rv-unpick" data-name="${esc(u["名字"])}" data-cur="${esc(rvNamePickValue(u))}" aria-label="${esc(u["名字"])}要怎麼換" ${saving ? "disabled" : ""}>${rvNamePickOpts(u)}</select>
         ${state}</div>

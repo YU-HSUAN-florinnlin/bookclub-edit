@@ -338,6 +338,36 @@ def test_web_row_text_for_english_name():
     assert "這位這一集有英文名，照樣換成 艾瑪" in out and "不用處理（照樣換成 艾瑪）" in out and "照原聲留著" not in out, out
 
 
+def test_web_row_similar_names_label():
+    """10-19 宇軒：③ 那列「也寫成」「卡片上寫成」合成一句「逐字稿中出現的相似名稱：」，不重複、讀音相近照標；舊字不再出現。"""
+    import shutil
+    import subprocess
+    import tempfile
+
+    node = shutil.which("node")
+    if not node:
+        print("（沒有 node，略過）")
+        return
+    web = REPO_ROOT / "bookclub" / "web"
+    base = {"id": "P", "名字": "小美", "說明": "", "名冊本名": "小美", "次數": 1, "老師說": 1, "學員說": 0, "是誰": "學員",
+            "第一次": 1, "刪除段落外次數": 1, "都在刪除段落": False, "② 已決定": False, "做法": "換成代號", "代號": "艾瑪", "同一人": None,
+            "自動配": False, "已決定": True, "名冊上的人": True}
+    rows = {"both": {**base, "其他寫法": ["美美", "阿美"], "卡片上寫成": ["美美", "曉美（讀音相近）"]},
+            "none": {**base, "其他寫法": [], "卡片上寫成": []}}
+    spec = {"前置": "", "情境": [{"名稱": k, "程式": f"""
+        rv.data = {{"提到的名字": [{json.dumps(r, ensure_ascii=False)}], "學員": {{}}, "這一集代號": {{}},
+          "代號分組": {{"女": ["艾瑪"], "男": [], "這一集用到的其他代號": []}}, "代號對照": {{"代號給了": {{}}, "撞名": {{}}}}}};
+        return rvNameRowHtml(rv.data["提到的名字"][0]);"""} for k, r in rows.items()]}
+    d = Path(tempfile.mkdtemp())
+    (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    files = ",".join(str(web / f) for f in ("cards.js", "review.js"))
+    out = json.loads(subprocess.run([node, str(REPO_ROOT / "tests" / "web_harness.js"), files, str(d / "spec.json")],
+                                    capture_output=True, text=True, check=True).stdout)
+    assert "逐字稿中出現的相似名稱：美美、阿美、曉美（讀音相近）" in out["both"], out["both"]
+    assert "也寫成" not in out["both"] and "卡片上寫成" not in out["both"], out["both"]
+    assert "逐字稿中出現的相似名稱" not in out["none"], out["none"]
+
+
 def test_same_person_then_not_needed_keeps_original_even_with_english_name():
     """10-18 宇軒（審查題 1）：名冊「小美：美美、阿德」、小美這一集有英文名（艾瑪）。③ 阿德先選「同一人：小美」、後來改回
     「不用處理」→ 照原聲（老師明確說不是小美）；直接選「不用處理」（沒有先選同一人）→ 照樣換成艾瑪。"""
