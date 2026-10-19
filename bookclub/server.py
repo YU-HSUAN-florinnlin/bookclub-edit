@@ -1348,7 +1348,8 @@ class BookclubServer(ThreadingHTTPServer):
         from bookclub import closing, fileio
 
         try:
-            p = fileio.pick_folder("選要把成品和紀錄存到哪個資料夾")
+            # 10-19 #252：視窗上的說明跟第 5 步框裡那一句一樣（選上次的「讀書會剪輯結案」也不會多一層）
+            p = fileio.pick_folder("選放結案資料的地方（例如下載、D 槽）；選上次的「讀書會剪輯結案」也可以")
         except fileio.PickUnavailable as e:
             return {"退回網頁": True, "說明": str(e)}
         if p is None:

@@ -1,0 +1,315 @@
+"""批次 1019-1：結案打包兩個小改動。
+
+- #252：選到的資料夾本身就叫「讀書會剪輯結案」時，不再多建一層同名資料夾（第二支影片結案時老師很可能直接點進上次那個）。
+- #253：打包多帶工作區裡的小紀錄（第 3 步決定、名字、逐字時間、生成紀錄、參考音文字檔⋯），之後要能重新匯入；
+  影片、聲音等大檔與超過上限的檔不帶、寫進打包清單「沒帶的檔」；打包清單第一段補版本那一行與「原始影片沒有打包」。
+
+合成資料（假影片位元組、假名字），全部寫在系統暫存資料夾；不碰 ~/讀書會剪輯資料。
+獨立可跑：PYTHONPATH=. .venv/bin/python tests/test_closing_pack_1019.py
+"""
+
+from __future__ import annotations
+
+import _testtmp  # noqa: F401
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "tests"))
+
+from bookclub import closing  # noqa: E402
+from bookclub import workdir as wd  # noqa: E402
+
+DAY = time.strftime("%Y%m%d")
+NODE = shutil.which("node")
+
+
+def _mk(p: Path, data: bytes) -> Path:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    return p
+
+
+def _workdir(root: Path, *, versions: int | None = 3, out_ver: int | None = 2) -> Path:
+    """假工作區：輸出過第 out_ver 版（共 versions 版），加上 #253 要多帶的各種小紀錄、大的聲音檔。"""
+    w = root / "第一堂_剪輯工作區"
+    prod = _mk(w / "輸出" / "成品_v2_0-3_sw.mp4", os.urandom(200_000))
+    final = _mk(w / "輸出" / "最終成品_v2_0-3_sw_20261019-101500.mp4", prod.read_bytes())
+    _mk(w / "輸出" / "成品_v1_0-3_sw.mp4", os.urandom(40_000))           # 別版的成品：不帶
+    _mk(w / "輸出" / "原聲_0-3.wav", os.urandom(10_000))                # 比對用聲音：不帶
+    _mk(w / "輸出" / "處理標記_0-3.md", "標記".encode())
+    _mk(w / "生成" / "處理紀錄.json", json.dumps({"產生時間": "2026-10-19T10:00:00", "片段": None}).encode())
+    _mk(w / "生成" / "剪輯決策.json", b"{}")
+    # 10-19 #253 要多帶的小紀錄
+    _mk(w / "生成" / "老師紀錄.json", b'{"S001": {}}')
+    _mk(w / "生成" / "學員紀錄.json", b"{}")
+    _mk(w / "生成" / "名字處理計畫.json", b"{}")
+    _mk(w / "生成" / "_嘗試快取.json", b"{}")                          # 生成用的快取：清空間會清，不算紀錄
+    _mk(w / "生成" / "老師" / "S001.wav", os.urandom(2_000_000))         # 大的聲音檔：不帶
+    _mk(w / "覆核" / "覆核決定.json", '{"決定": []}'.encode())
+    _mk(w / "覆核" / "名字覆核決定.json", b"{}")
+    _mk(w / "校對" / "人名決定.json", "{\"小安\": \"Amy\"}".encode())      # 假名字
+    _mk(w / "校對" / "段落.json", b"[]")
+    _mk(w / "學員名字候選" / "候選.json", b"[]")
+    _mk(w / "transcript" / "chunk_0000.json", b'{"words": []}')
+    _mk(w / "transcript" / "merged.srt", "1\r\n00:00:00,000 --> 00:00:01,000\r\n甲\r\n".encode())
+    _mk(w / "參考音" / "候選.json", b"[]")
+    _mk(w / "參考音" / "候選_01.txt", "參考音的文字".encode())
+    _mk(w / "參考音" / "候選_01.wav", os.urandom(30_000))                # 參考音聲音：不帶
+    _mk(w / "說話者判斷.json", b"{}")
+    _mk(w / "名字覆核.html", "<html></html>".encode())
+    _mk(w / "名字排除清單.csv", "名字\r\n".encode())
+    _mk(w / "audio.flac", os.urandom(50_000))                             # 抽出來的音軌：不帶
+    _mk(w / "覆核" / ".覆核決定.json.寫入中", b"x")                       # 點開頭的暫存：不帶
+    _mk(w / "覆核" / "太大的紀錄.json", b"{" + b" " * 300_000 + b"}")   # 測試時把上限調到 100 KB：超過上限
+    _mk(w / "報告.md", "報告".encode())
+    wd.write_json(w / "分析結果.json", {"video": str(root / "第一堂.mp4")})
+    wd.write_json(w / "transcript" / "merged.json", {"sentences": [{"id": "1", "start": 0.0, "end": 1.0, "text": "甲"}]})
+    out = {"檔案": str(final.relative_to(w)), "來源": "輸出/成品_v2_0-3_sw.mp4", "處理紀錄產生時間": "2026-10-19T10:00:00"}
+    if out_ver is not None:
+        out["版本號"] = out_ver
+    wd.write_json(w / "覆核" / "成品檢查.json", {"輸出成品": out})
+    if versions:
+        wd.write_json(w / "修改需求" / "格式.json", {"格式": 1})
+        wd.write_json(w / "修改需求" / "版本.json", {"列": [{"版本號": n} for n in range(1, versions + 1)]})
+    return w
+
+
+def _run(w: Path, loc: Path, **kw) -> closing.PackJob:
+    job = closing.PackJob(w, loc, **kw)
+    job.run()
+    return job
+
+
+def _sha(p: Path) -> str:
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _small_limit():
+    """把單檔上限調到 100 KB（不用真的寫 50 MB 的假檔）；回傳還原用的函式。"""
+    old = closing.PACK_RECORD_MAX_BYTES
+    closing.PACK_RECORD_MAX_BYTES = 100_000
+
+    def undo():
+        closing.PACK_RECORD_MAX_BYTES = old
+    return undo
+
+
+# ---------- #252 ----------
+
+def test_252_normal_folder_gets_one_layer():
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        job = _run(w, loc)
+        assert job.state == "已存好", job.error
+        want = loc / closing.PACK_ROOT / f"第一堂_{DAY}"
+        assert Path(job.folder) == want and want.is_dir()
+        assert closing.read_record(w)["打包"][-1]["資料夾"] == str(want)
+        assert closing.pack_base(loc) == loc / closing.PACK_ROOT
+
+
+def test_252_picked_pack_root_itself_no_nesting_and_numbered():
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t))
+        root = Path(t) / "下載" / closing.PACK_ROOT          # 上次結案留下的「讀書會剪輯結案」，老師直接點進去
+        _mk(root / f"別支影片_{DAY}" / "打包清單.txt", b"x")
+        assert closing.pack_base(root) == root
+        loc = closing.check_location(w, root, 1000)          # 空間檢查、位置檢查照樣過
+        job = _run(w, loc)
+        assert job.state == "已存好", job.error
+        assert Path(job.folder) == root.resolve() / f"第一堂_{DAY}"
+        assert not (root / closing.PACK_ROOT).exists()        # 沒有變成 讀書會剪輯結案/讀書會剪輯結案/
+        rec = closing.read_record(w)
+        assert rec["打包"][-1]["資料夾"] == str(root.resolve() / f"第一堂_{DAY}")
+        assert closing.pack_state(w)["核對通過的"]["資料夾"] == str(root.resolve() / f"第一堂_{DAY}")
+        # 同名影片資料夾已經在 → 照舊加「 (2)」
+        job2 = _run(w, loc)
+        assert job2.state == "已存好" and Path(job2.folder) == root.resolve() / f"第一堂_{DAY} (2)"
+        assert sorted(p.name for p in root.iterdir()) == sorted([f"別支影片_{DAY}", f"第一堂_{DAY}", f"第一堂_{DAY} (2)"])
+
+
+def test_252_location_checks_and_windows_display():
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t))
+        try:   # 工作區就在選到的「讀書會剪輯結案」裡面：照樣擋
+            inner = Path(t) / closing.PACK_ROOT
+            w2 = _workdir(inner)
+            closing.check_location(w2, inner, 1000)
+            raise AssertionError("工作區在打包位置裡應該擋下")
+        except closing.PackError as e:
+            assert "工作資料夾裡" in str(e), e
+        assert closing.check_location(w, Path(t), 1000) == Path(t).resolve()
+    assert closing.windows_display(f"/mnt/d/{closing.PACK_ROOT}/第一堂_{DAY}") == f"D:\\{closing.PACK_ROOT}\\第一堂_{DAY}"
+
+
+def test_252_js_pick_hint():
+    if not NODE:
+        print("（沒有 node，略過）")
+        return
+    import re
+
+    src = (REPO_ROOT / "bookclub" / "web" / "fileio.js").read_text(encoding="utf-8")
+    fns = "".join(re.search(rf"^function {n}\(.*?^\}}\n", src, re.S | re.M).group(0) for n in ("clGB", "clView"))
+    code = fns + """
+      const base = {"暫存大小": 2.6e9, "系統": "wsl", "狀態": null, "工作": null, "可以繼續": false};
+      console.log(JSON.stringify([
+        clView(base),
+        clView({...base, "狀態": "已打包", "核對通過的": {"資料夾": "D:\\\\x"}}),
+        clView({...base, "工作": {"狀態": "存檔中", "第幾個": 2, "共幾個": 9}}),
+        clView({...base, "狀態": "已結案", "只有紀錄": true}),
+        clView({...base, "狀態": "清理中"}),
+      ]));"""
+    v = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
+    hint = "選放結案資料的地方（例如下載、D 槽）；選上次的「讀書會剪輯結案」也可以。"
+    assert v[0]["pickHint"] == hint and v[1]["pickHint"] == hint
+    assert not v[2]["pickHint"] and not v[3]["pickHint"] and not v[4]["pickHint"]
+    assert "${v.pickHint ?" in src
+    server = (REPO_ROOT / "bookclub" / "server.py").read_text(encoding="utf-8")
+    assert "選上次的「讀書會剪輯結案」也可以\")" in server   # 選資料夾視窗上的說明
+
+
+# ---------- #253 ----------
+
+EXTRA = sorted([
+    "紀錄/生成/老師紀錄.json", "紀錄/生成/學員紀錄.json", "紀錄/生成/名字處理計畫.json",
+    "紀錄/覆核/覆核決定.json", "紀錄/覆核/名字覆核決定.json", "紀錄/校對/人名決定.json", "紀錄/校對/段落.json",
+    "紀錄/學員名字候選/候選.json", "紀錄/transcript/chunk_0000.json", "紀錄/transcript/merged.srt",
+    "紀錄/transcript/merged.json", "紀錄/參考音/候選.json", "紀錄/參考音/候選_01.txt", "紀錄/說話者判斷.json",
+    "紀錄/名字覆核.html", "紀錄/名字排除清單.csv"])
+
+
+def test_253_small_records_packed_big_files_not():
+    undo = _small_limit()
+    try:
+        with tempfile.TemporaryDirectory() as t:
+            w, loc = _workdir(Path(t)), Path(t) / "下載"
+            loc.mkdir()
+            plan_before = closing.clean_plan(w, kind="mac")
+            job = _run(w, loc)
+            assert job.state == "已存好", job.error
+            out = Path(job.folder)
+            names = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())
+            for rel in EXTRA:
+                assert rel in names, rel
+                assert (out / rel).read_bytes() == (w / rel.removeprefix("紀錄/")).read_bytes(), rel
+            # 原本就有的照舊（不重複帶：成品檢查只在 紀錄/成品檢查.json，分析結果只在 紀錄/分析結果.json）
+            for rel in ("紀錄/成品檢查.json", "紀錄/分析結果.json", "紀錄/報告.md", "紀錄/剪輯決策.json",
+                        "紀錄/處理紀錄.json", "紀錄/修改需求/版本.json", "紀錄/處理標記_0-3.md"):
+                assert rel in names, rel
+            for no in ("紀錄/覆核/成品檢查.json", "紀錄/生成/剪輯決策.json", "紀錄/生成/處理紀錄.json"):
+                assert no not in names, no
+            # 不帶：影片、聲音、快取、點開頭的暫存、超過上限的、結案.json、其他版本的成品
+            for p in names:
+                assert not p.endswith((".wav", ".flac")), p
+                assert "_嘗試快取" not in p and "寫入中" not in p and "太大的紀錄" not in p and closing.RECORD_FILE not in p, p
+            assert [p for p in names if p.endswith(".mp4")] == ["最終成品_v2_0-3_sw_20261019-101500.mp4"]
+            # 核對全過：結案.json 每個檔的大小、SHA-256 跟打包裡的一樣
+            e = closing.read_record(w)["打包"][-1]
+            assert e["核對"] == "通過" and len(e["檔案"]) == len(names)
+            for f in e["檔案"]:
+                assert _sha(out / f["相對路徑"]) == f["sha256"] and (out / f["相對路徑"]).stat().st_size == f["大小"]
+            src = {f["相對路徑"]: f["來源"] for f in e["檔案"]}
+            assert src["紀錄/覆核/覆核決定.json"] == "覆核/覆核決定.json"
+            # 打包清單：第一段版本那一行＋原始影片那一句；沒帶的檔
+            lst = (out / "打包清單.txt").read_bytes().decode("utf-8").split("\r\n")
+            assert lst[:4] == [*closing.PRIVACY_LINES, "最後輸出的是第 2 版（共 3 版）。", "原始影片沒有打包，請另外保留。"], lst[:5]
+            assert lst[4] == "" and lst[5].startswith("共 ")
+            i = next(k for k, s in enumerate(lst) if s.startswith("沒帶的檔"))
+            skipped = lst[i + 2:]
+            assert any(s.startswith("覆核/太大的紀錄.json：") and "太大沒帶" in s for s in skipped), skipped
+            gen = next(s for s in skipped if s.startswith("生成/："))
+            assert ".wav" in gen and ".json" in gen, gen          # 大的聲音檔＋要清的快取 .json
+            gen_n = int(gen.split("：")[1].split(" 個")[0])
+            assert gen_n == 2, gen                                # S001.wav＋_嘗試快取.json
+            assert any(s.startswith("參考音/：1 個（.wav）") for s in skipped), skipped
+            assert any(s.startswith("輸出/：") and ".mp4" in s and ".wav" in s for s in skipped), skipped
+            assert any(s.startswith("工作區最上層：1 個（.flac）") for s in skipped), skipped
+            # 清空間的計畫不變（新帶走的只是複製，工作區原本就留這些檔）
+            assert closing.clean_plan(w, kind="mac") == plan_before
+            for rel in EXTRA:
+                assert closing.classify(rel.removeprefix("紀錄/"))[0] != "清", rel
+    finally:
+        undo()
+
+
+def test_253_version_line_unknown():
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t), versions=None)        # 沒升級過（沒有修改需求/版本表）
+        assert closing.pack_version_line(w) == "版本：查不到"
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t), versions=4, out_ver=4)
+        assert closing.pack_version_line(w) == "最後輸出的是第 4 版（共 4 版）。"
+    assert closing.pack_list_text([]).split("\r\n")[:3] == [*closing.PRIVACY_LINES, ""]   # 沒給版本＝照舊
+
+
+def test_253_records_only_after_closed_also_has_records():
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        assert _run(w, loc).state == "已存好"
+        rec = closing.read_record(w)
+        rec["狀態"] = closing.CLOSED
+        wd.write_json(closing.record_path(w), rec)
+        job = _run(w, loc, records_only=True)
+        out = Path(job.folder)
+        assert job.state == "已存好", job.error
+        assert not list(out.glob("*.mp4")) and (out / "紀錄" / "覆核" / "覆核決定.json").is_file()
+        assert (out / "紀錄" / "transcript" / "merged.json").is_file()
+
+
+def test_253_small_text_record_changed_retried():
+    """新帶的 .md／.txt 存的時候被改了：跟 .json 一樣重讀重存（最多 3 次）。"""
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        target = w / "參考音" / "候選_01.txt"
+        job = closing.PackJob(w, loc)
+        orig = job._copy
+        hits = []
+
+        def copy(src, data, tmp):
+            got = orig(src, data, tmp)
+            if src == target and not hits:
+                hits.append(1)
+                target.write_bytes("改過的文字".encode())   # 複製完、比對前被改了一次
+            return got
+        job._copy = copy
+        job.run()
+        assert job.state == "已存好", job.error
+        assert hits and (Path(job.folder) / "紀錄" / "參考音" / "候選_01.txt").read_bytes() == "改過的文字".encode()
+
+
+def test_253_pack_items_no_duplicates_and_server_size():
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t))
+        items = closing.pack_items(w)
+        rels = [it["相對路徑"] for it in items]
+        assert len(rels) == len(set(rels)), rels
+        srcs = [it["來源"] for it in items if it.get("來源") is not None]
+        assert len(srcs) == len(set(srcs))
+        st = closing.pack_state(w)
+        assert st["打包大小"] == closing.pack_size(items) and st["檔數"] == len(items) + 1
+
+
+if __name__ == "__main__":
+    fns = [(k, v) for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
+    bad = 0
+    for name, fn in fns:
+        try:
+            fn()
+            print(f"✓ {name}")
+        except Exception as e:  # noqa: BLE001
+            bad += 1
+            print(f"✗ {name}：{type(e).__name__}：{e}")
+    print(f"{len(fns) - bad}/{len(fns)} 通過")
+    sys.exit(1 if bad else 0)

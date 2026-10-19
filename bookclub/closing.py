@@ -406,6 +406,12 @@ RECORD_FILES = (("生成/剪輯決策.json", "紀錄/剪輯決策.json"), ("生�
                 ("覆核/成品檢查.json", "紀錄/成品檢查.json"), ("分析結果.json", "紀錄/分析結果.json"),
                 ("報告.md", "紀錄/報告.md"))
 OUTPUT_RECORD_GLOBS = ("處理標記_*.md", "處理標記_*.html", "剪輯決策_*.json", "輸出摘要_*.json")
+# 10-19 #253：之後要能「重新匯入繼續修改」——工作區裡其他的小紀錄（第 3 步決定、名字、逐字時間、生成紀錄、參考音文字檔⋯）
+# 也一起帶，放 `紀錄/<原本的相對路徑>`。只帶文字類的檔；影片、聲音、圖片等大檔不帶（`輸出/` 照舊只帶最後輸出那支與上面幾種紀錄）
+PACK_TEXT_EXTS = (".json", ".jsonl", ".md", ".txt", ".csv", ".srt", ".html")
+PACK_RECORD_MAX_BYTES = 50_000_000       # 10-19 #253：單檔上限，避免把意外變大的檔當小紀錄帶走（超過的寫進清單「沒帶的檔」）
+PACK_SKIP_DIRS = ("輸出", "修改需求")      # 這兩個上面另外處理（修改需求整份、輸出只帶指定的）
+NO_VIDEO_LINE = "原始影片沒有打包，請另外保留。"   # 10-19 #253：宇軒定的字句（以後做匯入功能時再在匯入那邊提醒）
 
 
 class PackError(Exception):
@@ -415,7 +421,7 @@ class PackError(Exception):
 MISSING_PRODUCT = "找不到最後輸出的成品影片，先到第 5 步重新輸出一次再打包。"
 SOURCE_CHANGED = "存的時候工作區裡的檔案變了（{}），可能剛好又輸出或組裝了一次。等它做完再按一次。"
 SOURCE_BUSY = "紀錄檔「{}」一直在變（第 5 步可能還開著、一直在記看過的地方），先關掉第 5 步那一頁或等一下再按一次。"
-SMALL_RECORD_EXTS = (".json", ".jsonl")
+SMALL_RECORD_EXTS = PACK_TEXT_EXTS   # 10-19 #253：新帶的小紀錄（.md、.txt⋯）一樣，存的時候變了重讀重存
 SMALL_RECORD_BYTES = 5_000_000
 SMALL_RECORD_TRIES = 3
 
@@ -543,7 +549,93 @@ def pack_items(workdir: str | Path, *, records_only: bool = False, strict: bool 
         p = w / rel
         if p.is_file() and not p.is_symlink():
             out.append({"相對路徑": dst, "來源": p})
+    out += extra_record_items(w, out)   # 10-19 #253：其他小紀錄（之後重新匯入要用）
     return out
+
+
+def _workdir_files(w: Path):
+    """工作區裡的一般檔：產出 (相對路徑, 完整路徑, 大小)。不跟捷徑；點開頭的檔與資料夾（`.結案清理中/`、`.寫入鎖`、
+    `.xxx.寫入中` 之類）和 `結案.json`（打包的時候正在寫）略過。只讀。"""
+    import stat as _stat
+
+    for root, dirs, files in os.walk(w, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        top = Path(root) == w
+        for f in sorted(files):
+            if f.startswith(".") or (top and f == RECORD_FILE):
+                continue
+            fp = Path(root) / f
+            try:
+                st = os.lstat(fp)
+            except OSError:
+                continue
+            if _stat.S_ISREG(st.st_mode):
+                yield fp.relative_to(w), fp, st.st_size
+
+
+def extra_record_items(workdir: str | Path, taken: list[dict]) -> list[dict]:
+    """10-19 #253：打包多帶的小紀錄——工作區裡文字類的檔（`PACK_TEXT_EXTS`），放 `紀錄/<原本的相對路徑>`
+    （例如 `紀錄/覆核/覆核決定.json`、`紀錄/transcript/merged.json`）。不帶：`輸出/`、`修改需求/`（上面另外處理）、
+    已經在 taken 裡的（`RECORD_FILES` 那幾個）、超過 `PACK_RECORD_MAX_BYTES` 的、清空間會清掉的暫存（例如生成用的快取）。
+    打包裡已經有同一個路徑的（理論上不會）也不帶。只讀，不改變清空間的清單（工作區原本就留著這些檔）。"""
+    w = Path(workdir)
+    srcs = {Path(it["來源"]) for it in taken if it.get("來源") is not None}
+    dsts = {it["相對路徑"] for it in taken}
+    out: list[dict] = []
+    for rel, fp, size in _workdir_files(w):
+        if len(rel.parts) > 1 and rel.parts[0] in PACK_SKIP_DIRS:
+            continue
+        if fp in srcs or fp.suffix.lower() not in PACK_TEXT_EXTS or size > PACK_RECORD_MAX_BYTES:
+            continue
+        if classify(rel.as_posix())[0] == "清":
+            continue
+        dst = str(Path("紀錄") / rel)
+        if dst in dsts:
+            continue
+        dsts.add(dst)
+        out.append({"相對路徑": dst, "來源": fp})
+    return out
+
+
+def unpacked_lines(workdir: str | Path, items: list[dict]) -> list[str]:
+    """10-19 #253：打包清單「沒帶的檔」那一段（工作區裡沒打包的檔）。超過上限的紀錄檔一個一行；其他（影片、聲音、
+    其他版本的成品⋯）照最上層資料夾合成一行（檔數、副檔名、大小），不然生成的聲音檔會列好幾百行。只讀。"""
+    w = Path(workdir)
+    srcs = {Path(it["來源"]) for it in items if it.get("來源") is not None}
+    big: list[str] = []
+    groups: dict[str, list] = {}
+    for rel, fp, size in _workdir_files(w):
+        if fp in srcs:
+            continue
+        if fp.suffix.lower() in PACK_TEXT_EXTS and size > PACK_RECORD_MAX_BYTES:
+            big.append(f"{rel.as_posix()}：{human(size)}（紀錄檔超過 {human(PACK_RECORD_MAX_BYTES)}，太大沒帶）")
+            continue
+        key = f"{rel.parts[0]}/" if len(rel.parts) > 1 else "工作區最上層"
+        g = groups.setdefault(key, [0, 0, set()])
+        g[0] += 1
+        g[1] += size
+        g[2].add(fp.suffix.lower() or "沒有副檔名")
+    return big + [f"{k}：{n} 個（{'、'.join(sorted(exts))}），共 {human(sz)}"
+                  for k, (n, sz, exts) in sorted(groups.items())]
+
+
+def pack_version_line(workdir: str | Path) -> str:
+    """10-19 #253：打包清單第一段「最後輸出的是第 N 版（共 M 版）。」N＝成品檢查檔 `輸出成品` 記的版本號（沒記的舊紀錄照
+    處理紀錄產生時間對版本表）、M＝`修改需求/` 版本表的版本數（最新的版本號）。算不出來寫「版本：查不到」。"""
+    from bookclub import needs
+
+    w = Path(workdir)
+    try:
+        n = (last_export(w) or {}).get("版本號")
+        if not isinstance(n, int):
+            n = last_output_log(w)[0]
+        vers = needs.load(w).versions if needs.exists(w) else {}
+        m = max(vers) if vers else None
+    except Exception:  # noqa: BLE001 — 讀不到就寫查不到，不擋打包
+        n = m = None
+    if isinstance(n, int) and isinstance(m, int):
+        return f"最後輸出的是第 {n} 版（共 {m} 版）。"
+    return "版本：查不到"
 
 
 def pack_size(items: list[dict]) -> int:
@@ -595,6 +687,13 @@ def _sha(path: Path) -> str:
     return h.hexdigest()
 
 
+def pack_base(location: str | Path) -> Path:
+    """打包資料夾的上一層。10-19 #252：選到的資料夾本身就叫「讀書會剪輯結案」（第二支影片結案時老師很可能直接點進上次那個）
+    → 直接放在它下面，不再多建一層變成 `讀書會剪輯結案/讀書會剪輯結案/`；選一般的資料夾照舊在下面建「讀書會剪輯結案」。"""
+    loc = Path(location)
+    return loc if loc.name == PACK_ROOT else loc / PACK_ROOT
+
+
 def check_location(workdir: str | Path, location: str | Path, need: int, usage=None) -> Path:
     """打包位置能不能用（§3.4、§3.6）：在不在、是不是資料夾、不在工作區裡（也不是工作區的上層——打包資料夾會建在
     工作區裡面）、空間夠不夠（要 need＋200 MB）。能用回 resolve 後的路徑，不能用丟 PackError（給老師看的一句）。"""
@@ -605,7 +704,7 @@ def check_location(workdir: str | Path, location: str | Path, need: int, usage=N
     if not loc.is_dir():
         raise PackError(f"找不到這個資料夾：{location}（D 槽沒插？），換個位置再試。")
     loc = loc.resolve()
-    if _inside(loc, w) or _inside(w, loc / PACK_ROOT):
+    if _inside(loc, w) or _inside(w, pack_base(loc)):   # 10-19 #252：跟真的建資料夾的地方用同一個算法
         raise PackError("不能存在這支影片的工作資料夾裡，請選別的地方。")
     why = fileio.space_problem(need, loc, PACK_MARGIN_BYTES, "存的地方", usage=usage)
     if why:
@@ -636,11 +735,15 @@ def _gen_text(workdir: Path, kind: str) -> bytes:
     return text.encode("utf-8")
 
 
-def pack_list_text(files: list[dict]) -> str:
-    """`打包清單.txt`（§3.3、§6.4）：最上面兩句說明，之後每個檔的大小與 SHA-256。`\\r\\n`（Windows 記事本好讀）。"""
-    lines = [*PRIVACY_LINES, "", f"共 {len(files)} 個檔（不含這份清單）：", ""]
+def pack_list_text(files: list[dict], *, version: str | None = None, skipped: list[str] | None = None) -> str:
+    """`打包清單.txt`（§3.3、§6.4）：最上面兩句說明，之後每個檔的大小與 SHA-256。`\\r\\n`（Windows 記事本好讀）。
+    10-19 #253：第一段再補版本那一行（version）與「原始影片沒有打包，請另外保留。」；最後一段「沒帶的檔」（skipped）。"""
+    head = [*PRIVACY_LINES] + ([version, NO_VIDEO_LINE] if version is not None else [])
+    lines = [*head, "", f"共 {len(files)} 個檔（不含這份清單）：", ""]
     for f in files:
         lines.append(f"{f['相對路徑']}\t{f['大小']} 位元組\tSHA-256 {f['sha256']}")
+    if skipped:
+        lines += ["", "沒帶的檔（影片、聲音等大檔，和其他版本的成品；路徑是工作區裡的位置）：", ""] + skipped
     return NL.join(lines) + NL
 
 
@@ -724,7 +827,7 @@ class PackJob:
             raise PackError("找不到上次存到一半的資料夾（換了位置、或已經移走了），請重新按「結案打包…」選位置。")
         if folder is None:
             day = datetime.now().strftime("%Y%m%d")
-            base = self.location / PACK_ROOT
+            base = pack_base(self.location)   # 10-19 #252：選到「讀書會剪輯結案」本身就不再多建一層
             base.mkdir(parents=True, exist_ok=True)
             folder = _numbered_dir(base / f"{video_stem(w)}_{day}{PACKING_SUFFIX}")
             folder.mkdir(parents=True)
@@ -753,7 +856,8 @@ class PackJob:
             entry["檔案"] = done + []
         # 打包清單（現場產生的：寫完一樣重讀比對）
         self.index, self.current = self.total, PACK_LIST_NAME
-        lst = {"相對路徑": PACK_LIST_NAME, "來源": None, "內容": pack_list_text(done).encode("utf-8")}
+        text = pack_list_text(done, version=pack_version_line(w), skipped=unpacked_lines(w, items))   # 10-19 #253
+        lst = {"相對路徑": PACK_LIST_NAME, "來源": None, "內容": text.encode("utf-8")}
         done.append(self._one(folder, lst))
         self.state = "核對中"
         for f in done:   # 最後整份再對一次大小（剛才每個檔都重讀算過檢查碼）

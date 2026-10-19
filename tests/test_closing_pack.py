@@ -92,7 +92,7 @@ def test_pack_contents_verified_and_workdir_untouched():
                                 "逐字稿_成品時間.srt", "打包清單.txt", "紀錄/修改需求/卡片.json",
                                 "紀錄/修改需求/版本/v1/處理紀錄.json", "紀錄/處理標記_0-3.md", "紀錄/剪輯決策_0-3.json",
                                 "紀錄/剪輯決策.json", "紀錄/處理紀錄.json", "紀錄/成品檢查.json", "紀錄/分析結果.json",
-                                "紀錄/報告.md"]), names
+                                "紀錄/報告.md", "紀錄/transcript/merged.json"]), names   # 10-19 #253：其他小紀錄也帶
         assert (out / "最終成品_v1_0-3_sw_20261016-101500.mp4").read_bytes() == \
             (w / "輸出" / "最終成品_v1_0-3_sw_20261016-101500.mp4").read_bytes()
         lst = (out / "打包清單.txt").read_bytes().decode("utf-8")
