@@ -604,41 +604,102 @@ def voice_items(workdir: str | Path, taken: list[dict]) -> list[dict]:
 
 
 def card_stats_line(workdir: str | Path) -> str:
-    """10-19 #253：打包清單第一段「卡片：做進成品 N 張（人工確認過 X、還沒確認 Y、退回 R）；還沒處理 Z 張。」照最後輸出那一版：
-    `修改需求/成品狀態` 那一版有列的卡＝做進成品（通過／還沒看／退回，跟第 5 步一樣）；有效但那一版沒有列＝還沒處理。
-    不是「有效」的卡（刪掉、併入、拆成、消失）都不算。退回 0 張省略。算不出來寫「卡片：查不到」。"""
-    from bookclub import needs
+    """10-19 #253：打包清單第一段的卡片統計，照最後輸出那一版、用第 5 步同一套分類（`finalcards.build`；最後輸出的不是
+    現在處理紀錄那一版時用 `finalcards.version_page`）。宇軒 10-19 定的寫法：
+    「卡片：做進成品 N 張（人工確認過 X、還沒確認 Y、退回 R）；沿用上一版 W 張；還沒處理 Z 張；第 3 步選定不修改 U 張。」
+    - 做進成品＝這一版有它（通過＝人工確認過、還沒看＝還沒確認、退回＝退回）
+    - 沿用上一版＝第 5 步標「已通過（沿用上一版）」的（範圍外、之前那一版通過、沒按過要修改）
+    - 還沒處理＝這一版之後新增、還沒生成的，和「已改，等重做」的；範圍外、之前那一版還沒看完或退回的也算這裡
+    - 第 3 步選定不修改＝其他有效的卡（第 5 步清單不列、收在「第 3 步選定不修改」那一頁）
+    刪掉、併入、拆成、消失的卡不算。為 0 的段落省略（做進成品那段、括號裡的確認過／還沒確認照寫，退回 0 省略）。
+    算不出來（沒升級過、紀錄壞掉、對不到那一版）寫「卡片：查不到」。只讀。"""
+    from bookclub import finalcards, needs, proclog
 
     w = Path(workdir)
     try:
         n = (last_export(w) or {}).get("版本號")
         if not isinstance(n, int):
             n = last_output_log(w)[0]
-        if not isinstance(n, int) or not needs.exists(w):
+        if not isinstance(n, int) or not needs.exists(w) or not needs.healthy(w):
             return "卡片：查不到"
         st = needs.load(w)
         if n not in st.versions:
             return "卡片：查不到"
-        ok = seen = back = todo = 0
-        for k, c in st.cards.items():
-            if c.get("狀態") != needs.ALIVE:
+        log = proclog.load(w)
+        cur = st.version_at((log or {}).get("產生時間")) if log else None
+        if cur is not None and cur["版本號"] == n:
+            part = finalcards.build(w, log=log)
+            if part["來源"] != finalcards.SRC_NEW:
+                return "卡片：查不到"
+            cards, cross = part["卡片"], part["跨版本卡片"]
+        else:
+            cards, cross = finalcards.version_page(w, n, None)["卡片"], []
+        ok = seen = back = carry = todo = 0
+        listed: set[str] = set()
+        for c in cards + cross:
+            listed.add(str(c.get("卡號")))
+            if c.get("刪掉了"):
                 continue
-            row = st.states.get((k, n))
-            if not row:
+            if c.get("跨版本"):
                 todo += 1
-                continue
-            s = row.get("狀態")
-            if s == needs.PASSED:
+            elif c.get("這一版沒處理到"):
+                if finalcards.passed_ok(c) and c.get("狀態") != finalcards.EDITED:
+                    carry += 1
+                else:
+                    todo += 1
+            elif c.get("狀態") == needs.PASSED:
                 ok += 1
-            elif s == needs.RETURNED:
+            elif c.get("狀態") == needs.RETURNED:
                 back += 1
-            else:
+            elif c.get("狀態") == needs.NOT_SEEN:
                 seen += 1
+            else:   # 還沒生成、已改，等重做
+                todo += 1
+        keep = sum(1 for k, c in st.cards.items() if c.get("狀態") == needs.ALIVE and k not in listed)
     except Exception:  # noqa: BLE001 — 讀不到就寫查不到，不擋打包
         return "卡片：查不到"
-    made = ok + seen + back
     detail = f"人工確認過 {ok}、還沒確認 {seen}" + (f"、退回 {back}" if back else "")
-    return f"卡片：做進成品 {made} 張（{detail}）；還沒處理 {todo} 張。"
+    parts = [f"做進成品 {ok + seen + back} 張（{detail}）"]
+    parts += [f"沿用上一版 {carry} 張"] if carry else []
+    parts += [f"還沒處理 {todo} 張"] if todo else []
+    parts += [f"第 3 步選定不修改 {keep} 張"] if keep else []
+    return "卡片：" + "；".join(parts) + "。"
+
+
+def voice_match(workdir: str | Path) -> tuple[bool | None, int]:
+    """10-19 #253（宇軒選甲）：打包帶的是現在的生成聲音；拿最後輸出那一版的處理紀錄（`修改需求/版本/vN/處理紀錄.json`）
+    每一筆的 `檔案指紋`（`proclog.stamp_contents` 寫的生成檔內容 sha1 前 16 碼）跟現在的檔重算比對。
+    回 (同一版, 不一樣的筆數)：True＝都一樣；False＝有之後又生成過的（檔不在也算不一樣）；None＝查不到（舊紀錄沒指紋、
+    對不到那一版）。只讀。"""
+    from bookclub import proclog
+
+    w = Path(workdir)
+    try:
+        _n, log = last_output_log(w)
+    except Exception:  # noqa: BLE001
+        log = None
+    recs = [r for r in (log or {}).get("紀錄") or [] if isinstance(r, dict) and r.get("檔案")]
+    if log is None or any(not r.get("檔案指紋") for r in recs):
+        return None, 0
+    cache: dict[str, str | None] = {}
+    diff = 0
+    for r in recs:
+        f = str(r["檔案"])
+        if f not in cache:
+            p = wd.localize(f, w)
+            cache[f] = proclog.file_print(p) if p is not None else None
+        if cache[f] != r["檔案指紋"]:
+            diff += 1
+    return diff == 0, diff
+
+
+def voice_match_line(same: bool | None, diff: int) -> str | None:
+    """（純函式）打包清單第一段那一句：同一版不寫；不一樣、查不到各一句。"""
+    if same is True:
+        return None
+    if same is False:
+        return f"生成聲音是之後改過的狀態，比打包的成品新（有 {diff} 句不一樣）。"
+    return "生成聲音跟打包的成品是不是同一版：查不到。"
 
 
 def _workdir_files(w: Path):
@@ -830,11 +891,12 @@ def _gen_text(workdir: Path, kind: str) -> bytes:
 
 
 def pack_list_text(files: list[dict], *, version: str | None = None, skipped: list[str] | None = None,
-                   cards: str | None = None, voices: bool = False) -> str:
+                   cards: str | None = None, voices: bool = False, voice_note: str | None = None) -> str:
     """`打包清單.txt`（§3.3、§6.4）：最上面兩句說明，之後每個檔的大小與 SHA-256。`\\r\\n`（Windows 記事本好讀）。
     10-19 #253：第一段再補版本那一行（version）與「原始影片沒有打包，請另外保留。」；最後一段「沒帶的檔」（skipped）。"""
     # 10-19 #253 做法 A：卡片統計（cards）接在版本行下面；有帶生成聲音（voices）時在原始影片那一句後面補一句
     head = [*PRIVACY_LINES] + ([version] + ([cards] if cards else []) + [NO_VIDEO_LINE] + ([VOICE_LINE] if voices else [])
+                               + ([voice_note] if voices and voice_note else [])
                                if version is not None else [])
     lines = [*head, "", f"共 {len(files)} 個檔（不含這份清單）：", ""]
     for f in files:
@@ -953,8 +1015,11 @@ class PackJob:
             entry["檔案"] = done + []
         # 打包清單（現場產生的：寫完一樣重讀比對）
         self.index, self.current = self.total, PACK_LIST_NAME
+        # 10-19 #253（宇軒選甲）：帶的是現在的聲音，跟最後輸出那一版的處理紀錄比指紋，不一樣在清單寫一句、結案.json 記下
+        voices = any(it.get("生成聲音") for it in items)
+        same, diff = voice_match(w) if voices else (None, 0)
         text = pack_list_text(done, version=pack_version_line(w), skipped=unpacked_lines(w, items),   # 10-19 #253
-                              cards=card_stats_line(w), voices=any(it.get("生成聲音") for it in items))
+                              cards=card_stats_line(w), voices=voices, voice_note=voice_match_line(same, diff))
         lst = {"相對路徑": PACK_LIST_NAME, "來源": None, "內容": text.encode("utf-8")}
         done.append(self._one(folder, lst))
         self.state = "核對中"
@@ -977,6 +1042,8 @@ class PackJob:
         rec = read_record(w)
         entry = self._entry(rec) or entry
         entry.update({"資料夾": str(final), "檔案": done, "核對": "通過", "完成時間": _now()})
+        if voices:   # 10-19 #253：聲音跟成品是不是同一版（None＝查不到）
+            entry.update({"聲音跟成品同一版": same, "聲音不一樣句數": diff})
         if rec.get("狀態") not in (CLEANING, CLOSED):
             rec["狀態"] = PACKED
         _write_record(w, rec)

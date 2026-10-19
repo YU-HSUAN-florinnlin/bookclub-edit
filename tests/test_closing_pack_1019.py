@@ -223,7 +223,7 @@ def test_253_small_records_packed_big_files_not():
             # 打包清單：第一段版本那一行＋原始影片那一句；沒帶的檔
             lst = (out / "打包清單.txt").read_bytes().decode("utf-8").split("\r\n")
             assert lst[:5] == [*closing.PRIVACY_LINES, "最後輸出的是第 2 版（共 3 版）。",
-                               "卡片：做進成品 0 張（人工確認過 0、還沒確認 0）；還沒處理 0 張。",
+                               "卡片：做進成品 0 張（人工確認過 0、還沒確認 0）。",
                                "原始影片沒有打包，請另外保留。"], lst[:6]   # 這個假工作區沒有卡片、生成紀錄沒指到聲音
             assert lst[5] == "" and lst[6].startswith("共 ")
             i = next(k for k, s in enumerate(lst) if s.startswith("沒帶的檔"))
@@ -371,33 +371,90 @@ def test_253A_selected_voices_packed_clean_plan_same():
         assert all(not (w / r).exists() for r in voices) and all((out / "紀錄" / r).is_file() for r in voices)
 
 
-def _cards(w: Path, cards: list[tuple[str, str]], states: list[tuple[str, int, str]]) -> None:
-    wd.write_json(w / "修改需求" / "卡片.json", {"列": [{"卡號": k, "狀態": s, "類型": "名字"} for k, s in cards]})
-    wd.write_json(w / "修改需求" / "成品狀態.json", {"列": [{"卡號": k, "版本號": v, "狀態": s} for k, v, s in states]})
+def _versions_case():
+    """test_versions 的三版假工作區（第 1 版整支、第 2 版只做 0–75 秒），最後輸出第 2 版。"""
+    import test_versions as tv
+    from bookclub import finalcheck as fc
+
+    w = tv._three_versions()
+    chk = wd.read_json(fc.check_path(w))
+    chk["輸出成品"] = {"檔案": "輸出/成品_v2_0-1_sw.mp4", "版本號": 2}
+    wd.write_json(fc.check_path(w), chk)
+    return w
 
 
-def test_253A_card_stats_line():
-    with tempfile.TemporaryDirectory() as t:
-        w = _workdir(Path(t))    # 最後輸出第 2 版
-        _cards(w, [("K0001", "有效"), ("K0002", "有效"), ("K0003", "有效"), ("K0004", "有效"), ("K0005", "有效"),
-                   ("K0006", "刪掉"), ("K0007", "併入")],
-               [("K0001", 2, "通過"), ("K0002", 2, "通過"), ("K0003", 2, "還沒看"), ("K0004", 2, "退回"),
-                ("K0005", 3, "通過"),                     # 第 3 版才做：第 2 版沒有列＝還沒處理
-                ("K0006", 2, "通過"), ("K0007", 2, "還沒看"),   # 刪掉、併入的不算
-                ("K0001", 1, "退回")])                    # 別版的列不算
-        assert closing.card_stats_line(w) == "卡片：做進成品 4 張（人工確認過 2、還沒確認 1、退回 1）；還沒處理 1 張。"
-        _cards(w, [("K0001", "有效"), ("K0002", "有效")], [("K0001", 2, "通過")])
-        assert closing.card_stats_line(w) == "卡片：做進成品 1 張（人工確認過 1、還沒確認 0）；還沒處理 1 張。"   # 退回 0 省略
+def test_253A_card_stats_same_as_step5():
+    """審查必修：用第 5 步同一套分類。這個假工作區：第 2 版做進去 3 張（T003 通過、刪除段落 S1 與停格還沒看）；
+    名字:1 範圍外、第 1 版通過＝沿用上一版；T005 與第 1 版的停格是範圍外、第 1 版還沒看＝還沒處理；
+    名字:2、T007、重疊、刪除段落 S2 哪一版都沒處理＝第 3 步選定不修改。"""
+    from bookclub import needs, review
+    from bookclub import turns as turns_mod
+
+    w = _versions_case()
+    assert closing.card_stats_line(w) == ("卡片：做進成品 3 張（人工確認過 1、還沒確認 2）；沿用上一版 1 張；還沒處理 2 張；"
+                                          "第 3 步選定不修改 4 張。")
+    # 第 5 步新增、還沒生成的卡 → 還沒處理多 1
+    from bookclub import finalcards
+
+    m = review.manual_edit(w, {"類型": "局部消音", "start": 30.0, "end": 31.0, "方式": review.MUTE_WAYS[0]})
+    assert finalcards.edited(w, f"局部消音:{m['id']}", new=True)["記了"]
+    assert closing.card_stats_line(w) == ("卡片：做進成品 3 張（人工確認過 1、還沒確認 2）；沿用上一版 1 張；還沒處理 3 張；"
+                                          "第 3 步選定不修改 4 張。")
+    # 第 3 步改了、等重做（T003 原本通過）→ 從人工確認過移到還沒處理
+    turns_mod.save_turn(w, "T003", {"校對稿": "第三步改過的字"})
+    needs.sync_cards(w)
+    assert closing.card_stats_line(w) == ("卡片：做進成品 2 張（人工確認過 0、還沒確認 2）；沿用上一版 1 張；還沒處理 4 張；"
+                                          "第 3 步選定不修改 4 張。")
+
+
+def test_253A_card_stats_old_version_and_unknown():
+    w = _versions_case()
+    from bookclub import finalcheck as fc
+
+    chk = wd.read_json(fc.check_path(w))
+    chk["輸出成品"]["版本號"] = 1        # 最後輸出的是第 1 版（不是現在處理紀錄那一版）→ 照第 1 版那一頁
+    wd.write_json(fc.check_path(w), chk)
+    line = closing.card_stats_line(w)
+    assert line == "卡片：做進成品 6 張（人工確認過 2、還沒確認 4）；第 3 步選定不修改 4 張。", line   # 第 1 版整支：沒有沿用的
     with tempfile.TemporaryDirectory() as t:
         assert closing.card_stats_line(_workdir(Path(t), versions=None)) == "卡片：查不到"   # 沒有修改需求
     with tempfile.TemporaryDirectory() as t:
         assert closing.card_stats_line(_workdir(Path(t), out_ver=7)) == "卡片：查不到"       # 版本表沒有那一版
-    with tempfile.TemporaryDirectory() as t:
-        w = _workdir(Path(t))
-        (w / "修改需求" / "卡片.json").write_text("壞掉", encoding="utf-8")
-        assert closing.card_stats_line(w) == "卡片：查不到"
     lst = closing.pack_list_text([], version="版本：查不到", cards="卡片：查不到").split("\r\n")
-    assert lst[:5] == [*closing.PRIVACY_LINES, "版本：查不到", "卡片：查不到", "原始影片沒有打包，請另外保留。"][:5]
+    assert lst[:5] == [*closing.PRIVACY_LINES, "版本：查不到", "卡片：查不到", "原始影片沒有打包，請另外保留。"]
+
+
+def _voice_log(w: Path, voices: dict, *, prints: bool = True) -> None:
+    """最後輸出那一版的處理紀錄：每個選定、放回時間格的檔一筆，記 `檔案指紋`（proclog.stamp_contents 同一個算法）。"""
+    from bookclub import proclog
+
+    recs = [{"類型": "名字整句換掉", "檔案": r} for r in voices if "_來源" not in r]
+    if prints:
+        proclog.stamp_contents(w, recs)
+    wd.write_json(w / "生成" / "處理紀錄.json", {"產生時間": "2026-10-19T10:00:00", "片段": None, "紀錄": recs})
+
+
+def test_253A_voices_same_version_or_newer_or_unknown():
+    for case in ("同一版", "又生成過", "舊紀錄"):
+        with tempfile.TemporaryDirectory() as t:
+            w, loc = _workdir(Path(t)), Path(t) / "下載"
+            loc.mkdir()
+            voices = _voices(w)
+            _voice_log(w, voices, prints=case != "舊紀錄")
+            if case == "又生成過":
+                (w / "生成" / "老師" / "S001_放回時間格.wav").write_bytes(os.urandom(41_000))   # 輸出之後又生成過
+            job = _run(w, loc)
+            assert job.state == "已存好", job.error
+            lst = (Path(job.folder) / "打包清單.txt").read_bytes().decode("utf-8").split("\r\n")
+            e = closing.read_record(w)["打包"][-1]
+            assert lst[5] == closing.VOICE_LINE, lst[:8]
+            if case == "同一版":
+                assert lst[6] == "" and e["聲音跟成品同一版"] is True and e["聲音不一樣句數"] == 0
+            elif case == "又生成過":
+                assert lst[6] == "生成聲音是之後改過的狀態，比打包的成品新（有 1 句不一樣）。", lst[:8]
+                assert e["聲音跟成品同一版"] is False and e["聲音不一樣句數"] == 1
+            else:
+                assert lst[6] == "生成聲音跟打包的成品是不是同一版：查不到。" and e["聲音跟成品同一版"] is None
 
 
 def test_253_review_cache_dirs_staging_skipped_settings_kept():
