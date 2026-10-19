@@ -1493,6 +1493,7 @@ function fcAttentionHtml(att, kinds, flat) {
   const head = `<p class="rv-warnline">這一頁會顯示學員本名，截圖或分享螢幕時請注意。</p>
     <p class="rv-meta">目前成品裡還留著原聲的部分，不會擋輸出，但請多留意此部分；想確認就按「跳過去聽」，要改就「回第 3 步改」，改完要重新組裝。</p>
     ${att["名冊外沒找"] ? `<p class="fc-export-names"><b>⚠️ 名冊外的名字這次沒有找（人名清單沒跑成功）：成品裡可能有沒換掉的名字。</b>到第 1 步按「重新分析（做完的會跳過）」補跑，再回第 3 步 ③ 決定、重新組裝。</p>` : ""}
+    ${att["補找沒做完"] ? `<p class="fc-export-names" id="fcRescanUnfinished"><b>⚠️ 這次補找沒做完：剛在 ③ 選的名字，老師講到的其他地方可能沒換掉，請聽一次。</b></p>` : ""}
     ${att["第4步沒處理"] != null ? `<p class="rv-meta">這次執行時總檢查有 ${att["第4步沒處理"]} 列沒處理（含請看一眼），其中 ${rows.length} 處成品裡還留著原聲。</p>` : ""}`;
   if (!rows.length) return `${head}<p>沒有要留意的地方。</p>`;
   const defs = (kinds || []).slice();

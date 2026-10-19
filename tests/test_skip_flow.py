@@ -277,7 +277,8 @@ def test_attention_rows_old_and_new_workdir():
     w = TE._fresh()
     log = {"片段": None, "紀錄": [], "範圍": [0.0, 180.0]}
     old = finalcheck.attention_rows(w, log)                          # 舊工作區：沒有執行進度、沒有紀錄
-    assert old == {"有紀錄": False, "列": [], "總數": 0, "名字": 0, "第4步沒處理": None, "名冊外沒找": False}
+    assert old == {"有紀錄": False, "列": [], "總數": 0, "名字": 0, "第4步沒處理": None, "名冊外沒找": False,
+                   "補找沒做完": False}   # 10-19 #234
     wd.write_json(execute.progress_path(w), {"開始時間": "x"})       # 舊工具的執行進度（沒有這個欄位）
     assert not finalcheck.attention_rows(w, log)["有紀錄"]
     wd.write_json(execute.progress_path(w), {execute.SKIPPED_FIELD: {"沒處理": 3, "列": [
@@ -286,7 +287,7 @@ def test_attention_rows_old_and_new_workdir():
     att = finalcheck.attention_rows(w, log)
     assert att["有紀錄"] and att["總數"] == 2 and att["名字"] == 1 and att["第4步沒處理"] == 3
     assert finalcheck.attention_gaps(att) == {"需留意": 2, "需留意名字": 1, "需留意說明": "需留意 2 處（含名字 1 處）還沒聽過",
-                                              "名冊外沒找": False}
+                                              "名冊外沒找": False, "補找沒做完": False}
     assert finalcheck.attention_gaps({})["需留意說明"] == ""
 
 

@@ -655,6 +655,12 @@ def rescan_busy(workdir: str | Path) -> bool:
     return ensure_rescan(workdir)
 
 
+def rescan_failed(workdir: str | Path) -> bool:
+    """10-19 #234：補找出錯停住了（還有「待補找」、記著錯誤）。第 4 步開始時記進略過紀錄，第 5 步「需留意」列一行。只讀。"""
+    st = _load_rescan(Path(workdir))
+    return bool(st.get("待補找") and st.get("錯誤"))
+
+
 def rescan_error_gate(workdir: str | Path) -> str | None:
     """第 4 步開始前：補找出錯停住了 → 第一次按回提醒文字（擋一次），再按一次就放行（不能讓第 4 步永遠進不去）。"""
     workdir = Path(workdir)

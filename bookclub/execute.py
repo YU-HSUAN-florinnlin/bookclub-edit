@@ -1874,7 +1874,7 @@ def _row_where(r: dict) -> tuple[float, str]:
 
 def skipped_snapshot(workdir: str | Path) -> dict | None:
     """開始執行當下的總檢查沒處理的列（skipped_rows），加上記下的時間、保留原聲又是猜的學員段落（列在需留意）、
-    人名清單有沒有跑成功（沒有＝名冊外的名字這次沒有找）；算不出來回 None（不擋執行）。"""
+    人名清單有沒有跑成功（沒有＝名冊外的名字這次沒有找）、③ 補找是不是出錯停住（10-19 #234）；算不出來回 None（不擋執行）。"""
     try:
         from bookclub import review
         from bookclub import turns as turns_mod
@@ -1896,6 +1896,12 @@ def skipped_snapshot(workdir: str | Path) -> dict | None:
         snap["列"] += kept_rows
         snap["照原聲名字"] = len(kept_rows)
         snap["人名清單沒跑成功"] = bool(review.people_list_missing(Path(workdir)))
+        try:   # 10-19 #234：③ 補找出錯、按第二次放行開始的——第 5 步「需留意」列一行（補找成功後重跑第 4 步就不再列）
+            from bookclub import personnames
+
+            snap["補找沒做完"] = personnames.rescan_failed(workdir)
+        except Exception:  # noqa: BLE001 — 讀不到就不列
+            snap["補找沒做完"] = False
         return snap
     except Exception as e:  # noqa: BLE001 — 算不出來不擋執行，第 5 步「需留意」會寫沒有紀錄
         print(f"[AI 執行] ⚠️ 開始前總檢查算不出來（第 5 步「需留意」這次不會列）：{type(e).__name__}")
