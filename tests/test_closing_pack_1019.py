@@ -246,7 +246,10 @@ def test_253_small_records_packed_big_files_not():
 
 def test_253_version_line_unknown():
     with tempfile.TemporaryDirectory() as t:
-        w = _workdir(Path(t), versions=None)        # 沒升級過（沒有修改需求/版本表）
+        w = _workdir(Path(t), versions=None)        # 沒升級過（沒有修改需求/版本表），輸出紀錄有版本號：只寫第 N 版
+        assert closing.pack_version_line(w) == "最後輸出的是第 2 版。"
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t), versions=None, out_ver=None)   # 版本號也沒有
         assert closing.pack_version_line(w) == "版本：查不到"
     with tempfile.TemporaryDirectory() as t:
         w = _workdir(Path(t), versions=4, out_ver=4)
@@ -395,6 +398,21 @@ def test_253A_card_stats_line():
         assert closing.card_stats_line(w) == "卡片：查不到"
     lst = closing.pack_list_text([], version="版本：查不到", cards="卡片：查不到").split("\r\n")
     assert lst[:5] == [*closing.PRIVACY_LINES, "版本：查不到", "卡片：查不到", "原始影片沒有打包，請另外保留。"][:5]
+
+
+def test_253_review_cache_dirs_staging_skipped_settings_kept():
+    """0b7a6dd 審查：快取資料夾（web快取/、chunks/、名字候選/、重疊/）與 修改需求.升級中/ 的小檔不帶；工作區設定.json 照帶。"""
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t))
+        for rel in ("web快取/索引.json", "chunks/00.json", "名字候選/x.json", "重疊/區域.json", "修改需求.升級中/卡片.json"):
+            _mk(w / rel, b"{}")
+        _mk(w / "工作區設定.json", b'{"intro": null}')
+        _mk(w / "參考音" / "大寫.TXT", "x".encode())
+        rels = {it["相對路徑"] for it in closing.pack_items(w)}
+        for rel in ("web快取/索引.json", "chunks/00.json", "名字候選/x.json", "重疊/區域.json", "修改需求.升級中/卡片.json"):
+            assert f"紀錄/{rel}" not in rels, rel
+        assert "紀錄/工作區設定.json" in rels and "紀錄/參考音/大寫.TXT" in rels
+        assert ".TXT".lower() in closing.SMALL_RECORD_EXTS
 
 
 if __name__ == "__main__":

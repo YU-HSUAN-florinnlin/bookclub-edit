@@ -664,14 +664,17 @@ def _workdir_files(w: Path):
 def extra_record_items(workdir: str | Path, taken: list[dict]) -> list[dict]:
     """10-19 #253：打包多帶的小紀錄——工作區裡文字類的檔（`PACK_TEXT_EXTS`），放 `紀錄/<原本的相對路徑>`
     （例如 `紀錄/覆核/覆核決定.json`、`紀錄/transcript/merged.json`）。不帶：`輸出/`、`修改需求/`（上面另外處理）、
-    已經在 taken 裡的（`RECORD_FILES` 那幾個）、超過 `PACK_RECORD_MAX_BYTES` 的、清空間會清掉的暫存（例如生成用的快取）。
+    快取資料夾（`CACHE_DIRS`：`web快取/`、`chunks/`⋯）、`修改需求.升級中/`、已經在 taken 裡的（`RECORD_FILES` 那幾個）、超過 `PACK_RECORD_MAX_BYTES` 的、清空間會清掉的暫存（例如生成用的快取）。
     打包裡已經有同一個路徑的（理論上不會）也不帶。只讀，不改變清空間的清單（工作區原本就留著這些檔）。"""
     w = Path(workdir)
     srcs = {Path(it["來源"]) for it in taken if it.get("來源") is not None}
     dsts = {it["相對路徑"] for it in taken}
     out: list[dict] = []
+    from bookclub import needs
+
+    skip_dirs = PACK_SKIP_DIRS + CACHE_DIRS + (needs.STAGING,)   # 0b7a6dd 審查：快取資料夾、升級中途留下的備份不帶
     for rel, fp, size in _workdir_files(w):
-        if len(rel.parts) > 1 and rel.parts[0] in PACK_SKIP_DIRS:
+        if len(rel.parts) > 1 and rel.parts[0] in skip_dirs:
             continue
         if fp in srcs or fp.suffix.lower() not in PACK_TEXT_EXTS or size > PACK_RECORD_MAX_BYTES:
             continue
@@ -709,7 +712,8 @@ def unpacked_lines(workdir: str | Path, items: list[dict]) -> list[str]:
 
 def pack_version_line(workdir: str | Path) -> str:
     """10-19 #253：打包清單第一段「最後輸出的是第 N 版（共 M 版）。」N＝成品檢查檔 `輸出成品` 記的版本號（沒記的舊紀錄照
-    處理紀錄產生時間對版本表）、M＝`修改需求/` 版本表的版本數（最新的版本號）。算不出來寫「版本：查不到」。"""
+    處理紀錄產生時間對版本表）、M＝`修改需求/` 版本表的版本數（最新的版本號）。只有 N 寫「最後輸出的是第 N 版。」；
+    都算不出來寫「版本：查不到」。"""
     from bookclub import needs
 
     w = Path(workdir)
@@ -723,6 +727,8 @@ def pack_version_line(workdir: str | Path) -> str:
         n = m = None
     if isinstance(n, int) and isinstance(m, int):
         return f"最後輸出的是第 {n} 版（共 {m} 版）。"
+    if isinstance(n, int):   # 0b7a6dd 審查：沒升級過（沒有版本表）但輸出紀錄有版本號——跟畫面一樣寫第 N 版，不寫共幾版
+        return f"最後輸出的是第 {n} 版。"
     return "版本：查不到"
 
 
@@ -834,7 +840,7 @@ def pack_list_text(files: list[dict], *, version: str | None = None, skipped: li
     for f in files:
         lines.append(f"{f['相對路徑']}\t{f['大小']} 位元組\tSHA-256 {f['sha256']}")
     if skipped:
-        lines += ["", "沒帶的檔（影片、聲音等大檔，和其他版本的成品；路徑是工作區裡的位置）：", ""] + skipped
+        lines += ["", "沒帶的檔（影片、聲音、暫存檔，和其他版本的成品；路徑是工作區裡的位置）：", ""] + skipped
     return NL.join(lines) + NL
 
 
@@ -983,7 +989,7 @@ class PackJob:
         rel = it["相對路徑"]
         src = it.get("來源")
         try:   # 第 2 段審查建議 (b)：來源剛好不見了（又組裝、被移走）＝來源變了，不是「出了問題」
-            small = src is not None and src.suffix in SMALL_RECORD_EXTS and src.stat().st_size < SMALL_RECORD_BYTES
+            small = src is not None and src.suffix.lower() in SMALL_RECORD_EXTS and src.stat().st_size < SMALL_RECORD_BYTES
         except OSError:
             raise PackError(SOURCE_CHANGED.format(rel)) from None
         for n in range(1, (SMALL_RECORD_TRIES if small else 1) + 1):
