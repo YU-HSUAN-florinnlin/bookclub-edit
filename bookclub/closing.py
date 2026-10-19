@@ -412,6 +412,9 @@ PACK_TEXT_EXTS = (".json", ".jsonl", ".md", ".txt", ".csv", ".srt", ".html")
 PACK_RECORD_MAX_BYTES = 50_000_000       # 10-19 #253：單檔上限，避免把意外變大的檔當小紀錄帶走（超過的寫進清單「沒帶的檔」）
 PACK_SKIP_DIRS = ("輸出", "修改需求")      # 這兩個上面另外處理（修改需求整份、輸出只帶指定的）
 NO_VIDEO_LINE = "原始影片沒有打包，請另外保留。"   # 10-19 #253：宇軒定的字句（以後做匯入功能時再在匯入那邊提醒）
+VOICE_LINE = "生成好的聲音已經存在紀錄裡，之後匯入只要重做改到的地方。"   # 10-19 #253 做法 A
+# 10-19 #253 做法 A：老師名字、學員重念、保留原聲學員名字的生成紀錄（每一句指到的選定檔、放回時間格檔、來源檔要帶）
+GEN_LOGS = ("生成/老師紀錄.json", "生成/學員紀錄.json", "生成/保留原聲學員紀錄.json")
 
 
 class PackError(Exception):
@@ -550,7 +553,92 @@ def pack_items(workdir: str | Path, *, records_only: bool = False, strict: bool 
         if p.is_file() and not p.is_symlink():
             out.append({"相對路徑": dst, "來源": p})
     out += extra_record_items(w, out)   # 10-19 #253：其他小紀錄（之後重新匯入要用）
+    out += voice_items(w, out)          # 10-19 #253 做法 A：選定的生成聲音（之後匯入只重做改到的卡）
     return out
+
+
+def voice_files(workdir: str | Path) -> list[Path]:
+    """10-19 #253 做法 A：生成紀錄裡每一句指到的聲音檔——跟 `tts.output_missing` 檢查的同三個：`檔案`（選定那一次）、
+    `放回時間格.檔案`、`放回時間格.來源檔案`（停格補長用）。`wd.localize` 解析，只收工作區裡面、現在還在的一般檔；
+    同一個檔只列一次。沒被紀錄指到的嘗試檔、`_嘗試快取.json` 不在裡面。只讀。"""
+    w = Path(workdir)
+    root = w.resolve()
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for rel in GEN_LOGS:
+        try:
+            rec = wd.read_json(w / rel, default=None) or {}
+        except (OSError, ValueError):
+            continue
+        rows = (rec.get("句子") if isinstance(rec, dict) else None) or []
+        for r in rows if isinstance(rows, list) else []:
+            if not isinstance(r, dict):
+                continue
+            fit = r.get("放回時間格") if isinstance(r.get("放回時間格"), dict) else {}
+            for path in (r.get("檔案"), fit.get("檔案"), fit.get("來源檔案")):
+                p = wd.localize(path, w) if path else None
+                if p is None or p.is_symlink() or not p.is_file() or not _inside(p, root):
+                    continue
+                key = p.resolve()
+                if key not in seen:
+                    seen.add(key)
+                    out.append(w / key.relative_to(root))
+    return out
+
+
+def voice_items(workdir: str | Path, taken: list[dict]) -> list[dict]:
+    """10-19 #253 做法 A：選定的生成聲音放 `紀錄/<原相對路徑>`（例如 `紀錄/生成/老師/S001_放回時間格.wav`），之後匯入直接
+    放回原位。不套 50 MB 上限：這些是匯入時不用重新生成的關鍵，一句的長度有限，大小不會失控（真的很大也照帶）。
+    工作區裡的這些檔清空間照舊清（`clean_plan` 不變），打包裡多一份。"""
+    w = Path(workdir)
+    srcs = {Path(it["來源"]).resolve() for it in taken if it.get("來源") is not None}
+    dsts = {it["相對路徑"] for it in taken}
+    out = []
+    for p in voice_files(w):
+        dst = str(Path("紀錄") / p.relative_to(w))
+        if p.resolve() in srcs or dst in dsts:
+            continue
+        dsts.add(dst)
+        out.append({"相對路徑": dst, "來源": p, "生成聲音": True})
+    return out
+
+
+def card_stats_line(workdir: str | Path) -> str:
+    """10-19 #253：打包清單第一段「卡片：做進成品 N 張（人工確認過 X、還沒確認 Y、退回 R）；還沒處理 Z 張。」照最後輸出那一版：
+    `修改需求/成品狀態` 那一版有列的卡＝做進成品（通過／還沒看／退回，跟第 5 步一樣）；有效但那一版沒有列＝還沒處理。
+    不是「有效」的卡（刪掉、併入、拆成、消失）都不算。退回 0 張省略。算不出來寫「卡片：查不到」。"""
+    from bookclub import needs
+
+    w = Path(workdir)
+    try:
+        n = (last_export(w) or {}).get("版本號")
+        if not isinstance(n, int):
+            n = last_output_log(w)[0]
+        if not isinstance(n, int) or not needs.exists(w):
+            return "卡片：查不到"
+        st = needs.load(w)
+        if n not in st.versions:
+            return "卡片：查不到"
+        ok = seen = back = todo = 0
+        for k, c in st.cards.items():
+            if c.get("狀態") != needs.ALIVE:
+                continue
+            row = st.states.get((k, n))
+            if not row:
+                todo += 1
+                continue
+            s = row.get("狀態")
+            if s == needs.PASSED:
+                ok += 1
+            elif s == needs.RETURNED:
+                back += 1
+            else:
+                seen += 1
+    except Exception:  # noqa: BLE001 — 讀不到就寫查不到，不擋打包
+        return "卡片：查不到"
+    made = ok + seen + back
+    detail = f"人工確認過 {ok}、還沒確認 {seen}" + (f"、退回 {back}" if back else "")
+    return f"卡片：做進成品 {made} 張（{detail}）；還沒處理 {todo} 張。"
 
 
 def _workdir_files(w: Path):
@@ -735,10 +823,13 @@ def _gen_text(workdir: Path, kind: str) -> bytes:
     return text.encode("utf-8")
 
 
-def pack_list_text(files: list[dict], *, version: str | None = None, skipped: list[str] | None = None) -> str:
+def pack_list_text(files: list[dict], *, version: str | None = None, skipped: list[str] | None = None,
+                   cards: str | None = None, voices: bool = False) -> str:
     """`打包清單.txt`（§3.3、§6.4）：最上面兩句說明，之後每個檔的大小與 SHA-256。`\\r\\n`（Windows 記事本好讀）。
     10-19 #253：第一段再補版本那一行（version）與「原始影片沒有打包，請另外保留。」；最後一段「沒帶的檔」（skipped）。"""
-    head = [*PRIVACY_LINES] + ([version, NO_VIDEO_LINE] if version is not None else [])
+    # 10-19 #253 做法 A：卡片統計（cards）接在版本行下面；有帶生成聲音（voices）時在原始影片那一句後面補一句
+    head = [*PRIVACY_LINES] + ([version] + ([cards] if cards else []) + [NO_VIDEO_LINE] + ([VOICE_LINE] if voices else [])
+                               if version is not None else [])
     lines = [*head, "", f"共 {len(files)} 個檔（不含這份清單）：", ""]
     for f in files:
         lines.append(f"{f['相對路徑']}\t{f['大小']} 位元組\tSHA-256 {f['sha256']}")
@@ -856,7 +947,8 @@ class PackJob:
             entry["檔案"] = done + []
         # 打包清單（現場產生的：寫完一樣重讀比對）
         self.index, self.current = self.total, PACK_LIST_NAME
-        text = pack_list_text(done, version=pack_version_line(w), skipped=unpacked_lines(w, items))   # 10-19 #253
+        text = pack_list_text(done, version=pack_version_line(w), skipped=unpacked_lines(w, items),   # 10-19 #253
+                              cards=card_stats_line(w), voices=any(it.get("生成聲音") for it in items))
         lst = {"相對路徑": PACK_LIST_NAME, "來源": None, "內容": text.encode("utf-8")}
         done.append(self._one(folder, lst))
         self.state = "核對中"

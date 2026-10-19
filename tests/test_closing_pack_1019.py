@@ -222,8 +222,10 @@ def test_253_small_records_packed_big_files_not():
             assert src["紀錄/覆核/覆核決定.json"] == "覆核/覆核決定.json"
             # 打包清單：第一段版本那一行＋原始影片那一句；沒帶的檔
             lst = (out / "打包清單.txt").read_bytes().decode("utf-8").split("\r\n")
-            assert lst[:4] == [*closing.PRIVACY_LINES, "最後輸出的是第 2 版（共 3 版）。", "原始影片沒有打包，請另外保留。"], lst[:5]
-            assert lst[4] == "" and lst[5].startswith("共 ")
+            assert lst[:5] == [*closing.PRIVACY_LINES, "最後輸出的是第 2 版（共 3 版）。",
+                               "卡片：做進成品 0 張（人工確認過 0、還沒確認 0）；還沒處理 0 張。",
+                               "原始影片沒有打包，請另外保留。"], lst[:6]   # 這個假工作區沒有卡片、生成紀錄沒指到聲音
+            assert lst[5] == "" and lst[6].startswith("共 ")
             i = next(k for k, s in enumerate(lst) if s.startswith("沒帶的檔"))
             skipped = lst[i + 2:]
             assert any(s.startswith("覆核/太大的紀錄.json：") and "太大沒帶" in s for s in skipped), skipped
@@ -299,6 +301,100 @@ def test_253_pack_items_no_duplicates_and_server_size():
         assert len(srcs) == len(set(srcs))
         st = closing.pack_state(w)
         assert st["打包大小"] == closing.pack_size(items) and st["檔數"] == len(items) + 1
+
+
+# ---------- #253 做法 A：選定的生成聲音、卡片統計（宇軒 10-19 追加） ----------
+
+def _voices(w: Path) -> dict:
+    """三種生成紀錄各一句：選定檔、放回時間格檔、來源檔；另有沒被指到的嘗試 wav 與 `_嘗試快取.json`。回傳 {相對路徑: 位元組}。"""
+    files = {}
+
+    def wav(rel: str, n: int) -> str:
+        _mk(w / rel, os.urandom(n))
+        files[rel] = n
+        return rel
+    t = {"id": "S001", "檔案": str(w / wav("生成/老師/S001.wav", 40_000)),       # 完整路徑（localize 解析）
+         "放回時間格": {"檔案": wav("生成/老師/S001_放回時間格.wav", 41_000), "來源檔案": "生成/老師/S001.wav"}}
+    _mk(w / "生成" / "老師" / "S001_2.wav", os.urandom(30_000))                 # 沒被指到的嘗試檔：不帶
+    s = {"id": "T001", "檔案": wav("生成/學員/T001.wav", 50_000),
+         "放回時間格": {"檔案": wav("生成/學員/T001_放回時間格.wav", 50_500), "來源檔案": wav("生成/學員/T001_來源.wav", 60_000)}}
+    k = {"id": "K001", "檔案": wav("生成/保留原聲學員/K001.wav", 20_000),
+         "放回時間格": {"檔案": wav("生成/保留原聲學員/K001_放回時間格.wav", 21_000),
+                        "來源檔案": "/別的電腦/舊工作區/生成/保留原聲學員/不在.wav"}}   # 工作區外、不在：略過
+    wd.write_json(w / "生成" / "老師紀錄.json", {"句子": [t]})
+    wd.write_json(w / "生成" / "學員紀錄.json", {"句子": [s]})
+    wd.write_json(w / "生成" / "保留原聲學員紀錄.json", {"句子": [k]})
+    _mk(w / "生成" / "學員" / "_嘗試快取.json", b"{}")
+    return files
+
+
+def test_253A_selected_voices_packed_clean_plan_same():
+    with tempfile.TemporaryDirectory() as t:
+        w, loc = _workdir(Path(t)), Path(t) / "下載"
+        loc.mkdir()
+        before_items = closing.pack_items(w)
+        voices = _voices(w)
+        plan_before = closing.clean_plan(w, kind="mac")
+        items = closing.pack_items(w)
+        got = sorted(it["相對路徑"] for it in items if it.get("生成聲音"))
+        assert got == sorted(f"紀錄/{r}" for r in voices), got
+        # 打包需要的空間把這些聲音算進去（伺服器空間檢查用的 pack_size）
+        assert closing.pack_size(items) >= closing.pack_size(before_items) + sum(voices.values())
+        assert closing.pack_state(w)["打包大小"] == closing.pack_size(items)
+        job = _run(w, loc)
+        assert job.state == "已存好", job.error
+        out = Path(job.folder)
+        for r in voices:
+            assert (out / "紀錄" / r).read_bytes() == (w / r).read_bytes(), r
+        assert not (out / "紀錄" / "生成" / "老師" / "S001_2.wav").exists()
+        assert not (out / "紀錄" / "生成" / "學員" / "_嘗試快取.json").exists()
+        e = closing.read_record(w)["打包"][-1]
+        rows = {f["相對路徑"]: f for f in e["檔案"]}
+        for r in voices:
+            f = rows[f"紀錄/{r}"]
+            assert f["來源"] == r and f["sha256"] == _sha(out / "紀錄" / r) and f["大小"] == voices[r]
+        lst = (out / "打包清單.txt").read_bytes().decode("utf-8").split("\r\n")
+        assert lst[4:6] == ["原始影片沒有打包，請另外保留。", "生成好的聲音已經存在紀錄裡，之後匯入只要重做改到的地方。"], lst[:7]
+        gen = next(x for x in lst if x.startswith("生成/："))   # 沒被指到的嘗試檔、快取照資料夾合成一行
+        assert ".wav" in gen and ".json" in gen, gen
+        # 清空間不變：生成聲音照舊在工作區清掉
+        plan = closing.clean_plan(w, kind="mac")
+        assert plan == plan_before
+        cleaned = {r["相對路徑"] for r in plan["檔案"]}
+        assert all(r in cleaned for r in voices)
+        # 清空間前的核對（看打包的成品、每個檔在、大小對）照樣過、照樣清得掉
+        res = closing.clean(w, plan["清單指紋"], kind="mac")
+        assert res["省下位元組"] == plan["合計"] and closing.closed(w)
+        assert all(not (w / r).exists() for r in voices) and all((out / "紀錄" / r).is_file() for r in voices)
+
+
+def _cards(w: Path, cards: list[tuple[str, str]], states: list[tuple[str, int, str]]) -> None:
+    wd.write_json(w / "修改需求" / "卡片.json", {"列": [{"卡號": k, "狀態": s, "類型": "名字"} for k, s in cards]})
+    wd.write_json(w / "修改需求" / "成品狀態.json", {"列": [{"卡號": k, "版本號": v, "狀態": s} for k, v, s in states]})
+
+
+def test_253A_card_stats_line():
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t))    # 最後輸出第 2 版
+        _cards(w, [("K0001", "有效"), ("K0002", "有效"), ("K0003", "有效"), ("K0004", "有效"), ("K0005", "有效"),
+                   ("K0006", "刪掉"), ("K0007", "併入")],
+               [("K0001", 2, "通過"), ("K0002", 2, "通過"), ("K0003", 2, "還沒看"), ("K0004", 2, "退回"),
+                ("K0005", 3, "通過"),                     # 第 3 版才做：第 2 版沒有列＝還沒處理
+                ("K0006", 2, "通過"), ("K0007", 2, "還沒看"),   # 刪掉、併入的不算
+                ("K0001", 1, "退回")])                    # 別版的列不算
+        assert closing.card_stats_line(w) == "卡片：做進成品 4 張（人工確認過 2、還沒確認 1、退回 1）；還沒處理 1 張。"
+        _cards(w, [("K0001", "有效"), ("K0002", "有效")], [("K0001", 2, "通過")])
+        assert closing.card_stats_line(w) == "卡片：做進成品 1 張（人工確認過 1、還沒確認 0）；還沒處理 1 張。"   # 退回 0 省略
+    with tempfile.TemporaryDirectory() as t:
+        assert closing.card_stats_line(_workdir(Path(t), versions=None)) == "卡片：查不到"   # 沒有修改需求
+    with tempfile.TemporaryDirectory() as t:
+        assert closing.card_stats_line(_workdir(Path(t), out_ver=7)) == "卡片：查不到"       # 版本表沒有那一版
+    with tempfile.TemporaryDirectory() as t:
+        w = _workdir(Path(t))
+        (w / "修改需求" / "卡片.json").write_text("壞掉", encoding="utf-8")
+        assert closing.card_stats_line(w) == "卡片：查不到"
+    lst = closing.pack_list_text([], version="版本：查不到", cards="卡片：查不到").split("\r\n")
+    assert lst[:5] == [*closing.PRIVACY_LINES, "版本：查不到", "卡片：查不到", "原始影片沒有打包，請另外保留。"][:5]
 
 
 if __name__ == "__main__":
