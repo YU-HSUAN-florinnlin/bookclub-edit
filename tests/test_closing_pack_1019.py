@@ -386,25 +386,25 @@ def _versions_case():
 def test_253A_card_stats_same_as_step5():
     """審查必修：用第 5 步同一套分類。這個假工作區：第 2 版做進去 3 張（T003 通過、刪除段落 S1 與停格還沒看）；
     名字:1 範圍外、第 1 版通過，T005 與第 1 版的停格範圍外、第 1 版還沒看＝沿用上一版（10-20 宇軒定甲：拆開狀態）；
-    名字:2、T007、重疊、刪除段落 S2 哪一版都沒處理＝第 3 步選定不修改。"""
+    「第 3 步選定不修改」照第 5 步那一頁的筆數（這個假工作區那一頁是空的，不寫；見下一項測試）。"""
     from bookclub import needs, review
     from bookclub import turns as turns_mod
 
     w = _versions_case()
     assert closing.card_stats_line(w) == ("卡片：做進成品 3 張（人工確認過 1、還沒確認 2）；"
-                                          "沿用上一版 3 張（人工確認過 1、還沒確認 2）；第 3 步選定不修改 4 張。")
+                                          "沿用上一版 3 張（人工確認過 1、還沒確認 2）。")
     # 第 5 步新增、還沒生成的卡 → 還沒處理多 1
     from bookclub import finalcards
 
     m = review.manual_edit(w, {"類型": "局部消音", "start": 30.0, "end": 31.0, "方式": review.MUTE_WAYS[0]})
     assert finalcards.edited(w, f"局部消音:{m['id']}", new=True)["記了"]
     assert closing.card_stats_line(w) == ("卡片：做進成品 3 張（人工確認過 1、還沒確認 2）；"
-                                          "沿用上一版 3 張（人工確認過 1、還沒確認 2）；還沒處理 1 張；第 3 步選定不修改 4 張。")
+                                          "沿用上一版 3 張（人工確認過 1、還沒確認 2）；還沒處理 1 張。")
     # 第 3 步改了、等重做（T003 原本通過）→ 從人工確認過移到還沒處理
     turns_mod.save_turn(w, "T003", {"校對稿": "第三步改過的字"})
     needs.sync_cards(w)
     assert closing.card_stats_line(w) == ("卡片：做進成品 2 張（人工確認過 0、還沒確認 2）；"
-                                          "沿用上一版 3 張（人工確認過 1、還沒確認 2）；還沒處理 2 張；第 3 步選定不修改 4 張。")
+                                          "沿用上一版 3 張（人工確認過 1、還沒確認 2）；還沒處理 2 張。")
 
 
 def test_253A_card_stats_carry_all_passed_and_returned():
@@ -416,17 +416,17 @@ def test_253A_card_stats_carry_all_passed_and_returned():
     assert len(cross) == 2
     for c in cross:
         finalcards.decide(w, c["id"], needs.PASSED, version=1)
-    assert closing.card_stats_line(w) == "卡片：做進成品 3 張（人工確認過 1、還沒確認 2）；沿用上一版 3 張；第 3 步選定不修改 4 張。"
+    assert closing.card_stats_line(w) == "卡片：做進成品 3 張（人工確認過 1、還沒確認 2）；沿用上一版 3 張。"
     # 前一版的狀態列是退回、還沒排重做（例如舊工具留下的）→ 沿用上一版拆出退回
     st = needs.load(w)
     st.states[(cross[0]["卡號"], 1)]["狀態"] = needs.RETURNED
     needs.save(w, st)
     assert closing.card_stats_line(w) == ("卡片：做進成品 3 張（人工確認過 1、還沒確認 2）；"
-                                          "沿用上一版 3 張（人工確認過 2、退回 1）；第 3 步選定不修改 4 張。")
+                                          "沿用上一版 3 張（人工確認過 2、退回 1）。")
     # 在第 5 步按退回（要重做）→ 排進重做＝還沒處理（跟第 5 步「重做這幾張」一致）
     finalcards.decide(w, cross[1]["id"], needs.RETURNED, ["念錯字"], version=1)
     assert closing.card_stats_line(w) == ("卡片：做進成品 3 張（人工確認過 1、還沒確認 2）；"
-                                          "沿用上一版 2 張（人工確認過 1、退回 1）；還沒處理 1 張；第 3 步選定不修改 4 張。")
+                                          "沿用上一版 2 張（人工確認過 1、退回 1）；還沒處理 1 張。")
 
 
 def test_253A_card_stats_old_version_new_card_not_kept():
@@ -442,7 +442,7 @@ def test_253A_card_stats_old_version_new_card_not_kept():
     m = review.manual_edit(w, {"類型": "局部消音", "start": 30.0, "end": 31.0, "方式": review.MUTE_WAYS[0]})
     assert finalcards.edited(w, f"局部消音:{m['id']}", new=True)["記了"]
     after = closing.card_stats_line(w)
-    assert "還沒處理 1 張" in after and after.endswith("第 3 步選定不修改 4 張。"), (before, after)
+    assert "還沒處理" not in before and "還沒處理 1 張" in after and "選定不修改" not in after, (before, after)
 
 
 def test_253A_card_stats_old_version_and_unknown():
@@ -453,7 +453,7 @@ def test_253A_card_stats_old_version_and_unknown():
     chk["輸出成品"]["版本號"] = 1        # 最後輸出的是第 1 版（不是現在處理紀錄那一版）→ 照第 1 版那一頁
     wd.write_json(fc.check_path(w), chk)
     line = closing.card_stats_line(w)
-    assert line == "卡片：做進成品 6 張（人工確認過 2、還沒確認 4）；第 3 步選定不修改 4 張。", line   # 第 1 版整支：沒有沿用的
+    assert line == "卡片：做進成品 6 張（人工確認過 2、還沒確認 4）。", line   # 第 1 版整支：沒有沿用的
     with tempfile.TemporaryDirectory() as t:
         assert closing.card_stats_line(_workdir(Path(t), versions=None)) == "卡片：查不到"   # 沒有修改需求
     with tempfile.TemporaryDirectory() as t:
@@ -493,6 +493,29 @@ def test_253A_voices_same_version_or_newer_or_unknown():
                 assert e["聲音跟成品同一版"] is False and e["聲音不一樣檔數"] == 1
             else:
                 assert lst[6] == "生成聲音跟打包的成品是不是同一版：查不到。" and e["聲音跟成品同一版"] is None
+
+
+def test_253A_card_stats_keep_count_same_as_step5_page():
+    """10-20 宇軒 8799 實測：「第 3 步選定不修改」要跟第 5 步那一頁的筆數一樣（那一頁直接從第 3 步決定算，
+    保留原聲的學員段落不是修改需求裡的卡）。"""
+    import test_needs as tn
+    import test_versions as tv
+    from bookclub import finalcheck, review
+    from bookclub import finalcheck as fc
+
+    w = _versions_case()
+    tv._assemble(w, tv._t(3), tn._records())      # 第 3 版整支（0–180 秒）
+    chk = wd.read_json(fc.check_path(w))
+    chk["輸出成品"] = {"檔案": "輸出/成品_v3_0-3_sw.mp4", "版本號": 3}
+    wd.write_json(fc.check_path(w), chk)
+    before = closing.card_stats_line(w)
+    review.set_voice(w, None, "保留原聲")          # 學員全部保留原聲：沒被處理到的學員段落（T007）列在那一頁
+    rows = finalcheck.page_data(w)["不修改"]
+    assert any(r["子類"] == "保留原聲" for r in rows), rows
+    line = closing.card_stats_line(w)
+    assert line.endswith(f"；第 3 步選定不修改 {len(rows)} 張。"), (line, len(rows))
+    # 其他段不受影響（只有選定不修改那一段照那一頁）
+    assert line.split("；第 3 步選定不修改")[0] == before.split("；第 3 步選定不修改")[0].removesuffix("。"), (before, line)
 
 
 def test_253A_voice_match_bad_format_unknown():

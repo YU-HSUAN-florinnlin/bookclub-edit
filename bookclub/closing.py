@@ -610,7 +610,8 @@ def card_stats_line(workdir: str | Path) -> str:
     - 做進成品＝這一版有它（通過＝人工確認過、還沒看＝還沒確認、退回＝退回）
     - 沿用上一版＝第 5 步標「已通過（沿用上一版）」的（範圍外、之前那一版通過、沒按過要修改）
     - 還沒處理＝這一版之後新增、還沒生成的，和「已改，等重做」的；範圍外、之前那一版還沒看完或退回的也算這裡
-    - 第 3 步選定不修改＝其他有效的卡（第 5 步清單不列、收在「第 3 步選定不修改」那一頁）
+    - 第 3 步選定不修改＝第 5 步「第 3 步選定不修改」那一頁的筆數（`finalcheck.unchanged_rows` 的列數；不是修改需求的卡數，
+      各段加總不一定等於有效卡數）
     刪掉、併入、拆成、消失的卡不算。為 0 的段落省略（做進成品那段、括號裡的確認過／還沒確認照寫，退回 0 省略）。
     算不出來（沒升級過、紀錄壞掉、對不到那一版）寫「卡片：查不到」。只讀。"""
     from bookclub import finalcards, needs, proclog
@@ -634,7 +635,7 @@ def card_stats_line(workdir: str | Path) -> str:
             cards, cross = part["卡片"], part["跨版本卡片"]
         else:
             cards, cross = finalcards.version_page(w, n, None)["卡片"], []
-        ok = seen = back = todo = keep = 0
+        ok = seen = back = todo = 0
         carry = {needs.PASSED: 0, needs.NOT_SEEN: 0, needs.RETURNED: 0}   # 沿用上一版：照之前最近那一版的狀態拆開
         listed: set[str] = set()
         for c in cards + cross:
@@ -659,8 +660,8 @@ def card_stats_line(workdir: str | Path) -> str:
                 seen += 1
             else:   # 還沒生成、已改，等重做
                 todo += 1
-        # 第 5 步清單沒列的有效卡：預設是第 3 步選定不修改。10-20 審查建議 3：照 `finalcards._from_needs` 同一套判斷，
-        # 那一版之後才建的（第 5 步新增還沒生成）、有等重做的、第 3 步改成要處理的 → 還沒處理（看舊版那條路才會遇到）
+        # 第 5 步清單沒列的有效卡。10-20 審查建議 3：照 `finalcards._from_needs` 同一套判斷，那一版之後才建的（第 5 步新增
+        # 還沒生成）、有等重做的、第 3 步改成要處理的 → 還沒處理（看舊版那條路才會遇到）；其他不在這裡算（見下面「選定不修改」）
         v = st.versions[n]
         vtime = str(v.get("建立時間") or "")
         hist = needs.read_history(w) if v.get("其他卡指紋") is None else None
@@ -670,8 +671,13 @@ def card_stats_line(workdir: str | Path) -> str:
             if (c.get("等重做") or str(c.get("建立時間") or "") > vtime
                     or finalcards._step3_turned_on(st, k, c, v, hist)):
                 todo += 1
-            else:
-                keep += 1
+        # 10-20 宇軒 8799 實測（第 5 步那頁 14、清單 12 對不上）：「第 3 步選定不修改」照第 5 步那一頁的筆數——
+        # `finalcheck.unchanged_rows`（直接從第 3 步決定算，例如保留原聲的學員段落，不一定是修改需求裡的卡；網頁 keepN＝列數）。
+        # 所以各段加起來不一定等於有效卡數。最後輸出的是現在處理紀錄那一版時用同一份處理紀錄（跟畫面一模一樣）；
+        # 是舊版時用那一版的處理紀錄算（第 5 步看舊版沒有這一頁）
+        from bookclub import finalcheck
+
+        keep = len(finalcheck.unchanged_rows(w, log if cur is not None and cur["版本號"] == n else last_output_log(w)[1]))
     except Exception:  # noqa: BLE001 — 讀不到就寫查不到，不擋打包
         return "卡片：查不到"
     detail = f"人工確認過 {ok}、還沒確認 {seen}" + (f"、退回 {back}" if back else "")
