@@ -1297,8 +1297,17 @@ class CleanError(Exception):
     """不能清（訊息是給老師看的一句）。丟出來的時候一個檔都還沒動。"""
 
 
+HANDOFF_BACKUP = "交接前_"   # 33 號設計 §6：匯入交接包之前的紀錄備份（`備份/交接前_<日期>/`），結案清空間時一起清
+
+
+def _handoff_backup(parts: tuple) -> bool:
+    return len(parts) > 2 and parts[0] == "備份" and parts[1].startswith(HANDOFF_BACKUP)
+
+
 def _keep(parts: tuple, name: str) -> bool:
     suf = PurePosixPath(name).suffix.lower()
+    if _handoff_backup(parts):
+        return False
     if parts[0] in KEEP_DIRS:
         return True
     if len(parts) == 1 and (name == RECORD_FILE or suf in TOP_KEEP_EXTS):
@@ -1316,7 +1325,7 @@ def _clean_cat(parts: tuple, name: str) -> str | None:
         if name in ("audio.flac", "audio.抽音中.flac") or (name.startswith("audio.殘檔-") and low.endswith(".flac")):
             return CAT_TMP
         return None
-    if top in CACHE_DIRS:
+    if top in CACHE_DIRS or _handoff_backup(parts):
         return CAT_TMP
     if top == "輸出":
         if n == 2:

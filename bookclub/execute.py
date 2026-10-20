@@ -1084,7 +1084,7 @@ def names_done(workdir: Path) -> tuple[bool, str]:
     # 09-29 檢查 #7：跟生成程式用同一個判斷（文字、發音對照表、時間格、參考音）
     if tts.teacher_ref_changed(workdir, tlog):
         return False, f"老師參考音換過了，{len(gen)} 句都要重新生成"
-    table = tts.load_pron_table(workdir / tts.PRON_TABLE_NAME if (workdir / tts.PRON_TABLE_NAME).is_file() else None)
+    table = tts.load_pron_table(workdir=workdir)
     # 10-17 #244：句子照生成程式的整理方式（去前後空白、沒文字改念原文）再比，不然名字拿掉後留下的空格
     # 會讓生成程式說「沿用」、這裡說「還沒做」，每次繼續執行都失敗
     try:
@@ -1164,7 +1164,7 @@ def students_done(workdir: Path, a: float | None, b: float | None) -> tuple[bool
 
     log = wd.read_json(students.log_path(workdir), default=None) or {}
     recs = {r["id"]: r for r in log.get("句子", [])}
-    table = tts.load_pron_table()
+    table = tts.load_pron_table(workdir=workdir)
     # 09-29 檢查 #7：跟生成程式用同一個判斷（文字、發音對照表、時間格、參考音內容）
     # 10-01：比「現在配到的聲線」，不是紀錄自己記的路徑（以前等於自己比自己，換了聲線也看不出來）
     now = students.current_refs(workdir, items) if recs else {}
@@ -1196,7 +1196,7 @@ def stunames_done(workdir: Path) -> tuple[bool, str]:
     back = rec.get("退回直接消音") or {}
     from bookclub import tts
 
-    table = tts.load_pron_table()
+    table = tts.load_pron_table(workdir=workdir)
     left = [g["id"] for g in sp["生成"] if g["id"] not in back
             and (not (recs.get(g["id"]) or {}).get("放回時間格")
                  or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]},

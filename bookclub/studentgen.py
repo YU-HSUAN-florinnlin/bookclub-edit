@@ -149,7 +149,7 @@ def pending(workdir: str | Path) -> list[str]:
     rec = wd.read_json(log_path(workdir), default=None) or {}
     recs = {r["id"]: r for r in rec.get("句子", [])}
     back = rec.get("退回直接消音") or {}
-    table = tts.load_pron_table()
+    table = tts.load_pron_table(workdir=workdir)
     left = {g["學員"] for g in sp["生成"] if g["id"] not in back
             and (not (recs.get(g["id"]) or {}).get("放回時間格")
                  or tts.record_stale(recs[g["id"]], {**g, "生成用文字": tts.apply_pron(g["text"], table)[0]},
@@ -188,7 +188,7 @@ def generate(workdir: str | Path, *, synth_factory=None, hear=None, align=None, 
     ov = wd.read_json(wd.overlap_path(workdir), default={}) or {}
     blocked = [(o["start"], o["end"]) for o in ov.get("overlaps", [])]
     blocked += [(c["start"] - 0.5, c["end"] + 0.5) for c in studentnames.find(workdir).get("candidates", [])]
-    table = tts.load_pron_table()
+    table = tts.load_pron_table(workdir=workdir)
     tolerance = load_settings().thresholds.length_tolerance
     od = out_dir(workdir)
     od.mkdir(parents=True, exist_ok=True)

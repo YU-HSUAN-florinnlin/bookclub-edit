@@ -233,7 +233,17 @@ def pron_table_path() -> Path:
     return data_dir() / PRON_TABLE_NAME
 
 
-def load_pron_table(path: str | Path | None = None) -> list[tuple[str, str]]:
+def pron_table_for(workdir: str | Path | None) -> Path:
+    """這一集要用的發音對照表：工作區自己有一份（匯入覆核結果帶來的）用它；有交接的設定快照用快照（33 號設計 #259）；
+    都沒有照舊用本機 `~/讀書會剪輯資料/發音對照表.csv`。"""
+    if workdir is not None and (Path(workdir) / PRON_TABLE_NAME).is_file():
+        return Path(workdir) / PRON_TABLE_NAME
+    from bookclub import handoff
+
+    return handoff.setting_path(workdir, PRON_TABLE_NAME)
+
+
+def load_pron_table(path: str | Path | None = None, *, workdir: str | Path | None = None) -> list[tuple[str, str]]:
     """讀發音對照表（欄位：原字,生成用,原因,建立日期）。
 
     CosyVoice 的口音不完全是台灣口音，有些詞念起來會偏掉（「愉快」會念成
@@ -243,7 +253,7 @@ def load_pron_table(path: str | Path | None = None) -> list[tuple[str, str]]:
     """
     from bookclub import csvfile
 
-    path = Path(path).expanduser() if path else pron_table_path()
+    path = Path(path).expanduser() if path else (pron_table_for(workdir) if workdir is not None else pron_table_path())
     if not path.is_file():
         return []
     # 10-03 第九批 #35：Excel 另存的 Big5 也讀得了（見 csvfile）
@@ -1337,9 +1347,8 @@ def generate_teacher(
     tolerance = load_settings().thresholds.length_tolerance
 
     fill_teacher_text(items, wd.read_json(wd.merged_transcript_path(workdir)))
-    if pron_table is None and (workdir / PRON_TABLE_NAME).is_file():
-        pron_table = workdir / PRON_TABLE_NAME     # 匯入的工作區：用匯出時一起帶過來的那份
-    table = load_pron_table(pron_table)
+    # 匯入的工作區：用匯出時一起帶過來的那份；交接過來的用設定快照（pron_table_for）
+    table = load_pron_table(pron_table, workdir=workdir)
     for it in items:
         it["生成用文字"], it["發音對照"] = apply_pron(it["text"], table)
 

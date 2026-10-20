@@ -24,6 +24,14 @@ from bookclub import workdir as wd
 _auto_lock = threading.RLock()
 
 
+
+def _setting(workdir, name: str):
+    """33 號設計 #259：這一集要讀的設定檔（工作區有交接帶來的設定快照就讀快照，沒有照舊讀本機）。"""
+    from bookclub import handoff
+
+    return handoff.setting_path(workdir, name)
+
+
 def _locked(fn):
     @functools.wraps(fn)
     def wrap(*a, **k):
@@ -81,7 +89,7 @@ def episode_codes(workdir: str | Path) -> dict[str, str]:
     from bookclub.config import data_dir
 
     workdir = Path(workdir)
-    roster = names.load_roster(data_dir() / "名冊.csv")
+    roster = names.load_roster(_setting(workdir, "名冊.csv"))
     dec = wd.read_json(personnames.decisions_path(workdir), default={}) or {}
     return _codes(workdir, roster, dec, episode_spellings(workdir, roster=roster, dec=dec))
 
@@ -157,7 +165,7 @@ def episode_spellings(workdir: str | Path, roster: list[dict] | None = None,
 
     workdir = Path(workdir)
     if roster is None:
-        roster = names.load_roster(data_dir() / "名冊.csv")
+        roster = names.load_roster(_setting(workdir, "名冊.csv"))
     if dec is None:
         dec = wd.read_json(personnames.decisions_path(workdir), default={}) or {}
     canon = roster_canon(roster)
@@ -280,7 +288,7 @@ def keep_original_names(workdir: str | Path, dec: dict | None = None) -> dict[st
     workdir = Path(workdir)
     if dec is None:
         dec = wd.read_json(personnames.decisions_path(workdir), default={}) or {}
-    roster = names.load_roster(data_dir() / "名冊.csv")
+    roster = names.load_roster(_setting(workdir, "名冊.csv"))
     every = roster_owners(roster)
     alts = {p["名字"]: p.get("其他寫法") or [] for p in (wd.read_json(personnames.people_path(workdir), default={}) or {}).get("人名", [])}
     coded = coded_people(workdir, roster, dec)
@@ -304,7 +312,7 @@ def same_person_names(workdir: str | Path) -> set[str]:
     from bookclub import names, personnames
     from bookclub.config import data_dir
 
-    roster = names.load_roster(data_dir() / "名冊.csv")
+    roster = names.load_roster(_setting(workdir, "名冊.csv"))
     canon = {r["寫法"]: r["canonical"] for r in roster}
     canon.update({r["canonical"]: r["canonical"] for r in roster})
     return {canon.get(n, n) for n, d in (wd.read_json(personnames.decisions_path(Path(workdir)), default={}) or {}).items()
@@ -335,7 +343,7 @@ def replace_table(workdir: str | Path | None = None) -> list[dict]:
     from bookclub import names
     from bookclub.config import data_dir
 
-    rows = names.load_roster(data_dir() / "名冊.csv")
+    rows = names.load_roster(_setting(workdir, "名冊.csv"))
     if workdir is not None:
         codes = episode_codes(workdir)
         spell = episode_spellings(workdir, roster=rows)
@@ -357,7 +365,7 @@ def replace_table(workdir: str | Path | None = None) -> list[dict]:
     # （以前 replace_real_names 只換有代號的列，學員重念照字念；no_code_rows 還把它列成沒英文名照原聲）。
     # 拿掉後句首句尾的空白照 #245 去掉；畫面照 #247 標「（拿掉）」
     sens = [{**r, "拿掉": True} if not (r.get("代號") or "").strip() else r
-            for r in names.load_sensitive_words(data_dir() / "敏感詞.csv")]
+            for r in names.load_sensitive_words(_setting(workdir, "敏感詞.csv"))]
     return rows + sens
 
 
@@ -461,7 +469,7 @@ def sync(workdir: str | Path) -> int:
     workdir = Path(workdir)
     codes = episode_codes(workdir)
     propagate(workdir, codes)
-    roster = names.load_roster(data_dir() / "名冊.csv")
+    roster = names.load_roster(_setting(workdir, "名冊.csv"))
     spell = episode_spellings(workdir, roster=roster)
     canon = roster_canon(roster)   # 第二輪審查 4：還原時也本名優先，跟 episode_codes、episode_spellings 一致
     from bookclub import personnames
@@ -594,7 +602,7 @@ def _people_groups(workdir: Path) -> list[set[str]]:
     from bookclub.config import data_dir
 
     spell = episode_spellings(workdir)   # 1016-3：這一集自己決定的寫法不跟名冊那個人同一組
-    canon = roster_canon(names.load_roster(data_dir() / "名冊.csv"))
+    canon = roster_canon(names.load_roster(_setting(workdir, "名冊.csv")))
     out = []
     for p in (wd.read_json(personnames.people_path(workdir), default={}) or {}).get("人名", []):
         g = {p["名字"], *p["其他寫法"], *([p["名冊本名"]] if p.get("名冊本名") and p["名字"] not in spell else [])}
@@ -612,7 +620,7 @@ def name_spellings(workdir: str | Path) -> dict[str, str]:
 
     workdir = Path(workdir)
     out: dict[str, str] = {}
-    for r in names.load_roster(data_dir() / "名冊.csv"):
+    for r in names.load_roster(_setting(workdir, "名冊.csv")):
         out.setdefault(r["寫法"], r["canonical"])
     for g in _people_groups(workdir):
         owner = next((x for x in sorted(g) if x in out), None) or sorted(g)[0]
@@ -646,7 +654,7 @@ def person_gender(workdir: str | Path, real: str | None) -> tuple[str | None, st
 
     if not real:
         return None, "沒有本名"
-    g = students.roster_gender(real)
+    g = students.roster_gender(real, workdir)
     if g:
         return g, "名冊性別"
     tdata = wd.read_json(turns_mod.turns_path(Path(workdir)), default={}) or {}
@@ -713,7 +721,7 @@ def auto_unchanged(workdir: str | Path) -> dict[str, str]:
     workdir = Path(workdir)
     codes = episode_codes(workdir)
     out = {r: c for r, c in _load_auto(workdir)["自動配"].items() if c and codes.get(r) == c}
-    canon = {r["寫法"]: r["canonical"] for r in names.load_roster(data_dir() / "名冊.csv")}
+    canon = {r["寫法"]: r["canonical"] for r in names.load_roster(_setting(workdir, "名冊.csv"))}
     for name, d in (wd.read_json(personnames.decisions_path(workdir), default={}) or {}).items():
         k = canon.get(name, name)
         if isinstance(d, dict) and d.get("自動配") and d.get("代號") and codes.get(k) == d["代號"]:
@@ -769,7 +777,7 @@ def _auto_three(workdir: Path, codes: dict[str, str]) -> list[str]:
         canon = u.get("名冊本名")
         if not canon or u["② 已決定"] or u["都在刪除段落"] or u["已決定"] or codes.get(canon) or u["做法"] != "換成代號":
             continue
-        code = pick_code(workdir, students.roster_gender(canon), codes)
+        code = pick_code(workdir, students.roster_gender(canon, workdir), codes)
         if not code:
             break
         dec = wd.read_json(dp, default={}) or {}
@@ -815,7 +823,7 @@ def code_table(workdir: str | Path) -> dict:
     codes = episode_codes(workdir)
     tdata = wd.read_json(turns_mod.turns_path(workdir), default={}) or {}
     stu = tdata.get("學員") or {}
-    roster = names.load_roster(data_dir() / "名冊.csv")
+    roster = names.load_roster(_setting(workdir, "名冊.csv"))
     dec = wd.read_json(personnames.decisions_path(workdir), default={}) or {}
     two = tdata.get("本名代號") or {}
     pending = auto_unchanged(workdir)

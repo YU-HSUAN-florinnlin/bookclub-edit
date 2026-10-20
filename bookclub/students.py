@@ -299,14 +299,14 @@ def estimate_student_f0(workdir: Path, spans: list[tuple[float, float]], max_s: 
     return median_f0(x, sr)
 
 
-def roster_gender(real: str | None) -> str | None:
+def roster_gender(real: str | None, workdir: str | Path | None = None) -> str | None:
     """名冊（用本名找）這個人有填性別就回傳「男」「女」。09-30：名冊拿掉代號欄後改用本名找（以前用代號找，永遠找不到）。"""
-    from bookclub import csvfile
-    from bookclub.config import data_dir
+    from bookclub import csvfile, handoff
 
     if not real:
         return None
-    path = data_dir() / "名冊.csv"
+
+    path = handoff.setting_path(workdir, "名冊.csv")   # 33 號設計 #259：有設定快照讀快照
     if not path.is_file():
         return None
     for r in csvfile.read_rows(path):   # 10-03 第九批 #35：Excel 另存的 Big5 也讀得了
@@ -612,7 +612,7 @@ def load_voice_table(workdir: Path) -> dict:
 
 def _student_gender(workdir: Path, person: str, info: dict, spans: dict, table: dict,
                     estimate: bool) -> tuple[str | None, str]:
-    g = roster_gender(info.get("本名"))
+    g = roster_gender(info.get("本名"), workdir)
     if g:
         return g, "名冊性別"
     old = (table.get("舊的性別判斷") or {}).get(person)
@@ -810,7 +810,7 @@ def _prepare(workdir: Path, start: float | None, end: float | None, only: list[s
         first.setdefault(it["學員"], it["slot"][0])
     order = sorted(first, key=lambda n: people.get(n, {}).get("第一次", first[n]))
     voices = assign_voices(workdir, order, spans, people=people, log=log)
-    table = tts.load_pron_table(pron_table)
+    table = tts.load_pron_table(pron_table, workdir=workdir)
     for it in items:
         v = voices[it["學員"]]
         it["聲線"] = v["性別"]

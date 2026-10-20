@@ -162,7 +162,8 @@ WORKSPACE_SUFFIX = "_剪輯工作區"   # 跟 bookclub/server.py 的 PROJECT_SUF
 
 
 def recorded_workdirs(workdir: Path) -> list[Path]:
-    """`分析結果.json`、`參考音/挑選紀錄.json` 記的工作區位置（跟現在這個不一樣的才列）。"""
+    """`分析結果.json`、`參考音/挑選紀錄.json` 記的工作區位置（跟現在這個不一樣的才列）；匯入過交接包的再加上
+    `交接/交接紀錄.json` 記的對方工作區位置。"""
     workdir = Path(workdir)
     out: list[Path] = []
     for p in (analysis_result_path(workdir), ref_dir(workdir) / "挑選紀錄.json"):
@@ -172,6 +173,12 @@ def recorded_workdirs(workdir: Path) -> list[Path]:
             v = None
         if v and Path(v) != workdir and Path(v) not in out:
             out.append(Path(v))
+    try:   # 33 號設計 #258：匯入過的交接包記的對方工作區位置（對方紀錄裡的完整路徑換成這裡的）
+        from bookclub import handoff
+
+        out += [p for p in handoff.source_workdirs(workdir) if p != workdir and p not in out]
+    except Exception:  # noqa: BLE001 — 交接紀錄讀不到：照舊只看上面兩份
+        pass
     return out
 
 

@@ -66,8 +66,7 @@ def _teacher_inputs(workdir: Path, plan: dict | None = None) -> dict:
     from bookclub import tts
 
     plan = _teacher_plan(workdir) if plan is None else plan
-    own = workdir / tts.PRON_TABLE_NAME
-    table = tts.load_pron_table(own if own.is_file() else None)
+    table = tts.load_pron_table(workdir=workdir)
     gen = plan.get("生成", [])
     try:   # 10-17 #244：跟生成程式、第 4 步「做過沒有」比同一份文字（去前後空白、沒文字改念原文）
         gen = tts.teacher_plan_items(workdir, gen)
@@ -83,7 +82,7 @@ def _student_inputs(workdir: Path, a: float | None = None, b: float | None = Non
     from bookclub import students, tts
 
     items, _ = students.build_items(workdir, a, b)
-    table = tts.load_pron_table()
+    table = tts.load_pron_table(workdir=workdir)
     items = [{**g, "生成用文字": tts.apply_pron(g["text"], table)[0]} for g in items]
     log = wd.read_json(students.log_path(workdir), default=None)
     now = students.current_refs(workdir, items) if items else {}
@@ -100,7 +99,7 @@ def _stuname_inputs(workdir: Path, plan: dict | None = None) -> dict:
 
     plan = studentnames.plan(workdir) if plan is None else plan
     rec = wd.read_json(studentgen.log_path(workdir), default=None) or {}
-    table = tts.load_pron_table()
+    table = tts.load_pron_table(workdir=workdir)
     gen = [{**g, "生成用文字": tts.apply_pron(g["text"], table)[0]} for g in plan["生成"]]
     recs = {r["id"]: r for r in rec.get("句子", [])}
     return {"items": gen, "log": rec, "back": rec.get("退回直接消音"),
@@ -148,7 +147,11 @@ def _stat_key(workdir: Path) -> tuple:
             if f.endswith((".json", ".jsonl")):
                 add(Path(root) / f)
     add(tts.pron_table_path())
+    from bookclub import handoff
     from bookclub.config import data_dir
+
+    for name in handoff.SETTING_FILES:   # 33 號設計 #259：交接帶來的設定快照改了也算
+        add(handoff.snapshot_dir(workdir) / name)
 
     # 審查必修 3：名冊、敏感詞、名字排除清單、settings.toml 改了會改到要念的字或計畫（名字換成代號）——老師資料夾最上層的
     # 設定檔都算（一定有這三個；專案清單切換專案時會變，不算）
