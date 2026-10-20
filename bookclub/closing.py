@@ -406,6 +406,15 @@ RECORD_FILES = (("生成/剪輯決策.json", "紀錄/剪輯決策.json"), ("生�
                 ("覆核/成品檢查.json", "紀錄/成品檢查.json"), ("分析結果.json", "紀錄/分析結果.json"),
                 ("報告.md", "紀錄/報告.md"))
 OUTPUT_RECORD_GLOBS = ("處理標記_*.md", "處理標記_*.html", "剪輯決策_*.json", "輸出摘要_*.json")
+# 10-19 #253：之後要能「重新匯入繼續修改」——工作區裡其他的小紀錄（第 3 步決定、名字、逐字時間、生成紀錄、參考音文字檔⋯）
+# 也一起帶，放 `紀錄/<原本的相對路徑>`。只帶文字類的檔；影片、聲音、圖片等大檔不帶（`輸出/` 照舊只帶最後輸出那支與上面幾種紀錄）
+PACK_TEXT_EXTS = (".json", ".jsonl", ".md", ".txt", ".csv", ".srt", ".html")
+PACK_RECORD_MAX_BYTES = 50_000_000       # 10-19 #253：單檔上限，避免把意外變大的檔當小紀錄帶走（超過的寫進清單「沒帶的檔」）
+PACK_SKIP_DIRS = ("輸出", "修改需求")      # 這兩個上面另外處理（修改需求整份、輸出只帶指定的）
+NO_VIDEO_LINE = "原始影片沒有打包，請另外保留。"   # 10-19 #253：宇軒定的字句（以後做匯入功能時再在匯入那邊提醒）
+VOICE_LINE = "生成好的聲音已經存在紀錄裡，之後匯入只要重做改到的地方。"   # 10-19 #253 做法 A
+# 10-19 #253 做法 A：老師名字、學員重念、保留原聲學員名字的生成紀錄（每一句指到的選定檔、放回時間格檔、來源檔要帶）
+GEN_LOGS = ("生成/老師紀錄.json", "生成/學員紀錄.json", "生成/保留原聲學員紀錄.json")
 
 
 class PackError(Exception):
@@ -415,7 +424,7 @@ class PackError(Exception):
 MISSING_PRODUCT = "找不到最後輸出的成品影片，先到第 5 步重新輸出一次再打包。"
 SOURCE_CHANGED = "存的時候工作區裡的檔案變了（{}），可能剛好又輸出或組裝了一次。等它做完再按一次。"
 SOURCE_BUSY = "紀錄檔「{}」一直在變（第 5 步可能還開著、一直在記看過的地方），先關掉第 5 步那一頁或等一下再按一次。"
-SMALL_RECORD_EXTS = (".json", ".jsonl")
+SMALL_RECORD_EXTS = PACK_TEXT_EXTS   # 10-19 #253：新帶的小紀錄（.md、.txt⋯）一樣，存的時候變了重讀重存
 SMALL_RECORD_BYTES = 5_000_000
 SMALL_RECORD_TRIES = 3
 
@@ -543,7 +552,274 @@ def pack_items(workdir: str | Path, *, records_only: bool = False, strict: bool 
         p = w / rel
         if p.is_file() and not p.is_symlink():
             out.append({"相對路徑": dst, "來源": p})
+    out += extra_record_items(w, out)   # 10-19 #253：其他小紀錄（之後重新匯入要用）
+    out += voice_items(w, out)          # 10-19 #253 做法 A：選定的生成聲音（之後匯入只重做改到的卡）
     return out
+
+
+def voice_files(workdir: str | Path) -> list[Path]:
+    """10-19 #253 做法 A：生成紀錄裡每一句指到的聲音檔——跟 `tts.output_missing` 檢查的同三個：`檔案`（選定那一次）、
+    `放回時間格.檔案`、`放回時間格.來源檔案`（停格補長用）。`wd.localize` 解析，只收工作區裡面、現在還在的一般檔；
+    同一個檔只列一次。沒被紀錄指到的嘗試檔、`_嘗試快取.json` 不在裡面。只讀。"""
+    w = Path(workdir)
+    root = w.resolve()
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for rel in GEN_LOGS:
+        try:
+            rec = wd.read_json(w / rel, default=None) or {}
+        except (OSError, ValueError):
+            continue
+        rows = (rec.get("句子") if isinstance(rec, dict) else None) or []
+        for r in rows if isinstance(rows, list) else []:
+            if not isinstance(r, dict):
+                continue
+            fit = r.get("放回時間格") if isinstance(r.get("放回時間格"), dict) else {}
+            for path in (r.get("檔案"), fit.get("檔案"), fit.get("來源檔案")):
+                p = wd.localize(path, w) if path else None
+                if p is None or p.is_symlink() or not p.is_file() or not _inside(p, root):
+                    continue
+                key = p.resolve()
+                if key not in seen:
+                    seen.add(key)
+                    out.append(w / key.relative_to(root))
+    return out
+
+
+def voice_items(workdir: str | Path, taken: list[dict]) -> list[dict]:
+    """10-19 #253 做法 A：選定的生成聲音放 `紀錄/<原相對路徑>`（例如 `紀錄/生成/老師/S001_放回時間格.wav`），之後匯入直接
+    放回原位。不套 50 MB 上限：這些是匯入時不用重新生成的關鍵，一句的長度有限，大小不會失控（真的很大也照帶）。
+    工作區裡的這些檔清空間照舊清（`clean_plan` 不變），打包裡多一份。"""
+    w = Path(workdir)
+    srcs = {Path(it["來源"]).resolve() for it in taken if it.get("來源") is not None}
+    dsts = {it["相對路徑"] for it in taken}
+    out = []
+    for p in voice_files(w):
+        dst = str(Path("紀錄") / p.relative_to(w))
+        if p.resolve() in srcs or dst in dsts:
+            continue
+        dsts.add(dst)
+        out.append({"相對路徑": dst, "來源": p, "生成聲音": True})
+    return out
+
+
+def card_stats_line(workdir: str | Path) -> str:
+    """10-19 #253：打包清單第一段的卡片統計，照最後輸出那一版、用第 5 步同一套分類（`finalcards.build`；最後輸出的不是
+    現在處理紀錄那一版時用 `finalcards.version_page`）。宇軒 10-19 定的寫法：
+    「卡片：做進成品 N 張（人工確認過 X、還沒確認 Y、退回 R）；沿用上一版 W 張；還沒處理 Z 張；第 3 步選定不修改 U 張。」
+    - 做進成品＝這一版有它（通過＝人工確認過、還沒看＝還沒確認、退回＝退回）
+    - 沿用上一版＝第 5 步標「已通過（沿用上一版）」的（範圍外、之前那一版通過、沒按過要修改）
+    - 還沒處理＝這一版之後新增、還沒生成的，和「已改，等重做」的；範圍外、之前那一版還沒看完或退回的也算這裡
+    - 第 3 步選定不修改＝第 5 步「第 3 步選定不修改」那一頁的筆數（`finalcheck.unchanged_rows` 的列數；不是修改需求的卡數，
+      各段加總不一定等於有效卡數）
+    刪掉、併入、拆成、消失的卡不算。為 0 的段落省略（做進成品那段、括號裡的確認過／還沒確認照寫，退回 0 省略）。
+    算不出來（沒升級過、紀錄壞掉、對不到那一版）寫「卡片：查不到」。只讀。"""
+    from bookclub import finalcards, needs, proclog
+
+    w = Path(workdir)
+    try:
+        n = (last_export(w) or {}).get("版本號")
+        if not isinstance(n, int):
+            n = last_output_log(w)[0]
+        if not isinstance(n, int) or not needs.exists(w) or not needs.healthy(w):
+            return "卡片：查不到"
+        st = needs.load(w)
+        if n not in st.versions:
+            return "卡片：查不到"
+        log = proclog.load(w)
+        cur = st.version_at((log or {}).get("產生時間")) if log else None
+        if cur is not None and cur["版本號"] == n:
+            part = finalcards.build(w, log=log)
+            if part["來源"] != finalcards.SRC_NEW:
+                return "卡片：查不到"
+            cards, cross = part["卡片"], part["跨版本卡片"]
+        else:
+            cards, cross = finalcards.version_page(w, n, None)["卡片"], []
+        ok = seen = back = todo = 0
+        carry = {needs.PASSED: 0, needs.NOT_SEEN: 0, needs.RETURNED: 0}   # 沿用上一版：照之前最近那一版的狀態拆開
+        listed: set[str] = set()
+        for c in cards + cross:
+            k = str(c.get("卡號"))
+            listed.add(k)
+            if c.get("刪掉了"):
+                continue
+            if c.get("跨版本") or c.get("這一版沒處理到"):
+                # 10-20 宇軒定（甲）：範圍外的卡（第 5 步的沿用卡、跨版本卡）都算沿用上一版，狀態照之前最近那一版；
+                # 按過「要修改」（已改，等重做）的才是還沒處理。沒有之前那一版的（看舊版時、之後的版本才做的）也是還沒處理
+                old = finalcards._older_row(st, k, n)
+                s3 = (old[1].get("狀態") if old else None)
+                if c.get("狀態") == finalcards.EDITED or c.get("範圍外改了") or s3 not in carry:
+                    todo += 1
+                else:
+                    carry[s3] += 1
+            elif c.get("狀態") == needs.PASSED:
+                ok += 1
+            elif c.get("狀態") == needs.RETURNED:
+                back += 1
+            elif c.get("狀態") == needs.NOT_SEEN:
+                seen += 1
+            else:   # 還沒生成、已改，等重做
+                todo += 1
+        # 第 5 步清單沒列的有效卡。10-20 審查建議 3：照 `finalcards._from_needs` 同一套判斷，那一版之後才建的（第 5 步新增
+        # 還沒生成）、有等重做的、第 3 步改成要處理的 → 還沒處理（看舊版那條路才會遇到）；其他不在這裡算（見下面「選定不修改」）
+        v = st.versions[n]
+        vtime = str(v.get("建立時間") or "")
+        hist = needs.read_history(w) if v.get("其他卡指紋") is None else None
+        for k, c in st.cards.items():
+            if c.get("狀態") != needs.ALIVE or k in listed:
+                continue
+            if (c.get("等重做") or str(c.get("建立時間") or "") > vtime
+                    or finalcards._step3_turned_on(st, k, c, v, hist)):
+                todo += 1
+        # 10-20 宇軒 8799 實測（第 5 步那頁 14、清單 12 對不上）：「第 3 步選定不修改」照第 5 步那一頁的筆數——
+        # `finalcheck.unchanged_rows`（直接從第 3 步決定算，例如保留原聲的學員段落，不一定是修改需求裡的卡；網頁 keepN＝列數）。
+        # 所以各段加起來不一定等於有效卡數。最後輸出的是現在處理紀錄那一版時用同一份處理紀錄（跟畫面一模一樣）；
+        # 是舊版時用那一版的處理紀錄算（第 5 步看舊版沒有這一頁）
+        from bookclub import finalcheck
+
+        keep = len(finalcheck.unchanged_rows(w, log if cur is not None and cur["版本號"] == n else last_output_log(w)[1]))
+    except Exception:  # noqa: BLE001 — 讀不到就寫查不到，不擋打包
+        return "卡片：查不到"
+    detail = f"人工確認過 {ok}、還沒確認 {seen}" + (f"、退回 {back}" if back else "")
+    parts = [f"做進成品 {ok + seen + back} 張（{detail}）"]
+    w_n = sum(carry.values())
+    if w_n:
+        sub = [f"{name} {carry[key]}" for key, name in ((needs.PASSED, "人工確認過"), (needs.NOT_SEEN, "還沒確認"),
+                                                          (needs.RETURNED, "退回")) if carry[key]]
+        parts += [f"沿用上一版 {w_n} 張" + ("" if carry[needs.PASSED] == w_n else f"（{'、'.join(sub)}）")]
+    parts += [f"還沒處理 {todo} 張"] if todo else []
+    parts += [f"第 3 步選定不修改 {keep} 張"] if keep else []
+    return "卡片：" + "；".join(parts) + "。"
+
+
+def voice_match(workdir: str | Path) -> tuple[bool | None, int]:
+    """10-19 #253（宇軒選甲）：打包帶的是現在的生成聲音；拿最後輸出那一版的處理紀錄（`修改需求/版本/vN/處理紀錄.json`）
+    每一筆的 `檔案指紋`（`proclog.stamp_contents` 寫的生成檔內容 sha1 前 16 碼）跟現在的檔重算比對。
+    回 (同一版, 不一樣的檔數)：True＝都一樣；False＝有之後又生成過的（檔不在也算不一樣；同一個檔被好幾筆用到只算一個）；
+    None＝查不到（舊紀錄沒指紋、對不到那一版、內容格式不對——10-20 審查：整個包起來，不能讓打包在最後一步失敗）。只讀。"""
+    from bookclub import proclog
+
+    w = Path(workdir)
+    try:
+        _n, log = last_output_log(w)
+        if not isinstance(log, dict) or not isinstance(log.get("紀錄") or [], list):
+            return None, 0
+        recs = [r for r in log.get("紀錄") or [] if isinstance(r, dict) and r.get("檔案")]
+        if any(not isinstance(r["檔案"], str) or not r.get("檔案指紋") for r in recs):
+            return None, 0
+        want: dict[str, str] = {}
+        for r in recs:
+            f = str(r["檔案"])
+            if want.setdefault(f, str(r["檔案指紋"])) != str(r["檔案指紋"]):
+                return None, 0   # 同一個檔記了兩個不同的指紋：紀錄本身對不起來
+        diff = 0
+        for f, fp in want.items():
+            p = wd.localize(f, w)
+            if (proclog.file_print(p) if p is not None else None) != fp:
+                diff += 1
+        return diff == 0, diff
+    except Exception:  # noqa: BLE001 — 查不到就寫查不到
+        return None, 0
+
+
+def voice_match_line(same: bool | None, diff: int) -> str | None:
+    """（純函式）打包清單第一段那一句：同一版不寫；不一樣、查不到各一句。"""
+    if same is True:
+        return None
+    if same is False:
+        return f"生成聲音是之後改過的狀態，比打包的成品新（有 {diff} 個聲音檔不一樣）。"
+    return "生成聲音跟打包的成品是不是同一版：查不到。"
+
+
+def _workdir_files(w: Path):
+    """工作區裡的一般檔：產出 (相對路徑, 完整路徑, 大小)。不跟捷徑；點開頭的檔與資料夾（`.結案清理中/`、`.寫入鎖`、
+    `.xxx.寫入中` 之類）和 `結案.json`（打包的時候正在寫）略過。只讀。"""
+    import stat as _stat
+
+    for root, dirs, files in os.walk(w, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        top = Path(root) == w
+        for f in sorted(files):
+            if f.startswith(".") or (top and f == RECORD_FILE):
+                continue
+            fp = Path(root) / f
+            try:
+                st = os.lstat(fp)
+            except OSError:
+                continue
+            if _stat.S_ISREG(st.st_mode):
+                yield fp.relative_to(w), fp, st.st_size
+
+
+def extra_record_items(workdir: str | Path, taken: list[dict]) -> list[dict]:
+    """10-19 #253：打包多帶的小紀錄——工作區裡文字類的檔（`PACK_TEXT_EXTS`），放 `紀錄/<原本的相對路徑>`
+    （例如 `紀錄/覆核/覆核決定.json`、`紀錄/transcript/merged.json`）。不帶：`輸出/`、`修改需求/`（上面另外處理）、
+    快取資料夾（`CACHE_DIRS`：`web快取/`、`chunks/`⋯）、`修改需求.升級中/`、已經在 taken 裡的（`RECORD_FILES` 那幾個）、超過 `PACK_RECORD_MAX_BYTES` 的、清空間會清掉的暫存（例如生成用的快取）。
+    打包裡已經有同一個路徑的（理論上不會）也不帶。只讀，不改變清空間的清單（工作區原本就留著這些檔）。"""
+    w = Path(workdir)
+    srcs = {Path(it["來源"]) for it in taken if it.get("來源") is not None}
+    dsts = {it["相對路徑"] for it in taken}
+    out: list[dict] = []
+    from bookclub import needs
+
+    skip_dirs = PACK_SKIP_DIRS + CACHE_DIRS + (needs.STAGING,)   # 0b7a6dd 審查：快取資料夾、升級中途留下的備份不帶
+    for rel, fp, size in _workdir_files(w):
+        if len(rel.parts) > 1 and rel.parts[0] in skip_dirs:
+            continue
+        if fp in srcs or fp.suffix.lower() not in PACK_TEXT_EXTS or size > PACK_RECORD_MAX_BYTES:
+            continue
+        if classify(rel.as_posix())[0] == "清":
+            continue
+        dst = str(Path("紀錄") / rel)
+        if dst in dsts:
+            continue
+        dsts.add(dst)
+        out.append({"相對路徑": dst, "來源": fp})
+    return out
+
+
+def unpacked_lines(workdir: str | Path, items: list[dict]) -> list[str]:
+    """10-19 #253：打包清單「沒帶的檔」那一段（工作區裡沒打包的檔）。超過上限的紀錄檔一個一行；其他（影片、聲音、
+    其他版本的成品⋯）照最上層資料夾合成一行（檔數、副檔名、大小），不然生成的聲音檔會列好幾百行。只讀。"""
+    w = Path(workdir)
+    srcs = {Path(it["來源"]) for it in items if it.get("來源") is not None}
+    big: list[str] = []
+    groups: dict[str, list] = {}
+    for rel, fp, size in _workdir_files(w):
+        if fp in srcs:
+            continue
+        if fp.suffix.lower() in PACK_TEXT_EXTS and size > PACK_RECORD_MAX_BYTES:
+            big.append(f"{rel.as_posix()}：{human(size)}（紀錄檔超過 {human(PACK_RECORD_MAX_BYTES)}，太大沒帶）")
+            continue
+        key = f"{rel.parts[0]}/" if len(rel.parts) > 1 else "工作區最上層"
+        g = groups.setdefault(key, [0, 0, set()])
+        g[0] += 1
+        g[1] += size
+        g[2].add(fp.suffix.lower() or "沒有副檔名")
+    return big + [f"{k}：{n} 個（{'、'.join(sorted(exts))}），共 {human(sz)}"
+                  for k, (n, sz, exts) in sorted(groups.items())]
+
+
+def pack_version_line(workdir: str | Path) -> str:
+    """10-19 #253：打包清單第一段「最後輸出的是第 N 版（共 M 版）。」N＝成品檢查檔 `輸出成品` 記的版本號（沒記的舊紀錄照
+    處理紀錄產生時間對版本表）、M＝`修改需求/` 版本表的版本數（最新的版本號）。只有 N 寫「最後輸出的是第 N 版。」；
+    都算不出來寫「版本：查不到」。"""
+    from bookclub import needs
+
+    w = Path(workdir)
+    try:
+        n = (last_export(w) or {}).get("版本號")
+        if not isinstance(n, int):
+            n = last_output_log(w)[0]
+        vers = needs.load(w).versions if needs.exists(w) else {}
+        m = max(vers) if vers else None
+    except Exception:  # noqa: BLE001 — 讀不到就寫查不到，不擋打包
+        n = m = None
+    if isinstance(n, int) and isinstance(m, int):
+        return f"最後輸出的是第 {n} 版（共 {m} 版）。"
+    if isinstance(n, int):   # 0b7a6dd 審查：沒升級過（沒有版本表）但輸出紀錄有版本號——跟畫面一樣寫第 N 版，不寫共幾版
+        return f"最後輸出的是第 {n} 版。"
+    return "版本：查不到"
 
 
 def pack_size(items: list[dict]) -> int:
@@ -595,6 +871,13 @@ def _sha(path: Path) -> str:
     return h.hexdigest()
 
 
+def pack_base(location: str | Path) -> Path:
+    """打包資料夾的上一層。10-19 #252：選到的資料夾本身就叫「讀書會剪輯結案」（第二支影片結案時老師很可能直接點進上次那個）
+    → 直接放在它下面，不再多建一層變成 `讀書會剪輯結案/讀書會剪輯結案/`；選一般的資料夾照舊在下面建「讀書會剪輯結案」。"""
+    loc = Path(location)
+    return loc if loc.name == PACK_ROOT else loc / PACK_ROOT
+
+
 def check_location(workdir: str | Path, location: str | Path, need: int, usage=None) -> Path:
     """打包位置能不能用（§3.4、§3.6）：在不在、是不是資料夾、不在工作區裡（也不是工作區的上層——打包資料夾會建在
     工作區裡面）、空間夠不夠（要 need＋200 MB）。能用回 resolve 後的路徑，不能用丟 PackError（給老師看的一句）。"""
@@ -605,7 +888,7 @@ def check_location(workdir: str | Path, location: str | Path, need: int, usage=N
     if not loc.is_dir():
         raise PackError(f"找不到這個資料夾：{location}（D 槽沒插？），換個位置再試。")
     loc = loc.resolve()
-    if _inside(loc, w) or _inside(w, loc / PACK_ROOT):
+    if _inside(loc, w) or _inside(w, pack_base(loc)):   # 10-19 #252：跟真的建資料夾的地方用同一個算法
         raise PackError("不能存在這支影片的工作資料夾裡，請選別的地方。")
     why = fileio.space_problem(need, loc, PACK_MARGIN_BYTES, "存的地方", usage=usage)
     if why:
@@ -636,11 +919,19 @@ def _gen_text(workdir: Path, kind: str) -> bytes:
     return text.encode("utf-8")
 
 
-def pack_list_text(files: list[dict]) -> str:
-    """`打包清單.txt`（§3.3、§6.4）：最上面兩句說明，之後每個檔的大小與 SHA-256。`\\r\\n`（Windows 記事本好讀）。"""
-    lines = [*PRIVACY_LINES, "", f"共 {len(files)} 個檔（不含這份清單）：", ""]
+def pack_list_text(files: list[dict], *, version: str | None = None, skipped: list[str] | None = None,
+                   cards: str | None = None, voices: bool = False, voice_note: str | None = None) -> str:
+    """`打包清單.txt`（§3.3、§6.4）：最上面兩句說明，之後每個檔的大小與 SHA-256。`\\r\\n`（Windows 記事本好讀）。
+    10-19 #253：第一段再補版本那一行（version）與「原始影片沒有打包，請另外保留。」；最後一段「沒帶的檔」（skipped）。"""
+    # 10-19 #253 做法 A：卡片統計（cards）接在版本行下面；有帶生成聲音（voices）時在原始影片那一句後面補一句
+    head = [*PRIVACY_LINES] + ([version] + ([cards] if cards else []) + [NO_VIDEO_LINE] + ([VOICE_LINE] if voices else [])
+                               + ([voice_note] if voices and voice_note else [])
+                               if version is not None else [])
+    lines = [*head, "", f"共 {len(files)} 個檔（不含這份清單）：", ""]
     for f in files:
         lines.append(f"{f['相對路徑']}\t{f['大小']} 位元組\tSHA-256 {f['sha256']}")
+    if skipped:
+        lines += ["", "沒帶的檔（影片、聲音、暫存檔，和其他版本的成品；路徑是工作區裡的位置）：", ""] + skipped
     return NL.join(lines) + NL
 
 
@@ -724,7 +1015,7 @@ class PackJob:
             raise PackError("找不到上次存到一半的資料夾（換了位置、或已經移走了），請重新按「結案打包…」選位置。")
         if folder is None:
             day = datetime.now().strftime("%Y%m%d")
-            base = self.location / PACK_ROOT
+            base = pack_base(self.location)   # 10-19 #252：選到「讀書會剪輯結案」本身就不再多建一層
             base.mkdir(parents=True, exist_ok=True)
             folder = _numbered_dir(base / f"{video_stem(w)}_{day}{PACKING_SUFFIX}")
             folder.mkdir(parents=True)
@@ -753,7 +1044,12 @@ class PackJob:
             entry["檔案"] = done + []
         # 打包清單（現場產生的：寫完一樣重讀比對）
         self.index, self.current = self.total, PACK_LIST_NAME
-        lst = {"相對路徑": PACK_LIST_NAME, "來源": None, "內容": pack_list_text(done).encode("utf-8")}
+        # 10-19 #253（宇軒選甲）：帶的是現在的聲音，跟最後輸出那一版的處理紀錄比指紋，不一樣在清單寫一句、結案.json 記下
+        voices = any(it.get("生成聲音") for it in items)
+        same, diff = voice_match(w) if voices else (None, 0)
+        text = pack_list_text(done, version=pack_version_line(w), skipped=unpacked_lines(w, items),   # 10-19 #253
+                              cards=card_stats_line(w), voices=voices, voice_note=voice_match_line(same, diff))
+        lst = {"相對路徑": PACK_LIST_NAME, "來源": None, "內容": text.encode("utf-8")}
         done.append(self._one(folder, lst))
         self.state = "核對中"
         for f in done:   # 最後整份再對一次大小（剛才每個檔都重讀算過檢查碼）
@@ -775,6 +1071,8 @@ class PackJob:
         rec = read_record(w)
         entry = self._entry(rec) or entry
         entry.update({"資料夾": str(final), "檔案": done, "核對": "通過", "完成時間": _now()})
+        if voices:   # 10-19 #253：聲音跟成品是不是同一版（None＝查不到）
+            entry.update({"聲音跟成品同一版": same, "聲音不一樣檔數": diff})
         if rec.get("狀態") not in (CLEANING, CLOSED):
             rec["狀態"] = PACKED
         _write_record(w, rec)
@@ -787,7 +1085,7 @@ class PackJob:
         rel = it["相對路徑"]
         src = it.get("來源")
         try:   # 第 2 段審查建議 (b)：來源剛好不見了（又組裝、被移走）＝來源變了，不是「出了問題」
-            small = src is not None and src.suffix in SMALL_RECORD_EXTS and src.stat().st_size < SMALL_RECORD_BYTES
+            small = src is not None and src.suffix.lower() in SMALL_RECORD_EXTS and src.stat().st_size < SMALL_RECORD_BYTES
         except OSError:
             raise PackError(SOURCE_CHANGED.format(rel)) from None
         for n in range(1, (SMALL_RECORD_TRIES if small else 1) + 1):

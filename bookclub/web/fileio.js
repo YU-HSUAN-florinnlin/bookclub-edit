@@ -347,7 +347,10 @@ function clView(d) {
     statusKind = "done"; badge = "已存好";
   } else if (d["可以繼續"]) status = "上次存到一半。";
   const cleaning = st === "清理中";
-  return { running, line, warn, btn, status, statusKind, badge,
+  // 10-19 #252：選上次的「讀書會剪輯結案」也不會多一層，說明寫給老師知道（存／清進行中、已結案不寫）
+  const pickHint = running || cleaning || st === "已結案" ? ""
+    : "選放結案資料的地方（例如下載、D 槽）；選上次的「讀書會剪輯結案」也可以。";
+  return { running, line, warn, btn, status, statusKind, badge, pickHint,
            stop: running && js !== "清理中",
            resume: !running && !cleaning && !!d["可以繼續"],
            cleanResume: !running && cleaning && d["可以繼續清"] !== false,
@@ -368,6 +371,7 @@ async function closeBoxInit(box) {
   box.innerHTML = `<h3>結案打包</h3>
     ${closedNow ? "" : `<p>${esc(v.line)}</p>`}
     ${v.warn ? `<p class="rv-warnline">${esc(v.warn)}</p>` : ""}
+    ${v.pickHint ? `<p class="hint">${esc(v.pickHint)}</p>` : ""}
     <div class="fo-row">
       ${v.running ? (v.stop ? `<button class="secondary" id="cl-stop">停止</button>` : "")
         : v.cleanResume ? `<button class="secondary" id="cl-clean-resume">繼續清</button>`

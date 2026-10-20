@@ -204,7 +204,10 @@ def test_done_checks_on_fake_workdir():
         nameplan.compute_plan = lambda wk, *a, **k: {**(p := real_plan(wk, *a, **k)), "生成": [
             {**g, "text": g["text"] + "改"} if g["id"] == sid else g for g in p["生成"]]}
         done, why = execute.names_done(w)
-        assert not done and f"還有 1／{len(plan['生成'])} 句要生成（{sid}）" == why, why
+        # 10-18 #244：寫原片時間＋第 3 步卡片類型（不寫 S001 這種畫面上看不到的編號）
+        c0 = wd.read_json(wd.names_path(w))["candidates"][int(plan["生成"][0]["候選"][0]) - 1]
+        want = f"還有 1／{len(plan['生成'])} 句要生成：{execute.fmt_card_time(c0['start'])}（老師提到名字）"
+        assert not done and want == why and sid not in why, why
         assert execute._left_count(why) == 1
     finally:
         nameplan.compute_plan = real_plan

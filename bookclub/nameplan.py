@@ -38,13 +38,54 @@ def sentences_path(workdir: Path) -> Path:
     return workdir / "生成" / "名字句子.json"
 
 
-def replace_name(sentence: str, cand: dict) -> str | None:
-    """把句子裡的名字換成代號。依序試：比對到的字、名冊寫法、本名；都找不到回傳 None。"""
+DROP_MARK = "\ue002"   # 10-18 #245：名字拿掉的地方先留這個記號（私用區字元，不會念出來），接成整句後再整理、拿掉
+
+
+def mark_name(sentence: str, cand: dict) -> str | None:
+    """名字換成代號；沒有代號（名字拿掉）時先換成 `DROP_MARK`、空白一個都不動。找不到回傳 None。
+    10-18 #245：小段（Groq 切的半句）裡拿掉名字不能去空白——小段的頭尾是句中，接成整句之後才用 `finish_drops` 整理。"""
     for key in ("matched_text", "name", "canonical"):
         word = (cand.get(key) or "").strip()
         if word and word in sentence:
-            return sentence.replace(word, cand["代號"], 1)
+            return sentence.replace(word, cand.get("代號") or DROP_MARK, 1)
     return None
+
+
+def finish_drops(text: str) -> tuple[str, list[int]]:
+    """整句裡的 `DROP_MARK` 拿掉，回傳（要念的文字, 名字被拿掉的位置）（純函式）。
+    10-17 #245、10-18 宇軒：名字在整句的句首被拿掉，開頭的空白去掉；在句尾，結尾的空白去掉（含全形空白、tab、換行）；
+    句中的空白一律不動。位置給 #247 卡片標「（拿掉）」用，已經扣掉開頭去掉的字數。"""
+    out, at = "", []
+    for ch in text or "":
+        if ch == DROP_MARK:
+            at.append(len(out))
+        else:
+            out += ch
+    if any(not out[:p].strip() for p in at):
+        lead = len(out) - len(out.lstrip())
+        out = out.lstrip()
+        at = [max(0, p - lead) for p in at]
+    if any(not out[p:].strip() for p in at):
+        out = out.rstrip()
+        at = [min(p, len(out)) for p in at]
+    return out, at
+
+
+DROP_MARK_LEFT = "程式內部錯誤：名字拿掉的記號沒清掉（要念的字裡還有），請回報開發者"
+
+
+def check_no_drop_mark(text: str) -> None:
+    """10-18 #245 小保險：要念的字裡還有 `DROP_MARK` 就丟錯，不要靜默清掉（清掉會藏住漏整理的那條路）。"""
+    if DROP_MARK in (text or ""):
+        raise RuntimeError(DROP_MARK_LEFT)
+
+
+def replace_name(sentence: str, cand: dict) -> str | None:
+    """把句子裡的名字換成代號。依序試：比對到的字、名冊寫法、本名；都找不到回傳 None。
+    10-17 #245：沒有代號（名字拿掉）時，`sentence` 當成整句，句首、句尾留下的空白去掉（見 `finish_drops`）。
+    小段要再接成整句的，用 `mark_name` 再對整句 `finish_drops`。"""
+    new = mark_name(sentence, cand)
+    return None if new is None else finish_drops(new)[0]
 
 
 END_PUNCT = "。！？!?﹖﹗…"          # 句子結束
@@ -422,6 +463,14 @@ def whole_slot(c: dict, d: dict, group: list[dict], words: list[dict] | None,
 
 
 CUT_SKIP = "落在剪掉的片段裡（聲音和畫面都拿掉，不用處理）"
+NO_CODE_SKIP = "這個名字這一集還沒有英文名：照原聲留著（第 3 步「開始前 4 件事」③ 選英文名）"
+
+
+def no_code_keep(c: dict, d: dict | None = None) -> bool:
+    """10-18 #246 修法 5（宇軒）：老師名字卡沒有英文名（代號空的）→ 照原聲留著，不生成成空的（以前名字被拿掉、只剩「來」）。
+    敏感詞（替代詞空的＝刻意拿掉）、人工標的老師整段、人自己改過要念的字（改稿）照舊。"""
+    return (not (c.get("代號") or "").strip() and not c.get("敏感詞") and not c.get("老師整段")
+            and not ((d or {}).get("改稿") or "").strip())
 
 
 def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dict],
@@ -479,6 +528,10 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             mutes.append({"候選": i, "start": round(c["start"] - pad, 3), "end": round(c["end"] + pad, 3)})
             continue
 
+        if no_code_keep(c, d):   # 10-18 #246 修法 5：沒有英文名不生成成空的，照原聲留著（第 4 步提醒、第 5 步「需留意」列出）
+            skipped.append({"候選": i, "原因": NO_CODE_SKIP})
+            continue
+
         if how == NAME_ONLY:
             gen.append({"id": f"N{_num(i)}", "text": c["代號"], "slot": [c["start"] - pad, c["end"] + pad], "候選": [i]})
             continue
@@ -501,7 +554,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         item = whole.get(key)
         # 名字只在原本那一段裡換（避免換到前後段同音的字），再接成整句
         texts = item["_texts"] if item else {g["id"]: g["text"] for g in group}
-        new = replace_name(texts[sid], c)
+        new = mark_name(texts[sid], c)   # 10-18 #245：小段裡先留記號，接成整句後才去句首句尾的空白
         edited = (d.get("改稿") or "").strip()
         if new is None and not item and words:
             # 10-01（17 號 2-7）：找名字掃的是逐字時間的字，句子文字是另一份轉文字結果，寫法可能不一樣
@@ -520,7 +573,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             continue
         if new is not None:     # 找不到字但人已經改好要念的句子（09-30）：照人改的念，不算「要人處理」
             texts[sid] = new    # 10-03 第八批（#12）：同一句另一張卡已經整句改好（改稿）→ 併進那一句，跟縮小範圍的一樣
-        full = "".join(texts[g["id"]] for g in group)
+        full = finish_drops("".join(texts[g["id"]] for g in group))[0]
         lo = min(group[0]["start"], c["start"])   # 名字本身一定包進時間格（句首的字可能比句子早開始）
         hi = max(group[-1]["end"], c["end"])
         if item:
@@ -602,7 +655,7 @@ def _names_in(text: str, cands: list[dict]) -> str | None:
     10-03 補修：同一張卡（同一句同代號）的另一處已經換到的，這一處找不到不算（字已經換成代號了）。"""
     done: set[str] = set()
     for c in cands:
-        new = replace_name(text, c)
+        new = mark_name(text, c)
         if new is None:
             if c.get("同一張卡") and c["同一張卡"] in done:
                 continue
@@ -610,7 +663,7 @@ def _names_in(text: str, cands: list[dict]) -> str | None:
         text = new
         if c.get("同一張卡"):
             done.add(c["同一張卡"])
-    return text
+    return finish_drops(text)[0]   # 10-18 #245：範圍裡的字就是整句，換完才去句首句尾的空白
 
 
 def _add_ranged(ranged: list[dict], manual: list[dict], c: dict, i, d: dict, ws: dict, words: list[dict] | None) -> None:
@@ -782,16 +835,16 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     candidates = names.get("candidates", [])
     candidates = review.effective_name_candidates(workdir, candidates, decisions)   # 人工補的、改過時間的
     decisions = review.card_decisions(candidates, decisions)   # 10-03 補修：一張卡的決定套到同一句同代號的每一處
-    # 1016-3 第二、三輪審查：③ 這一集選了「不用處理／不是名字」、沒有代號的名字 → 照原聲留著（只在計算時略過，不寫回覆核決定），
-    # 但**只限** epcodes.keep_original_names 的那幾種（決定時名冊上沒有這個寫法、或是這一集自己加進名冊的）。
-    # 決定時名冊上就有的選了不用處理／不是名字：照舊換掉或排成「換成空的」把名字拿掉重念（隱私安全網；③ 那列會警告）
+    # 1016-3：③ 這一集選了「不用處理／不是名字」、沒有代號的名字 → 照原聲留著（只在計算時略過，不寫回覆核決定）。
+    # 10-18 #250：名冊上的人也一樣照原聲（推翻 1016-3「決定時名冊上就有的照樣拿掉」）；名冊上是別人的寫法照舊換
+    # （epcodes.kept_spellings）。第 5 步「需留意」列出這些地方（execute.kept_name_rows）
     from bookclub import epcodes
 
     skip3 = epcodes.keep_original_names(workdir)
     if skip3:
         decisions = dict(decisions)
         for i, c in enumerate(candidates, start=1):
-            if not c.get("敏感詞") and not (c.get("代號") or "").strip() and c.get("name") in skip3.get(c.get("canonical"), ()):
+            if epcodes.is_kept_original(c, skip3):
                 k = str(c.get("id") or i)
                 d = dict(decisions.get(k) or {})
                 d["tags"] = sorted(set(d.get("tags") or []) | {"不是名字"})
@@ -827,6 +880,7 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     table = review.replace_table(workdir)
     for g in plan["生成"]:
         g["text"], _changes = review.replace_real_names(g["text"], table)
+        check_no_drop_mark(g["text"])   # 10-18 #245：要念的字裡不能留著拿掉名字的記號
     if only:
         plan["略過"] = [s for s in plan["略過"] if s["候選"] in set(only)]
         plan["只處理"] = sorted(set(only))

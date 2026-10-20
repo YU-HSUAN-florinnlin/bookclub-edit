@@ -168,7 +168,9 @@ def _privacy_workdir(how: str) -> Path:
     return w
 
 
-def test_2_roster_person_not_needed_removed_from_student_redo():
+def test_2_roster_person_not_needed_kept_in_student_redo():
+    """10-18 #250（推翻 1017 總審查「學員重念稿也拿掉名字」）：名冊上的小華在 ③ 選不用處理／不是名字 →
+    學員重念稿照原聲留著小華（不換、不拿掉），替換表沒有小華那一列；其他人照舊。"""
     try:
         for how in ("不用處理", "不是名字"):
             w = _privacy_workdir(how)
@@ -176,16 +178,16 @@ def test_2_roster_person_not_needed_removed_from_student_redo():
             texts = [it.get("text") or it.get("文字") or "" for it in items]
             hit = [t for t in texts if "沒來" in t]
             assert hit, (how, texts)
-            assert not any("華華" in t or "小華" in t for t in texts), (how, hit)
+            assert any("華華" in t for t in hit), (how, hit)   # 照字念（照原聲留著的名字）
             assert any("艾瑪" in t for t in hit), hit   # 有代號的照舊換代號
             assert any("阿明也是" in t for t in hit), hit   # 沒決定的名冊學員不動（那個由開始前檢查擋）
-            # 第 3 步建議稿也一樣（不再標含本名）
+            # 第 3 步建議稿也一樣：華華照原樣，建議行不寫「拿掉了」
             page = review.page_data(w)
-            flagged = [s["id"] for s in page["項目"] if s.get("含本名") and "沒來" in (s.get("建議稿") or "")]
-            assert not any("華華" in (s.get("建議稿") or "") for s in page["項目"]), (how, flagged)
+            stu = [s for s in page["項目"] if s["類型"] == "學員段落" and "沒來" in (s.get("建議稿") or "")]
+            assert stu and all("華華" in s["建議稿"] and "拿掉了" not in s["建議"]["原因"] for s in stu), (how, stu)
             tab = {r["寫法"]: r for r in epcodes.replace_table(w)}
-            assert tab["華華"].get("拿掉") and not tab["華華"]["代號"], tab["華華"]
-            assert not tab["阿明"].get("拿掉"), tab["阿明"]
+            assert "華華" not in tab and "小華" not in tab, (how, sorted(tab))
+            assert not any(r.get("拿掉") for r in tab.values()), tab
     finally:
         (T._DATA / "名冊.csv").write_text(T._ROSTER, encoding="utf-8")
 
@@ -277,10 +279,11 @@ process.stdout.write(JSON.stringify(out));
 
 def test_5_dropdown_labels_and_hint():
     review_js = (WEB / "review.js").read_text(encoding="utf-8")
-    assert "名冊上的人會把名字拿掉" in review_js
+    # 10-18 #250：不用處理＝照原聲留著（名冊上的人也一樣），說明與 README 不再寫「會把名字拿掉」
+    assert "「不用處理」（照原聲留著）" in review_js and "名冊上的人會把名字拿掉" not in review_js
     assert "名冊上的人選「不用處理」也會拿掉名字" not in review_js
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "名冊上的人會把名字拿掉" in readme and "名冊上的人選「不用處理」也會拿掉名字" not in readme
+    assert "名冊上的人會把名字拿掉" not in readme and "不用處理（照原聲留著，名冊上的人也一樣" in readme
     if not NODE:
         print("（沒有 node，略過選單）")
         return
@@ -290,9 +293,9 @@ def test_5_dropdown_labels_and_hint():
     r = subprocess.run([NODE, str(d / "t.js"), str(REPO_ROOT / "tests" / "web_harness.js"), files],
                        capture_output=True, text=True, check=True)
     out = json.loads(r.stdout)
-    assert 'value="how:不用處理" selected>不用處理（名字照樣拿掉）</option>' in out["a"], out["a"]
-    assert '>不是名字（名字照樣拿掉）</option>' in out["a"], out["a"]
-    assert '>不用處理</option>' in out["b"] and '>不是名字</option>' in out["b"] and "照樣拿掉" not in out["b"], out["b"]
+    assert 'value="how:不用處理" selected>不用處理（照原聲留著）</option>' in out["a"], out["a"]
+    assert '>不是名字（照原聲留著）</option>' in out["a"], out["a"]
+    assert '>不用處理</option>' in out["b"] and '>不是名字</option>' in out["b"] and "照原聲留著" not in out["b"], out["b"]
 
 
 if __name__ == "__main__":

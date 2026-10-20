@@ -49,7 +49,16 @@ def fresh(drop: list[tuple[float, float]] = ()) -> Path:
     m = _r(w / "transcript" / "merged.json")
     m["words"] = [x for x in m["words"] if not any(a <= x["start"] < b for a, b in drop)]
     _w(w / "transcript" / "merged.json", m)
+    _codes(w)
     return w
+
+
+def _codes(w: Path) -> None:
+    """10-18 #246：名字沒有英文名改成照原聲（不生成）；這裡測的是整句換掉，先給這一集的英文名（跟名字候選一樣）。"""
+    from bookclub import turns as turns_mod
+
+    turns_mod.set_name_code(w, "小美", "Amy", add_roster=False)
+    turns_mod.set_name_code(w, "阿明", "Tom", add_roster=False)
 
 
 # ---------- 純函式 ----------

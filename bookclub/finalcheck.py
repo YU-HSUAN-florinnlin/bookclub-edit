@@ -1194,6 +1194,8 @@ def unchanged_rows(workdir: str | Path, log: dict | None) -> list[dict]:
 # (類別, 畫面上的名稱, 一行說明)。依這個順序顯示；名字換不了代號紅字置頂（會念出本名）
 ATTENTION_KINDS = (
     ("名字換不了代號", "名字換不了代號（會念出本名）", "程式在句子裡找不到名字、換不了代號，成品照原聲念出本名"),
+    # 10-18 #250：③ 選了不用處理／不是名字、照原聲留著的名字（名冊上的人也一樣），每一處列出來給人聽一次
+    ("照原聲名字", "照原聲留著的名字（③ 選不用處理或不是名字）", "你在 ③ 選了照原聲留著，請聽一次確定可以留"),
     ("段落外", "學員段落外面的幾秒", "學員段落切短後，句子有幾秒落在段落外面、沒被處理：可能是學員原聲"),
     ("聲紋", "聲音不像老師、沒被處理", "聲音特徵判斷不是老師、不在任何處理裡：可能是漏抓的學員發言（原聲）"),
     ("沒有字", "有人聲但逐字稿沒有字", "這裡如果有提到名字，工具找不到、照原聲留著"),
@@ -1203,9 +1205,14 @@ ATTENTION_KINDS = (
     ("學員是猜的", "學員是程式猜的（保留原聲）", "這幾段太短、學員是程式猜的，又設成保留原聲：猜錯的話是別人的原聲留在成品"),
 )
 PEOPLE_UNSEARCHED = "名冊外的名字這次沒有找（人名清單沒跑成功）：成品裡可能有沒換掉的名字"
+# 10-19 #234：同一句在 web/finalcheck.js 的 fcAttentionHtml 也寫了一次（改字兩處一起改；tests/test_rescan_attention_234.py 會比對）
+RESCAN_UNFINISHED = "這次補找沒做完：剛在 ③ 選的名字，老師講到的其他地方可能沒換掉，請聽一次"
 ATTENTION_NAME = "名字換不了代號"
-ATTENTION_TEXT_KINDS = ("英文代號", "字太少")   # 看的是要念的文字（不是原聲）：只扣剪掉的地方
+# 看的是要念的文字（不是原聲）：只扣剪掉的地方。10-18 #250「照原聲名字」也一樣：同一句因為別的名字重念、學員重念時，
+# 那一句「有被處理」，照原聲類算會被扣光、列不出來（設計草稿風險 5）
+ATTENTION_TEXT_KINDS = ("英文代號", "字太少", "照原聲名字")
 ATTENTION_MIN_S = 0.3   # 扣掉被處理蓋到的地方之後剩不到這麼久就不列（跟「不修改」一樣）
+ATTENTION_NO_MIN_KINDS = ("照原聲名字",)   # 不套 0.3 秒門檻的類別（名字本身很短）
 
 
 def place_attention(rows: list[dict], log: dict | None) -> list[dict]:
@@ -1236,7 +1243,8 @@ def place_attention(rows: list[dict], log: dict | None) -> list[dict]:
             left = [[max(x, rng[0]), min(y, rng[1])] for x, y in left if min(y, rng[1]) > max(x, rng[0])]
         left = [seg for seg in subtract_ranges(left, cuts if kind in ATTENTION_TEXT_KINDS else holes) if seg[1] - seg[0] > 1e-6]
         secs = round(sum(y - x for x, y in left), 3)
-        if secs < ATTENTION_MIN_S:
+        # 10-18 審查：照原聲留著的名字只有名字那幾個字（兩個字的名字常常不到 0.3 秒），不套門檻，剩下有一點就列
+        if secs < (1e-6 if kind in ATTENTION_NO_MIN_KINDS else ATTENTION_MIN_S):
             continue
         segs = [[round(near_output_time(x, plist), 3), round(near_output_time(y, plist), 3)] for x, y in left]
         out.append({"鍵": r.get("key"), "類別": kind, "第3步": r.get("第3步"), "原片": [round(a, 3), round(b, 3)],
@@ -1260,15 +1268,16 @@ def attention_rows(workdir: str | Path, log: dict | None) -> dict:
     有紀錄＝這次成品是新版工具組裝的（第 4 步開始時記了略過的列）；舊的成品回 有紀錄=False、列是空的。"""
     snap = attention_snapshot(workdir)
     unsearched = bool((snap or {}).get("人名清單沒跑成功"))   # 10-08 審查：名冊外的名字這次沒有找
+    rescan = bool((snap or {}).get("補找沒做完"))   # 10-19 #234：第 4 步是在 ③ 補找出錯（放行）的狀態下開始的
     if not log or snap is None:
         return {"有紀錄": snap is not None, "列": [], "總數": 0, "名字": 0, "第4步沒處理": (snap or {}).get("沒處理"),
-                "名冊外沒找": unsearched}
+                "名冊外沒找": unsearched, "補找沒做完": rescan}
     try:
         rows = place_attention(snap.get("列") or [], log)
     except Exception:  # noqa: BLE001 — 算不出來不擋第 5 步
         rows = []
     return {"有紀錄": True, "列": rows, "總數": len(rows), "名字": sum(1 for r in rows if r["名字"]),
-            "第4步沒處理": snap.get("沒處理"), "名冊外沒找": unsearched}
+            "第4步沒處理": snap.get("沒處理"), "名冊外沒找": unsearched, "補找沒做完": rescan}
 
 
 def group_counts(log: dict | None, index: dict | None = None) -> dict[str, int]:
@@ -1766,7 +1775,10 @@ def attention_gaps(att: dict) -> dict:
     text = f"需留意 {n} 處" + (f"（含名字 {m} 處）" if m else "") + "還沒聽過" if n else ""
     if att.get("名冊外沒找"):
         text = "；".join(x for x in (text, "名冊外的名字這次沒有找") if x)
-    return {"需留意": n, "需留意名字": m, "需留意說明": text, "名冊外沒找": bool(att.get("名冊外沒找"))}
+    if att.get("補找沒做完"):   # 10-19 #234
+        text = "；".join(x for x in (text, "③ 剛選的名字這次補找沒做完") if x)
+    return {"需留意": n, "需留意名字": m, "需留意說明": text, "名冊外沒找": bool(att.get("名冊外沒找")),
+            "補找沒做完": bool(att.get("補找沒做完"))}
 
 
 def export_final(workdir: str | Path, confirm: bool = False) -> dict:
@@ -1800,7 +1812,7 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
                 raise ValueError("還不能輸出：" + "；".join(gaps["擋下"]))
             return {"ok": False, "要確認": True, "不能輸出": True, "還差": gaps}
         if (not st["可以輸出"] or gaps["提醒"] or gaps["名字提醒"] or gaps["需留意名字"] or gaps["名冊外沒找"]
-                or gaps["不是最新版本"]) and not confirm:
+                or gaps.get("補找沒做完") or gaps["不是最新版本"]) and not confirm:
             return {"ok": False, "要確認": True, "還差": gaps}
         src = workdir / check["成品影片"]
         src_print = product_print(src)   # 10-13 審查修正二（順手）：複製前先記指紋，複製途中第 4 步換檔也記得到複製的那份

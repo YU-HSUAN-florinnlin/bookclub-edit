@@ -468,6 +468,7 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .rv-who { margin: 0 0 6px; font-size: 15px; color: var(--muted); }
 .rv-quote { margin: 0 0 6px; }
 .rv-quote mark, .rv-note mark { background: #ffe8a3; color: #3a2a00; border-radius: 3px; padding: 0 2px; }
+.rv-quote mark.rv-drop, .rv-note mark.rv-drop, .rv-warnline mark.rv-drop { background: transparent; color: var(--muted, #888); font-size: 0.9em; padding: 0; }   /* 10-17 #247：名字拿掉的地方，只在畫面上標 */
 .rv-note { font-size: 15px; color: var(--muted); margin: 6px 0; }
 .rv-pair { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
 .rv-pair dt { color: var(--muted); font-size: 15px; }

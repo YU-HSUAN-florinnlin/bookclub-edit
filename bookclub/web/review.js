@@ -1111,6 +1111,16 @@ function rvNamePickValue(u) {
   return "";
 }
 
+// 10-19 宇軒：「也寫成」「卡片上寫成」合成一句「逐字稿中出現的相似名稱：」（其他寫法在前、卡片上抓到的字在後，不重複；讀音比對配到的保留「（讀音相近）」）
+function rvSimilarNames(u) {
+  const seen = new Set(), out = [];
+  for (const w of [...(u["其他寫法"] || []), ...(u["卡片上寫成"] || [])]) {
+    const key = String(w).replace(/（讀音相近）$/, "");
+    if (!seen.has(key)) { seen.add(key); out.push(w); }
+  }
+  return out.length ? "・逐字稿中出現的相似名稱：" + esc(out.join("、")) : "";
+}
+
 function rvNamePickOpts(u) {
   const cur = rvNamePickValue(u);
   const curCode = u["做法"] === "換成代號" ? (u["代號"] || "") : "";
@@ -1136,7 +1146,8 @@ function rvNamePickOpts(u) {
     `<option value="${esc(`code:${c}`)}" ${sel(`code:${c}`)}>${esc(c + note(c))}</option>`).join("")}</optgroup>`));
   if (curCode && !all.includes(curCode)) out.push(`<option value="${esc(`code:${curCode}`)}" selected>${esc(curCode)}</option>`);
   out.push('<option value="code:__new">自己打一個英文名…</option>');
-  const drop = u["名冊上的人"] ? "（名字照樣拿掉）" : "";   // 1017 總審查：名冊上的人選這兩個，成品照樣把名字拿掉
+  // 10-18 #250：名冊上的人選這兩個也照原聲留著（推翻 1016-3「名字照樣拿掉」）；這一集有英文名的照樣換（題 1 選 B）
+  const drop = u["名冊上的英文名"] ? `（照樣換成 ${esc(u["名冊上的英文名"])}）` : u["名冊上的人"] ? "（照原聲留著）" : "";
   out.push(`<option value="how:不是名字" ${sel("how:不是名字")}>不是名字${drop}</option>`);
   out.push(`<option value="how:不用處理" ${sel("how:不用處理")}>不用處理${drop}</option>`);
   return out.join("");
@@ -1151,11 +1162,11 @@ function rvNameRowHtml(u) {
   const state = saving ? '<span class="rv-meta rv-saving">存檔中…</span>'
     : u["已決定"] ? (u["自動配"] ? '<span class="rv-tag" title="程式自動配的，不用改就不用動">自動配</span>' : "")
     : u["做法"] ? `<span class="rv-meta">（建議，還沒確認）</span>${confirmBtn}` : '<span class="rv-warnline">還沒決定</span>';
-  return `<li class="rv-person" data-unname="${esc(u["名字"])}"><div class="nm"><b>${esc(u["名字"])}</b><span class="rv-meta">${who(u)}・${cntOf(u)}（老師 ${u["老師說"]}、學員 ${u["學員說"]}）${u["其他寫法"].length ? "・也寫成 " + esc(u["其他寫法"].join("、")) : ""}</span></div>
+  return `<li class="rv-person" data-unname="${esc(u["名字"])}"><div class="nm"><b>${esc(u["名字"])}</b><span class="rv-meta">${who(u)}・${cntOf(u)}（老師 ${u["老師說"]}、學員 ${u["學員說"]}）${rvSimilarNames(u)}</span></div>
       <div class="ctl"><button class="ghost small rv-segplay" data-t="${u["第一次"]}">試聽第一次出現</button>
         <select class="rv-unpick" data-name="${esc(u["名字"])}" data-cur="${esc(rvNamePickValue(u))}" aria-label="${esc(u["名字"])}要怎麼換" ${saving ? "disabled" : ""}>${rvNamePickOpts(u)}</select>
         ${state}</div>
-      ${u["名冊上的人會拿掉"] ? '<p class="rv-warnline rv-ownwarn">這是名冊上的人，成品會把名字拿掉重念</p>' : ""}${u["名冊現在有"] ? '<p class="rv-meta">選的時候名冊還沒有，現在有了；這一集照原聲留著</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
+      ${u["名冊上的人照原聲"] ? '<p class="rv-meta rv-ownwarn">照原聲留著，第 5 步「需留意」會列出來</p>' : ""}${u["照樣換成英文名"] ? `<p class="rv-meta rv-ownwarn">這位這一集有英文名，照樣換成 ${esc(u["照樣換成英文名"])}</p>` : ""}${u["名冊現在有"] ? '<p class="rv-meta">選的時候名冊還沒有，現在有了；這一集照原聲留著</p>' : ""}${u["說明"] ? `<p class="rv-meta">${esc(u["說明"])}</p>` : ""}</li>`;
 }
 
 function rvNameCountHtml() {
@@ -1191,7 +1202,7 @@ function rvPrepNamesHtml() {
   return `${peopleWarn}${rvDupHtml()}${rvAutoHtml()}<div class="rv-meta">每個名字選一項：<ul class="rv-bullets">
     <li>是 ② 的學員（轉錯字、暱稱）→「同一人：…」</li>
     <li>其他人（家人朋友、沒登記的人）→ 挑一個英文名</li>
-    <li>書中人物、公眾人物 →「不用處理」（名冊上的人會把名字拿掉）</li>
+    <li>書中人物、公眾人物 →「不用處理」（照原聲留著）</li>
     <li>抓錯的 →「不是名字」</li></ul></div>
     ${rvRescanLineHtml()}
     <p class="rv-meta" id="rvNameCount">${rvNameCountHtml()}</p>
