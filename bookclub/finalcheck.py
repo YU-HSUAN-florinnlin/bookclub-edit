@@ -1207,6 +1207,8 @@ ATTENTION_KINDS = (
 PEOPLE_UNSEARCHED = "名冊外的名字這次沒有找（人名清單沒跑成功）：成品裡可能有沒換掉的名字"
 # 10-19 #234：同一句在 web/finalcheck.js 的 fcAttentionHtml 也寫了一次（改字兩處一起改；tests/test_rescan_attention_234.py 會比對）
 RESCAN_UNFINISHED = "這次補找沒做完：剛在 ③ 選的名字，老師講到的其他地方可能沒換掉，請聽一次"
+# 10-20 總審查：第 4 步開始時「照原聲留著的名字」算不出來（清單是空的，不代表沒有）。同一句也寫在 fcAttentionHtml（改字兩處一起改）
+KEPT_UNLISTED = "照原聲留著的名字這次算不出來，下面沒有列出：③ 選不用處理、不是名字，或還沒有英文名的名字，請自己聽一次"
 ATTENTION_NAME = "名字換不了代號"
 # 看的是要念的文字（不是原聲）：只扣剪掉的地方。10-18 #250「照原聲名字」也一樣：同一句因為別的名字重念、學員重念時，
 # 那一句「有被處理」，照原聲類算會被扣光、列不出來（設計草稿風險 5）
@@ -1269,15 +1271,17 @@ def attention_rows(workdir: str | Path, log: dict | None) -> dict:
     snap = attention_snapshot(workdir)
     unsearched = bool((snap or {}).get("人名清單沒跑成功"))   # 10-08 審查：名冊外的名字這次沒有找
     rescan = bool((snap or {}).get("補找沒做完"))   # 10-19 #234：第 4 步是在 ③ 補找出錯（放行）的狀態下開始的
+    kept_fail = bool((snap or {}).get("照原聲名字算不出來"))   # 10-20 總審查：照原聲留著的名字這次沒列出來
     if not log or snap is None:
         return {"有紀錄": snap is not None, "列": [], "總數": 0, "名字": 0, "第4步沒處理": (snap or {}).get("沒處理"),
-                "名冊外沒找": unsearched, "補找沒做完": rescan}
+                "名冊外沒找": unsearched, "補找沒做完": rescan, "照原聲名字算不出來": kept_fail}
     try:
         rows = place_attention(snap.get("列") or [], log)
     except Exception:  # noqa: BLE001 — 算不出來不擋第 5 步
         rows = []
     return {"有紀錄": True, "列": rows, "總數": len(rows), "名字": sum(1 for r in rows if r["名字"]),
-            "第4步沒處理": snap.get("沒處理"), "名冊外沒找": unsearched, "補找沒做完": rescan}
+            "第4步沒處理": snap.get("沒處理"), "名冊外沒找": unsearched, "補找沒做完": rescan,
+            "照原聲名字算不出來": kept_fail}
 
 
 def group_counts(log: dict | None, index: dict | None = None) -> dict[str, int]:
@@ -1777,8 +1781,10 @@ def attention_gaps(att: dict) -> dict:
         text = "；".join(x for x in (text, "名冊外的名字這次沒有找") if x)
     if att.get("補找沒做完"):   # 10-19 #234
         text = "；".join(x for x in (text, "③ 剛選的名字這次補找沒做完") if x)
+    if att.get("照原聲名字算不出來"):   # 10-20 總審查：清單空的不代表沒有，提一句（不擋）
+        text = "；".join(x for x in (text, "照原聲留著的名字這次算不出來、沒有列出") if x)
     return {"需留意": n, "需留意名字": m, "需留意說明": text, "名冊外沒找": bool(att.get("名冊外沒找")),
-            "補找沒做完": bool(att.get("補找沒做完"))}
+            "補找沒做完": bool(att.get("補找沒做完")), "照原聲名字算不出來": bool(att.get("照原聲名字算不出來"))}
 
 
 def export_final(workdir: str | Path, confirm: bool = False) -> dict:
@@ -1812,7 +1818,7 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
                 raise ValueError("還不能輸出：" + "；".join(gaps["擋下"]))
             return {"ok": False, "要確認": True, "不能輸出": True, "還差": gaps}
         if (not st["可以輸出"] or gaps["提醒"] or gaps["名字提醒"] or gaps["需留意名字"] or gaps["名冊外沒找"]
-                or gaps.get("補找沒做完") or gaps["不是最新版本"]) and not confirm:
+                or gaps.get("補找沒做完") or gaps.get("照原聲名字算不出來") or gaps["不是最新版本"]) and not confirm:
             return {"ok": False, "要確認": True, "還差": gaps}
         src = workdir / check["成品影片"]
         src_print = product_print(src)   # 10-13 審查修正二（順手）：複製前先記指紋，複製途中第 4 步換檔也記得到複製的那份

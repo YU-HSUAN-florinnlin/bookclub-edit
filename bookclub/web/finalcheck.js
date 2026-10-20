@@ -1495,6 +1495,8 @@ function fcAttentionHtml(att, kinds, flat) {
     ${att["名冊外沒找"] ? `<p class="fc-export-names"><b>⚠️ 名冊外的名字這次沒有找（人名清單沒跑成功）：成品裡可能有沒換掉的名字。</b>到第 1 步按「重新分析（做完的會跳過）」補跑，再回第 3 步 ③ 決定、重新組裝。</p>` : ""}
     ${/* 10-19 #234：字跟 finalcheck.py 的 RESCAN_UNFINISHED 一樣，改字兩處一起改 */ ""}
     ${att["補找沒做完"] ? `<p class="fc-export-names" id="fcRescanUnfinished"><b>⚠️ 這次補找沒做完：剛在 ③ 選的名字，老師講到的其他地方可能沒換掉，請聽一次。</b></p>` : ""}
+    ${/* 10-20 總審查：字跟 finalcheck.py 的 KEPT_UNLISTED 一樣，改字兩處一起改 */ ""}
+    ${att["照原聲名字算不出來"] ? `<p class="fc-export-names" id="fcKeptUnlisted"><b>⚠️ 照原聲留著的名字這次算不出來，下面沒有列出：③ 選不用處理、不是名字，或還沒有英文名的名字，請自己聽一次。</b></p>` : ""}
     ${att["第4步沒處理"] != null ? `<p class="rv-meta">這次執行時總檢查有 ${att["第4步沒處理"]} 列沒處理（含請看一眼），其中 ${rows.length} 處成品裡還留著原聲。</p>` : ""}`;
   if (!rows.length) return `${head}<p>沒有要留意的地方。</p>`;
   const defs = (kinds || []).slice();

@@ -184,8 +184,17 @@ def precheck(workdir: str | Path) -> dict:
     from bookclub import epcodes
 
     lack_codes = epcodes.missing(workdir)
+    # 10-20 總審查：名字處理計畫只排一次，下面兩個檢查共用（第 4 步執行中網頁每 2 秒查一次，WSL 上多排一次很吃 CPU）
+    plan = None
+    if wd.read_json(wd.names_path(workdir), default=None):
+        from bookclub import nameplan
+
+        try:
+            plan = nameplan.compute_plan(workdir)
+        except Exception:  # noqa: BLE001 — 排不出計畫的話，生成那一步會講清楚
+            plan = None
     try:   # 10-18 #246 修法 5：沒有英文名的照原聲留著（真的不重念、不拿掉），寫清楚是哪幾處
-        no_code = no_code_rows(workdir)
+        no_code = no_code_rows(workdir, plan)
     except Exception:  # noqa: BLE001 — 算不出來就照名字數提醒
         no_code = []
     if no_code:
@@ -194,13 +203,8 @@ def precheck(workdir: str | Path) -> dict:
     elif lack_codes:
         notes.append(f"有 {len(lack_codes)} 個名字這一集還沒有代號（不擋）：用到的地方照原聲留著。"
                      "要換的話到第 3 步 ③ 選，或按第 4 步的「幫還沒代號的自動配」")
-    if wd.read_json(wd.names_path(workdir), default=None):
-        from bookclub import nameplan
-
-        try:
-            stuck = nameplan.compute_plan(workdir)["要人處理"]
-        except Exception:  # noqa: BLE001 — 排不出計畫的話，生成那一步會講清楚
-            stuck = []
+    if plan is not None:
+        stuck = plan.get("要人處理") or []
         if stuck:   # 10-08 宇軒：名字那道關卡不擋，第 5 步「需留意」紅字列出來
             notes.append(f"老師提到名字有 {len(stuck)} 筆換不了代號（不擋）：句子裡找不到名字，成品會照原聲念出來；"
                          "做完到第 5 步「需留意」看得到是哪幾處")
@@ -1959,11 +1963,15 @@ def skipped_snapshot(workdir: str | Path) -> dict | None:
         snap["猜的學員"] = len(guess)
         try:   # 10-18 #250：照原聲留著的名字；#246：沒有英文名、照原聲留著的地方
             kept_rows = kept_name_rows(workdir) + no_code_rows(workdir)
+            kept_failed = False
         except Exception as e:  # noqa: BLE001 — 算不出來不擋執行；第 5 步就少這一類
             print(f"[AI 執行] ⚠️ 照原聲留著的名字算不出來（第 5 步「需留意」這次不會列）：{type(e).__name__}")
-            kept_rows = []
+            kept_rows, kept_failed = [], True
         snap["列"] += kept_rows
         snap["照原聲名字"] = len(kept_rows)
+        # 10-20 總審查：算不出來時清單是空的，第 5 步看起來像「沒有照原聲的名字」→ 照「補找沒做完」的做法記下來，
+        # 第 5 步「需留意」與輸出確認視窗各提一句（不擋）
+        snap["照原聲名字算不出來"] = kept_failed
         snap["人名清單沒跑成功"] = bool(review.people_list_missing(Path(workdir)))
         try:   # 10-19 #234：③ 補找出錯、按第二次放行開始的——第 5 步「需留意」列一行（補找成功後重跑第 4 步就不再列）
             from bookclub import personnames
