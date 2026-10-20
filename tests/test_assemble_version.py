@@ -36,7 +36,7 @@ TAG = "0-3"
 # 組裝相關程式 → 記下的雜湊（SHA-256 前 16 碼）。改了請看檔頭說明。
 ASSEMBLE_FILES_VERSION = 1
 ASSEMBLE_FILES = {   # 10-17 #122 第 1 版的起點
-    "bookclub/render.py": "1ff34b63373c060e",
+    "bookclub/render.py": "4b6ba50d0447bb5a",   # 10-20 總審查 1020-1：輸出摘要多記老師、學員名字計畫指紋，這次沒改成品的聲音和畫面
     "bookclub/assemble.py": "c29a103f9b113d70",
     "bookclub/roomtone.py": "4ea9c4a050cbe090",
     "bookclub/silentedge.py": "6715c0e2b51c5ee8",
@@ -52,6 +52,9 @@ def _digest(rel: str) -> str:
 def _done_workdir(summary_extra: dict | None = None) -> Path:
     """假工作區＋一支比所有輸入檔都新、驗證通過的成品（基準：render_done 應該說做過了）。"""
     w = fake_workdir.make(Path(tempfile.mkdtemp()) / "w")
+    from bookclub import nameplan
+
+    nameplan.refresh_plan(w)   # 10-20 總審查：組裝過的工作區一定有計畫檔（第 4 步開頭會排），render_done 會比內容
     out = w / "輸出"
     out.mkdir(exist_ok=True)
     summ = {"輸出": {"sw": {"驗證": {"通過": True}}}, "底噪挑法": roomtone.METHOD}

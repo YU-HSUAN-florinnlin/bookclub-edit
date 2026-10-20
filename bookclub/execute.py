@@ -1230,10 +1230,17 @@ def render_done(workdir: Path, tag: str, methods: list[str]) -> tuple[bool, str]
     outs = [product_path(workdir, tag, m) for m in methods]   # 10-15 第5步2.0 第3段：檔名帶版本號，看最新那一支
     if not all(p.exists() for p in outs):
         return False, "還沒組裝"
-    newest_in = max((p.stat().st_mtime for p in render_inputs(workdir)), default=0.0)
+    summ = wd.read_json(workdir / "輸出" / f"輸出摘要_{tag}.json", default=None) or {}
+    inputs = render_inputs(workdir)
+    if summ.get("老師名字計畫指紋") is not None:
+        # 10-20 總審查：摘要記了組裝用的老師名字計畫指紋 → 計畫檔改看內容（name_plan_changed），不看修改時間：
+        # 每次開始執行都重排計畫，只有略過、要人處理這類不影響成品的部分變了也會重寫檔，不該因此重新組裝
+        from bookclub import nameplan
+
+        inputs = [p for p in inputs if p != nameplan.plan_path(workdir)]
+    newest_in = max((p.stat().st_mtime for p in inputs), default=0.0)
     if min(p.stat().st_mtime for p in outs) < newest_in:
         return False, "覆核或生成結果比成品新，要重新組裝"
-    summ = wd.read_json(workdir / "輸出" / f"輸出摘要_{tag}.json", default=None) or {}
     bad = [m for m in methods if not ((summ.get("輸出") or {}).get(m, {}).get("驗證") or {}).get("通過")]
     if bad:
         return False, f"成品沒有通過驗證（{'、'.join(bad)}），要重新組裝"
@@ -1245,7 +1252,69 @@ def render_done(workdir: Path, tag: str, methods: list[str]) -> tuple[bool, str]
 
     if summ.get("組裝做法版本", 1) != render.ASSEMBLE_VERSION:   # 10-17 #122：舊摘要沒這一欄當第 1 版
         return False, "工具更新改了組裝做法，要重新組裝（生成好的聲音沿用）"
+    if name_plan_changed(workdir, tag, summ):
+        return False, NAME_PLAN_CHANGED
     return True, "成品比覆核、生成結果都新"
+
+
+NAME_PLAN_CHANGED = "名字的處理方式改了，要重新組裝（生成好的聲音沿用）"
+_STU_NAME_KINDS = ("學員名字消音", "學員名字換代號")
+
+
+def name_plan_changed(workdir: Path, tag: str, summ: dict) -> bool:
+    """10-20 總審查：舊工作區升級（例如 #250 改成照原聲）或在 ③ 改了人名決定之後，現在排出來的名字處理計畫
+    跟這支成品組裝時用的不一樣，但檔案修改時間看不出來（③ 的人名決定不在 `render_inputs` 裡、保留原聲學員那份
+    計畫沒有存成檔），以前步驟表說做過了、成品還是舊做法。這裡直接比內容（`nameplan.plan_key`，順序與時間戳不算）：
+    - 老師：現在排的（`nameplan.current_plan`）與計畫檔 vs 輸出摘要記的 `老師名字計畫指紋`（只看生成、消音）；
+      舊版摘要沒這一欄 → 現在排的跟計畫檔整份比（跟 `_write_plan` 要不要重寫同一個判斷：開始執行時會重寫、
+      檔案時間變新就會重新組裝，步驟表先說出來）
+    - 保留原聲學員：現在排的（`studentnames.plan`）vs 輸出摘要記的 `學員名字計畫指紋`；
+      舊版摘要沒這一欄 → 拿 `剪輯決策_{tag}.json` 裡實際處理的學員名字比（`_stu_names_differ`）"""
+    import json
+
+    from bookclub import nameplan, studentnames
+
+    now = nameplan.current_plan(workdir)
+    used = wd.read_json(nameplan.plan_path(workdir), default=None)
+    fp_t = summ.get("老師名字計畫指紋")
+    if fp_t is not None:
+        if fp_t != nameplan.plan_key(now) or (used is not None and fp_t != nameplan.plan_key(used)):
+            return True
+    elif (now is not None or used is not None) and \
+            json.loads(json.dumps(now or {}, ensure_ascii=False)) != (used or {}):
+        return True
+    try:
+        sp = studentnames.plan(workdir)
+    except FileNotFoundError:
+        sp = {}
+    fp = summ.get("學員名字計畫指紋")
+    if fp is not None:
+        return fp != nameplan.plan_key(sp)
+    edl = wd.read_json(workdir / "輸出" / f"剪輯決策_{tag}.json", default=None)
+    return _stu_names_differ(sp, edl) if edl is not None else False
+
+
+def _stu_names_differ(sp: dict, edl: dict) -> bool:
+    """10-20 總審查：舊版（0.2.2b3 以前）組裝沒記學員名字計畫的指紋 → 比「成品實際處理了哪些學員名字」。
+    成品處理了、現在不處理（例如 #250 起照原聲留著）→ 不一樣；現在要處理、成品沒處理，而且不是落在剪掉的片段
+    或被別的動作整個蓋過 → 不一樣。只會在這一版第一次判斷時用到（重新組裝後摘要就有指紋）。"""
+    acts = edl.get("動作") or []
+    done = {str(c) for e in acts if e.get("類型") in _STU_NAME_KINDS for c in (e.get("候選") or [])}
+    want = {str(m["id"]): (m["start"], m["end"]) for m in sp.get("消音") or []}
+    for g in sp.get("生成") or []:
+        for c in g.get("候選") or []:
+            want.setdefault(str(c), tuple(g["slot"]))
+    if done - set(want):
+        return True
+    a, b = (edl.get("範圍") or [0.0, 1e12])[:2]
+    spans = [(float(x), float(y)) for x, y in edl.get("刪除") or []] + \
+            [(float(e["start"]), float(e["end"])) for e in acts if e.get("類型") not in _STU_NAME_KINDS]
+    for cid, (s, t) in want.items():
+        if cid in done or not (s < b and a < t):
+            continue
+        if not any(x <= s and t <= y for x, y in spans):
+            return True
+    return False
 
 
 # ---------- 串起來 ----------

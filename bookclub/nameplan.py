@@ -821,6 +821,41 @@ def refresh_plan(workdir: str | Path) -> dict | None:
         return None
 
 
+def current_plan(workdir: str | Path) -> dict | None:
+    """10-20 總審查：第 4 步開頭 `refresh_plan` 會寫進計畫檔的那一份（不寫檔）；不用排的回 None。
+    給 `execute.render_done` 比對「組裝用的計畫檔」是不是還是現在的做法。"""
+    workdir = Path(workdir).expanduser()
+    names = wd.read_json(wd.names_path(workdir), default=None)
+    if names:
+        return compute_plan(workdir, names)
+    exported = wd.read_json(workdir / IMPORTED_PATH, default=None) if (workdir / IMPORTED_PATH).exists() else None
+    if exported and exported.get("名字處理計畫") is not None:
+        return exported["名字處理計畫"]
+    return None
+
+
+PLAN_KEY_PARTS = ("生成", "消音")   # 會改變成品的部分（略過、要人處理只影響提醒，不影響聲音）
+_PLAN_KEY_SKIP = ("更新時間", "時間戳", "產生時間")
+
+
+def plan_key(plan: dict | None) -> str:
+    """10-20 總審查：名字處理計畫（老師或保留原聲學員那一份）會影響成品的內容做成一個指紋。
+    只看生成、消音；每一筆的順序、時間戳不算（排序不同、重寫一次不會被當成改了做法）。"""
+    import hashlib
+
+    def clean(x):
+        if isinstance(x, dict):
+            return {k: clean(v) for k, v in x.items() if k not in _PLAN_KEY_SKIP}
+        if isinstance(x, list):
+            return [clean(v) for v in x]
+        return x
+
+    plan = json.loads(json.dumps(plan or {}, ensure_ascii=False))   # 跟寫進檔案後讀回來的一樣（tuple→list 等）
+    body = {k: sorted((json.dumps(clean(e), ensure_ascii=False, sort_keys=True) for e in plan.get(k) or []))
+            for k in PLAN_KEY_PARTS}
+    return hashlib.sha1(json.dumps(body, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
 def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | None = None) -> dict:
     """排出處理計畫（不寫檔）：`make_plan` 與匯出覆核結果共用，兩邊排出來的計畫一定一樣。"""
     workdir = Path(workdir).expanduser()

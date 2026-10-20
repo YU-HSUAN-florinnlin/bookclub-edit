@@ -297,7 +297,10 @@ def build_decisions(workdir: Path, a: float, b: float, *, demo_freeze: bool = Fa
     mark_freeze_offsets(kept, freezes)
     return {"範圍": [a, b], "刪除": cuts, "動作": kept, "停格": sorted(freezes, key=lambda f: f["at"]),
             "模糊": blur, "標記": marks, "警告": warnings, "警告明細": details, "學員聲線": voices, "重疊沒處理": left,
-            "名字沒處理": name_left}
+            "名字沒處理": name_left,
+            # 10-20 總審查：這次組裝用的名字處理計畫（老師那份讀檔、保留原聲學員那份沒有存成檔）記個指紋，
+            # 第 4 步看名字的處理方式改了沒有（execute.name_plan_changed）
+            "老師名字計畫指紋": nameplan.plan_key(plan), "學員名字計畫指紋": nameplan.plan_key(stu_plan)}
 
 
 def mark_freeze_offsets(kept: list[dict], freezes: list[dict]) -> None:
@@ -1208,7 +1211,7 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
                "停格秒": round(sum(f["dur"] for f in d["停格"]), 3), "預期成品秒": round(expected, 3),
                "片段數": len(plist), "聲音處理秒": round(audio_s, 1), "動作數": len(d["動作"]),
                "警告": d["警告"], "輸出": {}, "底噪挑法": roomtone_method(),
-               "組裝做法版本": ASSEMBLE_VERSION}
+               "組裝做法版本": ASSEMBLE_VERSION, "老師名字計畫指紋": d.get("老師名字計畫指紋"), "學員名字計畫指紋": d.get("學員名字計畫指紋")}
     old = wd.read_json(out / f"輸出摘要_{tag}.json", default=None) or {}
     if old.get("範圍") == [a, b]:
         summary["輸出"] = old.get("輸出", {})   # 只重跑某幾種做法時，其他做法的紀錄留著
