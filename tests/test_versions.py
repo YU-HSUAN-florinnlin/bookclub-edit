@@ -624,6 +624,9 @@ def test_render_video_names_with_version_after_upgrade():
     w = te._fresh()
     prod, _old = sk._with_product(w)
     tn._quiet(needs.upgrade, w)
+    from bookclub import nameplan
+
+    tn._quiet(nameplan.refresh_plan, w)   # 10-20 總審查：跟第 4 步一樣先排名字處理計畫（render_done 會比組裝用的計畫）
     n = needs.next_version_no(w)
     with sk._FakeRender(w, fail=True):
         try:
