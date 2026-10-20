@@ -1146,7 +1146,7 @@ function rvNamePickOpts(u) {
     `<option value="${esc(`code:${c}`)}" ${sel(`code:${c}`)}>${esc(c + note(c))}</option>`).join("")}</optgroup>`));
   if (curCode && !all.includes(curCode)) out.push(`<option value="${esc(`code:${curCode}`)}" selected>${esc(curCode)}</option>`);
   out.push('<option value="code:__new">自己打一個英文名…</option>');
-  // 10-18 #250：名冊上的人選這兩個也照原聲留著（推翻 1016-3「名字照樣拿掉」）；這一集有英文名的照樣換（題 1 選 B）
+  // 10-18 #250：名冊上的人選這兩個也照原聲留著（推翻 1016-3 名冊上的人要拿掉名字的舊規則）；這一集有英文名的照樣換（題 1 選 B）
   const drop = u["名冊上的英文名"] ? `（照樣換成 ${esc(u["名冊上的英文名"])}）` : u["名冊上的人"] ? "（照原聲留著）" : "";
   out.push(`<option value="how:不是名字" ${sel("how:不是名字")}>不是名字${drop}</option>`);
   out.push(`<option value="how:不用處理" ${sel("how:不用處理")}>不用處理${drop}</option>`);
