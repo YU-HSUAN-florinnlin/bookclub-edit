@@ -634,19 +634,23 @@ def card_stats_line(workdir: str | Path) -> str:
             cards, cross = part["卡片"], part["跨版本卡片"]
         else:
             cards, cross = finalcards.version_page(w, n, None)["卡片"], []
-        ok = seen = back = carry = todo = 0
+        ok = seen = back = todo = keep = 0
+        carry = {needs.PASSED: 0, needs.NOT_SEEN: 0, needs.RETURNED: 0}   # 沿用上一版：照之前最近那一版的狀態拆開
         listed: set[str] = set()
         for c in cards + cross:
-            listed.add(str(c.get("卡號")))
+            k = str(c.get("卡號"))
+            listed.add(k)
             if c.get("刪掉了"):
                 continue
-            if c.get("跨版本"):
-                todo += 1
-            elif c.get("這一版沒處理到"):
-                if finalcards.passed_ok(c) and c.get("狀態") != finalcards.EDITED:
-                    carry += 1
-                else:
+            if c.get("跨版本") or c.get("這一版沒處理到"):
+                # 10-20 宇軒定（甲）：範圍外的卡（第 5 步的沿用卡、跨版本卡）都算沿用上一版，狀態照之前最近那一版；
+                # 按過「要修改」（已改，等重做）的才是還沒處理。沒有之前那一版的（看舊版時、之後的版本才做的）也是還沒處理
+                old = finalcards._older_row(st, k, n)
+                s3 = (old[1].get("狀態") if old else None)
+                if c.get("狀態") == finalcards.EDITED or c.get("範圍外改了") or s3 not in carry:
                     todo += 1
+                else:
+                    carry[s3] += 1
             elif c.get("狀態") == needs.PASSED:
                 ok += 1
             elif c.get("狀態") == needs.RETURNED:
@@ -655,12 +659,28 @@ def card_stats_line(workdir: str | Path) -> str:
                 seen += 1
             else:   # 還沒生成、已改，等重做
                 todo += 1
-        keep = sum(1 for k, c in st.cards.items() if c.get("狀態") == needs.ALIVE and k not in listed)
+        # 第 5 步清單沒列的有效卡：預設是第 3 步選定不修改。10-20 審查建議 3：照 `finalcards._from_needs` 同一套判斷，
+        # 那一版之後才建的（第 5 步新增還沒生成）、有等重做的、第 3 步改成要處理的 → 還沒處理（看舊版那條路才會遇到）
+        v = st.versions[n]
+        vtime = str(v.get("建立時間") or "")
+        hist = needs.read_history(w) if v.get("其他卡指紋") is None else None
+        for k, c in st.cards.items():
+            if c.get("狀態") != needs.ALIVE or k in listed:
+                continue
+            if (c.get("等重做") or str(c.get("建立時間") or "") > vtime
+                    or finalcards._step3_turned_on(st, k, c, v, hist)):
+                todo += 1
+            else:
+                keep += 1
     except Exception:  # noqa: BLE001 — 讀不到就寫查不到，不擋打包
         return "卡片：查不到"
     detail = f"人工確認過 {ok}、還沒確認 {seen}" + (f"、退回 {back}" if back else "")
     parts = [f"做進成品 {ok + seen + back} 張（{detail}）"]
-    parts += [f"沿用上一版 {carry} 張"] if carry else []
+    w_n = sum(carry.values())
+    if w_n:
+        sub = [f"{name} {carry[key]}" for key, name in ((needs.PASSED, "人工確認過"), (needs.NOT_SEEN, "還沒確認"),
+                                                          (needs.RETURNED, "退回")) if carry[key]]
+        parts += [f"沿用上一版 {w_n} 張" + ("" if carry[needs.PASSED] == w_n else f"（{'、'.join(sub)}）")]
     parts += [f"還沒處理 {todo} 張"] if todo else []
     parts += [f"第 3 步選定不修改 {keep} 張"] if keep else []
     return "卡片：" + "；".join(parts) + "。"
@@ -669,28 +689,31 @@ def card_stats_line(workdir: str | Path) -> str:
 def voice_match(workdir: str | Path) -> tuple[bool | None, int]:
     """10-19 #253（宇軒選甲）：打包帶的是現在的生成聲音；拿最後輸出那一版的處理紀錄（`修改需求/版本/vN/處理紀錄.json`）
     每一筆的 `檔案指紋`（`proclog.stamp_contents` 寫的生成檔內容 sha1 前 16 碼）跟現在的檔重算比對。
-    回 (同一版, 不一樣的筆數)：True＝都一樣；False＝有之後又生成過的（檔不在也算不一樣）；None＝查不到（舊紀錄沒指紋、
-    對不到那一版）。只讀。"""
+    回 (同一版, 不一樣的檔數)：True＝都一樣；False＝有之後又生成過的（檔不在也算不一樣；同一個檔被好幾筆用到只算一個）；
+    None＝查不到（舊紀錄沒指紋、對不到那一版、內容格式不對——10-20 審查：整個包起來，不能讓打包在最後一步失敗）。只讀。"""
     from bookclub import proclog
 
     w = Path(workdir)
     try:
         _n, log = last_output_log(w)
-    except Exception:  # noqa: BLE001
-        log = None
-    recs = [r for r in (log or {}).get("紀錄") or [] if isinstance(r, dict) and r.get("檔案")]
-    if log is None or any(not r.get("檔案指紋") for r in recs):
-        return None, 0
-    cache: dict[str, str | None] = {}
-    diff = 0
-    for r in recs:
-        f = str(r["檔案"])
-        if f not in cache:
+        if not isinstance(log, dict) or not isinstance(log.get("紀錄") or [], list):
+            return None, 0
+        recs = [r for r in log.get("紀錄") or [] if isinstance(r, dict) and r.get("檔案")]
+        if any(not isinstance(r["檔案"], str) or not r.get("檔案指紋") for r in recs):
+            return None, 0
+        want: dict[str, str] = {}
+        for r in recs:
+            f = str(r["檔案"])
+            if want.setdefault(f, str(r["檔案指紋"])) != str(r["檔案指紋"]):
+                return None, 0   # 同一個檔記了兩個不同的指紋：紀錄本身對不起來
+        diff = 0
+        for f, fp in want.items():
             p = wd.localize(f, w)
-            cache[f] = proclog.file_print(p) if p is not None else None
-        if cache[f] != r["檔案指紋"]:
-            diff += 1
-    return diff == 0, diff
+            if (proclog.file_print(p) if p is not None else None) != fp:
+                diff += 1
+        return diff == 0, diff
+    except Exception:  # noqa: BLE001 — 查不到就寫查不到
+        return None, 0
 
 
 def voice_match_line(same: bool | None, diff: int) -> str | None:
@@ -698,7 +721,7 @@ def voice_match_line(same: bool | None, diff: int) -> str | None:
     if same is True:
         return None
     if same is False:
-        return f"生成聲音是之後改過的狀態，比打包的成品新（有 {diff} 句不一樣）。"
+        return f"生成聲音是之後改過的狀態，比打包的成品新（有 {diff} 個聲音檔不一樣）。"
     return "生成聲音跟打包的成品是不是同一版：查不到。"
 
 
@@ -1043,7 +1066,7 @@ class PackJob:
         entry = self._entry(rec) or entry
         entry.update({"資料夾": str(final), "檔案": done, "核對": "通過", "完成時間": _now()})
         if voices:   # 10-19 #253：聲音跟成品是不是同一版（None＝查不到）
-            entry.update({"聲音跟成品同一版": same, "聲音不一樣句數": diff})
+            entry.update({"聲音跟成品同一版": same, "聲音不一樣檔數": diff})
         if rec.get("狀態") not in (CLEANING, CLOSED):
             rec["狀態"] = PACKED
         _write_record(w, rec)
