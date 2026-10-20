@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import threading
 from datetime import datetime
@@ -502,12 +501,13 @@ def _needs_store(workdir: Path):
         return None
 
 
-def card_redo_items(st, log: dict | None, check: dict, index: dict) -> list[dict]:
+def card_redo_items(st, log: dict | None, check: dict, index: dict, workdir: Path | None = None) -> list[dict]:
     """10-15 總檢查修正（1015-7，必修 1、分流定案甲）：`needs.redo_cards` 裡記了原因、成品檢查檔卻沒有的卡 → 第 4 步要重做的項目
     （跟 `redo_items` 同樣的欄位，另帶 `卡號`；鍵＝`卡片:<卡號>`）：
     - 跨版本卡、沿用卡（最新一版沒有它的狀態列）、舊版自己才有的卡按「要修改」——原因記在卡片的等重做
     - 之前版本退回、還沒重做的（例如範圍外、上一版退回的）
-    已經在成品檢查檔退回（`redo_items`）、或上次重做到一半（`重做中`）的卡不重複。st＝None（新紀錄不能用）回空的。"""
+    已經在成品檢查檔退回（`redo_items`）、或上次重做到一半（`重做中`）的卡不重複。st＝None（新紀錄不能用）回空的。
+    1015-8 #228：清單走 `needs.redo_list`（給了 workdir；只取記了原因的，結果跟以前一樣，收進同一個入口）。"""
     if st is None:
         return []
     from bookclub import needs
@@ -519,7 +519,8 @@ def card_redo_items(st, log: dict | None, check: dict, index: dict) -> list[dict
         if not e.get("卡號"):
             covered.update(needs._card_of_redo(st, e, index))
     out = []
-    for r in needs.redo_cards(st):
+    rows = needs.redo_list(workdir, st, log) if workdir is not None else needs.redo_cards(st)
+    for r in rows:
         if r["原因"] is None or r["卡號"] in covered:
             continue
         o = r["原片"] or [None, None]
@@ -902,7 +903,7 @@ def export_stale(workdir: str | Path, check: dict, cur: str | None = None) -> di
     過期＝任一成立（10-13 複核調整 3：只看「是不是同一份檔」，不做內容指紋）：
     1. `輸出成品.來源` 不是現在檢查的那支（cur，沒給就用 `check["成品影片"]`）——「換了成品」；
     2. 輸出時記的 `成品檔指紋` 跟現在那支的 `product_print` 不同——「成品換新了」（重新組裝過，只重組內容沒變也算）；
-    3. 舊紀錄沒 `成品檔指紋`：直接比 `輸出成品.檔案`（最終成品）與現在那支兩個檔（輸出用 copy2，修改時間保留，相等＝同一份）。
+    3. 舊紀錄沒 `成品檔指紋`：直接比 `輸出成品.檔案`（最終成品）與現在那支兩個檔（輸出是硬連結＝同一個檔；退回複製時用 copy2、修改時間保留——相等＝同一份）。
     `重做中` 期間成品檔還沒換，自然不算過期。現在那支讀不到（檔案不見）就不判斷。"""
     out = check.get("輸出成品") or {}
     cur = cur if cur is not None else check.get("成品影片")
@@ -1193,6 +1194,12 @@ def unchanged_rows(workdir: str | Path, log: dict | None) -> list[dict]:
 # (類別, 畫面上的名稱, 一行說明)。依這個順序顯示；名字換不了代號紅字置頂（會念出本名）
 ATTENTION_KINDS = (
     ("名字換不了代號", "名字換不了代號（會念出本名）", "程式在句子裡找不到名字、換不了代號，成品照原聲念出本名"),
+    # 10-18 #250：③ 選了不用處理／不是名字、照原聲留著的名字（名冊上的人也一樣），每一處列出來給人聽一次
+    # 10-20 總審查：#246 這一集還沒有英文名、照原聲留著的也列在這一類，名稱與說明一起寫進去（畫面照這裡顯示）
+    ("照原聲名字", "照原聲留著的名字（③ 選不用處理、不是名字，或這一集還沒有英文名）",
+     "這些名字成品照原聲念出來（③ 選了照原聲留著，或還沒有英文名），請聽一次確定可以留"),
+    # 10-20 總審查（隱私）：要念的整句只有替代詞留空的敏感詞，拿掉後沒有字 → 不生成、整句消音，列出來給人聽一次
+    ("整句拿掉", "要念的字拿掉後沒有了（改成整句消音）", "這一句只有替代詞留空的敏感詞，拿掉後沒有字，改成整句消音：請聽一次前後接得順不順"),
     ("段落外", "學員段落外面的幾秒", "學員段落切短後，句子有幾秒落在段落外面、沒被處理：可能是學員原聲"),
     ("聲紋", "聲音不像老師、沒被處理", "聲音特徵判斷不是老師、不在任何處理裡：可能是漏抓的學員發言（原聲）"),
     ("沒有字", "有人聲但逐字稿沒有字", "這裡如果有提到名字，工具找不到、照原聲留著"),
@@ -1202,9 +1209,16 @@ ATTENTION_KINDS = (
     ("學員是猜的", "學員是程式猜的（保留原聲）", "這幾段太短、學員是程式猜的，又設成保留原聲：猜錯的話是別人的原聲留在成品"),
 )
 PEOPLE_UNSEARCHED = "名冊外的名字這次沒有找（人名清單沒跑成功）：成品裡可能有沒換掉的名字"
+# 10-19 #234：同一句在 web/finalcheck.js 的 fcAttentionHtml 也寫了一次（改字兩處一起改；tests/test_rescan_attention_234.py 會比對）
+RESCAN_UNFINISHED = "這次補找沒做完：剛在 ③ 選的名字，老師講到的其他地方可能沒換掉，請聽一次"
+# 10-20 總審查：第 4 步開始時「照原聲留著的名字」算不出來（清單是空的，不代表沒有）。同一句也寫在 fcAttentionHtml（改字兩處一起改）
+KEPT_UNLISTED = "照原聲留著的名字這次算不出來，下面沒有列出：③ 選不用處理、不是名字，或還沒有英文名的名字，請自己聽一次"
 ATTENTION_NAME = "名字換不了代號"
-ATTENTION_TEXT_KINDS = ("英文代號", "字太少")   # 看的是要念的文字（不是原聲）：只扣剪掉的地方
+# 看的是要念的文字（不是原聲）：只扣剪掉的地方。10-18 #250「照原聲名字」也一樣：同一句因為別的名字重念、學員重念時，
+# 那一句「有被處理」，照原聲類算會被扣光、列不出來（設計草稿風險 5）
+ATTENTION_TEXT_KINDS = ("英文代號", "字太少", "照原聲名字", "整句拿掉")   # 10-20 總審查：整句拿掉本身就是消音，只扣剪掉的
 ATTENTION_MIN_S = 0.3   # 扣掉被處理蓋到的地方之後剩不到這麼久就不列（跟「不修改」一樣）
+ATTENTION_NO_MIN_KINDS = ("照原聲名字",)   # 不套 0.3 秒門檻的類別（名字本身很短）
 
 
 def place_attention(rows: list[dict], log: dict | None) -> list[dict]:
@@ -1235,7 +1249,8 @@ def place_attention(rows: list[dict], log: dict | None) -> list[dict]:
             left = [[max(x, rng[0]), min(y, rng[1])] for x, y in left if min(y, rng[1]) > max(x, rng[0])]
         left = [seg for seg in subtract_ranges(left, cuts if kind in ATTENTION_TEXT_KINDS else holes) if seg[1] - seg[0] > 1e-6]
         secs = round(sum(y - x for x, y in left), 3)
-        if secs < ATTENTION_MIN_S:
+        # 10-18 審查：照原聲留著的名字只有名字那幾個字（兩個字的名字常常不到 0.3 秒），不套門檻，剩下有一點就列
+        if secs < (1e-6 if kind in ATTENTION_NO_MIN_KINDS else ATTENTION_MIN_S):
             continue
         segs = [[round(near_output_time(x, plist), 3), round(near_output_time(y, plist), 3)] for x, y in left]
         out.append({"鍵": r.get("key"), "類別": kind, "第3步": r.get("第3步"), "原片": [round(a, 3), round(b, 3)],
@@ -1259,15 +1274,18 @@ def attention_rows(workdir: str | Path, log: dict | None) -> dict:
     有紀錄＝這次成品是新版工具組裝的（第 4 步開始時記了略過的列）；舊的成品回 有紀錄=False、列是空的。"""
     snap = attention_snapshot(workdir)
     unsearched = bool((snap or {}).get("人名清單沒跑成功"))   # 10-08 審查：名冊外的名字這次沒有找
+    rescan = bool((snap or {}).get("補找沒做完"))   # 10-19 #234：第 4 步是在 ③ 補找出錯（放行）的狀態下開始的
+    kept_fail = bool((snap or {}).get("照原聲名字算不出來"))   # 10-20 總審查：照原聲留著的名字這次沒列出來
     if not log or snap is None:
         return {"有紀錄": snap is not None, "列": [], "總數": 0, "名字": 0, "第4步沒處理": (snap or {}).get("沒處理"),
-                "名冊外沒找": unsearched}
+                "名冊外沒找": unsearched, "補找沒做完": rescan, "照原聲名字算不出來": kept_fail}
     try:
         rows = place_attention(snap.get("列") or [], log)
     except Exception:  # noqa: BLE001 — 算不出來不擋第 5 步
         rows = []
     return {"有紀錄": True, "列": rows, "總數": len(rows), "名字": sum(1 for r in rows if r["名字"]),
-            "第4步沒處理": snap.get("沒處理"), "名冊外沒找": unsearched}
+            "第4步沒處理": snap.get("沒處理"), "名冊外沒找": unsearched, "補找沒做完": rescan,
+            "照原聲名字算不出來": kept_fail}
 
 
 def group_counts(log: dict | None, index: dict | None = None) -> dict[str, int]:
@@ -1765,7 +1783,12 @@ def attention_gaps(att: dict) -> dict:
     text = f"需留意 {n} 處" + (f"（含名字 {m} 處）" if m else "") + "還沒聽過" if n else ""
     if att.get("名冊外沒找"):
         text = "；".join(x for x in (text, "名冊外的名字這次沒有找") if x)
-    return {"需留意": n, "需留意名字": m, "需留意說明": text, "名冊外沒找": bool(att.get("名冊外沒找"))}
+    if att.get("補找沒做完"):   # 10-19 #234
+        text = "；".join(x for x in (text, "③ 剛選的名字這次補找沒做完") if x)
+    if att.get("照原聲名字算不出來"):   # 10-20 總審查：清單空的不代表沒有，提一句（不擋）
+        text = "；".join(x for x in (text, "照原聲留著的名字這次算不出來、沒有列出") if x)
+    return {"需留意": n, "需留意名字": m, "需留意說明": text, "名冊外沒找": bool(att.get("名冊外沒找")),
+            "補找沒做完": bool(att.get("補找沒做完")), "照原聲名字算不出來": bool(att.get("照原聲名字算不出來"))}
 
 
 def export_final(workdir: str | Path, confirm: bool = False) -> dict:
@@ -1799,7 +1822,7 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
                 raise ValueError("還不能輸出：" + "；".join(gaps["擋下"]))
             return {"ok": False, "要確認": True, "不能輸出": True, "還差": gaps}
         if (not st["可以輸出"] or gaps["提醒"] or gaps["名字提醒"] or gaps["需留意名字"] or gaps["名冊外沒找"]
-                or gaps["不是最新版本"]) and not confirm:
+                or gaps.get("補找沒做完") or gaps.get("照原聲名字算不出來") or gaps["不是最新版本"]) and not confirm:
             return {"ok": False, "要確認": True, "還差": gaps}
         src = workdir / check["成品影片"]
         src_print = product_print(src)   # 10-13 審查修正二（順手）：複製前先記指紋，複製途中第 4 步換檔也記得到複製的那份
@@ -1808,12 +1831,15 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
         while dst.exists() or dst.is_symlink():   # 同一秒按兩次：加編號，一樣不蓋掉
             dst = src.with_name(f"{Path(final_name(src.name, datetime.now().strftime('%Y%m%d-%H%M%S'))).stem} ({n}){src.suffix}")
             n += 1
-        from bookclub.fileio import cleanup_partials
+        from bookclub.fileio import cleanup_partials, link_or_copy
 
         # 10-08：上次輸出到一半斷掉（伺服器被關掉）留下、超過 1 小時沒動的 `.最終成品_….輸出中` 先清掉
         cleanup_partials(dst.parent, suffix=".輸出中")
         tmp = dst.with_name(f".{dst.name}.輸出中")
-        shutil.copy2(src, tmp)   # 先複製到暫存檔、完整了才換上（複製到一半中斷不會留下半個最終成品）
+        # #79（1017-2）：最終成品是成品的硬連結（同一份資料兩個名字，不再多佔一份 0.5–1 GB）；跨磁碟、不支援才複製。
+        # 安全前提：第 4 步組裝是寫 `_輸出中_…` 再換名（新的檔），不會改到已經輸出的最終成品；標字版（ffmpeg 直接寫
+        # 正式檔名）不能輸出（export_blocks 擋下）。以後任何程式都不可以原地改寫成品檔。
+        link_or_copy(src, tmp)   # 先放到暫存檔名、完整了才換上（複製到一半中斷不會留下半個最終成品）
         os.replace(tmp, dst)
         extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
         rec = {"時間": _now(), "來源": check["成品影片"], "檔案": str(dst.relative_to(workdir)),
@@ -1855,7 +1881,7 @@ def redo_list(workdir: str | Path) -> dict:
     # 10-15 總檢查修正（1015-7，必修 1）：成品檢查檔看不到的「要修改」——跨版本卡、沿用卡、看舊版時按的（原因記在卡片的等重做），
     # 之前版本退回還沒重做的——照卡片一起重做（`card_redo_items`）
     st = _needs_store(workdir)
-    items = items + card_redo_items(st, log, check, index)
+    items = items + card_redo_items(st, log, check, index, workdir)
     ctx = _redo_ctx(workdir) if items else {}
     logs: dict = {}
     doing_items = (check.get("重做中") or {}).get("項目") or []
@@ -2309,7 +2335,7 @@ def returned_by_card(workdir: str | Path, index: dict) -> dict[str, list[str]]:
         from bookclub import needs
 
         out: dict[str, list[str]] = {}
-        for r in needs.redo_cards(st):
+        for r in needs.redo_list(Path(workdir), st):   # 1015-8 #228：唯一入口；只列記了原因的（畫面不變）
             if r["原因"] is not None and r["第3步鍵"]:
                 why = needs.reason_text(r["原因"].get("選項"), r["原因"].get("補充", ""))
                 out[r["第3步鍵"]] = ["（沒寫原因）" if why == needs.REASON_NONE else why]

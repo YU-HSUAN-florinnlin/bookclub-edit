@@ -116,9 +116,10 @@ def whole_sentence(ordered: list[dict], pos: dict, c: dict, owner: dict) -> dict
     who = owner.get(sid)
     group = nameplan.expand_sentence(ordered, pos[sid], same=lambda s: owner.get(s.get("id")) == who)
     texts = {g["id"]: g["text"] for g in group}
-    new = nameplan.replace_name(texts[sid], c)
+    new = nameplan.mark_name(texts[sid], c)   # 10-18 #245：小段裡先留記號，接成整句後才去句首句尾的空白
     return {"start": group[0]["start"], "end": group[-1]["end"], "原文": "".join(g["text"] for g in group),
-            "換成代號": ("".join(new if g["id"] == sid else texts[g["id"]] for g in group)) if new is not None else None,
+            "換成代號": nameplan.finish_drops("".join(new if g["id"] == sid else texts[g["id"]] for g in group))[0]
+            if new is not None else None,
             "句子": [g["id"] for g in group]}
 
 
@@ -138,11 +139,19 @@ def items(workdir: str | Path, cut_ranges: list[tuple[float, float]] = ()) -> li
     owner = sentence_owner(tdata.get("段落", []), sorted(kept))
     ordered = _ordered_sentences(workdir)
     pos = {s["id"]: k for k, s in enumerate(ordered)}
+    from bookclub import epcodes
+
+    keep = epcodes.keep_original_names(workdir)
     out = []
     for c in res["candidates"]:
         if c.get("學員") not in kept or owner.get(c.get("sentence_id")) != c.get("學員"):
             continue
         d = decisions.get(c["id"], {}) or {}
+        # 10-18 #250：③ 選了不用處理／不是名字的名字，保留原聲學員講到時預設也照原聲（標「不是名字」，不消音）；
+        # 人在這張卡上自己選過做法或標記的照人選的（預設直接消音的規則其他名字不變，設計第 5 題 A）
+        orig = epcodes.is_kept_original(c, keep) and not d.get("做法") and "tags" not in d
+        if orig:
+            d = {**d, "tags": ["不是名字"]}
         out.append({
             "類型": "學員名字", "id": c["id"], "start": c["start"], "end": c["end"], "學員": c.get("學員"),
             "sentence_html": _highlight_sentence(c.get("sentence", ""), c.get("matched_text", ""), c.get("位置", "")),
@@ -151,7 +160,12 @@ def items(workdir: str | Path, cut_ranges: list[tuple[float, float]] = ()) -> li
             "比對層級": c.get("比對層級", ""), "敏感詞": bool(c.get("敏感詞")),
             "做法": d.get("做法") or MUTE, "tags": d.get("tags", []), "note": d.get("note", ""),
             "已確認": bool(d.get("已確認")),
-            "建議": {"做法": MUTE, "原因": f"{c.get('學員')} 保留原聲，講到名字預設直接消音；也可以選換成代號，用他自己的聲音生成"},
+            "建議": {"做法": MUTE, "原因": f"③ 選了「不用處理」或「不是名字」，{c.get('學員')} 講到這個名字照原聲留著（第 5 步「需留意」會列出來）；"
+                                         "要消音或換成代號，把標記拿掉再選" if orig else
+                     f"{c.get('學員')} 保留原聲，講到名字預設直接消音；也可以選換成代號，用他自己的聲音生成"},
+            **({"照原聲留著": True} if orig else {}),
+            # 10-18 複審：選「換成代號」但這一集沒有英文名 → 照原聲（plan 不生成），卡片照實寫
+            **({"沒英文名照原聲": True} if no_code_keep(c) else {}),
             "不用處理": "落在剪掉的片段裡（聲音和畫面都拿掉）" if review._in_ranges(c["start"], c["end"], list(cut_ranges)) else None,
         })
     return out
@@ -180,6 +194,11 @@ def save(workdir: str | Path, cid: str, fields: dict) -> dict:
     return {"ok": True, "id": str(cid), "決定": d}
 
 
+def no_code_keep(it: dict) -> bool:
+    """學員名字卡選了換成代號、這一集沒有英文名（不是敏感詞）→ 照原聲（10-18 宇軒）。"""
+    return not (it.get("代號") or "").strip() and not it.get("敏感詞")
+
+
 def plan(workdir: str | Path) -> dict:
     """第 4 步要做的：{"消音": [{id, start, end, 學員}], "生成": [{id, 學員, text, 原文, slot, 候選}], "要人處理": [...]}。
     標「不是名字」「是地名」的略過；換成代號但句子裡找不到比對到的字 → 退回直接消音，列在要人處理。"""
@@ -192,6 +211,11 @@ def plan(workdir: str | Path) -> dict:
             continue
         pad = names_mod.DEFAULT_BUFFER_S
         mute = {"id": it["id"], "start": round(it["start"] - pad, 3), "end": round(it["end"] + pad, 3), "學員": it["學員"]}
+        if it["做法"] == CODE and no_code_keep(it):
+            # 10-18 宇軒（審查題 4）：選換成代號、這一集沒有英文名 → 照原聲（不生成名字被拿掉的句子、不消音），
+            # 跟老師名字卡同一套（nameplan.no_code_keep）：第 4 步提醒、第 5 步「需留意」列出（execute.no_code_rows）
+            out.setdefault("照原聲", []).append(it["id"])
+            continue
         if it["做法"] == CODE:
             w = it["整句"]
             if w and w.get("換成代號"):
@@ -217,8 +241,10 @@ def plan(workdir: str | Path) -> dict:
         if len(g["_cands"]) > 1:   # 從原句重新換，每個名字都換成代號
             text = g["原文"]
             for c in g["_cands"]:
-                text = nameplan.replace_name(text, c) or text
-            g["text"] = text
+                text = nameplan.mark_name(text, c) or text
+            g["text"] = nameplan.finish_drops(text)[0]   # 10-18 #245：全部換完才去句首句尾的空白
         g.pop("_cands")
     out["生成"] = list(merged.values())
+    for g in out["生成"]:   # 10-18 #245 小保險：要念的字裡不能留著拿掉名字的記號
+        nameplan.check_no_drop_mark(g.get("text"))
     return out

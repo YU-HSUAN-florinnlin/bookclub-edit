@@ -456,6 +456,12 @@ def build(workdir: str | Path, *, log: dict | None = None, check: dict | None = 
     for c in cross:
         c["共用"], c["連帶自"], c["跨版本"] = [], [], True   # 跨版本：狀態、成品時間是那一版的（畫面試聽播那一版的成品）
     redo = _redo_map(workdir, log) if src == SRC_NEW else None
+    for c in cards if redo else []:
+        # 1015-8 #228：要重做的清單說「改了」（例如生成程式會重新生成它的句子：升級前改過範圍、發音對照表、參考音換了、
+        # 聲音檔不在），卡片上照樣寫「已改，等重做」——畫面跟「重做這幾張（N 張）」、第 4 步同一份
+        r = redo.get(c.get("卡號"))
+        if r and r["起因"] == needs.REDO_EDITED and c["狀態"] in (needs.PASSED, needs.NOT_SEEN):
+            c["狀態"] = EDITED
     mark_flags(cards, cross, redo, reasons=_reason_cards(workdir) if src == SRC_NEW else None)
     return {"來源": src, "卡片": cards, "統計": summary(cards, cross, len(redo) if redo is not None else None),
             "跨版本卡片": cross}
@@ -468,12 +474,9 @@ def _reason_cards(workdir: Path) -> set[str]:
 
 
 def _redo_map(workdir: Path, log: dict | None = None) -> dict:
-    """10-15 總檢查修正（1015-7）：`needs.redo_cards`（要重做的卡唯一的清單）→ {卡號: 那一筆}。"""
-    st = needs.load(workdir)
-    v = st.latest_version()
-    hist = needs.read_history(workdir) if v is not None and v.get("其他卡指紋") is None else None
-    log = proclog.load(workdir) if log is None else log
-    return {r["卡號"]: r for r in needs.redo_cards(st, log, hist)}
+    """10-15 總檢查修正（1015-7）：要重做的卡唯一的清單 → {卡號: 那一筆}。1015-8 #228：改走 `needs.redo_list`
+    （跟第 4 步同一個入口；生成程式會重新生成的卡也算，畫面「已改，等重做」）。"""
+    return {r["卡號"]: r for r in needs.redo_list(workdir, needs.load(workdir), log)}
 
 
 # 第 5 步卡片要用到的第 3 步資料（卡片元件 cards.js 的 data()）
@@ -838,7 +841,6 @@ def export_version(workdir: str | Path, n: int, confirm: bool = False) -> dict:
     """10-15 第5步2.0 第3段（31 號設計 §6.5、§6.7）：輸出舊的那一版（選單選到哪一版就輸出哪一版）。規則照 0.2.1b3：沒看完也能輸出，
     先問一次（還有幾張沒看完）。那一版的影片清掉了不能輸出。輸出紀錄記到那一版（版本表），成品檢查檔照舊記最新一次輸出（雙寫）。"""
     import os
-    import shutil
     from datetime import datetime
 
     from bookclub import workdir as wd
@@ -869,7 +871,9 @@ def export_version(workdir: str | Path, n: int, confirm: bool = False) -> dict:
         dst = src.with_name(f"{Path(fc.final_name(src.name, stamp)).stem} ({k}){src.suffix}")
         k += 1
     tmp = dst.with_name(f".{dst.name}.輸出中")
-    shutil.copy2(src, tmp)
+    from bookclub.fileio import link_or_copy
+
+    link_or_copy(src, tmp)   # #79（1017-2）：硬連結（同一份資料），跨磁碟、不支援才複製；前提同 finalcheck.export_final
     os.replace(tmp, dst)
     extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
     rec = {"時間": fc._now(), "來源": rel, "檔案": str(dst.relative_to(workdir)),

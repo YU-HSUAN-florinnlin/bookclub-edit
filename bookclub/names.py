@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import csv
+import functools
 import io
 import re
 import time
@@ -47,6 +48,7 @@ STRETCHED_CHAR_S = 0.5    # 名字平均一個字超過這麼長，才去看聲�
 TRIM_PAUSE_S = 0.3        # 名字範圍裡安靜這麼久以上，算真的停頓（範圍在這裡分段，挑真的有名字的那段）
 
 
+@functools.lru_cache(maxsize=None)   # 10-16 #234：同一個字一再查拼音（2 小時的課、名冊 40 人要查幾百萬次）；字數有限，記憶體很小
 def _syllable_parts(ch: str):
     from pypinyin import Style, lazy_pinyin
 
@@ -792,9 +794,24 @@ def assign_words(sentences: list[dict], words: list[dict], max_gap_s: float = 0.
     return out
 
 
-def append_candidates(workdir: str | Path, sentence_ids: list[str]) -> int:
+def append_candidates(workdir: str | Path, sentence_ids: list[str], tag: str = "段落改成老師後補找") -> int:
     """第 3 步把一段學員段落改成老師（09-29 宇軒：那段其實是老師在講話）之後，補找這幾句裡老師提到的名字，
-    加在 `名字候選.json` 最後面（原本的候選編號不變，覆核決定照舊對得上）。回傳補了幾筆；還沒跑過找名字回傳 0。"""
+    加在 `名字候選.json` 最後面（原本的候選編號不變，覆核決定照舊對得上）。回傳補了幾筆；還沒跑過找名字回傳 0。
+    10-16 審查（#234）：掃的時候不拿鎖、掃完拿 `epcodes._auto_lock` 重讀再接上（以前讀→掃→寫整份，掃的途中
+    背景補找加進去的名字會被蓋掉）。掃的途中第 1 步重跑或逐字稿改了：放棄這輪，重掃（最多 3 次）。"""
+    for _ in range(3):
+        scan = scan_candidates(workdir, sentence_ids)
+        if scan is None:
+            return 0
+        n = merge_candidates(workdir, scan, tag)
+        if n is not None:
+            return n
+    print("⚠️ 補找名字：掃的途中名字候選或逐字稿一直在變（連 3 輪），這次沒有補上；漏抓的名字請到第 3 步用「＋新增修改」補")
+    return 0
+
+
+def scan_candidates(workdir: str | Path, sentence_ids: list[str]) -> dict | None:
+    """在指定的句子裡比對名冊（最花時間，不拿鎖）。回傳 {candidates, 指紋}；還沒跑過找名字、沒有名冊或音檔回 None。"""
     import tempfile
 
     from bookclub.config import data_dir
@@ -804,21 +821,45 @@ def append_candidates(workdir: str | Path, sentence_ids: list[str]) -> int:
     cur = read_json(names_path(workdir), default=None)
     roster = data_dir() / "名冊.csv"
     if cur is None or not roster.is_file() or not audio_path(workdir).is_file():
-        return 0
+        return None
     ids = set(sentence_ids)
     sents = (read_json(speakers_path(workdir), default={}) or {}).get("sentences", [])
     words = (read_json(merged_transcript_path(workdir), default={}) or {}).get("words", [])
+    fp = _scan_fingerprint(cur, sents, ids)   # 掃之前記下，接上時比對
     sensitive = data_dir() / "敏感詞.csv"
     with tempfile.TemporaryDirectory() as tmp:
         res = find_names(audio_path(workdir), workdir, sents, words, roster, sensitive if sensitive.is_file() else None,
                          select=lambda s: s.get("id") in ids, cache_path=Path(tmp) / "補找.json", use_cache=False)
-    old = cur.get("candidates", [])
-    new = [c for c in res["candidates"]
-           if not any(o.get("sentence_id") == c.get("sentence_id") and abs(o["start"] - c["start"]) < 0.05 for o in old)]
-    if new:
-        for c in new:
-            c["補找"] = "段落改成老師後補找"
-        cur["candidates"] = old + new
-        cur.setdefault("統計", {})["總筆數"] = len(cur["candidates"])
-        write_json(names_path(workdir), cur)
-    return len(new)
+    return {"candidates": res["candidates"], "指紋": fp, "句子": sorted(ids)}
+
+
+def _scan_fingerprint(cur: dict, sents: list[dict], ids: set[str]) -> list:
+    """名字候選檔的輸入指紋（第 1 步重跑會變）＋掃的那幾句文字（逐字稿改了會變）。"""
+    return [cur.get("輸入指紋"), fingerprint([[s.get("id"), s.get("text")] for s in sents if s.get("id") in ids])]
+
+
+def merge_candidates(workdir: str | Path, scan: dict, tag: str) -> int | None:
+    """`scan_candidates` 的結果拿鎖接上：重讀名字候選（掃的途中別人可能改過）、去掉已經有的、加在最後面、代號對齊。
+    回傳加了幾筆；掃的途中第 1 步重跑或逐字稿改了（指紋不一樣）回 None（這輪不算，要重掃）。"""
+    from bookclub import epcodes
+    from bookclub.workdir import speakers_path
+
+    workdir = Path(workdir)
+    with epcodes._auto_lock:
+        cur = read_json(names_path(workdir), default=None)
+        if cur is None:
+            return 0
+        sents = (read_json(speakers_path(workdir), default={}) or {}).get("sentences", [])
+        if scan.get("指紋") is not None and scan["指紋"] != _scan_fingerprint(cur, sents, set(scan.get("句子") or [])):
+            return None
+        old = cur.get("candidates", [])
+        new = [c for c in scan["candidates"]
+               if not any(o.get("sentence_id") == c.get("sentence_id") and abs(o["start"] - c["start"]) < 0.05 for o in old)]
+        if new:
+            for c in new:
+                c["補找"] = tag
+            cur["candidates"] = old + new
+            cur.setdefault("統計", {})["總筆數"] = len(cur["candidates"])
+            write_json(names_path(workdir), cur)
+            epcodes.sync(workdir)
+        return len(new)

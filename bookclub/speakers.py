@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -85,9 +86,8 @@ def save_corrected(workdir: Path, sentences: list[dict], scan_regions: list[list
     """把文字修正過的判斷寫回 `說話者判斷.json`（同一個快取檔；refpick 挑參考音時直接讀到修正後的結果）。
     原本的聲紋判斷留在每句的 `聲紋判斷`，重複執行不會越改越多。"""
     path = speakers_path(workdir)
-    data = read_json(path, default={}) or {}
-    data["sentences"] = sentences
-    data["scan_regions"] = scan_regions
-    data["scan_pad_s"] = pad_s
-    data["文字修正"] = correction
+    old = read_json(path, default={}) or {}
+    data = {**old, "sentences": sentences, "scan_regions": scan_regions, "scan_pad_s": pad_s, "文字修正": correction}
+    if json.loads(json.dumps(data, ensure_ascii=False)) == old:   # 10-17 #122：內容一樣不寫（檔案變新會讓下次開始執行重新組裝）
+        return
     write_json(path, data)

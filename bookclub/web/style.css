@@ -468,6 +468,7 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .rv-who { margin: 0 0 6px; font-size: 15px; color: var(--muted); }
 .rv-quote { margin: 0 0 6px; }
 .rv-quote mark, .rv-note mark { background: #ffe8a3; color: #3a2a00; border-radius: 3px; padding: 0 2px; }
+.rv-quote mark.rv-drop, .rv-note mark.rv-drop, .rv-warnline mark.rv-drop { background: transparent; color: var(--muted, #888); font-size: 0.9em; padding: 0; }   /* 10-17 #247：名字拿掉的地方，只在畫面上標 */
 .rv-note { font-size: 15px; color: var(--muted); margin: 6px 0; }
 .rv-pair { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
 .rv-pair dt { color: var(--muted); font-size: 15px; }
@@ -892,3 +893,20 @@ dialog.rv-modal::backdrop { background: rgba(0,0,0,.35); backdrop-filter: blur(4
 .app.nav-collapsed .substeps { display: none; }
 #fc-redo-slot:empty { display: none; }
 #fc-redoall:disabled { background: var(--bg-soft); border-color: var(--border); color: var(--muted); cursor: not-allowed; opacity: 1; }   /* 審查建議 1：只套這顆、不要再疊半透明 */
+
+/* 1015-8 第 3 段（32 號設計 §5.2）：已結案的瘦身版。頂端一句；第 1–4 步所有按鈕灰掉；第 5 步只灰掉聽／改／重做／輸出／拿檔
+   （卡片、分頁、版本選單、上一張下一張照樣能按；結案打包框的「再存一份紀錄…」「打開資料夾」也能按）。伺服器另外擋（409）。
+   10-17 畫面測試：第 1–4 步只看不改的導覽按鈕（例如第 3 步「開始前 4 件事」①～④ 分頁）加 class="ws-nav"，不灰掉。 */
+.ws-closed-bar { margin: 0 0 12px; padding: 8px 12px; border-radius: 6px; background: #eef1f4; color: #3b4652; font-weight: 600; }
+body.ws-closed-all #content button:not(.ws-nav), body.ws-closed-all #content input, body.ws-closed-all #content select,
+body.ws-closed-all #content textarea,
+body.ws-closed #fc-export, body.ws-closed #fc-pass, body.ws-closed #fc-fix, body.ws-closed #fc-back-undo,
+body.ws-closed #fc-redoall, body.ws-closed #fc-add, body.ws-closed #fc-undo, body.ws-closed #fc-rebase,
+body.ws-closed #fc-goto, body.ws-closed #fc-rate, body.ws-closed [data-ab], body.ws-closed .fc-u-play,
+body.ws-closed .fc-a-play, body.ws-closed .fc-u-go, body.ws-closed .fc-a-go, body.ws-closed #rv-isteacher,
+body.ws-closed #rv-split, body.ws-closed #fc-fix-go {
+  pointer-events: none; opacity: .45;
+}
+body.ws-closed #foMain, body.ws-closed #fc-tl, body.ws-closed .rv-timebar, body.ws-closed .fc-seenpct { display: none; }
+.fc-gone { padding: 24px 0; }
+.pj-closed summary { cursor: pointer; margin: 8px 0; color: #555; }

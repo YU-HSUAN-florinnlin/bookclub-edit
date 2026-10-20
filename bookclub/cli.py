@@ -239,6 +239,21 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--tag", help="輸出檔名標記（預設「開始分-結束分」）")
     rv.add_argument("--no-demo-freeze", action="store_true", help="不做停格示範與模糊示範（正式成品 run execute 本來就不做）")
 
+    # 1015-8（32 號設計 #222 第 1 段）：結案——這一段只有逐字稿匯出；打包、清空間在第 2、3 段
+    close_parser = sub.add_parser("close", help="結案（開發者用；老師在第 5 步按「結案打包…」）：匯出逐字稿、看會清哪些檔、搬回、取消結案")
+    close_what = close_parser.add_mutually_exclusive_group(required=True)
+    close_what.add_argument("--transcript", nargs=2, metavar=("工作區", "資料夾"),
+                            help="把逐字稿寫到資料夾：逐字稿.srt、逐字稿.txt（原片時間）、逐字稿_成品時間.srt（最後輸出那一版）")
+    close_what.add_argument("--dry-run", dest="dry_run", metavar="工作區",
+                            help="看每一個會清的檔（相對路徑、大小、分類）、合計、清單指紋；只看、不刪")
+    close_what.add_argument("--restore", metavar="工作區",
+                            help="清到一半、還沒開始刪：把 .結案清理中/ 的東西搬回原位，結案.json 回到「已打包」")
+    close_what.add_argument("--reopen", metavar="工作區",
+                            help="取消結案：結案.json 改名成 結案_取消_<時間>.json（之後要從第 4 步整支重跑；影片副本清了要先放回原位）")
+    close_parser.add_argument("--intro", type=float, default=0.0, metavar="秒",
+                              help="成品前面接的片頭長度（秒），成品時間的逐字稿每句往後加這麼多（預設 0）")
+    sub.add_parser("disk", help="查佔用空間：工作區、匯入的影片、模型快取、舊版工具、更新前備份各多大（只看、不刪）")
+
     return parser
 
 
@@ -261,6 +276,46 @@ def main(argv: list[str] | None = None) -> int:
         from bookclub.needs import main as upgrade_main
 
         return upgrade_main(args.rest)
+
+    if args.command == "close":
+        from bookclub import closing
+
+        if args.dry_run:
+            print("\n".join(closing.dry_run_lines(args.dry_run)))
+            return 0
+        if args.restore or args.reopen:
+            try:
+                if args.restore:
+                    n = closing.restore(args.restore)
+                    print(f"搬回 {n} 個檔，結案.json 回到「{closing.state(args.restore)}」。")
+                else:
+                    new = closing.reopen(args.reopen)
+                    print(f"取消結案了：結案.json 改名成 {new.name}。這支影片要從第 4 步整支重跑（聲音檔都清掉了）；"
+                          "WSL 上影片副本清掉了的話，先把影片放回 ~/讀書會剪輯資料/影片/。")
+            except closing.CleanError as e:
+                print(f"❌ {e}")
+                return 1
+            return 0
+        try:
+            got = closing.export_transcripts(args.transcript[0], args.transcript[1], intro_s=args.intro)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"❌ {e}")
+            return 1
+        print(f"逐字稿寫好了（{got['句數']} 句）：")
+        for f in got["檔案"]:
+            print(f"  {f}")
+        if got["成品時間"] is not None:
+            print(f"成品時間照第 {got['成品時間']} 版換算，剪掉的句子沒寫。")
+        if got["說明"]:
+            print(f"⚠️ {got['說明']}")
+        print("逐字稿裡有學員的本名和分享內容，不要直接公開或傳給別人。拿去做行銷前，先挑段落、改掉名字。")
+        return 0
+
+    if args.command == "disk":
+        from bookclub import closing
+
+        print("\n".join(closing.disk_report()))
+        return 0
 
     if args.command == "models":
         if args.models_command == "download":

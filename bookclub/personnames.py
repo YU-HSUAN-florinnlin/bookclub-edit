@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import io
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -84,6 +85,7 @@ def parse_reply(text: str, n_lines: int) -> list[dict]:
 def match_roster(people: list[dict], roster: list[dict]) -> None:
     """對照名冊（就地加 `名冊本名`、`名冊代號`；純函式）。名字或任何一個其他寫法等於名冊上的寫法就算。"""
     lookup = {r["寫法"]: r for r in roster}
+    lookup.update({r["canonical"]: r for r in roster if r["寫法"] == r["canonical"]})   # 本名優先（跟 epcodes 一致）
     for p in people:
         hit = next((lookup[w] for w in [p["名字"], *p["其他寫法"]] if w in lookup), None)
         p["名冊本名"] = hit["canonical"] if hit else None
@@ -246,12 +248,36 @@ def set_roster_code(name: str, code: str) -> bool:
     return _edit_roster(name, lambda r: r.__setitem__("英文代號", code))
 
 
-def add_roster_alias(real: str, aliases: list[str]) -> bool:
-    """名冊上 `real` 那一列的「其他寫法」補上 `aliases`（例如逐字稿轉錯的字）。"""
+def _split_alts(text: str) -> list[str]:
+    """名冊「其他寫法」欄拆開（跟 `names.load_roster` 一樣用「、 , ， /」分，每項去空白）。"""
+    return [v.strip() for v in re.split(r"[、,，/]", text or "") if v.strip()]
+
+
+def add_roster_alias(real: str, aliases: list[str]) -> list[str]:
+    """名冊上 `real` 那一列的「其他寫法」補上 `aliases`（例如逐字稿轉錯的字）。
+    回傳**這次真的加上去**的寫法（名冊原本就有的不算）；都有了就不動名冊。找不到那一列回空的。
+    1016-3 審查 C：拆法跟 `names.load_roster` 一樣（「美美, 阿德」「美美/阿德」都算有阿德）；原本那一格的字照舊，新的接在後面。"""
+    got: list[str] = []
+
     def change(r):
-        have = [x for x in (r.get("其他寫法") or "").replace(",", "、").split("、") if x.strip()]
-        r["其他寫法"] = "、".join(have + [a for a in aliases if a and a != real and a not in have])
-    return _edit_roster(real, change)
+        orig = r.get("其他寫法") or ""
+        have = set(_split_alts(orig))
+        new = [a for a in dict.fromkeys(x.strip() for x in aliases if x) if a and a != real and a not in have]
+        got.extend(new)
+        if new:
+            r["其他寫法"] = orig.rstrip() + ("、" if orig.strip() else "") + "、".join(new)
+
+    from bookclub import names
+    from bookclub.config import data_dir
+
+    rows = names.load_roster(data_dir() / "名冊.csv")
+    have = {r["寫法"] for r in rows if r["canonical"] == real}
+    # 第二輪審查 3：已經是名冊上別列本名的不加（同一個寫法兩列都有，換成誰要看列的順序）；這一集由「同一人」蓋過去
+    others = {r["canonical"] for r in rows if r["canonical"] != real}
+    aliases = [a for a in aliases if a and a.strip() not in others]
+    if not have or all(not a.strip() or a.strip() in have or a.strip() == real for a in aliases):
+        return []
+    return got if _edit_roster(real, change) else []
 
 
 def rescan_names(workdir: Path) -> int:
@@ -296,11 +322,47 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
         return bool(cuts) and bool(t) and any(a - 0.3 <= t[0] and t[1] <= b + 0.3 for a, b in cuts)
 
     people = [dict(p) for p in data.get("人名", []) if p["是誰"] != "老師本人"]
-    seen = {p.get("名冊本名") or p["名字"] for p in people} | {w for p in people for w in (p["名字"], *p["其他寫法"])}
+
+    spell = epcodes.episode_spellings(workdir, roster=roster, dec=dec)
+    keep = epcodes.keep_original_names(workdir, dec=dec)
+    spellings = {r["寫法"] for r in roster} | {r["canonical"] for r in roster}
+    owners = epcodes.roster_owners(roster)
+    coded = epcodes.coded_people(workdir, roster, dec)
+
+    def ws_of(p: dict) -> list[str]:
+        return [p["名字"], *p["其他寫法"]]
+
+    def same_pick(p: dict) -> bool:
+        """③ 這一集自己決定的（「同一人：某某」，或這一集蓋過名冊對法的）：名冊比對到的本名不算這一列本身，
+        這一列照樣列在 ③、可以改（1016-3）。"""
+        d = dec.get(p["名字"]) or {}
+        # 10-18 #250 題 1：人親手選了不用處理／不是名字的列（就算這位有英文名、照樣換）照樣留在 ③，那列才看得到說明
+        return d.get("做法") == "是上面的學員" or p["名字"] in spell or (
+            d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配"))
+
+    def row_canon(p: dict) -> str:
+        """這一列在這一集算誰（跟下面 `canon` 同一套）：同一人 → 那位；這一集自己決定的寫法 → 名字本身；其他 → 名冊本名或名字。"""
+        d = dec.get(p["名字"]) or {}
+        if d.get("做法") == "是上面的學員" and d.get("同一人"):
+            return d["同一人"]
+        if p["名字"] in spell:
+            return p["名字"]
+        return roster_canon.get(p["名字"]) or p.get("名冊本名") or p["名字"]
+
+    roster_canon = epcodes.roster_canon(roster)
+    # 10-18 #246 修法 1：寫法 → 那一列的本名。卡片比對到的寫法在人名清單某一列，**而且那一列的本名就是卡片的本名**才算在那列；
+    # 人名清單把暱稱併到別人名下（「陳大同」其他寫法有「阿美」）時，卡片的本名（林美美）照樣補一列，不然 ③ 找不到這個人
+    spell_row: dict[str, set[str]] = {}
+    for p in people:
+        for w in (p["名字"], *p["其他寫法"]):
+            spell_row.setdefault(w, set()).add(row_canon(p))
+    # 1016-3：「同一人」或這一集自己決定的列，名冊比對到的本名不算這一列本身（那位照樣可以有自己的一列）
+    seen = {row_canon(p) for p in people if not same_pick(p)} | {w for w, cs in spell_row.items() if w in cs}
+    cands_all = (wd.read_json(wd.names_path(workdir), default={}) or {}).get("candidates", [])
     extra: dict[str, dict] = {}   # 名字候選裡有、人名清單沒抓到的名冊名字
-    for c in (wd.read_json(wd.names_path(workdir), default={}) or {}).get("candidates", []):
+    for c in cands_all:
         k = c.get("canonical")
-        if not k or c.get("敏感詞") or k in seen:
+        if not k or c.get("敏感詞") or k in seen or k in spell_row.get(c.get("name"), ()):
             continue
         e = extra.setdefault(k, {"id": f"R{len(extra) + 1:03d}", "名字": k, "其他寫法": [], "是誰": "名冊上的人", "說明": "",
                                  "名冊本名": k, "句子": [], "次數": 0, "老師說": 0, "學員說": 0, "第一次": c["start"]})
@@ -311,9 +373,14 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
             e["句子"].append(c["sentence_id"])
     out = []
     for p in people + list(extra.values()):
-        canon = p.get("名冊本名") or p["名字"]
         d = dec.get(p["名字"], {})
-        in_two = canon in chosen or bool({p["名字"], *p["其他寫法"]} & chosen)
+        canon = p.get("名冊本名") or p["名字"]
+        if d.get("做法") == "是上面的學員" and d.get("同一人"):
+            canon = d["同一人"]
+        elif p["名字"] in spell:
+            canon = p["名字"]   # 這一集自己決定：代號看這個名字自己的
+        # 1016-3：③ 選了「同一人：某某」的照樣列在 ③（可以改決定），不當成 ② 的學員
+        in_two = not same_pick(p) and (canon in chosen or bool({p["名字"], *p["其他寫法"]} & chosen))
         if d.get("做法"):
             how = d["做法"]
         elif p["是誰"] == "書中人物或作者":
@@ -323,8 +390,24 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
         else:
             how = None
         left = [sid for sid in p.get("句子", []) if not in_cut(sid)]
+        # 10-18 #246 修法 2：卡片上實際抓到的字（本名是這一列的卡片），跟列名、也寫成不一樣的才列；讀音比對配到的加註
+        own = {p["名字"], *p["其他寫法"]}
+        shown: dict[str, bool] = {}
+        for c in cands_all:
+            if c.get("敏感詞") or c.get("canonical") != canon or not c.get("matched_text") or c["matched_text"] in own:
+                continue
+            shown[c["matched_text"]] = shown.get(c["matched_text"], False) or c.get("比對層級") in ("A1", "A2")
+        card_words = [w + ("（讀音相近）" if near else "") for w, near in shown.items()]
+        # 10-18 #250 題 1（宇軒選 B）：名冊上對到的人這一集有英文名 → 選不用處理／不是名字也照樣換成那個英文名
+        # 「這位」只看名字本身對到誰（名冊上沒有就看人名清單對到的名冊本名），不看其他寫法是誰的
+        who = owners.get(p["名字"]) or ({p["名冊本名"]} if p.get("名冊本名") else set())
+        own_code = next((codes.get(o) for o in sorted(who) if codes.get(o)), None)
+        if own_code:   # 決定時名冊上還沒有、這一集自己加進名冊的寫法選這兩個照原聲（epcodes.kept_spellings），不寫「照樣換成」
+            hyp = {k: v for k, v in d.items() if k != "自動配"} | {"做法": "不用處理"}
+            if p["名字"] in epcodes.kept_spellings(p["名字"], hyp, [p["名字"]], owners, coded):
+                own_code = None
         out.append({"id": p["id"], "名字": p["名字"], "其他寫法": p["其他寫法"], "是誰": p["是誰"], "說明": p.get("說明", ""),
-                    "名冊本名": p.get("名冊本名"), "次數": p["次數"], "老師說": p["老師說"], "學員說": p["學員說"],
+                    "名冊本名": p.get("名冊本名"), "卡片上寫成": card_words, "次數": p["次數"], "老師說": p["老師說"], "學員說": p["學員說"],
                     "第一次": p["第一次"],
                     "刪除段落外次數": len(left) if p.get("句子") else p["次數"],
                     "都在刪除段落": bool(cuts) and bool(p.get("句子")) and not left,
@@ -332,6 +415,17 @@ def mentioned(workdir: str | Path, chosen: set[str] | None = None,
                     "做法": "換成代號" if in_two else how,
                     "代號": codes.get(canon) if (in_two or how in ("換成代號", "是上面的學員")) else None,
                     "同一人": d.get("同一人"),
+                    "名冊上是別人": spell[p["名字"]][2] if p["名字"] in spell and d.get("做法") != "是上面的學員" else None,
+                    # 10-18 #250（推翻 1016-3「名冊上的人照樣拿掉」）：名冊上的人選不用處理／不是名字也照原聲留著，
+                    # ③ 那列寫灰字「照原聲留著，第 5 步『需留意』會列出來」
+                    "名冊上的人照原聲": bool(d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配")
+                                        and any(w in spellings and w in keep.get(p["名字"], ()) for w in ws_of(p))),
+                    # 名冊上的人：③ 下拉選單「不用處理」「不是名字」後面標「（照原聲留著）」；這一集有英文名的標「（照樣換成 X）」
+                    "名冊上的人": any(w in spellings for w in ws_of(p)),
+                    "名冊上的英文名": own_code,
+                    "照樣換成英文名": own_code if d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配") else None,
+                    "名冊現在有": bool(d.get("做法") in ("不用處理", "不是名字") and not d.get("自動配")
+                                     and any(w in spellings and epcodes.at_map(p["名字"], d, ws_of(p)).get(w) == "" for w in ws_of(p))),   # 1016-3：③ 那列提醒（選不用處理會念出原名）
                     "自動配": bool(d.get("自動配")) and not in_two,   # 10-07：程式自動配的代號（算決定好，人沒改過）
                     "已決定": in_two or bool(d.get("做法"))})
     return out
@@ -342,7 +436,9 @@ unlisted = mentioned   # 舊名字
 
 def decide(workdir: str | Path, name: str, how: str, code: str | None = None, same_as: str | None = None) -> dict:
     """`POST /api/people/decide`：名冊上沒有的名字怎麼處理。換成代號＝加進名冊＋補找老師提到的地方。
-    10-07 審查：跟自動配同一把鎖（epcodes._auto_lock）。"""
+    10-07 審查：跟自動配同一把鎖（epcodes._auto_lock）。
+    10-16 #234：補找老師提到的地方（`rescan_names`，2 小時的課要幾十秒）改到背景做，這裡存好決定就回應；
+    補找的進度與找到幾處看 `rescan_status`。"""
     from bookclub import epcodes
 
     with epcodes._auto_lock:
@@ -351,6 +447,8 @@ def decide(workdir: str | Path, name: str, how: str, code: str | None = None, sa
 
 def _decide(workdir: str | Path, name: str, how: str, code: str | None = None, same_as: str | None = None) -> dict:
     from datetime import datetime
+
+    from bookclub import epcodes
 
     workdir = Path(workdir)
     if how not in HOWS:
@@ -364,41 +462,280 @@ def _decide(workdir: str | Path, name: str, how: str, code: str | None = None, s
         if not any(r["canonical"] == name for r in names.load_roster(data_dir() / "名冊.csv")):
             raise KeyError(f"人名清單裡沒有：{name}")
         p = {"名字": name, "其他寫法": []}
-    added = rescanned = 0
-    if how == "是上面的學員":   # 09-29 宇軒：其實是「學員是誰」選過的某位（轉錯字、暱稱）→ 用那位的代號，不用再選一次
-        from bookclub import names
-        from bookclub import turns as turns_mod
-        from bookclub.config import data_dir
-
-        if not same_as:
-            raise ValueError("要選是上面哪一位學員")
+    added = 0
+    rescan = False
+    if how == "是上面的學員":   # 先檢查，出錯就什麼都不動（下面才會改名冊）
         from bookclub import epcodes
 
-        roster = {r["canonical"]: r["代號"] for r in names.load_roster(data_dir() / "名冊.csv") if r.get("canonical")}
+        if not same_as:
+            raise ValueError("要選是哪一位學員")
         code = epcodes.episode_codes(workdir).get(same_as)
         if not code:
-            raise ValueError(f"「{same_as}」還沒有代號：先在「學員是誰」右欄幫他選")
-        if same_as in roster:
-            add_roster_alias(same_as, [name, *p["其他寫法"]])
-        else:
-            added = int(add_to_roster(name, p["其他寫法"]))
-        rescanned = rescan_names(workdir)
+            raise ValueError(f"「{same_as}」還沒有英文名：先在「② 辨識學員聲音是誰」右邊幫他選")
     elif how == "換成代號":
         code = (code or "").strip()
         if not code:
-            raise ValueError("換成代號要選一個代號")
+            raise ValueError("要選一個英文名")
+    dec = wd.read_json(decisions_path(workdir), default={}) or {}
+    prev = dec.get(name) if isinstance(dec.get(name), dict) else {}
+    # 1016-3 審查 A：名冊多支影片共用，改決定**不從名冊拿掉**寫法。以前選過「同一人」（或已經是這一集自己決定的），
+    # 名冊上這個寫法是別人的 → 記下來，這一集蓋過去（epcodes.episode_spellings），別支影片照名冊不受影響
+    from bookclub import names
+    from bookclub.config import data_dir
+
+    roster_rows = names.load_roster(data_dir() / "名冊.csv")
+    rcanon = epcodes.roster_canon(roster_rows)
+    ws = [name, *p["其他寫法"]]
+    now = {w: rcanon.get(w) or "" for w in ws}
+    at = None   # 第二、五輪審查：人親手選的換成代號／不用處理／不是名字，**每個寫法**記下「決定當時名冊對到誰」（沒有＝空）
+    if how in epcodes.SELF_HOWS:
+        if prev.get("做法") in epcodes.SELF_HOWS and (epcodes.AT_KEY in prev or prev.get(epcodes.OWN_KEY)) and not prev.get("自動配"):
+            if prev.get(epcodes.OWN_KEY):   # 同一條決定改代號：沿用當初記的（舊格式照讀；沒記到的寫法照現在的名冊）
+                at = {w: name for w in ws}
+            else:
+                old = epcodes.at_map(name, prev, ws)
+                at = {w: (old[w] if old.get(w) is not None else now[w]) for w in ws}
+        elif prev.get("做法") == "是上面的學員":
+            at = {w: name for w in ws}   # 以前選過「同一人」：名冊上的對法是這一集加的，這一集算它自己
+        else:
+            at = now
+    alias_added = None
+    if how == "是上面的學員":   # 09-29 宇軒：其實是「學員是誰」選過的某位（轉錯字、暱稱）→ 用那位的代號，不用再選一次
+        from bookclub import names
+        from bookclub.config import data_dir
+
+        roster = {r["canonical"]: r["代號"] for r in names.load_roster(data_dir() / "名冊.csv") if r.get("canonical")}
+        if same_as in roster:
+            alias_added = {"本名": same_as, "寫法": add_roster_alias(same_as, [name, *p["其他寫法"]])}
+        else:
+            added = int(add_to_roster(name, p["其他寫法"]))
+        rescan = True
+    elif how == "換成代號":
         added = int(add_to_roster(name, p["其他寫法"]))   # 名字加進名冊（已經在就不改）；代號只記在這一集的決定裡（epcodes）
-        rescanned = rescan_names(workdir)
+        rescan = True
     elif how == "不是名字":
         from bookclub.server import _append_exclusion
 
+        on_roster = {r["寫法"] for r in roster_rows} | {r["canonical"] for r in roster_rows}
         for w in [name, *p["其他寫法"]]:
+            if w in on_roster:   # 第二輪審查 2：名冊上的名字不寫進全域排除清單（別支影片要換）；這一集由 episode_spellings 不換
+                continue
             _append_exclusion(w, "人名清單：宇軒判斷不是名字")
-    dec = wd.read_json(decisions_path(workdir), default={}) or {}
     dec[name] = {"做法": how, "代號": code if how in ("換成代號", "是上面的學員") else None,
                  "同一人": same_as if how == "是上面的學員" else None, "更新時間": datetime.now().isoformat(timespec="seconds")}
+    if alias_added and alias_added["寫法"]:
+        dec[name]["加進名冊的其他寫法"] = alias_added   # 只當紀錄（名冊共用，改決定時不拿掉）
+    elif prev.get("加進名冊的其他寫法"):
+        dec[name]["加進名冊的其他寫法"] = prev["加進名冊的其他寫法"]
+    if at is not None:
+        dec[name][epcodes.AT_KEY] = at
+    if how in ("不用處理", "不是名字"):   # 10-18 宇軒：先選同一人、後來改回 → 照原聲（老師說不是那個人；epcodes.kept_spellings）
+        was = prev.get(epcodes.FROM_SAME_KEY) or (prev.get("同一人") if prev.get("做法") == "是上面的學員" else None)
+        if was:
+            dec[name][epcodes.FROM_SAME_KEY] = was
     wd.write_json(decisions_path(workdir), dec)
     from bookclub import epcodes
 
-    epcodes.sync(workdir)
-    return {"ok": True, "名字": name, "做法": how, "加進名冊": bool(added), "補找到的老師名字": rescanned}
+    epcodes.sync(workdir)   # 名字候選的本名、代號照這一集的決定對齊
+    if rescan:   # 10-16 #234：名冊變了，背景補找老師提到這個名字的地方（先記下「要補找」，伺服器重開也會補做）
+        request_rescan(workdir)
+    return {"ok": True, "名字": name, "做法": how, "加進名冊": bool(added), "補找中": rescan}
+
+
+# ---------- 10-16 #234：背景補找老師提到的名字 ----------
+# 以前每選一次「換成代號」「是上面的學員」都當場把老師所有句子重掃一遍（2 小時的課、名冊 40 人，Mac 上約 26 秒，
+# 老師的 WSL2 更慢），掃完才回應，等的時候網頁其他列選的東西又被整頁重畫蓋掉。
+# 現在：選完先存決定、在 `校對/人名補找.json` 記「待補找」，背景執行緒去掃；掃的時候**不拿** `epcodes._auto_lock`
+# （不然其他列還是要排隊等），掃完才拿鎖重讀名字候選、合併新的、對齊代號。掃的途中又有人選了，掃完再掃一輪
+# （新加進名冊的名字可能在這一輪開始之後才加）。伺服器在掃的途中關掉：「待補找」還在，下次打開網頁（/api/state、
+# /api/review）就補做；第 4 步開始前也會等它做完。找到的處數累積在「未通知」，網頁通知過才歸零。
+
+RESCAN_FILE = "人名補找.json"   # 校對/人名補找.json：{待補找, 要求（第幾次要求）, 未通知（找到幾處還沒跟人說）, 錯誤}
+_sched_lock = threading.Lock()   # 只保護這個檔與 _workers；拿著它時不去拿 _auto_lock（_auto_lock → _sched_lock 的順序才可以）
+_workers: dict[str, threading.Thread] = {}
+
+
+def rescan_path(workdir: str | Path) -> Path:
+    return Path(workdir) / "校對" / RESCAN_FILE
+
+
+def _load_rescan(workdir: Path) -> dict:
+    return wd.read_json(rescan_path(workdir), default={}) or {}
+
+
+def request_rescan(workdir: str | Path) -> bool:
+    """記下「名冊變了，要補找」，並開背景去做（已經在做就讓它做完再多做一輪）。已結案的工作區不補找（回 False）。"""
+    workdir = Path(workdir)
+    if _closed(workdir):
+        return False
+    with _sched_lock:
+        st = _load_rescan(workdir)
+        st["待補找"] = True
+        st["要求"] = int(st.get("要求") or 0) + 1
+        for k in ("錯誤", "錯誤時間", "錯誤已提醒"):
+            st.pop(k, None)
+        wd.write_json(rescan_path(workdir), st)
+    return ensure_rescan(workdir)
+
+
+RETRY_AFTER_S = 60.0   # 出錯之後，打開第 3 步網頁至少隔這麼久才再試（不要每次重抓都重掃幾十秒）
+ERROR_MSG = "找老師提到的名字時出錯了。過一分鐘再重新整理網頁；一直不行，用「＋新增修改」補漏抓的名字。"   # 出錯後隔 RETRY_AFTER_S 才重試
+
+
+def _alive(key: str) -> bool:
+    t = _workers.get(key)
+    return t is not None and t.is_alive()
+
+
+def _closed(workdir: Path) -> bool:
+    """1017 總審查：已結案（瘦身版）的工作區不補找、不寫檔。`workdir.no_writes()` 只管得到發起的那個執行緒，
+    背景補找管不到，所以開背景之前、背景每一輪開始都看一次。"""
+    from bookclub import closing
+
+    return closing.closed(workdir)
+
+
+def rescan_running(workdir: str | Path) -> bool:
+    """背景補找**現在真的在跑**（只看，不會順手開補找；結案打包、清空間前用）。"""
+    return _alive(str(Path(workdir).resolve()))
+
+
+def ensure_rescan(workdir: str | Path, retry: bool = False) -> bool:
+    """有「待補找」又沒有背景在做（例如伺服器做到一半關掉）就開一個。回傳現在是不是**真的有背景在補找**。
+    上一輪出錯的：預設不重試；`retry=True`（打開第 3 步網頁）且距離出錯超過 `RETRY_AFTER_S` 才再試。"""
+    workdir = Path(workdir)
+    key = str(workdir.resolve())
+    if _closed(workdir):   # 1017 總審查：已結案不補找（背景執行緒不在 no_writes 裡，會寫進瘦身版）
+        return _alive(key)
+    with _sched_lock:
+        if _alive(key):
+            return True
+        st = _load_rescan(workdir)
+        if not st.get("待補找"):
+            return False
+        if st.get("錯誤") and not (retry and time.time() - float(st.get("錯誤時間") or 0) >= RETRY_AFTER_S):
+            return False
+        t = threading.Thread(target=_rescan_worker, args=(workdir, key), name="人名補找", daemon=True)
+        _workers[key] = t
+        t.start()
+    return True
+
+
+def rescan_status(workdir: str | Path) -> dict:
+    """網頁用：`補找中`（背景真的在做）、`未通知`（掃完找到幾處、還沒跟人說）、`錯誤`（沒在做、上一輪出錯；白話）。"""
+    workdir = Path(workdir)
+    busy = ensure_rescan(workdir)
+    st = _load_rescan(workdir)
+    return {"補找中": busy, "未通知": int(st.get("未通知") or 0),
+            "錯誤": ERROR_MSG if (st.get("錯誤") and st.get("待補找") and not busy) else None}
+
+
+def rescan_seen(workdir: str | Path) -> dict:
+    """網頁跳過「補找到 N 處」的通知之後歸零。"""
+    workdir = Path(workdir)
+    with _sched_lock:
+        st = _load_rescan(workdir)
+        if st.get("未通知"):
+            st["未通知"] = 0
+            wd.write_json(rescan_path(workdir), st)
+    return {"ok": True}
+
+
+def wait_rescan(workdir: str | Path, timeout: float = 300.0) -> dict:
+    """測試、命令列用：等背景補找做完，回傳 `rescan_status`。"""
+    workdir = Path(workdir)
+    t = _workers.get(str(workdir.resolve()))
+    if t is not None:
+        t.join(timeout)
+    return rescan_status(workdir)
+
+
+def rescan_busy(workdir: str | Path) -> bool:
+    """第 4 步開始前：背景**真的在**補找（伺服器重開後沒做完的會在這裡開起來）。出錯停住的回 False，看 `rescan_error_gate`。"""
+    return ensure_rescan(workdir)
+
+
+def rescan_failed(workdir: str | Path) -> bool:
+    """10-19 #234：補找出錯停住了（還有「待補找」、記著錯誤）。第 4 步開始時記進略過紀錄，第 5 步「需留意」列一行。只讀。"""
+    st = _load_rescan(Path(workdir))
+    return bool(st.get("待補找") and st.get("錯誤"))
+
+
+def rescan_error_gate(workdir: str | Path) -> str | None:
+    """第 4 步開始前：補找出錯停住了 → 第一次按回提醒文字（擋一次），再按一次就放行（不能讓第 4 步永遠進不去）。"""
+    workdir = Path(workdir)
+    with _sched_lock:
+        st = _load_rescan(workdir)
+        if not (st.get("待補找") and st.get("錯誤")) or st.get("錯誤已提醒"):
+            return None
+        st["錯誤已提醒"] = True
+        wd.write_json(rescan_path(workdir), st)
+    return ERROR_MSG + "照樣開始的話，剛加的名字在老師講到的地方可能沒換掉。要照樣開始，再按一次。"
+
+
+def _scan_teacher(workdir: Path) -> dict | None:
+    """在老師的句子裡比對名冊（不拿鎖，最花時間的部分；`names.scan_candidates`）。還沒跑過找名字回 None。"""
+    from bookclub import names
+
+    return names.scan_candidates(workdir, _teacher_sentence_ids(workdir))
+
+
+def _merge_found(workdir: Path, scan: dict | None) -> int | None:
+    """拿鎖接上（`names.merge_candidates`）。掃的途中第 1 步重跑或逐字稿改了回 None（這輪不算）。"""
+    from bookclub import names
+
+    if not scan:
+        return 0
+    return names.merge_candidates(workdir, scan, "名冊加了名字後補找")
+
+
+def _teacher_sentence_ids(workdir: Path) -> list[str]:
+    from bookclub import turns as turns_mod
+
+    speakers = wd.read_json(wd.speakers_path(workdir), default={}) or {}
+    tdata = turns_mod.page_data(workdir)
+    ids = {sid for t in tdata.get("段落", []) if t.get("說話者") == "老師" for sid in t.get("句子", [])}
+    ids |= {s["id"] for s in speakers.get("sentences", []) if s.get("label") == "老師"}
+    return sorted(ids)
+
+
+def _rescan_worker(workdir: Path, key: str) -> None:
+    me = threading.current_thread()
+    changed = 0   # 連續幾輪掃的途中資料變了
+    while True:
+        with _sched_lock:
+            st = _load_rescan(workdir)
+            if not st.get("待補找") or _closed(workdir):   # 1017 總審查：做到一半結案了（清理中也算）就停，不寫檔
+                if _workers.get(key) is me:
+                    _workers.pop(key, None)
+                return
+            gen = st.get("要求")
+        try:
+            n = _merge_found(workdir, _scan_teacher(workdir))
+            if n is None:   # 掃的途中第 1 步重跑或逐字稿改了：這輪不算，再掃一輪（連續 3 輪都這樣算出錯）
+                changed += 1
+                if changed >= 3:
+                    raise RuntimeError("掃的途中名字候選或逐字稿一直在變")
+                continue
+            changed = 0
+        except Exception as e:  # noqa: BLE001 — 留著「待補找」，下次打開網頁再試
+            import traceback
+
+            traceback.print_exc()
+            with _sched_lock:
+                st = _load_rescan(workdir)
+                st["錯誤"] = f"{type(e).__name__}：{e}"   # 只記在檔案、印在終端機；網頁只給白話（ERROR_MSG）
+                st["錯誤時間"] = time.time()
+                st["錯誤已提醒"] = False
+                wd.write_json(rescan_path(workdir), st)
+                if _workers.get(key) is me:
+                    _workers.pop(key, None)
+            return
+        with _sched_lock:
+            st = _load_rescan(workdir)
+            st["未通知"] = int(st.get("未通知") or 0) + n
+            for k in ("錯誤", "錯誤時間", "錯誤已提醒"):
+                st.pop(k, None)
+            if st.get("要求") == gen:   # 掃的途中沒有新的要求才算做完；有的話再掃一輪
+                st["待補找"] = False
+            wd.write_json(rescan_path(workdir), st)

@@ -63,7 +63,8 @@ async function apiPost(path, body, { quiet = false } = {}) {
   if (!res.ok) {
     const err = new Error(data.error || `${path} 失敗（${res.status}）`);
     err.data = data;   // 10-02 第七批：呼叫端看得到其他欄位（例如「找不到claude」）
-    if (!quiet) { showSaveError(err.message); err.shown = true; }
+    // 1015-8 第 3 段：已結案的瘦身版——頂端那一句已經說了，不再跳「沒存到」的提示
+    if (!quiet && !data["已結案"]) { showSaveError(err.message); err.shown = true; }
     throw err;
   }
   return data;
@@ -203,6 +204,30 @@ let lastState = null;
 function pjNowHtml(lab) {
   if (!lab || !lab["顯示名稱"]) return "";
   return `<div class="pj-now"><b>現在在：${esc(lab["顯示名稱"])}</b> <span class="badge ${lab["標示"] === "測試" ? "" : "done"}">${esc(lab["標示"])}</span></div>`;
+}
+
+// 1015-8 第 3 段（32 號設計 §5.2）：已結案的瘦身版——每一步頂端一句（給老師看）；第 1–4 步所有按鈕灰掉、第 5 步只灰掉
+// 聽／改／重做／輸出／拿檔（style.css 的 body.ws-closed、body.ws-closed-all）。伺服器那邊另外一層擋（409）。
+function wsClosed() { return !!(lastState && lastState["已結案"]); }
+
+function wsClosedBarHtml(st) {
+  const s = st || lastState || {};
+  if (!s["已結案"]) return "";
+  const c = s["結案"] || {};
+  const where = c["日期"] || c["位置顯示"] ? `（${[c["日期"], c["位置顯示"] ? `存到 ${c["位置顯示"]}` : ""].filter(Boolean).join(" ")}）` : "";
+  return `<div class="ws-closed-bar" role="status">這支影片已結案${esc(where)}，這裡只能看紀錄。</div>`;
+}
+
+function wsClosedMark(id) {
+  const on = wsClosed() && /^step[1-5]$/.test(id || "");
+  document.body.classList.toggle("ws-closed", on);
+  document.body.classList.toggle("ws-closed-all", on && id !== "step5");
+  if (on && id !== "step5" && !contentEl.querySelector(".ws-closed-bar")) contentEl.insertAdjacentHTML("afterbegin", wsClosedBarHtml());
+}
+
+// 總覽：進行中的在上面、已結案的放最下面一組（純函式；順序照原本的）
+function pjGroups(list) {
+  return { "進行中": (list || []).filter((p) => !p["已結案"]), "已結案": (list || []).filter((p) => !!p["已結案"]) };
 }
 
 async function renderSidebar() {
@@ -357,17 +382,19 @@ async function renderRoute() {
   stopStatusPoll();
   contentEl.classList.remove("wide");
 
+  // 10-17 畫面測試：已結案的專案從第 1–4 步回總覽，這兩個 class 還在＝總覽的「切換」「選影片」全灰。每一頁畫之前先拿掉
+  document.body.classList.remove("ws-closed", "ws-closed-all");
   try {
     if (id === "overview") return await renderOverview();
     if (id !== "step0" && lastState && lastState["沒有專案"]) {
       contentEl.innerHTML = `<div class="notyet-card">還沒選影片。到 <a href="#overview">總覽</a> 選一支影片，或切換到已有的專案。</div>`;
       return;
     }
-    if (id === "step1") return await renderStep1();
-    if (id === "step2") return await renderStep2();
-    if (id === "step3") return await renderReview();
-    if (id === "step4") return await renderExecute();
-    if (id === "step5") return await renderFinal();
+    if (id === "step1") { await renderStep1(); return wsClosedMark(id); }
+    if (id === "step2") { await renderStep2(); return wsClosedMark(id); }
+    if (id === "step3") { await renderReview(); return wsClosedMark(id); }
+    if (id === "step4") { await renderExecute(); return wsClosedMark(id); }
+    if (id === "step5") { await renderFinal(); return wsClosedMark(id); }
     if (id === "step0") return await renderProfile();
     const def = STEP_DEFS.find((s) => s.id === id);
     return renderNotYet(def);
@@ -644,17 +671,19 @@ async function renderExecuteBody() {
   // 老師的畫面一律整支、照卡片重做（伺服器沒開開發者設定時收到範圍也不理）
   const dev = !!d["開發者"];
   const ra = dev ? d["只重新組裝"] : null;
+  const autoBtn = pre["缺代號"] && !running;   // 1016-3：「按下面『幫還沒代號的自動配』」只在下面真的有這顆時才這樣寫
+  // 10-20 總審查：說明改說「英文名」（跟 ③ 一致），沒有英文名的照原聲留著（#246），不再寫「都要有代號」
   const btn = execBtnState(running, prog, !!d["有成品"]);   // 10-08：按鈕文字照狀態   // 10-05 #97：沒有退回時也能只重新組裝（伺服器算好能不能按）
   contentEl.innerHTML = `
     <h1>4　AI 執行</h1>
     <p class="exec-now" id="execNow"><b>${esc(btn.status)}</b></p>
     <p class="muted">依序跑四步：老師提到名字 → 學員重念 → 保留原聲學員講到名字 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
     <div class="hint">從第 4 步直接開始（例如老師已經自己看完全片、挑好參考聲音）：<b>第 1 步轉文字還是要跑</b>（學員的話要照逐字稿重念，電腦自動）；
-      <b>第 2 步的老師參考音也要選好</b>，會出現的名字都要有代號（沒有的按下面「幫還沒代號的自動配」）。
+      <b>第 2 步的老師參考音也要選好</b>，會出現的名字要有英文名，沒有的照原聲留著（${autoBtn ? "要換的按下面「幫還沒代號的自動配」" : "要換的到第 3 步 ③ 按「幫還沒英文名的自動配」"}）。
       能省掉的是第 3 步逐筆覆核的人工：沒覆核的話，照第 1 步的建議做（名字的那一句老師重念、學員段落全部學員重念、建議剪掉的段落不剪）。
       第 3 步「開始前 4 件事」只有 ② 學員是誰一定要做（沒配代號的學員，AI 重念會念出本名）。</div>
     ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
-    ${pre["缺代號"] && !running ? `<p><button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">從代號名單配（外國人名的中文寫法），之後在第 3 步 ②③ 可以改</span></p>` : ""}
+    ${autoBtn ? `<p><button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">從代號名單配（外國人名的中文寫法），之後在第 3 步 ②③ 可以改</span></p>` : ""}
     <h2>要修改的項目</h2>
     <div class="card" id="execStats">${execStatsHtml(d)}</div>
     ${fc ? finalCheckHtml(fc) : ""}
@@ -1055,19 +1084,29 @@ async function renderOverview() {
   }
   const list = projects["專案"] || [];
   // 10-04 #129：每一列小字印完整路徑（以前只印上一層），資料夾名稱一樣的專案分得出來
-  const rows = list.map((p) => `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
-      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${p["路徑"] === projects["目前"] ? "　（目前）" : ""}<div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）：" : ""}${esc(p["路徑"])}</div></td>
+  // 1015-8 第 3 段（§5.3）：已結案的放到最下面一個收合的「已結案（N 支）」，名稱旁徽章、底下灰字「10-16 存到 D:\…」
+  const rowHtml = (p) => {
+    const c = p["已結案"];
+    return `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
+      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${c ? ` <span class="badge">已結案</span>` : ""}${p["路徑"] === projects["目前"] ? "　（目前）" : ""}
+        ${c ? `<div class="muted">${esc([c["日期"], c["位置顯示"] ? `存到 ${c["位置顯示"]}` : ""].filter(Boolean).join(" "))}</div>` : ""}
+        <div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）：" : ""}${esc(p["路徑"])}</div></td>
       <td>${esc(p["長度"] || "—")}</td>
-      <td>${p["分析完成"] ? "分析完成" : "還沒分析完"}${p["有覆核"] ? "、覆核中" : ""}</td>
+      <td>${c ? "已結案，只能看紀錄" : `${p["分析完成"] ? "分析完成" : "還沒分析完"}${p["有覆核"] ? "、覆核中" : ""}`}</td>
       <td>${esc(p["修改時間"])}</td>
-      <td>${p["路徑"] === projects["目前"] ? "" : `<button class="secondary pj-switch" data-path="${esc(p["路徑"])}">切換</button>`}</td></tr>`).join("");
+      <td>${p["路徑"] === projects["目前"] ? "" : `<button class="secondary pj-switch" data-path="${esc(p["路徑"])}">切換</button>`}</td></tr>`;
+  };
+  const groups = pjGroups(list);
+  const rows = groups["進行中"].map(rowHtml).join("");
+  const closedRows = groups["已結案"].map(rowHtml).join("");
   contentEl.innerHTML = `
     <h1>總覽</h1>
     ${projects["轉文字金鑰"] === false ? `<div class="hint">${esc(projects["轉文字金鑰說明"] || "這個網頁伺服器讀不到 Groq 金鑰，新影片沒辦法轉文字。關掉這個伺服器，改用雙擊「啟動.command」重開。")}（已經轉好文字的專案不受影響）</div>` : ""}
     ${pickCardHtml()}
     ${current}
     <h2>已有的專案（${list.length}）</h2>
-    <div class="card">${list.length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">還沒有專案。</p>`}</div>`;
+    <div class="card">${groups["進行中"].length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">${list.length ? "沒有進行中的專案。" : "還沒有專案。"}</p>`}
+      ${closedRows ? `<details class="pj-closed"><summary>已結案（${groups["已結案"].length} 支）</summary><table class="kv pj-list"><tbody>${closedRows}</tbody></table></details>` : ""}</div>`;
   contentEl.querySelectorAll(".pj-switch").forEach((b) => b.addEventListener("click", async () => {
     const p = list.find((x) => x["路徑"] === b.dataset.path) || {};
     // 10-08：切換前說清楚要切去哪一個（名稱一樣的專案分得出來）

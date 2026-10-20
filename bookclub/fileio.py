@@ -276,6 +276,93 @@ def pick_file(title: str, *, method: str | None = None, run=None, exts: tuple[st
 
 
 # ---------------------------------------------------------------------------
+# 選資料夾視窗（1015-8 結案打包，32 號設計 §1a：按「結案打包…」直接跳系統的選資料夾視窗）
+# ---------------------------------------------------------------------------
+
+FOLDER_PICKER_ENV = "BOOKCLUB_FOLDER_PICKER"
+
+
+def folder_picker_enabled(env: dict | None = None) -> bool:
+    """總開關：環境變數 BOOKCLUB_FOLDER_PICKER=0 不叫系統的選資料夾視窗，網頁改成打路徑的框（測試、沒有桌面時用）。"""
+    env = os.environ if env is None else env
+    return str(env.get(FOLDER_PICKER_ENV, "1")).strip().lower() not in ("0", "false", "no", "off")
+
+
+def powershell_folder_script(title: str) -> str:
+    """WSL2 的選資料夾視窗（Windows 的 FolderBrowserDialog），預設開在 Windows 的下載資料夾；按取消印 CANCEL_MARK。"""
+    return "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+        "Add-Type -AssemblyName System.Windows.Forms",
+        "$owner = New-Object System.Windows.Forms.Form",
+        "$owner.TopMost = $true",
+        "$owner.ShowInTaskbar = $false",
+        "$owner.StartPosition = 'CenterScreen'",
+        "$owner.Size = New-Object System.Drawing.Size(1, 1)",
+        "$owner.Opacity = 0",
+        "$owner.Show()",
+        "$owner.Activate()",
+        "$d = New-Object System.Windows.Forms.FolderBrowserDialog",
+        f"$d.Description = {_ps_str(title)}",
+        "$d.ShowNewFolderButton = $true",
+        "try { $p = (New-Object -ComObject Shell.Application).NameSpace('shell:Downloads').Self.Path } catch { $p = '' }",
+        "if (-not $p) { $p = Join-Path $env:USERPROFILE 'Downloads' }",
+        "$d.SelectedPath = $p",
+        "$r = $d.ShowDialog($owner)",
+        "$owner.Close()",
+        f"if ($r -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $d.SelectedPath }} else {{ Write-Output {_ps_str(CANCEL_MARK)} }}",
+    ])
+
+
+def folder_command(method: str, title: str, which=None) -> list[str]:
+    which = which or shutil.which
+    if method == "mac":
+        script = ("var app = Application.currentApplication(); app.includeStandardAdditions = true; app.activate(); "
+                  f"String(app.chooseFolder({{withPrompt: {json.dumps(title, ensure_ascii=False)}}}))")
+        return ["osascript", "-l", "JavaScript", "-e", script]
+    if method == "wsl":
+        ps = _find_exe("powershell.exe", PS_CANDIDATES, which) or "powershell.exe"
+        return [ps, "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass",
+                "-EncodedCommand", encode_ps(powershell_folder_script(title))]
+    if method == "zenity":
+        return ["zenity", "--file-selection", "--directory", f"--title={title}"]
+    if method == "kdialog":
+        return ["kdialog", "--title", title, "--getexistingdirectory", str(Path.home())]
+    raise ValueError(f"不認得的選檔方式：{method}")
+
+
+def pick_folder(title: str, *, method: str | None = None, run=None, which=None, env: dict | None = None) -> Path | None:
+    """叫系統的選資料夾視窗，回傳 Ubuntu／Mac 這邊的路徑；按取消回 None；叫不起來（或總開關關掉）丟 PickUnavailable。
+    跟選檔視窗共用同一把鎖（同一時間只開一個視窗）。run／which 可以從外面傳假的（測試不叫真的視窗）。"""
+    if not folder_picker_enabled(env):
+        raise PickUnavailable("系統的選資料夾視窗關掉了（BOOKCLUB_FOLDER_PICKER=0），請在下面打資料夾的路徑")
+    which = which or shutil.which
+    run = run or subprocess.run
+    method = method or pick_method(which=which)
+    if not method:
+        raise PickUnavailable("這台電腦叫不起系統的選資料夾視窗（沒有桌面環境），請在下面打資料夾的路徑")
+    if not _pick_lock.acquire(blocking=False):
+        raise PickUnavailable("選檔視窗已經開著了（可能躲在瀏覽器後面），先在那個視窗選好或按取消")
+    try:
+        cmd = folder_command(method, title, which=which)
+        try:
+            kw = {"cwd": "/mnt/c"} if method == "wsl" and Path("/mnt/c").is_dir() else {}
+            r = run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=PICK_TIMEOUT_S, **kw)
+        except subprocess.TimeoutExpired:
+            raise PickUnavailable("選資料夾視窗開太久沒有選（超過 15 分鐘），已經不等了") from None
+        except OSError as e:
+            raise PickUnavailable(f"叫不起系統的選資料夾視窗（{e.strerror or e}）") from None
+        got = parse_pick(method, r.returncode, r.stdout, r.stderr)
+        if got is None:
+            return None
+        if method == "wsl":
+            got = wsl_to_linux(got, run=run)
+        return Path(got)
+    finally:
+        _pick_lock.release()
+
+
+# ---------------------------------------------------------------------------
 # Mac：常駐的選檔小程式（10-08，bookclub/filepicker.swift）
 # ---------------------------------------------------------------------------
 #
@@ -560,6 +647,25 @@ def cleanup_partials(folder: Path, *, older_than_s: float = PARTIAL_STALE_S, now
                 f.unlink()
                 n += 1
     return n
+
+
+def link_or_copy(src: Path, dst: Path) -> bool:
+    """#79（1017-2）：讓 dst 跟 src 是同一份資料——先試硬連結（同一個檔兩個名字，不多佔空間、一下就好），
+    做不到（跨磁碟、檔案系統不支援硬連結、dst 已經在之類的 OSError）就照舊 `shutil.copy2`（修改時間保留）。
+    回傳 True＝連結、False＝複製。src 是捷徑時連到它指到的那支（`os.link` 預設跟著捷徑走）。
+    前提：任何程式都不可以原地改寫 src／dst（要換內容就寫暫存檔再換名），不然兩個名字會一起變。
+    審查（1017-2）：dst 已經在（例如上次中斷留下的暫存檔，可能是另一支成品的硬連結）先拿掉這個名字再連結／複製——
+    `copy2` 原地覆寫會改到那支成品。src 與 dst 是同一個路徑照舊丟 `shutil.SameFileError`（不會先把它刪掉）。"""
+    src, dst = Path(src), Path(dst)
+    if os.path.realpath(src) == os.path.join(os.path.realpath(dst.parent), dst.name):
+        raise shutil.SameFileError(f"{src} 和 {dst} 是同一個檔")
+    dst.unlink(missing_ok=True)   # 只拿掉這個名字（捷徑就拿掉捷徑本身），別的名字的資料不動
+    try:
+        os.link(src, dst)
+        return True
+    except OSError:
+        shutil.copy2(src, dst)
+        return False
 
 
 class CopyCancelled(Exception):

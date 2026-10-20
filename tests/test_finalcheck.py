@@ -1154,18 +1154,21 @@ def test_export_record_print_taken_before_copy():
         sw = _prod(w, "成品_0-3_sw.mp4", T1)
         fc.page_data(w)
         before = fc.product_print(w / sw)
-        real = fc.shutil.copy2
+        from bookclub import fileio
 
-        def swap(a, b):   # 複製完就把成品換掉（模擬第 4 步剛好換檔）
+        real = fileio.link_or_copy   # #79（1017-2）：輸出改成硬連結（做不到才 copy2）
+
+        def swap(a, b):   # 連結／複製完就把成品換掉（模擬第 4 步剛好換檔：寫暫存再換名，新的檔）
             r = real(a, b)
-            _prod(w, "成品_0-3_sw.mp4", T1, 120, b"changed-later")
+            _prod(w, "成品_0-3_sw.mp4.換檔中", T1, 120, b"changed-later")
+            (w / "輸出" / "成品_0-3_sw.mp4.換檔中").replace(w / sw)
             return r
 
-        fc.shutil.copy2 = swap
+        fileio.link_or_copy = swap
         try:
             rec = fc.export_final(w, confirm=True)
         finally:
-            fc.shutil.copy2 = real
+            fileio.link_or_copy = real
         assert rec["成品檔指紋"] == before and fc.page_data(w)["輸出成品過期"]["原因"] == "成品換新了"
 
 if __name__ == "__main__":

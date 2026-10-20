@@ -185,6 +185,7 @@ def test_outside_passed_card_can_be_fixed_on_latest():
     plan = tn._quiet(fc.redo_plan, w)
     assert [e["卡號"] for e in plan if e.get("卡號")] == [n1["卡號"]]
     tn._quiet(fc.prepare_redo, w, log=lambda s: None)
+    _gen_logs(w)   # 1015-8 #228：生成程式把清掉的那一句重新生成了
     _assemble(w, _t(4), tn._records())
     tn._quiet(fc.finish_redo, w)
     st = needs.load(w)
@@ -623,6 +624,9 @@ def test_render_video_names_with_version_after_upgrade():
     w = te._fresh()
     prod, _old = sk._with_product(w)
     tn._quiet(needs.upgrade, w)
+    from bookclub import nameplan
+
+    tn._quiet(nameplan.refresh_plan, w)   # 10-20 總審查：跟第 4 步一樣先排名字處理計畫（render_done 會比組裝用的計畫）
     n = needs.next_version_no(w)
     with sk._FakeRender(w, fail=True):
         try:
@@ -724,18 +728,8 @@ def test_api_execute_start_base_version_developer_only():
 # ---------- 10-15 總檢查修正（1015-7）：要修改的分流、第 4 步拿得到原因、redo_cards 一份清單 ----------
 
 def _gen_logs(w: Path) -> None:
-    """假的生成紀錄（照現在排出來的計畫，每句一個種子、一個聲音檔）：第 4 步才算得出「文字和範圍都沒改＝換一種念法」。"""
-    from bookclub import workdir as wd
-
-    for role, xs in fc._redo_ctx(w).items():
-        if not xs:
-            continue
-        lp, od = fc._role_paths(w, role)
-        od.mkdir(parents=True, exist_ok=True)
-        wd.write_json(lp, {"句子": [{"id": x["id"], "text": x.get("text"), "slot": x["slot"], "嘗試": [{"種子": 7}],
-                                    "選定": 1, "第幾版": 1} for x in xs]})
-        for x in xs:
-            (od / f"{x['id']}.wav").write_bytes(b"wav")
+    """假的生成紀錄：照現在的計畫，全部做好（`test_needs.gen_logs`，1015-8 起假工作區預設就有）。"""
+    tn.gen_logs(w)
 
 
 def _gen_ids(w: Path, role: str) -> set:
@@ -914,6 +908,7 @@ def test_reason_after_reassemble_only_not_orphaned():
         assert [e["鍵"] for e in plan] == c["紀錄鍵"]
         tn._quiet(fc.prepare_redo, w, log=lambda s: None)
         assert needs.redo_run_cards(w, needs.load(w), fc._index(w)) == {c["卡號"]}
+        _gen_logs(w)   # 1015-8 #228：生成程式把清掉的那一句重新生成了（不然 redo_list 照生成程式的判斷還是「已改，等重做」）
         recs = tn._records()
         i = next(j for j, x in enumerate(recs) if x.get("檔案") and "S001" in x["檔案"])
         recs[i] = {**recs[i], "檔案指紋": "fp-new"}
