@@ -11,7 +11,6 @@ asteroid-filterbanks==0.4.0
 attrs==26.1.0
 audioread==3.1.0
 beautifulsoup4==4.15.0
--e file:///Users/florinn/Downloads/bookclub-edit
 certifi==2026.7.22
 cffi==2.1.1
 charset-normalizer==3.5.1

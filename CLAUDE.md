@@ -44,7 +44,7 @@
 ## 跑測試
 
 - 單支：`.venv/bin/python tests/test_xxx.py`（各檔開頭的「獨立可跑」那行）；少數檔寫 `PYTHONPATH=. .venv/bin/python tests/test_xxx.py`（例如 `test_csvfile.py`、`test_codes_auto.py`）。沒有用 pytest。
-- 全部跑一輪：`for f in tests/test_*.py; do PYTHONPATH=. .venv/bin/python "$f" || echo "失敗：$f"; done`（2026-10-19 實測 62 支全過，約 1 分鐘）
+- 全部跑一輪：`for f in tests/test_*.py; do PYTHONPATH=. .venv/bin/python "$f" || echo "失敗：$f"; done`（2026-10-20 實測 81 支全過，約 2～3 分鐘；機器忙時 test_people_rescan 會超過 90 秒，單獨重跑即可）
 - 單元／網頁測試：用合成資料，不跑模型、不碰真的工作區、不寫 `~/讀書會剪輯資料`。新的測試檔在 `from __future__` 下第一個 import `_testtmp`。
 - 快照測試 `tests/test_cards_snapshot.py`：用 node 的假瀏覽器比對第 3 步卡片的 HTML、按鈕事件、送出的 API。只有**維護者同意刻意改第 3 步畫面**時才重產（`--update`），並在該檔開頭記下改了什麼。`test_final_cards_web.py`、`test_web.py` 也用到 node。
 - smoke 測試（`tests/smoke/`）會**真的載入三個模型**跑一小段假錄音，要幾分鐘到十幾分鐘：`.venv/bin/bookclub doctor --smoke`（只在 Mac 上跑，WSL2 跳過）。AI 不要自己跑，除非被明確要求。
