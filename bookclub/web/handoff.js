@@ -39,6 +39,7 @@ async function hoBoxInit(el, stage) {
       ${line.running ? `<button class="secondary" id="ho-stop">停止</button>`
         : `<button class="secondary" id="ho-pack" ${why ? "disabled" : ""}>交接打包…</button>`}
       <button class="ghost" id="ho-imp" ${line.running ? "disabled" : ""}>匯入交接包…</button>
+      ${stage === "第3步" && !line.running && d["最近一次"] ? `<button class="ghost" id="ho-clean" hidden>清掉暫存…</button>` : ""}
       ${why && !line.running ? `<span class="muted">${esc(why)}</span>` : ""}
       <span id="ho-msg" role="status">${line.text ? (line.kind ? `<span class="badge ${line.kind}">${line.kind === "done" ? "已存好" : "沒有存好"}</span> ` : "") + esc(line.text) : ""}</span>
     </div>
@@ -76,6 +77,15 @@ async function hoBoxInit(el, stage) {
     hoBoxInit(el, stage);
   });
   el.querySelector("#ho-imp").addEventListener("click", () => hoOpenImport());
+  const cl = el.querySelector("#ho-clean");
+  if (cl && !(hoWatch === stage && job && job["狀態"] === "已存好")) {
+    apiGet("/api/handoff/clean-plan").then((plan) => {
+      if (!document.body.contains(cl) || !plan["合計"] || !plan["有交接包"]) return;
+      cl.textContent = `清掉暫存（約 ${hoSize(plan["合計"])}）…`;
+      cl.hidden = false;
+      cl.addEventListener("click", () => hoAskClean(msg));
+    }).catch(() => {});
+  }
   clearTimeout(hoPollTimer);
   if (line.running) hoPollTimer = setTimeout(() => { if (document.body.contains(el)) hoBoxInit(el, stage); }, 1000);
   else if (hoWatch === stage && job && job["狀態"] === "已存好") {
@@ -170,7 +180,7 @@ async function hoRenderImport(dlg) {
   const s = (v.z || {})["摘要"] || {};
   const name = s["原片檔名"] || "原片";
   const zipHtml = v.z
-    ? `<b>${esc(v.z["檔名"])}</b><div class="muted">${esc(s["哪一段"] === "第5步" ? "第 5 步交接（含成品）" : "第 3 步交接")}・${esc(s["主機"] || "")}・${esc(String(s["匯出時間"] || "").replace("T", " ").slice(0, 16))}</div>`
+    ? `<b>${esc(v.z["檔名"])}</b><div class="muted">${esc(s["哪一段"] === "第5步" ? "第 5 步交接（含成品）" : "第 3 步交接")}・${esc(s["電腦"] || "")}・${esc(String(s["匯出時間"] || "").replace("T", " ").slice(0, 16))}</div>`
     : `<span class="muted">還沒選</span>`;
   let vidHtml = `<span class="muted">先選交接包</span>`;
   if (v.z) {
@@ -254,7 +264,11 @@ async function hoRenderImport(dlg) {
   if (yes) yes.addEventListener("click", async () => {
     yes.disabled = true;
     try { await apiPost("/api/handoff/import/start", { "確認": true }, { quiet: true }); }
-    catch (e) { yes.disabled = false; return; }
+    catch (e) {
+      yes.disabled = false;
+      yes.closest(".rv-confirm-btns").insertAdjacentHTML("beforebegin", `<p class="rv-warnline">${esc(e.message)}</p>`);
+      return;
+    }
     hoRenderImport(dlg);
   });
   const no = dlg.querySelector("#ho-no");
@@ -299,7 +313,7 @@ function hoBindOverview(root, list) {
     const h = p["交接"] || {};
     const ok = await hoDialog("清掉這集？", [
       `「${p["顯示名稱"] || p["名稱"] || ""}」已經交出去了。清掉之後，這台的整個工作資料夾${h["含原片複本"] ? "和複製進 Ubuntu 的原片" : ""}都會移除（約 ${hoSize(h["大小"])}）。`,
-      "交接包已經在雲端空間上，要回頭看可以重新匯入。"], "清掉這集", "先留著");
+      "請確認交接包已經上傳到雲端空間。要回頭看可以重新匯入。"], "清掉這集", "先留著");
     if (!ok) return;
     btn.disabled = true;
     try { await apiPost("/api/handoff/clean-episode", { "路徑": btn.dataset.path }, { quiet: true }); }

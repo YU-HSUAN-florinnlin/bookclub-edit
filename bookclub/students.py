@@ -306,14 +306,15 @@ def roster_gender(real: str | None, workdir: str | Path | None = None) -> str | 
     if not real:
         return None
 
-    path = handoff.setting_path(workdir, "名冊.csv")   # 33 號設計 #259：有設定快照讀快照
-    if not path.is_file():
-        return None
-    for r in csvfile.read_rows(path):   # 10-03 第九批 #35：Excel 另存的 Big5 也讀得了
-        names = [(r.get("中文名") or "").strip()] + [x.strip() for x in re.split(r"[、,，/]", r.get("其他寫法") or "")]
-        if real in [n for n in names if n]:
-            g = (r.get("性別") or "").strip()
-            return "男" if g.startswith("男") else "女" if g.startswith("女") else None
+    # 33 號設計 #259：有設定快照先讀快照（跟交接那台一致），快照沒有這個人再查本機名冊（審查 M4）
+    for path in handoff.setting_paths(workdir, "名冊.csv"):
+        if not path.is_file():
+            continue
+        for r in csvfile.read_rows(path):   # 10-03 第九批 #35：Excel 另存的 Big5 也讀得了
+            names = [(r.get("中文名") or "").strip()] + [x.strip() for x in re.split(r"[、,，/]", r.get("其他寫法") or "")]
+            if real in [n for n in names if n]:
+                g = (r.get("性別") or "").strip()
+                return "男" if g.startswith("男") else "女" if g.startswith("女") else None
     return None
 
 

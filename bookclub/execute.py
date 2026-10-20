@@ -1084,7 +1084,7 @@ def names_done(workdir: Path) -> tuple[bool, str]:
     # 09-29 檢查 #7：跟生成程式用同一個判斷（文字、發音對照表、時間格、參考音）
     if tts.teacher_ref_changed(workdir, tlog):
         return False, f"老師參考音換過了，{len(gen)} 句都要重新生成"
-    table = tts.load_pron_table(workdir=workdir)
+    table = tts.load_pron_table(workdir=workdir, teacher=True)
     # 10-17 #244：句子照生成程式的整理方式（去前後空白、沒文字改念原文）再比，不然名字拿掉後留下的空格
     # 會讓生成程式說「沿用」、這裡說「還沒做」，每次繼續執行都失敗
     try:

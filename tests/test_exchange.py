@@ -1,5 +1,5 @@
 """bookclub/exchange.py（覆核結果匯出／匯入）10-03 第九批 #36 的測試：匯入的工作區只能做老師提到名字的部分，
-說明檔、匯出與匯入的回傳都寫明能做什麼、不能做什麼，以及「交接整個專案請複製整個工作區資料夾」。
+說明檔、匯出與匯入的回傳都寫明能做什麼、不能做什麼，以及「要交給夥伴做第 4、5 步，請在第 3 步按『交接打包…』」。
 用 tests/fake_workdir.py 的假工作區與暫存的 BOOKCLUB_DATA_DIR，不載入模型。
 
 獨立可跑：.venv/bin/python tests/test_exchange.py
@@ -45,7 +45,7 @@ def test_readme_says_scope_and_whole_folder_handover():
     text = exchange._readme(result)
     assert "只含老師提到名字的處理" in text
     assert "不能做：第 4 步「開始 AI 修改」" in text and "第 5 步" in text
-    assert "複製整個工作區資料夾" in text and "匯入你的設定包" in text
+    assert exchange.SCOPE_HANDOVER in text and "交接打包" in text
     assert "之後的版本直接讀這份" not in text            # 舊說法拿掉
 
 
@@ -68,12 +68,12 @@ def test_imported_workdir_says_what_it_can_do_and_step4_is_blocked():
     new = w.parent / "夥伴工作區_範圍"
     got = exchange.import_review(r["檔案"], new, video)
     assert got["可以做"] == exchange.SCOPE_CAN and "gen names" in got["可以做"] and "render audio" in got["可以做"]
-    assert got["不能做"] == exchange.SCOPE_CANNOT and "複製整個工作區資料夾" in got["交接整個專案"]
+    assert got["不能做"] == exchange.SCOPE_CANNOT and got["交接整個專案"] == exchange.SCOPE_HANDOVER
     # 寫明的「不能做」跟實際一致：第 4 步的前置檢查擋在缺逐字稿與段落分析
     pre = execute.precheck(new)
     assert not pre["可以開始"]
     assert any("還沒有逐字稿" in m for m in pre["缺"]) and any("段落分析" in m for m in pre["缺"])
-    assert (new / exchange.README_NAME).read_text(encoding="utf-8").count("複製整個工作區資料夾") == 1
+    assert (new / exchange.README_NAME).read_text(encoding="utf-8").count("交接打包") == 1
 
 
 def _run_all() -> int:

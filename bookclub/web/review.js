@@ -1644,7 +1644,7 @@ async function rvExport() {
     const warn = (r["未確認數"] ? `還有 ${r["未確認數"]} 筆沒通過。` : "")
       + ((r["還有本名的地方"] || []).length ? `${r["還有本名的地方"].length} 處還有本名：${esc(r["還有本名的地方"].slice(0, 5).join("、"))}。` : "")
       + ((r["缺參考音"] || []).length ? "還沒選定老師參考音（第 2 步）。" : "");
-    msg.innerHTML = `${warn ? `<span class="rv-warnline">${warn}</span> ` : ""}已匯出：<code>${esc(r["檔案"])}</code>（<a href="/api/review/export.zip">下載</a>）。只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交接整個專案請複製整個工作區資料夾。`;
+    msg.innerHTML = `${warn ? `<span class="rv-warnline">${warn}</span> ` : ""}已匯出：<code>${esc(r["檔案"])}</code>（<a href="/api/review/export.zip">下載</a>）。只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交給夥伴做第 4、5 步，請在第 3 步按『交接打包…』。`;
   } catch (err) { msg.innerHTML = `<span class="rv-warnline">匯出失敗：${esc(err.message)}</span>`; }
 }
 

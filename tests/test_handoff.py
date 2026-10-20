@@ -137,7 +137,7 @@ def test_stage3_pack_contents_and_snapshot():
     assert handoff.README_NAME in names
     assert "工作區/校對/段落.json" in names and "工作區/參考音/ref.wav" in names and "工作區/transcript/merged.json" in names
     assert not any(n.endswith((".mp4", "audio.flac")) or "web快取" in n for n in names), "不帶原片、音軌、快取"
-    assert m["哪一段"] == "第3步" and m["主機"] and m["工具版本"] and m["匯出時間"]
+    assert m["哪一段"] == "第3步" and m["電腦"] and m["工具版本"] and m["匯出時間"]
     assert m["原片"]["檔名"] == "假影片.mp4" and m["原片"]["大小"] == video.stat().st_size and m["原片"]["長度"] == fake_workdir.DUR
     assert all(set(f) >= {"路徑", "大小", "sha256", "修改時間"} for f in m["檔案"])
     assert set(m["聲線"]) == {"男聲_暫定.wav", "女聲_暫定.wav"}
@@ -439,15 +439,8 @@ def test_clean_episode_after_handover():
     except handoff.HandoffError as e:
         assert "又改過" in str(e)
     seg.write_bytes(orig)
-    # 交接包搬走了 → 不清
-    moved = z5.with_name("搬走.zip")
-    os.rename(z5, moved)
-    try:
-        handoff.clean_episode(w2, kind="wsl", data=_DATA)
-        raise AssertionError("找不到交接包要擋")
-    except handoff.HandoffError as e:
-        assert "找不到" in str(e)
-    os.rename(moved, z5)
+    # 宇軒 10-20：不再看 zip 還在不在（改由確認視窗請人確認已上傳）
+    os.rename(z5, z5.with_name("搬走.zip"))
     r = handoff.clean_episode(w2, kind="wsl", data=_DATA)
     assert r["省下位元組"] > 0 and not w2.exists() and not copy.exists() and video.is_file()
 
@@ -483,6 +476,236 @@ def test_stage5_needs_product_and_pack_cancel():
         raise AssertionError("不能存在工作資料夾裡")
     except handoff.HandoffError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# 1020-2 審查修正
+# ---------------------------------------------------------------------------
+
+def test_m1_change_during_pack_is_a_change():
+    """打包寫完 zip 後、記錄之前改了卡片：交接時的樣子用包裡的內容，所以算「又改過」，清掉這集擋下。"""
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    out = Path(tempfile.mkdtemp())
+
+    def touch(_z):
+        wd.write_json(w2 / "修改需求" / "卡片.json", {"列": [{"卡號": "K0001", "誰": "打包中又改"}]})
+    job = handoff.PackJob(w2, out, handoff.STAGE5, fail_hook=touch)
+    job.run()
+    assert job.state == "已存好"
+    assert handoff.changes_after_export(w2) == ["修改需求/卡片.json"]
+    try:
+        handoff.clean_episode(w2, kind="mac", data=_DATA)
+        raise AssertionError("改過要擋")
+    except handoff.HandoffError as e:
+        assert "又改過" in str(e)
+    assert w2.is_dir()
+
+
+def test_m2_server_written_files_are_not_changes():
+    """打包後打開第 3、5 步、看一段影片（伺服器自己寫的檔）不算動過；只比人做的判斷。"""
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    _pack(w2, handoff.STAGE5)
+    wd.write_json(w2 / "修改需求" / "格式.json", {"同步": {"檔案": {"覆核/成品檢查.json": [1, 2]}}})
+    wd.write_json(w2 / "修改需求" / "看過.json", {"列": [{"版本號": 1, "看過區段": [[0, 5]]}]})
+    (w2 / "修改需求" / "歷史.jsonl").write_text('{"序號": 1}\n', encoding="utf-8")
+    chk = json.loads((w2 / "覆核" / "成品檢查.json").read_text(encoding="utf-8"))
+    chk.update({"看過區段": [[0, 5]], "成品長度": 180.0, "成品檔指紋": [1, 2]})
+    wd.write_json(w2 / "覆核" / "成品檢查.json", chk)
+    assert handoff.changes_after_export(w2) == []
+    assert handoff.episode_clean_check(w2, kind="mac", data=_DATA) is None
+    chk["逐筆"] = {"x": {"結果": "退回"}}   # 人按的退回：算改過
+    wd.write_json(w2 / "覆核" / "成品檢查.json", chk)
+    assert handoff.changes_after_export(w2) == ["覆核/成品檢查.json"]
+    # 老師段 1 交出去時還沒有成品檢查，之後只打開第 5 步（建了空的）：不算改過
+    t, _v = _teacher()
+    _pack(t, handoff.STAGE3)
+    wd.write_json(t / "覆核" / "成品檢查.json", {"版本": 1, "逐筆": {}, "整片退回": [], "看過區段": []})
+    assert handoff.changes_after_export(t) == []
+
+
+def test_m3_teacher_downloaded_video_elsewhere_still_replaces_original():
+    """老師段 3 選的是「下載」裡的原片（不在原本的位置）：照交接編號找到老師原本那份工作區，換掉＋備份。"""
+    w, video = _teacher()
+    z3 = _pack(w, handoff.STAGE3)
+    w2 = Path(_import(z3, _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    z5 = _pack(w2, handoff.STAGE5)
+    elsewhere = _download(video, "老師下載")
+    seg = w / "校對" / "段落.json"
+    data = json.loads(seg.read_text(encoding="utf-8"))
+    data["段落"][0]["校對稿"] = "交出去之後老師又改了。"
+    wd.write_json(seg, data)
+    cands = [w, w2]   # 同一台演練：兩份都在專案清單上
+    job = _import(z5, elsewhere, candidates=cands)
+    assert job.state == "要確認" and Path(job.ask["工作區"]) == w and "校對/段落.json" in job.ask["改過"]
+    job = _import(z5, elsewhere, confirm=True, candidates=cands)
+    assert job.state == "完成" and Path(job.result["工作區"]) == w and job.result["備份"]
+    ana = json.loads((w / "分析結果.json").read_text(encoding="utf-8"))
+    assert ana["video"] == str(elsewhere)
+    assert not (elsewhere.parent / "假影片_剪輯工作區").exists(), "不另建一份"
+    # 夥伴那台匯入第 3 步包：同一個工作區 ID 的老師那份（交出這個包的）不算，照原片旁邊建新的
+    v3 = _download(video, "夥伴二")
+    job = _import(z3, v3, candidates=[w])
+    assert job.state == "完成" and Path(job.result["工作區"]) == v3.parent / "假影片_剪輯工作區"
+    assert handoff.read_record(Path(job.result["工作區"]))["工作區ID"] == handoff.read_record(w)["工作區ID"]
+
+
+def test_m4_last_safety_net_uses_snapshot_and_local():
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    assert "大雄" not in (handoff.snapshot_dir(w2) / "名冊.csv").read_text(encoding="utf-8-sig")
+    words = {r["寫法"] for r in epcodes.replace_table(w2)}
+    assert {"大雄", "胖虎", "小美", "某公司名", "這本書"} <= words, "快照＋本機合起來"
+    from bookclub import students
+
+    assert students.roster_gender("大雄", w2) == "男", "快照沒有的人查本機"
+    saved = (_DATA / "名冊.csv").read_bytes()
+    try:
+        (_DATA / "名冊.csv").write_text("中文名,其他寫法,英文代號,聲線,性別\n", encoding="utf-8")
+        assert "小美" in {r["寫法"] for r in epcodes.replace_table(w2)}, "本機沒有的，快照照樣有"
+    finally:
+        (_DATA / "名冊.csv").write_bytes(saved)
+
+
+def test_s1_failure_midway_restores_teacher_workdir():
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    z5 = _pack(w2, handoff.STAGE5)
+    before = {p.relative_to(w).as_posix(): p.read_bytes() for p in w.rglob("*") if p.is_file()}
+    orig = handoff._move_in
+    n = {"k": 0}
+
+    def flaky(src, dst, root):
+        n["k"] += 1
+        if n["k"] == len(before) + 5:
+            raise OSError(28, "No space left on device")
+        return orig(src, dst, root)
+    handoff._move_in = flaky
+    try:
+        job = _import(z5, video)
+    finally:
+        handoff._move_in = orig
+    assert job.state == "失敗" and "空間不夠" in job.error
+    after = {p.relative_to(w).as_posix(): p.read_bytes() for p in w.rglob("*") if p.is_file()}
+    assert after == before, sorted(set(after) ^ set(before))
+    assert not handoff.has_snapshot(w)
+
+
+def test_s4_space_checked_before_import():
+    w, video = _teacher()
+    z = _pack(w, handoff.STAGE3)
+    m = handoff.read_manifest(z)
+    from collections import namedtuple
+
+    U = namedtuple("U", "total used free")
+    try:
+        handoff.space_check(Path(tempfile.mkdtemp()) / "新的", m, usage=lambda p: U(10, 10, 1000))
+        raise AssertionError("空間不夠要擋")
+    except handoff.HandoffError as e:
+        assert "空間不夠" in str(e) and "GB" in str(e)
+
+
+def test_s7_symlinked_subfolder_is_not_written_through():
+    w, video = _teacher()
+    z = _pack(w, handoff.STAGE3)
+    v2 = _download(video)
+    target = v2.parent / "假影片_剪輯工作區"
+    outside = Path(tempfile.mkdtemp()) / "外面"
+    outside.mkdir()
+    target.mkdir()
+    os.symlink(outside, target / "校對")
+    job = _import(z, v2)
+    assert job.state == "失敗" and "捷徑" in job.error
+    assert not list(outside.iterdir()), "不能寫到工作區外"
+
+
+def test_s3_teacher_own_workdir_has_no_clean_episode():
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    _pack(w2, handoff.STAGE5)
+    assert handoff.episode_clean_info(w2, kind="mac", data=_DATA)
+    # 老師自己（第 1 步建的）按了第 5 步交接打包：不出現「清掉這集」、也清不掉
+    _partner_stage5(w)
+    _pack(w, handoff.STAGE5)
+    assert handoff.handed_over(w) and handoff.episode_clean_info(w, kind="mac", data=_DATA) is None
+    try:
+        handoff.clean_episode(w, kind="mac", data=_DATA)
+        raise AssertionError("老師自己的工作區不能整集清")
+    except handoff.HandoffError as e:
+        assert "從頭做的" in str(e)
+    assert w.is_dir()
+
+
+def test_machine_label_stable_and_no_hostname():
+    import socket
+
+    a, b = handoff.machine_label(), handoff.machine_label()
+    assert a == b and a.split("・")[0] in ("Mac", "Windows", "Linux") and len(a.split("・")[1]) == 4
+    w, _v = _teacher()
+    z = _pack(w, handoff.STAGE3)
+    raw = zipfile.ZipFile(z).read(handoff.LIST_NAME).decode("utf-8")
+    assert socket.gethostname() not in raw and json.loads(raw)["電腦"] == a
+
+
+def _open5(w: Path) -> None:
+    """不開伺服器，照 GET /api/final 的做法打開第 5 步（審查重現腳本同一套）。"""
+    import types
+
+    from bookclub import server as srv
+
+    fake = types.SimpleNamespace(workdir=w, video=None, exec_running=lambda: False)
+    page, snap = srv._final_step3(fake)
+    srv._needs_ensure(fake, page, snap)
+    try:
+        srv._final_data(fake, page)
+    except Exception:  # noqa: BLE001 — 假資料的成品量不到長度之類的，不影響這裡要看的「有沒有改檔」
+        pass
+
+
+def test_m4_roster_changes_on_teacher_machine():
+    """宇軒 10-20：老師處理後面幾集時本機名冊會變。①匯入不看名冊內容 ②匯回後只打開第 5 步不重排、不判要重新生成
+    ③合起來的名單只會多換，不會讓檢查丟錯。"""
+    from bookclub import needs, nameplan
+
+    saved = (_DATA / "名冊.csv").read_bytes()
+    try:
+        w, video = _teacher()
+        z3 = _pack(w, handoff.STAGE3)
+        # ① 夥伴那台名冊跟快照不同（少了阿明、多了別人）：匯入照常成功、不提醒名冊
+        (_DATA / "名冊.csv").write_text("中文名,其他寫法,英文代號,聲線,性別\n小美,,Amy,,女\n路人甲,,Joe,,男\n", encoding="utf-8")
+        job = _import(z3, _download(video))
+        assert job.state == "完成" and not any("名冊" in x for x in job.result["提醒"])
+        w2 = Path(job.result["工作區"])
+        _partner_stage5(w2)
+        wd.write_json(nameplan.plan_path(w2), nameplan.compute_plan(w2))   # 夥伴第 4 步排好的計畫
+        _open5(w2)   # 夥伴打開過第 5 步（修改需求紀錄已升級，一般流程）
+        z5 = _pack(w2, handoff.STAGE5)
+        # 老師這台的名冊後來變大（處理後面幾集時加了人，其中一個寫法剛好出現在這一集老師講的話裡）
+        (_DATA / "名冊.csv").write_text(saved.decode("utf-8") + "書本,這本書,Book,,男\n", encoding="utf-8")
+        job = _import(z5, video)
+        assert job.state == "完成" and not any("名冊" in x for x in job.result["提醒"])
+        # ② 只打開第 5 步：名字處理計畫、生成紀錄、覆核決定都不重寫；要重做的清單不因名冊變大而多
+        watch = [nameplan.plan_path(w), w / "生成" / "老師紀錄.json", w / "覆核" / "覆核決定.json", w / "校對" / "段落.json",
+                 w / "修改需求" / "卡片.json"]
+        before = {p: (p.read_bytes() if p.is_file() else None) for p in watch}
+        redo0 = needs.redo_list(w) if needs.exists(w) else None
+        _open5(w)
+        _open5(w)
+        after = {p: (p.read_bytes() if p.is_file() else None) for p in watch}
+        assert after == before, [str(p.relative_to(w)) for p in watch if after[p] != before[p]]
+        assert (needs.redo_list(w) if needs.exists(w) else None) == redo0
+        # ③ 重跑第 4 步時才用「快照＋本機」：多換一個名字，不會丟錯
+        plan = nameplan.compute_plan(w)
+        assert "書本" in {r["canonical"] for r in epcodes.replace_table(w)}
+        assert plan is not None
+    finally:
+        (_DATA / "名冊.csv").write_bytes(saved)
 
 
 if __name__ == "__main__":

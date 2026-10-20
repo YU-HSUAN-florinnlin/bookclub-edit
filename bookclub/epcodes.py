@@ -25,6 +25,18 @@ _auto_lock = threading.RLock()
 
 
 
+def _union(loader, workdir, name: str) -> list[dict]:
+    """快照與本機兩份設定合起來：前一份（快照）整份照用（同一份裡同一個寫法對到兩個人的照舊都留），
+    後一份（本機）只補前一份沒有的寫法。沒有快照＝只有本機那一份，跟以前一樣。"""
+    from bookclub import handoff
+
+    out: list[dict] = []
+    for path in handoff.setting_paths(workdir, name):
+        have = {r["寫法"] for r in out}
+        out += [r for r in loader(path) if r["寫法"] not in have]
+    return out
+
+
 def _setting(workdir, name: str):
     """33 號設計 #259：這一集要讀的設定檔（工作區有交接帶來的設定快照就讀快照，沒有照舊讀本機）。"""
     from bookclub import handoff
@@ -343,7 +355,7 @@ def replace_table(workdir: str | Path | None = None) -> list[dict]:
     from bookclub import names
     from bookclub.config import data_dir
 
-    rows = names.load_roster(_setting(workdir, "名冊.csv"))
+    rows = _union(names.load_roster, workdir, "名冊.csv")   # 審查 M4：快照＋本機名冊合起來（保險不能變弱）
     if workdir is not None:
         codes = episode_codes(workdir)
         spell = episode_spellings(workdir, roster=rows)
@@ -365,7 +377,7 @@ def replace_table(workdir: str | Path | None = None) -> list[dict]:
     # （以前 replace_real_names 只換有代號的列，學員重念照字念；no_code_rows 還把它列成沒英文名照原聲）。
     # 拿掉後句首句尾的空白照 #245 去掉；畫面照 #247 標「（拿掉）」
     sens = [{**r, "拿掉": True} if not (r.get("代號") or "").strip() else r
-            for r in names.load_sensitive_words(_setting(workdir, "敏感詞.csv"))]
+            for r in _union(names.load_sensitive_words, workdir, "敏感詞.csv")]
     return rows + sens
 
 

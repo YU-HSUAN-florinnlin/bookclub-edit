@@ -66,7 +66,7 @@ def _teacher_inputs(workdir: Path, plan: dict | None = None) -> dict:
     from bookclub import tts
 
     plan = _teacher_plan(workdir) if plan is None else plan
-    table = tts.load_pron_table(workdir=workdir)
+    table = tts.load_pron_table(workdir=workdir, teacher=True)
     gen = plan.get("生成", [])
     try:   # 10-17 #244：跟生成程式、第 4 步「做過沒有」比同一份文字（去前後空白、沒文字改念原文）
         gen = tts.teacher_plan_items(workdir, gen)

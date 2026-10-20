@@ -1,7 +1,7 @@
 """接力交接（33 號設計，#257–#260）：老師 → 夥伴 → 老師，用一個 zip（交接包）交棒。
 
 - 交接打包（#257 甲）：第 3 步（老師交給夥伴）、第 5 步（夥伴交回老師）。zip 裡是 `工作區/<相對路徑>` 的紀錄、參考音
-  （第 5 步再加目前的成品影片與選定的生成聲音），加一份 `交接清單.json`（工具版本、哪一段、主機名、匯出時間、原片檔名／長度／大小、
+  （第 5 步再加目前的成品影片與選定的生成聲音），加一份 `交接清單.json`（工具版本、哪一段、哪台電腦（系統＋本機代號）、匯出時間、原片檔名／長度／大小、
   每個檔的 SHA-256 與原始修改時間、聲線檔指紋）。不帶原片與快取。寫 zip 用暫存名、寫完換名、再從目的地重讀逐檔核對。
 - 這一集的設定快照（#257、#259 丙）：`交接/設定快照/名冊.csv`、`敏感詞.csv`、`發音對照表.csv`——只放這一集用得到的列。
   工作區有快照時，第 4 步、老師句子最後一道保險、代號、發音對照表都讀快照（`setting_path`），沒有就照舊讀本機。
@@ -20,7 +20,6 @@ import hashlib
 import json
 import os
 import shutil
-import socket
 import stat as _stat
 import threading
 import time
@@ -54,6 +53,21 @@ DURATION_TOLERANCE_S = 1.0
 PACK_MARGIN_BYTES = 200_000_000
 # 比「交接後有沒有動過」時不算的欄位（打開第 3 步就會累加的計時）
 VOLATILE_KEYS = {"覆核/覆核決定.json": ("覆核秒數",)}
+# 「交接後有沒有動過」只比人做的判斷（審查 M2）：第 3 步的決定、代號、學員聲線、參考音與底噪的選擇、第 5 步的通過／退回、
+# 修改需求的卡片／版本／成品狀態、第 4 步做出的生成紀錄與處理紀錄、工作區設定。其他一律不比，例如：
+# `修改需求/格式.json`（打開第 3、5 步就會同步）、`修改需求/看過.json`、`修改需求/歷史.jsonl`、`修改需求/生成句.json`、
+# 升級產物（`修改需求/升級前備份_*`、升級報告）、`覆核/成品檢查.json` 裡的看過區段與量長度欄位、`transcript/`、
+# `說話者判斷.json`、`分析結果.json`、`報告.md`、`輸出/` 的紀錄、設定快照、`學員名字候選.json`（打開第 3 步自動找）、
+# `校對/代號表紀錄.json`（代號對齊時自動記的上一份代號表）（這些是分析結果或工具自己寫的）。
+JUDGED_FILES = ("校對/段落.json", "名字覆核決定.json", "覆核/覆核決定.json", "學員名字覆核決定.json", "名字候選.json",
+                "校對/刪除建議.json", "重疊.json",          # needs.STEP3_FILES 扣掉打開第 3 步就會自動產生的「學員名字候選.json」
+                "校對/人名決定.json", "校對/代號自動配.json", "生成/學員聲線.json",
+                "參考音/ref.wav", "參考音/ref.txt", "參考音/底噪.json", "工作區設定.json",
+                "覆核/成品檢查.json", "修改需求/卡片.json", "修改需求/版本.json", "修改需求/成品狀態.json",
+                "生成/老師紀錄.json", "生成/學員紀錄.json", "生成/保留原聲學員紀錄.json", "生成/處理紀錄.json")
+# 成品檢查只比人按的：逐筆通過／退回、整片退回、未登記確認（打開第 5 步才建的空檔＝沒有）
+KEEP_KEYS = {"覆核/成品檢查.json": ("逐筆", "整片退回", "未登記確認")}
+MACHINE_FILE = "本機代號.json"   # 宇軒 10-20：不存主機名，存系統類別＋這台第一次用時隨機產生的短代號（在本機資料資料夾）
 # 交接包不帶、匯入也不換的資料夾（最上層）
 SKIP_TOP = ("輸出", BACKUP_DIR, "匯出", DIR_NAME, STAGING_DIR)
 # 匯入後只改內容、修改時間不還原的檔（歷史剛記了一筆）
@@ -81,6 +95,30 @@ def _sha_file(path: Path) -> str:
                 break
             h.update(b)
     return h.hexdigest()
+
+
+def machine_label() -> str:
+    """這台電腦給人看的名字：「Mac・K3F9」「Windows・7QXA」。代號第一次用時隨機產生，存在 `~/讀書會剪輯資料/本機代號.json`，
+    之後固定（宇軒 10-20：不存主機名）。"""
+    import secrets
+
+    from bookclub import fileio
+    from bookclub.config import data_dir
+
+    kind = {"mac": "Mac", "wsl": "Windows"}.get(fileio.platform_kind(), "Linux")
+    p = data_dir() / MACHINE_FILE
+    code = None
+    try:
+        code = (wd.read_json(p, default=None) or {}).get("代號")
+    except (OSError, ValueError):
+        code = None
+    if not code:
+        code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(4))
+        try:
+            wd.write_json(p, {"代號": code})
+        except OSError:
+            pass
+    return f"{kind}・{code}"
 
 
 def tool_version() -> str:
@@ -149,6 +187,16 @@ def setting_path(workdir: str | Path | None, name: str) -> Path:
         if p.is_file():
             return p
     return data_dir() / name
+
+
+def setting_paths(workdir: str | Path | None, name: str) -> list[Path]:
+    """最後一道隱私保險用（審查 M4）：快照＋本機兩份都讀、合起來（快照在前）。快照只是讓第 4 步不因這台名冊不完整而變，
+    不能讓保險變弱：本機名冊、敏感詞有的照樣換。沒有快照＝只有本機。"""
+    from bookclub.config import data_dir
+
+    first = setting_path(workdir, name)
+    local = data_dir() / name
+    return [first] if first == local else [first, local]
 
 
 def has_snapshot(workdir: str | Path) -> bool:
@@ -425,15 +473,41 @@ def norm_print(rel: str, path: Path) -> str | None:
         return None
 
 
+def judged_print(rel: str, data: bytes | None) -> str | None:
+    """人做的判斷那幾個檔的指紋（data＝檔案內容；None＝檔案不在）。`覆核決定.json` 不算計時欄位、`成品檢查.json`
+    只看人按的那幾欄（不在時當作空的，打開第 5 步才建的不算改過）。"""
+    keep, drop = KEEP_KEYS.get(rel), VOLATILE_KEYS.get(rel)
+    if data is None:
+        if not keep:
+            return None
+        data = b"{}"
+    if keep or drop:
+        try:
+            obj = json.loads(data.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return hashlib.sha256(data).hexdigest()
+        if isinstance(obj, dict):
+            if keep:
+                obj = {k: obj.get(k) or ({} if k != "整片退回" else []) for k in keep}
+            else:
+                obj = {k: v for k, v in obj.items() if k not in drop}
+        return hashlib.sha256(json.dumps(obj, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    return hashlib.sha256(data).hexdigest()
+
+
 def record_prints(workdir: str | Path) -> dict[str, str]:
-    """這個工作區現在的紀錄指紋 {相對路徑: 指紋}（交接包兩種都帶的那一套檔；設定快照不算）。"""
+    """這個工作區現在「人做的判斷」的指紋 {相對路徑: 指紋}（只有 JUDGED_FILES 那幾個）。"""
+    w = Path(workdir)
     out = {}
-    for rel, fp in record_files(workdir):
-        if rel.startswith(f"{DIR_NAME}/"):
-            continue
-        p = norm_print(rel, fp)
-        if p:
-            out[rel] = p
+    for rel in JUDGED_FILES:
+        p = w / rel
+        try:
+            data = p.read_bytes() if p.is_file() and not p.is_symlink() else None
+        except OSError:
+            data = None
+        fp = judged_print(rel, data)
+        if fp:
+            out[rel] = fp
     return out
 
 
@@ -455,7 +529,15 @@ def changes_after_export(workdir: str | Path) -> list[str] | None:
     e = last_export(workdir)
     if not e or not isinstance(e.get("紀錄指紋"), dict):
         return None
-    return changed_since(e["紀錄指紋"], record_prints(workdir))
+    return _changes(e["紀錄指紋"], record_prints(workdir))
+
+
+def _changes(old: dict, now: dict) -> list[str]:
+    """交接時記下的 vs 現在的。交接時還沒有修改需求紀錄（舊工作區、之後才升級）→ 修改需求那幾個不比。"""
+    old = {k: v for k, v in old.items() if k in JUDGED_FILES}
+    if not any(k.startswith("修改需求/") for k in old):
+        now = {k: v for k, v in now.items() if not k.startswith("修改需求/")}
+    return changed_since(old, now)
 
 
 def zip_name(workdir: str | Path, stage: str, now: datetime | None = None) -> str:
@@ -563,6 +645,7 @@ class PackJob:
         tmp = dest.with_name(f".{dest.name}{TMP_SUFFIX}")
         self.dest = dest
         files: list[dict] = []
+        self.judged: dict[str, str] = {}
         try:
             with zipfile.ZipFile(tmp, "w", allowZip64=True) as zf:
                 for i, it in enumerate(items, start=1):
@@ -570,8 +653,12 @@ class PackJob:
                         raise HandoffError("停下來了：這次沒有存，要交接再按一次「交接打包…」。")
                     self.index, self.current = i, it["相對路徑"]
                     files.append(self._add(zf, it))
+                rec0 = read_record(w)
+                wid = rec0.get("工作區ID") or uuid.uuid4().hex[:12]
+                prev = (rec0.get("匯入") or [{}])[-1].get("交接編號")
                 manifest = {"格式版本": FORMAT_VERSION, "工具版本": tool_version(), "哪一段": self.stage,
-                            "主機": socket.gethostname(), "匯出時間": _now(), "交接編號": uuid.uuid4().hex[:12],
+                            "電腦": machine_label(), "匯出時間": _now(), "交接編號": uuid.uuid4().hex[:12],
+                            "工作區ID": wid, "上一棒交接編號": prev,
                             "工作區名稱": w.name, "工作區": str(w), "原片": video_info(w), "檔案": files,
                             "聲線": voice_prints(),
                             "設定快照": snapshot_counts({n: self._snap_bytes(items, n) for n in SETTING_FILES})}
@@ -593,9 +680,15 @@ class PackJob:
             raise HandoffError("存過去的交接包核對不對，換個位置再試。") from None
         self.size = dest.stat().st_size
         rec = read_record(w)
+        rec["工作區ID"] = manifest["工作區ID"]
+        # 審查 M1：交接時的樣子＝包裡實際放的內容（打包時算的），不是打包完再重讀工作區
+        judged = {rel: self.judged[rel] for rel in JUDGED_FILES if rel in self.judged}
+        for rel in JUDGED_FILES:
+            if rel not in judged and rel in KEEP_KEYS:
+                judged[rel] = judged_print(rel, None)
         rec.setdefault("交出", []).append({
             "時間": _now(), "哪一段": self.stage, "檔名": dest.name, "路徑": str(dest), "位置顯示": self.display,
-            "大小": self.size, "交接編號": manifest["交接編號"], "核對": "通過", "紀錄指紋": record_prints(w)})
+            "大小": self.size, "交接編號": manifest["交接編號"], "核對": "通過", "紀錄指紋": judged})
         if self.stage == STAGE5:
             rec["已交出去"] = _now()
         _write_record(w, rec)
@@ -622,6 +715,16 @@ class PackJob:
         src: Path = it["來源"]
         st = src.stat()
         before = (st.st_size, st.st_mtime_ns, st.st_ino)
+        if rel in JUDGED_FILES and st.st_size < 50_000_000:   # 人做的判斷（小檔）：用寫進包裡的同一份內容算指紋
+            data = src.read_bytes()
+            st2 = src.stat()
+            if (st2.st_size, st2.st_mtime_ns, st2.st_ino) != before or len(data) != before[0]:
+                raise HandoffError(f"存的時候工作區裡的檔案變了（{rel}），等它做完再按一次。")
+            zi = zipfile.ZipInfo.from_file(src, arc, strict_timestamps=False)
+            zi.compress_type = zipfile.ZIP_STORED if src.suffix.lower() == ".wav" else zipfile.ZIP_DEFLATED
+            zf.writestr(zi, data)
+            self.judged[rel] = judged_print(rel, data)
+            return {"路徑": rel, "大小": len(data), "sha256": hashlib.sha256(data).hexdigest(), "修改時間": before[1]}
         zi = zipfile.ZipInfo.from_file(src, arc, strict_timestamps=False)
         big = src.suffix.lower() in (".mp4", ".mov", ".m4v", ".mkv", ".wav", ".flac")
         zi.compress_type = zipfile.ZIP_STORED if big else zipfile.ZIP_DEFLATED
@@ -653,6 +756,8 @@ def _safe_rel(rel: str) -> str:
         raise HandoffError(NOT_PACKAGE)
     if p.parts[0] in (STAGING_DIR, BACKUP_DIR) or p.parts[0].startswith("."):
         raise HandoffError(NOT_PACKAGE)
+    if p.as_posix() in (f"{DIR_NAME}/{RECORD_NAME}", "結案.json"):   # 本機才有的檔，包裡不該有
+        raise HandoffError(NOT_PACKAGE)
     return p.as_posix()
 
 
@@ -676,15 +781,19 @@ def read_manifest(zip_path: str | Path) -> dict:
         raise HandoffError("這個交接包是比較新的工具做的，先把這台的工具更新到新版再匯入。")
     if m.get("哪一段") not in STAGES:
         raise HandoffError(NOT_PACKAGE)
+    seen = set()
     for f in m["檔案"]:
         f["路徑"] = _safe_rel(f.get("路徑"))
+        if f["路徑"] in seen:
+            raise HandoffError(NOT_PACKAGE)
+        seen.add(f["路徑"])
     return m
 
 
 def summary(m: dict) -> dict:
     """給畫面看的交接包摘要。"""
     v = m.get("原片") or {}
-    return {"哪一段": m.get("哪一段"), "匯出時間": m.get("匯出時間"), "主機": m.get("主機"), "工具版本": m.get("工具版本"),
+    return {"哪一段": m.get("哪一段"), "匯出時間": m.get("匯出時間"), "電腦": m.get("電腦"), "工具版本": m.get("工具版本"),
             "原片檔名": v.get("檔名"), "原片長度": v.get("長度"), "原片大小": v.get("大小"),
             "檔數": len(m.get("檔案") or []), "有成品": m.get("哪一段") == STAGE5}
 
@@ -757,6 +866,40 @@ def is_existing(target: Path) -> bool:
     return target.is_dir() and wd.analysis_result_path(target).is_file()
 
 
+def find_target(m: dict, video: str | Path, candidates: list[Path] | None = None) -> Path:
+    """這個交接包要匯入哪一份工作區（審查 M3：不靠原片放在哪）：
+    1. 這台的工作區（專案清單上的）有交出過「上一棒交接編號」那個包 → 就是它（老師段 3 收回夥伴的包）
+    2. 有同一個工作區 ID、而且不是交出這個包本身的那一份 → 它
+    3. 都沒有：原片旁邊的 `<檔名>_剪輯工作區/`（跟「選影片」同一套）"""
+    prev, wid, me = m.get("上一棒交接編號"), m.get("工作區ID"), m.get("交接編號")
+    cands = []
+    for d in candidates or []:
+        try:
+            if Path(d).is_dir() and not Path(d).is_symlink() and is_existing(Path(d)):
+                cands.append(Path(d))
+        except OSError:
+            continue
+    if prev:
+        for d in cands:
+            if any(e.get("交接編號") == prev and e.get("核對") == "通過" for e in read_record(d).get("交出") or []):
+                return d
+    if wid:
+        for d in cands:
+            rec = read_record(d)
+            if rec.get("工作區ID") == wid and not any(e.get("交接編號") == me for e in rec.get("交出") or []):
+                return d
+    return target_for(video)
+
+
+def _registered() -> list[Path]:
+    try:
+        from bookclub.server import registered_projects
+
+        return registered_projects()
+    except Exception:  # noqa: BLE001 — 專案清單讀不到：只看原片旁邊
+        return []
+
+
 # ---------------------------------------------------------------------------
 # 匯入（#258 乙）
 # ---------------------------------------------------------------------------
@@ -766,11 +909,12 @@ class ImportJob:
     要確認＝這台已經有這一集，而且交接之後動過（或沒有交接紀錄）：列出改過的檔，`confirm=True` 再開一次才換。"""
 
     def __init__(self, zip_path: Path, video: Path, *, confirm: bool = False, probe=None, extract_audio=None,
-                 target: Path | None = None):
+                 target: Path | None = None, candidates: list[Path] | None = None):
         self.zip_path, self.video = Path(zip_path), Path(video)
         self.confirm = confirm
         self._probe, self._extract = probe, extract_audio
         self.target = Path(target) if target else None
+        self.candidates = candidates
         self.state = "等待"
         self.error: str | None = None
         self.ask: dict | None = None
@@ -810,6 +954,12 @@ class ImportJob:
                 self.state = "完成"
         except HandoffError as e:
             self.state, self.error = "失敗", str(e)
+        except OSError as e:
+            import errno
+
+            print(f"⚠️ [匯入交接包] {type(e).__name__}：{e}")
+            self.state, self.error = "失敗", ("空間不夠了：清出空間再匯入一次（這台的紀錄沒有被換掉）。" if e.errno == errno.ENOSPC
+                                            else "匯入的時候出了問題（這台的紀錄沒有被換掉）；把終端機最後幾行給開發者。")
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ [匯入交接包] {type(e).__name__}：{e}")
             self.state, self.error = "失敗", "匯入的時候出了問題；把終端機最後幾行給開發者。"
@@ -829,14 +979,18 @@ class ImportJob:
         # 3. 聲線比對（不擋）
         voices = voice_diff(m.get("聲線"))
         # 4. 這台有沒有這一集
-        target = self.target or target_for(self.video)
+        target = self.target or find_target(m, self.video,
+                                            self.candidates if self.candidates is not None else _registered())
+        if target.is_symlink():
+            raise HandoffError("這一集的工作資料夾是捷徑，不能匯入；請開發者看過再處理。")
         existing = is_existing(target)
         if existing and closing.closed(target):
             raise HandoffError("這支影片在這台已經結案了，不能匯入。要重做請找宇軒。")
-        if existing and target.is_symlink():
-            raise HandoffError("這一集的工作資料夾是捷徑，不能匯入；請開發者看過再處理。")
+        space_check(target, m)   # 審查 S4：開始搬之前先看空間
         if existing and not self.confirm:
-            changes = changes_after_export(target)
+            rec = read_record(target)
+            other = bool(rec.get("工作區ID")) and bool(m.get("工作區ID")) and rec["工作區ID"] != m["工作區ID"]
+            changes = None if other else changes_after_export(target)
             if changes is None or changes:
                 self.state = "要確認"
                 self.ask = {"沒有交接紀錄": changes is None, "改過": (changes or [])[:20],
@@ -867,11 +1021,28 @@ def _extract(zip_path: Path, m: dict, staging: Path) -> None:
                 raise HandoffError(NOT_READY)
 
 
-def _move_in(src: Path, dst: Path) -> None:
+def _move_in(src: Path, dst: Path, root: Path) -> None:
+    """搬一個檔進 root 裡的 dst。審查 S7：dst 所在的資料夾（照實際位置）要在 root 裡面，中間有捷徑跑到外面就停。"""
+    from bookclub import closing
+
     dst.parent.mkdir(parents=True, exist_ok=True)
+    if not closing._inside_real(dst, root):
+        raise HandoffError(f"工作資料夾裡的「{dst.parent.relative_to(root)}」是捷徑，指到工作資料夾外面，不能匯入；請開發者看過再處理。")
     if dst.is_symlink():
         dst.unlink()   # 要換的是捷徑：拿掉捷徑本身，不寫到它指的地方
     os.replace(src, dst)
+
+
+def space_check(target: Path, m: dict, usage=None) -> None:
+    """匯入前看空間（審查 S4）：要解開的大小＋1 GB 餘裕（之後抽音軌、組裝要寫硬碟）。不夠丟 HandoffError（說要多少）。"""
+    from bookclub import fileio
+
+    need = sum(int(f.get("大小") or 0) for f in m.get("檔案") or [])
+    where = target if target.is_dir() else next((p for p in target.parents if p.is_dir()), target.parent)
+    why = fileio.space_problem(need, where, fileio.IMPORT_MARGIN_BYTES, "這台電腦", usage=usage,
+                               also=fileio.wsl_host_disks())
+    if why:
+        raise HandoffError(f"空間不夠，沒有匯入：{why}")
 
 
 def backup_dir_name(now: datetime | None = None) -> str:
@@ -900,7 +1071,7 @@ def _log_history(target: Path, m: dict) -> bool:
     with needs._locked(target):
         st = needs.load(target)
         st.log(_now(), None, 5 if m.get("哪一段") == STAGE5 else 3, "交接匯入", None,
-               {"主機": m.get("主機"), "哪一段": m.get("哪一段"), "匯出時間": m.get("匯出時間"),
+               {"電腦": m.get("電腦"), "哪一段": m.get("哪一段"), "匯出時間": m.get("匯出時間"),
                 "交接編號": m.get("交接編號")})
         needs.save(target, st)
     return True
@@ -911,6 +1082,9 @@ def import_into(target: Path, zip_path: Path, m: dict, video: Path, *, existing:
     """把交接包換進 target（已經核對過、原片比對過）。這台已有這一集：只把紀錄搬到 `備份/交接前_<日期>/`（快取不備份、
     `web快取/` 直接丟掉）再換成包裡的；出錯時把備份搬回去。回 {工作區, 去哪一步, 備份, 新建, 聲線不同, 提醒}。"""
     target = Path(target)
+    if target.is_symlink():
+        raise HandoffError("這一集的工作資料夾是捷徑，不能匯入；請開發者看過再處理。")
+    created = not target.exists()
     target.mkdir(parents=True, exist_ok=True)
     staging = target / STAGING_DIR
     if staging.is_symlink():
@@ -919,26 +1093,53 @@ def import_into(target: Path, zip_path: Path, m: dict, video: Path, *, existing:
         shutil.rmtree(staging)   # 上次匯入到一半留下的（自己的暫存資料夾）
     staging.mkdir()
     backup_rel = None
-    moved: list[str] = []
+    moved: list[str] = []     # 搬進備份的（原本這台的檔）
+    placed: list[str] = []    # 從包裡搬進來的
     try:
         _extract(zip_path, m, staging)
         if existing:
             backup_rel = f"{BACKUP_DIR}/{backup_dir_name()}"
             bdir = target / backup_rel
-            for rel, fp in record_files(target):
+            # 這台的紀錄全部備份；包裡要放進來的位置原本有檔的（成品、生成聲音⋯）也一起備份，失敗時才回得去
+            olds = {rel for rel, _fp in record_files(target)} | {f["路徑"] for f in m["檔案"]}
+            for rel in sorted(olds):
+                fp = target / rel
                 if fp.is_symlink() or not fp.is_file():
                     continue
-                _move_in(fp, bdir / rel)
+                _move_in(fp, bdir / rel, target)
                 moved.append(rel)
         for f in m["檔案"]:
-            _move_in(staging / f["路徑"], target / f["路徑"])
+            _move_in(staging / f["路徑"], target / f["路徑"], target)
+            placed.append(f["路徑"])
+        _rewrite_video(target, Path(video))
+        _log_history(target, m)
+        rec = read_record(target)
+        rec.setdefault("匯入", []).append({
+            "時間": _now(), "來自電腦": m.get("電腦"), "哪一段": m.get("哪一段"), "匯出時間": m.get("匯出時間"),
+            "交接編號": m.get("交接編號"), "來源工作區": m.get("工作區"), "備份": backup_rel, "新建": not existing,
+            "聲線不同": voices or []})
+        if m.get("工作區ID"):
+            rec["工作區ID"] = m["工作區ID"]
+        rec.pop("已交出去", None)
+        _write_record(target, rec)
     except BaseException:
-        if backup_rel:   # 換到一半：備份搬回原位（包裡多出來的檔留著）
-            for rel in moved:
-                try:
-                    _move_in(target / backup_rel / rel, target / rel)
-                except OSError:
-                    print(f"⚠️ [匯入交接包] 搬不回去：{rel}（在 {backup_rel}/ 裡）")
+        # 審查 S1：換到一半失敗——包裡搬進來的全部拿掉、備份搬回原位，這台回到匯入前的樣子
+        for rel in placed:
+            try:
+                p = target / rel
+                if p.is_file() and not p.is_symlink():
+                    p.unlink()
+            except OSError:
+                print(f"⚠️ [匯入交接包] 拿不掉：{rel}")
+        for rel in moved:
+            try:
+                _move_in(target / backup_rel / rel, target / rel, target)
+            except (OSError, HandoffError):
+                print(f"⚠️ [匯入交接包] 搬不回去：{rel}（在 {backup_rel}/ 裡）")
+        if backup_rel:
+            shutil.rmtree(target / backup_rel, ignore_errors=True)   # 都搬回去了：空的備份資料夾不留
+        if created:
+            shutil.rmtree(target, ignore_errors=True)   # 這次才建的資料夾整個拿掉
         raise
     finally:
         if staging.exists() and not staging.is_symlink():
@@ -946,8 +1147,6 @@ def import_into(target: Path, zip_path: Path, m: dict, video: Path, *, existing:
     cache = target / "web快取"
     if existing and cache.is_dir() and not cache.is_symlink():
         shutil.rmtree(cache, ignore_errors=True)   # 播放用的快取，用到再切（換成對方的成品後舊的對不上）
-    _rewrite_video(target, Path(video))
-    _log_history(target, m)
     # 修改時間照交接清單還原（Mac／Ubuntu 時區不同、解壓縮都會讓修改時間變，被誤判要重新組裝）
     for f in m["檔案"]:
         if f["路徑"] in HISTORY_FILES:
@@ -958,12 +1157,6 @@ def import_into(target: Path, zip_path: Path, m: dict, video: Path, *, existing:
                 os.utime(p, ns=(f["修改時間"], f["修改時間"]))
         except OSError:
             pass
-    rec = read_record(target)
-    rec.setdefault("匯入", []).append({
-        "時間": _now(), "來自主機": m.get("主機"), "哪一段": m.get("哪一段"), "匯出時間": m.get("匯出時間"),
-        "交接編號": m.get("交接編號"), "來源工作區": m.get("工作區"), "備份": backup_rel, "聲線不同": voices or []})
-    rec.pop("已交出去", None)
-    _write_record(target, rec)
     notes = []
     if not wd.audio_path(target).is_file():
         try:
@@ -1063,13 +1256,18 @@ def clean_copy(workdir: str | Path, fingerprint: str, *, kind: str | None = None
     return {"省下位元組": saved, "原片複本": copy_done}
 
 
+def imported_episode(workdir: str | Path) -> bool:
+    """審查 S3：這一集是匯入第 3 步交接包建出來的（夥伴端）。老師自己第 1 步建的工作區不算。"""
+    return any(e.get("哪一段") == STAGE3 and e.get("新建") for e in read_record(workdir).get("匯入") or [])
+
+
 def episode_clean_info(workdir: str | Path, *, kind: str | None = None, data: Path | None = None) -> dict | None:
     """總覽「清掉這集」用（只讀）：已交出去的才有 → {已交出去, 大小, 含原片複本}；沒交出去回 None。"""
     from bookclub import closing, fileio
 
     w = Path(workdir)
     when = handed_over(w)
-    if not when:
+    if not when or not imported_episode(w):
         return None
     kind = kind or fileio.platform_kind()
     try:
@@ -1081,8 +1279,8 @@ def episode_clean_info(workdir: str | Path, *, kind: str | None = None, data: Pa
 
 
 def episode_clean_check(workdir: str | Path, *, kind: str | None = None, data: Path | None = None) -> dict | None:
-    """「清掉這集」之前再確認（照順序，沒過丟 HandoffError）：①已交出去、最近一次第 5 步交接包核對通過、那個 zip 還在而且大小對
-    ②交出去之後這一集沒有再改過 ③工作區是真的資料夾（不是捷徑）、名稱是「…_剪輯工作區」、有分析結果、沒結案。回原片複本那一列或 None。"""
+    """「清掉這集」之前再確認（照順序，沒過丟 HandoffError）：①已交出去（最近一次第 5 步交接包核對通過）、這一集是匯入
+    第 3 步交接包建的（宇軒 10-20：不再看 zip 還在不在，改由確認視窗請人確認已上傳到雲端空間）②交出去之後人做的判斷沒有再改過 ③工作區是真的資料夾（不是捷徑）、名稱是「…_剪輯工作區」、有分析結果、沒結案。回原片複本那一列或 None。"""
     from bookclub import closing, fileio
 
     w = Path(workdir)
@@ -1090,13 +1288,9 @@ def episode_clean_check(workdir: str | Path, *, kind: str | None = None, data: P
     e = last_export(w, STAGE5)
     if not handed_over(w) or e is None:
         raise HandoffError("這一集還沒交出去（第 5 步交接打包），不能整集清掉。")
-    z = Path(str(e.get("路徑") or ""))
-    try:
-        if not e.get("路徑") or not z.is_file() or z.stat().st_size != int(e.get("大小") or -1):
-            raise HandoffError("找不到剛才存的交接包（搬走了，或存的地方現在讀不到），找得到才能清。")
-    except OSError:
-        raise HandoffError("找不到剛才存的交接包（搬走了，或存的地方現在讀不到），找得到才能清。") from None
-    if changed_since(e.get("紀錄指紋") or {}, record_prints(w)):
+    if not imported_episode(w):
+        raise HandoffError("這一集是在這台從頭做的（不是匯入交接包來的），不能整集清掉。")
+    if _changes(e.get("紀錄指紋") or {}, record_prints(w)):
         raise HandoffError("交出去之後這一集又改過了。要交回去的話先再按一次「交接打包…」，存好再清。")
     from bookclub.workdir import WORKSPACE_SUFFIX
 

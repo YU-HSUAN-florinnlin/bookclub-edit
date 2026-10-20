@@ -1667,8 +1667,10 @@ class BookclubServer(ThreadingHTTPServer):
         """`POST /api/handoff/import/zip` {路徑?}：第 ① 格——叫系統選檔視窗選 zip（或打的路徑），先讀交接清單（很快）。"""
         from bookclub import fileio, handoff
 
-        if self.handoff_running():
+        if self.import_job is not None and self.import_job.running:
             raise ValueError("上一個匯入還沒做完。")
+        if self.handoff_job is not None and self.handoff_job.running:
+            raise ValueError("交接打包正在做，等它做完再匯入。")
         typed = str(body.get("路徑") or "").strip()
         if typed:
             p = Path(typed).expanduser()
@@ -1726,7 +1728,8 @@ class BookclubServer(ThreadingHTTPServer):
         why = self._handoff_busy("匯入交接包")
         if why:
             raise ValueError(why)
-        ij = handoff.ImportJob(Path(self.handoff_zip["路徑"]), Path(pk["路徑"]), confirm=bool(body.get("確認")))
+        ij = handoff.ImportJob(Path(self.handoff_zip["路徑"]), Path(pk["路徑"]), confirm=bool(body.get("確認")),
+                               candidates=[d for d in registered_projects() if d.is_dir()])
         ij.on_done = self._import_done
         with self.pick_lock:
             if self.handoff_running():
