@@ -793,7 +793,9 @@ def read_manifest(zip_path: str | Path) -> dict:
 def summary(m: dict) -> dict:
     """給畫面看的交接包摘要。"""
     v = m.get("原片") or {}
-    return {"哪一段": m.get("哪一段"), "匯出時間": m.get("匯出時間"), "電腦": m.get("電腦"), "工具版本": m.get("工具版本"),
+    return {"哪一段": m.get("哪一段"), "匯出時間": m.get("匯出時間"),
+            "電腦": str(m.get("電腦") or "").split("・")[0],   # 宇軒 10-20：畫面只寫 Mac／Windows（代號只存在清單與歷史）
+            "工具版本": m.get("工具版本"),
             "原片檔名": v.get("檔名"), "原片長度": v.get("長度"), "原片大小": v.get("大小"),
             "檔數": len(m.get("檔案") or []), "有成品": m.get("哪一段") == STAGE5}
 
@@ -866,29 +868,52 @@ def is_existing(target: Path) -> bool:
     return target.is_dir() and wd.analysis_result_path(target).is_file()
 
 
-def find_target(m: dict, video: str | Path, candidates: list[Path] | None = None) -> Path:
-    """這個交接包要匯入哪一份工作區（審查 M3：不靠原片放在哪）：
-    1. 這台的工作區（專案清單上的）有交出過「上一棒交接編號」那個包 → 就是它（老師段 3 收回夥伴的包）
-    2. 有同一個工作區 ID、而且不是交出這個包本身的那一份 → 它
-    3. 都沒有：原片旁邊的 `<檔名>_剪輯工作區/`（跟「選影片」同一套）"""
+def find_targets(m: dict, video: str | Path, candidates: list[Path] | None = None) -> tuple[list[Path], str]:
+    """這個交接包要匯入哪一份工作區（審查 M3：不靠原片放在哪）。回 (符合的工作區, 怎麼找到的)：
+    1. 這台的工作區（專案清單上的）有交出過「上一棒交接編號」那個包 →「上一棒」
+    2. 有同一個工作區 ID、而且不是交出這個包本身的那一份 →「工作區ID」
+    3. 都沒有：原片旁邊的 `<檔名>_剪輯工作區/`（跟「選影片」同一套）→「原片旁邊」
+    1、2 符合的不只一份時全部回（二審 N5：讓人選）。"""
     prev, wid, me = m.get("上一棒交接編號"), m.get("工作區ID"), m.get("交接編號")
     cands = []
     for d in candidates or []:
         try:
-            if Path(d).is_dir() and not Path(d).is_symlink() and is_existing(Path(d)):
+            if Path(d).is_dir() and not Path(d).is_symlink() and is_existing(Path(d)) and Path(d) not in cands:
                 cands.append(Path(d))
         except OSError:
             continue
     if prev:
-        for d in cands:
-            if any(e.get("交接編號") == prev and e.get("核對") == "通過" for e in read_record(d).get("交出") or []):
-                return d
+        hit = [d for d in cands if any(e.get("交接編號") == prev and e.get("核對") == "通過"
+                                       for e in read_record(d).get("交出") or [])]
+        if hit:
+            return hit, "上一棒"
     if wid:
+        hit = []
         for d in cands:
             rec = read_record(d)
             if rec.get("工作區ID") == wid and not any(e.get("交接編號") == me for e in rec.get("交出") or []):
-                return d
-    return target_for(video)
+                hit.append(d)
+        if hit:
+            return hit, "工作區ID"
+    return [target_for(video)], "原片旁邊"
+
+
+def find_target(m: dict, video: str | Path, candidates: list[Path] | None = None) -> Path:
+    return find_targets(m, video, candidates)[0][0]
+
+
+def export_after(workdir: str | Path, num: str | None) -> tuple[dict | None, list[dict]]:
+    """這台交出過的「num 那一包」，和它之後又交出的（核對通過的）。找不到 num 回 (None, [])。"""
+    out = [e for e in read_record(workdir).get("交出") or [] if e.get("核對") == "通過"]
+    for i, e in enumerate(out):
+        if num and e.get("交接編號") == num:
+            return e, out[i + 1:]
+    return None, []
+
+
+def _short_time(t: str | None) -> str:
+    t = str(t or "")
+    return f"{t[5:7]}-{t[8:10]} {t[11:16]}" if len(t) >= 16 else t
 
 
 def _registered() -> list[Path]:
@@ -915,6 +940,7 @@ class ImportJob:
         self._probe, self._extract = probe, extract_audio
         self.target = Path(target) if target else None
         self.candidates = candidates
+        self.resolved: Path | None = None   # 實際要匯入（換掉）的工作區（伺服器擋寫入用）
         self.state = "等待"
         self.error: str | None = None
         self.ask: dict | None = None
@@ -967,6 +993,47 @@ class ImportJob:
     def _progress(self, i: int, n: int, _rel: str) -> None:
         self.index, self.total = i, n
 
+    def _ask(self, m: dict, targets: list[Path], how: str, existing: bool) -> dict | None:
+        """要不要先問（回確認內容或 None）。二審 N1、N2、N3、N5。"""
+        target = targets[0]
+        lines: list[str] = []
+        changes: list[str] = []
+        prev = m.get("上一棒交接編號")
+        if len(targets) > 1:
+            lines.append("這台有好幾份工作區都是這一集，請選要換掉哪一份：")
+        if not existing:
+            if m.get("哪一段") == STAGE5 and prev and how == "原片旁邊":
+                lines.append("這台的專案清單裡找不到當初交出去的那一份工作區（可能改過名或搬過）。"
+                             "要另外建一份嗎？或在下面打原本那一份工作資料夾的位置。")
+                return {"說明": lines, "改過": [], "共幾個": 0, "工作區": str(target), "工作區名稱": target.name,
+                        "選項": [], "可以另建": True, "可以指定": True}
+            return None
+        rec = read_record(target)
+        if rec.get("工作區ID") and m.get("工作區ID") and rec["工作區ID"] != m["工作區ID"]:
+            lines.append("這台的這一集是另一份工作區（不是這個交接包那一份），匯入會把它的紀錄換成包裡的（先備份）。")
+        else:
+            base, later = export_after(target, prev)
+            if base is not None:
+                changes = _changes(base.get("紀錄指紋") or {}, record_prints(target))
+                if later:
+                    lines.append(f"你在這包之後又交接過一次（{_short_time(later[-1].get('時間'))}），這包是比較舊的那次做的。"
+                                 "繼續的話，那次之後的修改會換成包裡的（先備份）。")
+            else:
+                ch = changes_after_export(target)
+                if ch is None:
+                    lines.append("這台的這一集沒有交接打包過的紀錄，看不出來交出去之後有沒有改過。")
+                changes = ch or []
+            if changes:
+                lines.append(f"這台的這一集在交接打包之後又改過（{len(changes)} 個檔）：")
+            olds = [e for e in rec.get("匯入") or [] if e.get("哪一段") == m.get("哪一段") and e.get("匯出時間")]
+            if olds and str(olds[-1]["匯出時間"]) > str(m.get("匯出時間") or ""):
+                lines.insert(0, f"這個交接包比你上次匯入的（{_short_time(olds[-1]['匯出時間'])} 交出的）還舊。")
+        if not lines and len(targets) == 1:
+            return None
+        return {"說明": lines, "改過": changes[:20], "共幾個": len(changes), "工作區": str(target),
+                "工作區名稱": target.name, "選項": [str(t) for t in targets] if len(targets) > 1 else [],
+                "可以另建": False, "可以指定": False}
+
     def _run(self) -> dict | None:
         from bookclub import closing
 
@@ -979,22 +1046,25 @@ class ImportJob:
         # 3. 聲線比對（不擋）
         voices = voice_diff(m.get("聲線"))
         # 4. 這台有沒有這一集
-        target = self.target or find_target(m, self.video,
-                                            self.candidates if self.candidates is not None else _registered())
+        if self.target:
+            targets, how = [self.target], "指定"
+        else:
+            targets, how = find_targets(m, self.video, self.candidates if self.candidates is not None else _registered())
+        target = targets[0]
+        self.resolved = target
         if target.is_symlink():
             raise HandoffError("這一集的工作資料夾是捷徑，不能匯入；請開發者看過再處理。")
         existing = is_existing(target)
         if existing and closing.closed(target):
             raise HandoffError("這支影片在這台已經結案了，不能匯入。要重做請找宇軒。")
+        if existing and any(e.get("交接編號") == m.get("交接編號") for e in read_record(target).get("交出") or []):
+            raise HandoffError("選的原片旁邊就是交出這個交接包的那一份工作區。要在同一台演練另一邊，請把原片另外放一份在別的資料夾再匯入。")
         space_check(target, m)   # 審查 S4：開始搬之前先看空間
-        if existing and not self.confirm:
-            rec = read_record(target)
-            other = bool(rec.get("工作區ID")) and bool(m.get("工作區ID")) and rec["工作區ID"] != m["工作區ID"]
-            changes = None if other else changes_after_export(target)
-            if changes is None or changes:
+        if not self.confirm:
+            ask = self._ask(m, targets, how, existing)
+            if ask:
                 self.state = "要確認"
-                self.ask = {"沒有交接紀錄": changes is None, "改過": (changes or [])[:20],
-                            "共幾個": len(changes or []), "工作區": str(target)}
+                self.ask = ask
                 return None
         self.state = "匯入中"
         return import_into(target, self.zip_path, m, self.video, existing=existing, voices=voices,

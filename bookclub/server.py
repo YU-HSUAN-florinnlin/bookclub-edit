@@ -1728,8 +1728,14 @@ class BookclubServer(ThreadingHTTPServer):
         why = self._handoff_busy("匯入交接包")
         if why:
             raise ValueError(why)
+        target = None
+        if body.get("工作區"):   # 二審 N3、N5：人選的（或打的）原本那一份工作區
+            target = Path(str(body["工作區"])).expanduser()
+            if not target.is_absolute() or not target.is_dir() or target.is_symlink() \
+                    or not handoff.is_existing(target):
+                raise ValueError("這個位置不是這個工具的工作資料夾（裡面要有分析結果），請再確認。")
         ij = handoff.ImportJob(Path(self.handoff_zip["路徑"]), Path(pk["路徑"]), confirm=bool(body.get("確認")),
-                               candidates=[d for d in registered_projects() if d.is_dir()])
+                               candidates=[d for d in registered_projects() if d.is_dir()], target=target)
         ij.on_done = self._import_done
         with self.pick_lock:
             if self.handoff_running():
@@ -2279,6 +2285,11 @@ class Handler(BaseHTTPRequestHandler):
         # 1015-8 第 3 段（32 號設計 §5.2）：伺服器一層擋——已結案（含清理中）所有會寫這個工作區的 API 一律 409
         if _server_closed(server) and not closed_post_allowed(path, body):
             raise Closed(CLOSED_MSG)
+        ij = getattr(server, "import_job", None)
+        if ij is not None and ij.running and ij.resolved is not None and server.has_workdir \
+                and Path(ij.resolved) == Path(server.workdir) \
+                and (path.startswith(STEP3_WRITES) or path.startswith("/api/final/") or path.startswith("/api/execute/")):
+            raise Busy("正在匯入交接包、換掉這一集，等它做完再改。")   # 二審 S6
         if path.startswith(STEP3_WRITES) and path not in STEP3_WRITES_OK and server.exec_running():
             raise Busy("AI 正在執行第 4 步，第 3 步這時候不能改（改了這次執行也用不到）。等它跑完，或到第 4 步按「停止」")
         if path == "/api/execute/stop":

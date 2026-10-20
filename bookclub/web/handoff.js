@@ -180,7 +180,7 @@ async function hoRenderImport(dlg) {
   const s = (v.z || {})["摘要"] || {};
   const name = s["原片檔名"] || "原片";
   const zipHtml = v.z
-    ? `<b>${esc(v.z["檔名"])}</b><div class="muted">${esc(s["哪一段"] === "第5步" ? "第 5 步交接（含成品）" : "第 3 步交接")}・${esc(s["電腦"] || "")}・${esc(String(s["匯出時間"] || "").replace("T", " ").slice(0, 16))}</div>`
+    ? `<b>${esc(v.z["檔名"])}</b><div class="muted">${esc(s["哪一段"] === "第5步" ? "第 5 步交接（含成品）" : "第 3 步交接")}・${esc(s["電腦"] || "")}・${esc(String(s["匯出時間"] || "").replace("T", " ").slice(5, 16))}</div>`
     : `<span class="muted">還沒選</span>`;
   let vidHtml = `<span class="muted">先選交接包</span>`;
   if (v.z) {
@@ -192,16 +192,18 @@ async function hoRenderImport(dlg) {
   let bottom = "";
   if (v.js === "要確認") {
     const ask = v.job["要確認"] || {};
-    const lines = ask["沒有交接紀錄"]
-      ? ["這台已經有這一集，但沒有交接打包過的紀錄，看不出來交出去之後有沒有改過。"]
-      : [`這台的這一集在交接打包之後又改過（${ask["共幾個"]} 個檔）：`];
-    bottom = `<div class="ho-ask">${lines.map((x) => `<p>${esc(x)}</p>`).join("")}
+    const opts = ask["選項"] || [];
+    bottom = `<div class="ho-ask"><p>要換掉的工作區：<b>${esc(ask["工作區名稱"] || "")}</b></p>
+      ${(ask["說明"] || []).map((x) => `<p>${esc(x)}</p>`).join("")}
       ${(ask["改過"] || []).length ? `<ul class="ho-list">${ask["改過"].map((x) => `<li>${esc(x)}</li>`).join("")}${ask["共幾個"] > ask["改過"].length ? `<li>⋯</li>` : ""}</ul>` : ""}
-      <p>繼續的話，會先把這台的紀錄備份到「備份/交接前_日期」，再換成包裡的。</p></div>
-      <div class="rv-confirm-btns"><button class="ghost" id="ho-no">不匯入</button><button class="primary" id="ho-yes">繼續匯入</button></div>`;
+      ${opts.length ? `<ul class="ho-list">${opts.map((x, i) => `<li><label><input type="radio" name="ho-pick" value="${esc(x)}" ${i ? "" : "checked"}> ${esc(x)}</label></li>`).join("")}</ul>` : ""}
+      ${ask["可以指定"] ? `<p><input type="text" id="ho-where" size="44" placeholder="原本那一份工作資料夾的完整位置（可以不填）"></p>` : ""}
+      ${ask["可以另建"] ? "" : `<p>繼續的話，會先把這台的紀錄備份到「備份/交接前_日期」，再換成包裡的。</p>`}</div>
+      <p id="ho-imp-msg" role="status"></p>
+      <div class="rv-confirm-btns"><button class="ghost" id="ho-no">不匯入</button><button class="primary" id="ho-yes">${ask["可以另建"] ? "繼續" : "繼續匯入"}</button></div>`;
   } else if (v.js === "完成") {
     const r = v.job["結果"] || {};
-    bottom = `<p><span class="badge done">匯入好了</span> ${r["新建"] ? "已經建好這一集。" : "已經換成包裡的內容，原本的紀錄備份在「" + esc(r["備份"] || "") + "」。"}</p>
+    bottom = `<p><span class="badge done">匯入好了</span> ${r["新建"] ? "已經建好這一集。" : "已經換成包裡的內容，原本的紀錄備份在「" + esc(r["備份"] || "") + "」。"}（工作區：${esc(String(r["工作區"] || "").split("/").pop())}）</p>
       ${(r["提醒"] || []).map((x) => `<p class="rv-warnline">${esc(x)}</p>`).join("")}
       <p class="muted">下載的交接包（zip）可以刪了。</p>
       <div class="rv-confirm-btns"><button class="primary" id="ho-go">到${esc(hoStepName(r["去哪一步"]))}</button></div>`;
@@ -263,7 +265,12 @@ async function hoRenderImport(dlg) {
   const yes = dlg.querySelector("#ho-yes");
   if (yes) yes.addEventListener("click", async () => {
     yes.disabled = true;
-    try { await apiPost("/api/handoff/import/start", { "確認": true }, { quiet: true }); }
+    const body = { "確認": true };
+    const pick = dlg.querySelector('input[name="ho-pick"]:checked');
+    const where = dlg.querySelector("#ho-where");
+    if (pick) body["工作區"] = pick.value;
+    if (where && where.value.trim()) body["工作區"] = where.value.trim();
+    try { await apiPost("/api/handoff/import/start", body, { quiet: true }); }
     catch (e) {
       yes.disabled = false;
       yes.closest(".rv-confirm-btns").insertAdjacentHTML("beforebegin", `<p class="rv-warnline">${esc(e.message)}</p>`);

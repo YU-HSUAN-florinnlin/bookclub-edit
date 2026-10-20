@@ -193,6 +193,26 @@ def test_import_api_switches_project_then_clean_episode():
         httpd.server_close()
 
 
+def test_writes_blocked_while_importing_current_workdir():
+    """二審 S6：匯入正在換掉目前這一集時，第 3、5 步的寫入擋下。"""
+    import types
+
+    w, _v = _teacher()
+    httpd, base = _serve(w)
+    try:
+        httpd.import_job = types.SimpleNamespace(running=True, resolved=w)
+        code, r = _call(base, "/api/review/time", {"秒數": 3})
+        assert code == 409 and "匯入交接包" in r["error"]
+        code, r = _call(base, "/api/final/watched", {})
+        assert code == 409
+        httpd.import_job = types.SimpleNamespace(running=True, resolved=w.parent / "別的")
+        assert _call(base, "/api/review/time", {"秒數": 3})[0] == 200
+    finally:
+        httpd.import_job = None
+        httpd.shutdown()
+        httpd.server_close()
+
+
 if __name__ == "__main__":
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for name, fn in tests:

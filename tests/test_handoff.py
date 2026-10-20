@@ -333,7 +333,8 @@ def test_teacher_changed_after_export_is_listed():
     sdata["段落"][0]["校對稿"] = "老師後來又改了這一句。"
     wd.write_json(seg, sdata)
     job = _import(z5, video)
-    assert job.state == "要確認" and "校對/段落.json" in job.ask["改過"] and not job.ask["沒有交接紀錄"]
+    assert job.state == "要確認" and "校對/段落.json" in job.ask["改過"] \
+        and not any("沒有交接打包過" in x for x in job.ask["說明"]) and job.ask["工作區名稱"] == w.name
     assert json.loads(seg.read_text(encoding="utf-8"))["段落"][0]["校對稿"] == "老師後來又改了這一句。", "還沒確認不能動"
     job = _import(z5, video, confirm=True)
     assert job.state == "完成" and job.result["備份"]
@@ -348,7 +349,7 @@ def test_existing_without_record_asks():
     # 夥伴那台已經有這一集、沒交接打包過，又匯入一次 → 要確認（沒有交接紀錄）
     v2 = Path(json.loads((w2 / "分析結果.json").read_text(encoding="utf-8"))["video"])
     job = _import(z, v2)
-    assert job.state == "要確認" and job.ask["沒有交接紀錄"]
+    assert job.state == "要確認" and any("沒有交接打包過" in x for x in job.ask["說明"])
 
 
 def _wsl_setup(w: Path, video: Path) -> Path:
@@ -706,6 +707,100 @@ def test_m4_roster_changes_on_teacher_machine():
         assert plan is not None
     finally:
         (_DATA / "名冊.csv").write_bytes(saved)
+
+
+# ---------------------------------------------------------------------------
+# 1020-2 二審修正
+# ---------------------------------------------------------------------------
+
+def _edit_seg(w: Path, text: str) -> None:
+    seg = w / "校對" / "段落.json"
+    data = json.loads(seg.read_text(encoding="utf-8"))
+    data["段落"][0]["校對稿"] = text
+    wd.write_json(seg, data)
+
+
+def _seg0(w: Path) -> str:
+    return json.loads((w / "校對" / "段落.json").read_text(encoding="utf-8"))["段落"][0]["校對稿"]
+
+
+def test_n1_package_from_older_export_asks():
+    """老師交接兩次（A1、A2），夥伴照較舊的 A1 做完交回：要確認、說明這包是比較舊的那次；比對基準是 A1。"""
+    w, video = _teacher()
+    a1 = _pack(w, handoff.STAGE3)
+    _edit_seg(w, "A1 之後老師改的。")
+    _pack(w, handoff.STAGE3)   # A2
+    w2 = Path(_import(a1, _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    z5 = _pack(w2, handoff.STAGE5)
+    job = _import(z5, video, candidates=[w])
+    assert job.state == "要確認" and any("比較舊的那次" in x for x in job.ask["說明"]), job.ask
+    assert "校對/段落.json" in job.ask["改過"], "跟 A1 比：A1 之後改的那句要列出來"
+    assert _seg0(w) == "A1 之後老師改的。", "還沒確認不能動"
+    job = _import(z5, video, confirm=True, candidates=[w])
+    assert job.state == "完成"
+    assert json.loads((w / job.result["備份"] / "校對" / "段落.json").read_text(encoding="utf-8"))["段落"][0]["校對稿"] \
+        == "A1 之後老師改的。"
+    # 照最新那包（A2）做的、之後沒動：不用問
+    w3, v3 = _teacher()
+    b1 = _pack(w3, handoff.STAGE3)
+    w4 = Path(_import(b1, _download(v3)).result["工作區"])
+    _partner_stage5(w4)
+    assert _import(_pack(w4, handoff.STAGE5), v3, candidates=[w3]).state == "完成"
+
+
+def test_n2_older_than_last_import_says_so():
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    b1 = _pack(w2, handoff.STAGE5)
+    time.sleep(1.1)
+    _edit_seg(w2, "夥伴第二包。")
+    b2 = _pack(w2, handoff.STAGE5)
+    assert _import(b2, video, candidates=[w]).state == "完成"
+    job = _import(b1, video, candidates=[w])
+    assert job.state == "要確認" and "比你上次匯入的" in job.ask["說明"][0], job.ask
+
+
+def test_n3_original_not_found_asks_before_creating():
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    z5 = _pack(w2, handoff.STAGE5)
+    elsewhere = _download(video, "老師下載")
+    job = _import(z5, elsewhere, candidates=[])      # 專案清單裡找不到老師那一份
+    assert job.state == "要確認" and job.ask["可以另建"] and job.ask["可以指定"]
+    assert not (elsewhere.parent / "假影片_剪輯工作區").exists(), "沒問之前不另建"
+    job = _import(z5, elsewhere, confirm=True, target=w)   # 人指定原本那一份
+    assert job.state == "完成" and Path(job.result["工作區"]) == w and job.result["備份"]
+
+
+def test_n5_two_copies_let_user_choose():
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    z5 = _pack(w2, handoff.STAGE5)
+    copy = w.parent.parent / "副本" / w.name
+    shutil.copytree(w, copy)
+    job = _import(z5, video, candidates=[copy, w])
+    assert job.state == "要確認" and job.ask["選項"] == [str(copy), str(w)] and job.ask["工作區名稱"] == w.name
+    job = _import(z5, video, confirm=True, candidates=[copy, w], target=w)
+    assert job.state == "完成" and Path(job.result["工作區"]) == w
+    assert not (copy / handoff.BACKUP_DIR).exists(), "沒選的那一份不動"
+
+
+def test_n6_same_machine_original_video_refused():
+    w, video = _teacher()
+    z = _pack(w, handoff.STAGE3)
+    job = _import(z, video, candidates=[w])
+    assert job.state == "失敗" and "另外放一份" in job.error
+
+
+def test_summary_shows_only_system():
+    w, _v = _teacher()
+    z = _pack(w, handoff.STAGE3)
+    s = handoff.summary(handoff.read_manifest(z))
+    assert s["電腦"] in ("Mac", "Windows", "Linux")
 
 
 if __name__ == "__main__":
