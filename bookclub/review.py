@@ -178,7 +178,8 @@ def suggest_overlap(o: dict, turns: list[dict], who: str | None, voices: dict, s
 def replace_real_names(text: str, table: list[dict]) -> tuple[str, list[dict]]:
     """名冊上的本名、敏感詞換成代號／替代詞（純函式）。table：[{寫法, 代號}]，長的先換。
     回傳 (新文字, [{原字, 換成, 位置}])，位置是新文字裡的字元索引，給畫面標出換過的字。
-    1017 總審查：標 `拿掉` 的列換成空字串（10-18 #250 之後 `epcodes.replace_table` 不再給這種列，③ 選不用處理照原聲；這裡的支援留著）。
+    1017 總審查：標 `拿掉` 的列換成空字串（10-18 #250 之後 ③ 選不用處理照原聲，名冊的列不再標；10-20 總審查起
+    `epcodes.replace_table` 只給替代詞留空的敏感詞標 `拿掉`＝人決定刪）。
     10-17 #245：換成空字串時，句首、句尾留下的空白去掉、句中的空白不動（跟 `nameplan.finish_drops` 同一個規則）；`換成` 是空的就是拿掉。"""
     rows = sorted((r for r in table if (r.get("代號") or r.get("拿掉")) and len(r["寫法"]) >= 2), key=lambda r: -len(r["寫法"]))
     out, changes, i = "", [], 0

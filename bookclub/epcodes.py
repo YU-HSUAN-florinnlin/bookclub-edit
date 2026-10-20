@@ -331,7 +331,7 @@ def duplicates(workdir: str | Path, only: set[str] | None = None) -> dict[str, l
 
 
 def replace_table(workdir: str | Path | None = None) -> list[dict]:
-    """學員重念稿的替換表：名冊寫法（代號換成這一集的）＋敏感詞。"""
+    """學員重念稿的替換表：名冊寫法（代號換成這一集的）＋敏感詞（替代詞留空的標 `拿掉`）。"""
     from bookclub import names
     from bookclub.config import data_dir
 
@@ -353,7 +353,12 @@ def replace_table(workdir: str | Path | None = None) -> list[dict]:
                     continue
                 out.append({**r, "代號": code})
         rows = out
-    return rows + names.load_sensitive_words(data_dir() / "敏感詞.csv")
+    # 10-20 總審查：敏感詞替代詞留空＝人決定刪（不是程式把名字變成空的）→ 標 `拿掉`，學員重念稿跟老師句子一樣拿掉
+    # （以前 replace_real_names 只換有代號的列，學員重念照字念；no_code_rows 還把它列成沒英文名照原聲）。
+    # 拿掉後句首句尾的空白照 #245 去掉；畫面照 #247 標「（拿掉）」
+    sens = [{**r, "拿掉": True} if not (r.get("代號") or "").strip() else r
+            for r in names.load_sensitive_words(data_dir() / "敏感詞.csv")]
+    return rows + sens
 
 
 SNAPSHOT_NAME = "代號表紀錄.json"   # 放在 校對/：上一次對齊時的代號表，拿來看哪個本名的代號改了
