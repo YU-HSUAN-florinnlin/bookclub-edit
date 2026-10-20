@@ -1278,19 +1278,24 @@ def name_plan_changed(workdir: Path, tag: str, summ: dict) -> bool:
 
     from bookclub import nameplan, studentnames
 
-    now = nameplan.current_plan(workdir)
-    used = wd.read_json(nameplan.plan_path(workdir), default=None)
-    fp_t = summ.get("老師名字計畫指紋")
-    if fp_t is not None:
-        if fp_t != nameplan.plan_key(now) or (used is not None and fp_t != nameplan.plan_key(used)):
+    # 10-20 總審查（復審防呆）：現在排不出計畫（例如名字候選檔不在、但計畫檔還在；或排的時候出錯）→ 這一份不比、當成沒改，
+    # 不然每次都判要重新組裝（重組也修不好）。排不出來的原因由生成那一步講
+    try:
+        now = nameplan.current_plan(workdir)
+    except Exception:  # noqa: BLE001
+        now = None
+    if now is not None:
+        used = wd.read_json(nameplan.plan_path(workdir), default=None)
+        fp_t = summ.get("老師名字計畫指紋")
+        if fp_t is not None:
+            if fp_t != nameplan.plan_key(now) or (used is not None and fp_t != nameplan.plan_key(used)):
+                return True
+        elif json.loads(json.dumps(now, ensure_ascii=False)) != (used or {}):
             return True
-    elif (now is not None or used is not None) and \
-            json.loads(json.dumps(now or {}, ensure_ascii=False)) != (used or {}):
-        return True
     try:
         sp = studentnames.plan(workdir)
-    except FileNotFoundError:
-        sp = {}
+    except Exception:  # noqa: BLE001 — 同上：排不出來（含找不到段落分析）就不比
+        return False
     fp = summ.get("學員名字計畫指紋")
     if fp is not None:
         return fp != nameplan.plan_key(sp)
@@ -1893,6 +1898,39 @@ def kept_name_rows(workdir: str | Path) -> list[dict]:
     return rows
 
 
+BLANK_KIND = "整句拿掉"   # 10-20 總審查：第 5 步「需留意」的類別（finalcheck.ATTENTION_KINDS）
+
+
+def blank_drop_rows(workdir: str | Path, plan: dict | None = None) -> list[dict]:
+    """10-20 總審查（隱私）：要念的整句拿掉替代詞留空的敏感詞後沒有字、改成整句消音的地方（只讀），每一處一列：
+    - 老師：名字處理計畫的消音裡標 `nameplan.BLANK_KEY` 的（同一句幾個候選只列一列）
+    - 學員重念：`students.empty_chunks` 裡標 `nameplan.BLANK_KEY` 的（重疊卡片的學員那一句也算）"""
+    from bookclub import nameplan, review, students
+
+    workdir = Path(workdir)
+    rows: list[dict] = []
+    if wd.read_json(wd.names_path(workdir), default=None):
+        plan = plan if plan is not None else nameplan.compute_plan(workdir)
+        data = wd.read_json(wd.names_path(workdir), default=None) or {}
+        ndec = wd.read_json(review.name_decisions_path(workdir), default={}) or {}
+        cards = review.card_of(review.effective_name_candidates(workdir, data.get("candidates", []), ndec))
+        seen = set()
+        for m in plan.get("消音") or []:
+            if not m.get(nameplan.BLANK_KEY) or m.get("生成編號") in seen:
+                continue
+            seen.add(m.get("生成編號"))
+            card = f"重疊:{m['重疊項目'][0]}" if m.get("重疊項目") and not isinstance(m.get("候選"), int) \
+                else f"名字:{cards.get(str(m['候選']), m['候選'])}"
+            rows.append({"key": f"{BLANK_KIND}:老師:{m.get('生成編號')}", "類別": BLANK_KIND, "start": float(m["start"]),
+                         "end": float(m["end"]), "第3步": card})
+    for m in students.empty_chunks(workdir):
+        if m.get(nameplan.BLANK_KEY):
+            card = f"重疊:{m['重疊']}" if m.get("重疊") else f"學員段落:{m.get('段落')}"
+            rows.append({"key": f"{BLANK_KIND}:學員重念:{m['id']}", "類別": BLANK_KIND, "start": float(m["start"]),
+                         "end": float(m["end"]), "第3步": card})
+    return rows
+
+
 def no_code_rows(workdir: str | Path, plan: dict | None = None) -> list[dict]:
     """10-18 #246 修法 5：沒有英文名、照原聲留著的地方（只讀），每一處一列（跟 `kept_name_rows` 同一個類別）：
     - 老師名字卡：計畫裡 `略過` 原因是 `nameplan.NO_CODE_SKIP` 的（同一句同代號併成一張的照一張卡列）
@@ -1972,6 +2010,10 @@ def skipped_snapshot(workdir: str | Path) -> dict | None:
         # 10-20 總審查：算不出來時清單是空的，第 5 步看起來像「沒有照原聲的名字」→ 照「補找沒做完」的做法記下來，
         # 第 5 步「需留意」與輸出確認視窗各提一句（不擋）
         snap["照原聲名字算不出來"] = kept_failed
+        try:   # 10-20 總審查：拿掉後沒有字、改成整句消音的地方
+            snap["列"] += blank_drop_rows(workdir)
+        except Exception as e:  # noqa: BLE001 — 算不出來不擋執行
+            print(f"[AI 執行] ⚠️ 整句拿掉的地方算不出來（第 5 步「需留意」這次不會列）：{type(e).__name__}")
         snap["人名清單沒跑成功"] = bool(review.people_list_missing(Path(workdir)))
         try:   # 10-19 #234：③ 補找出錯、按第二次放行開始的——第 5 步「需留意」列一行（補找成功後重跑第 4 步就不再列）
             from bookclub import personnames

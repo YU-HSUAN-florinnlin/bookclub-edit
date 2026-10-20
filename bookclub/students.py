@@ -26,6 +26,7 @@ from typing import Callable
 
 import numpy as np
 
+from bookclub import nameplan
 from bookclub import workdir as wd
 
 MIN_CHUNK_S, MAX_CHUNK_S = 8.0, 25.0   # 10-03 #61：8 秒以上遇到停頓就切；找不到停頓最長放寬到 25 秒
@@ -360,12 +361,17 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
         sents = in_window(all_sents, lo, hi)
         edited = bool(t.get("校對稿")) and t["校對稿"] != t.get("原文")
         if not all_sents:
-            if keep_empty:
-                continue
             # 手動標的學員段落裡沒有逐字稿句子（09-29）：照段落起訖，用校對稿整段一次生成，不能留學員原聲
             a, b = clip_slot(max(t["start"], lo), min(t["end"], hi), cuts)
             if b - a > 0.3 and not in_ranges(a, b, list(cuts)) and (t.get("校對稿") or "").strip():
                 text, changes = review.replace_real_names(t["校對稿"].strip(), table)
+                if nameplan.blank_text(text):   # 10-20 總審查：拿掉替代詞留空的敏感詞後沒有字 → 不生成、整格消音
+                    if keep_empty:
+                        items.append({"id": f"{t['id']}_01", "段落": t["id"], "學員": who, "text": "", "slot": [a, b],
+                                      "slot_s": b - a, "文字來源": "校對稿（拿掉後沒有字）", nameplan.BLANK_KEY: True})
+                    continue
+                if keep_empty:
+                    continue
                 items.append({
                     "id": f"{t['id']}_01", "段落": t["id"], "學員": who, "text": text, "原文": t.get("原文", ""),
                     "slot": [a, b], "slot_s": b - a, "句子": [], "換成代號": len(changes),
@@ -382,11 +388,15 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
             text, changes = review.replace_real_names(src, table)
             a, b = clip_slot(*chunk["slot"], cuts)
             mid = {MID_SPEECH: chunk[MID_SPEECH]} if chunk[MID_SPEECH] else {}
-            if not text.strip():
-                # 校對時這幾句的字全刪了：不生成，組裝時整格消音（見 empty_chunks）
+            if nameplan.blank_text(text):
+                # 校對時這幾句的字全刪了：不生成，組裝時整格消音（見 empty_chunks）。
+                # 10-20 總審查（隱私）：拿掉替代詞留空的敏感詞後沒有字（或只剩標點）也一樣，標 `拿掉後沒有字`（第 5 步列出來）
                 if keep_empty:
+                    dropped = not nameplan.blank_text(src)
                     items.append({"id": f"{t['id']}_{k:02d}", "段落": t["id"], "學員": who, "text": "",
-                                  "slot": [a, b], "slot_s": b - a, "文字來源": "校對稿（這幾句刪光了）"})
+                                  "slot": [a, b], "slot_s": b - a,
+                                  "文字來源": "校對稿（拿掉後沒有字）" if dropped else "校對稿（這幾句刪光了）",
+                                  **({nameplan.BLANK_KEY: True} if dropped else {})})
                 continue
             if keep_empty:
                 continue
@@ -397,6 +407,10 @@ def build_items(workdir: Path, start: float | None = None, end: float | None = N
             })
     if not keep_empty:
         items += overlap_items(workdir, items, spans, kept, cuts, table, lo, hi, only)
+    else:   # 10-20 總審查：重疊卡片「學員說的」拿掉後沒有字的那一句也整格消音
+        turn_slots = [tuple(it["slot"]) for it in build_items(workdir, start, end, only, include_kept)[0] if not it.get("重疊")]
+        items += overlap_items(workdir, [{"slot": list(x)} for x in turn_slots], {}, kept, cuts, table, lo, hi, only,
+                               keep_empty=True)
     return items, spans
 
 
@@ -454,7 +468,7 @@ def renumbered_slots(workdir: Path, start: float | None, end: float | None) -> i
 
 
 def overlap_items(workdir: Path, turn_items: list[dict], spans: dict, kept: set, cuts: list, table: list,
-                  lo: float, hi: float, only: list[str] | None) -> list[dict]:
+                  lo: float, hi: float, only: list[str] | None, keep_empty: bool = False) -> list[dict]:
     """重疊卡片要自己生成的學員那一句（10-01）：
     - 選「生成學員聲音」、又不在任何學員重念的時間格裡 → 用卡片上「學員說的」；時間格＝學員那一整句
       （10-01 第三批：以前只換重疊那一小段，整句擠進去、前後還留學員原聲；見 `review.student_gen_slot`）
@@ -478,6 +492,14 @@ def overlap_items(workdir: Path, turn_items: list[dict], spans: dict, kept: set,
         if b - a < 0.1 or in_ranges(a, b, list(cuts)):
             continue
         text, changes = review.replace_real_names(o["學員文字"].strip(), table)
+        blank = nameplan.blank_text(text)   # 10-20 總審查：拿掉後沒有字 → 不生成、整格消音（keep_empty 時才回這種）
+        if blank != keep_empty:
+            continue
+        if blank:
+            out.append({"id": f"{o['id']}_學員", "段落": o["id"], "學員": who, "text": "", "slot": [round(a, 3), round(b, 3)],
+                        "slot_s": b - a, "文字來源": "重疊卡片的「學員說的」（拿掉後沒有字）", "重疊": o["id"],
+                        nameplan.BLANK_KEY: True})
+            continue
         spans.setdefault(who, []).append((a, b))
         out.append({"id": f"{o['id']}_學員", "段落": o["id"], "學員": who, "text": text, "原文": "",
                     "slot": [round(a, 3), round(b, 3)], "slot_s": b - a, "句子": [], "換成代號": len(changes),
@@ -561,7 +583,10 @@ def split_edited(turn: dict, sents: list[dict]) -> dict[str, str] | None:
 def empty_chunks(workdir: Path, start: float | None = None, end: float | None = None) -> list[dict]:
     """校對稿刪光、不生成的學員時間格（組裝時當局部消音，不能留學員原聲）。"""
     items, _ = build_items(workdir, start, end, keep_empty=True)
-    return [{"id": it["id"], "start": it["slot"][0], "end": it["slot"][1], "原因": f"{it['id']} 校對稿刪光了", "學員": it["學員"]}
+    return [{"id": it["id"], "start": it["slot"][0], "end": it["slot"][1], "學員": it["學員"],
+             "原因": f"{it['id']} 要念的字拿掉後沒有了（替代詞留空的敏感詞）" if it.get(nameplan.BLANK_KEY) else f"{it['id']} 校對稿刪光了",
+             **({nameplan.BLANK_KEY: True, "段落": it["段落"]} if it.get(nameplan.BLANK_KEY) else {}),
+             **({"重疊": it["重疊"]} if it.get("重疊") else {})}
             for it in items]
 
 

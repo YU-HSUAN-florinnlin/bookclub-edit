@@ -916,10 +916,37 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     for g in plan["生成"]:
         g["text"], _changes = review.replace_real_names(g["text"], table)
         check_no_drop_mark(g["text"])   # 10-18 #245：要念的字裡不能留著拿掉名字的記號
+    blank_to_mute(plan)
     if only:
         plan["略過"] = [s for s in plan["略過"] if s["候選"] in set(only)]
         plan["只處理"] = sorted(set(only))
     return plan
+
+
+BLANK_KEY = "拿掉後沒有字"   # 10-20 總審查：消音那一筆是「要念的整句拿掉後沒有字」改來的（第 5 步「需留意」列出來）
+
+
+def blank_text(text: str | None) -> bool:
+    """要念的字是空的、或只剩標點空白（純函式）。"""
+    return not any(ch.isalnum() for ch in (text or ""))
+
+
+def blank_to_mute(plan: dict) -> None:
+    """10-20 總審查（隱私）：老師要念的一整句只有替代詞留空的敏感詞（或名字），拿掉後沒有字（或只剩標點空白）
+    → 不生成、整句改成消音（就地改）。以前生成程式看到空的會改念原文（`tts.fill_teacher_text`），等於把那個詞念出來。
+    人設定替代詞留空＝人決定刪，消音符合原則；消音那一筆標 `拿掉後沒有字`，第 5 步「需留意」列一行讓人聽。"""
+    keep, mutes = [], []
+    for g in plan.get("生成") or []:
+        if not blank_text(g.get("text")):
+            keep.append(g)
+            continue
+        cands = list(g.get("候選") or []) or [g["id"]]
+        for c in cands:
+            mutes.append({"候選": c, "start": g["slot"][0], "end": g["slot"][1], BLANK_KEY: True, "生成編號": g["id"],
+                          **({"重疊項目": g["重疊項目"]} if g.get("重疊項目") else {})})
+    if mutes:
+        plan["生成"] = keep
+        plan["消音"] = list(plan.get("消音") or []) + mutes
 
 
 def _write_plan(workdir: Path, plan: dict, n_cands: int | None = None, only: list[int] | None = None,
