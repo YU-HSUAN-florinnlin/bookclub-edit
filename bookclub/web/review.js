@@ -123,11 +123,12 @@ async function renderReview() {
           <button class="ghost" id="rv-set-btn" aria-expanded="false">設定</button>
           <button class="ghost" id="rv-key-btn" aria-expanded="false">快捷鍵</button>
           <button class="ghost" id="rv-code-btn" aria-expanded="false" title="本名和代號的對照（截圖或分享螢幕時會露出本名）">代號對照</button>
-          <button class="ghost" id="rv-export" title="只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交接整個專案請複製整個工作區資料夾">匯出覆核結果</button>
+          <button class="ghost" id="rv-export" title="只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交給夥伴做第 4、5 步請用下面的「交接打包…」">匯出覆核結果</button>
           <button class="primary" id="rv-go4" disabled>開始 AI 修改</button>
         </div>
       </header>
       <div class="rv-busy" id="rv-busy" role="status" hidden></div>
+      <div class="cl-box ho-box3" id="rv-handoff" hidden></div>
       <dialog class="rv-modal" id="rv-modal-keys" aria-labelledby="rv-modal-keys-h">
         <div class="rv-modal-head"><h2 id="rv-modal-keys-h">快捷鍵</h2><button class="ghost rv-modal-x" data-modal-close aria-label="關閉">✕</button></div>
         <div class="rv-modal-body" id="rv-keys">
@@ -194,6 +195,8 @@ async function renderReview() {
   });
   document.getElementById("rv-export").addEventListener("click", rvExport);
   document.getElementById("rv-go4").addEventListener("click", rvConfirmGo4);
+  // 33 號設計：交接打包、匯入交接包（handoff.js）；已結案不顯示
+  if (typeof hoBoxInit === "function" && !(typeof wsClosed === "function" && wsClosed())) hoBoxInit(document.getElementById("rv-handoff"), "第3步");
   rvBindTimeline(document.getElementById("rv-tl"));
   window.addEventListener("resize", rvRenderTimeline);
 

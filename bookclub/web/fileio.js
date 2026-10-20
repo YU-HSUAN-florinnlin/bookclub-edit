@@ -222,7 +222,7 @@ function foWhichLine(d, job) {
 async function fileOutInit(el) {
   if (!el) return;
   if (!el.querySelector("#foMain")) {   // 第一次：排好三塊（按鈕列每秒重畫時，片頭片尾與資料夾瀏覽不會被洗掉）
-    el.innerHTML = `<div id="foMain"></div><div id="clBox" class="cl-box" hidden></div><div id="feExtras"></div>
+    el.innerHTML = `<div id="foMain"></div><div id="clBox" class="cl-box" hidden></div><div id="hoBox5" class="cl-box" hidden></div><div id="feExtras"></div>
       <div id="pkFallback" hidden><p class="hint" id="pkFallbackWhy"></p><div id="picker"></div></div>`;
     if (SHOW_EXTRAS) pkRefresh();
   }
@@ -278,6 +278,9 @@ async function fileOutInit(el) {
   clearTimeout(foPollTimer);
   if (running) foPollTimer = setTimeout(() => { if (document.body.contains(el)) fileOutInit(el); }, 1000);
   closeBoxInit(el.querySelector("#clBox"));
+  // 33 號設計：交接打包、匯入交接包（handoff.js）；已結案不顯示。框正在打包時自己輪詢，這裡只在第一次畫
+  const ho = el.querySelector("#hoBox5");
+  if (ho && ho.hidden && typeof hoBoxInit === "function" && !(typeof wsClosed === "function" && wsClosed())) hoBoxInit(ho, "第5步");
 }
 
 // ---------------------------------------------------------------------------

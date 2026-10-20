@@ -1088,7 +1088,7 @@ async function renderOverview() {
   const rowHtml = (p) => {
     const c = p["已結案"];
     return `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
-      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${c ? ` <span class="badge">已結案</span>` : ""}${p["路徑"] === projects["目前"] ? "　（目前）" : ""}
+      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${c ? ` <span class="badge">已結案</span>` : ""}${p["路徑"] === projects["目前"] ? "　（目前）" : ""}${!c && typeof hoRowHtml === "function" ? hoRowHtml(p) : ""}
         ${c ? `<div class="muted">${esc([c["日期"], c["位置顯示"] ? `存到 ${c["位置顯示"]}` : ""].filter(Boolean).join(" "))}</div>` : ""}
         <div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）：" : ""}${esc(p["路徑"])}</div></td>
       <td>${esc(p["長度"] || "—")}</td>
@@ -1103,6 +1103,7 @@ async function renderOverview() {
     <h1>總覽</h1>
     ${projects["轉文字金鑰"] === false ? `<div class="hint">${esc(projects["轉文字金鑰說明"] || "這個網頁伺服器讀不到 Groq 金鑰，新影片沒辦法轉文字。關掉這個伺服器，改用雙擊「啟動.command」重開。")}（已經轉好文字的專案不受影響）</div>` : ""}
     ${pickCardHtml()}
+    ${typeof hoOverviewCardHtml === "function" ? hoOverviewCardHtml() : ""}
     ${current}
     <h2>已有的專案（${list.length}）</h2>
     <div class="card">${groups["進行中"].length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">${list.length ? "沒有進行中的專案。" : "還沒有專案。"}</p>`}
@@ -1114,6 +1115,7 @@ async function renderOverview() {
     try { await apiPost("/api/projects/switch", { "路徑": b.dataset.path }); } catch (e) { alert(e.message); return; }
     await render();
   }));
+  if (typeof hoBindOverview === "function") hoBindOverview(contentEl, list);   // 33 號設計：匯入交接包、清掉這集（handoff.js）
   await bindPickCard(list);   // 10-07：系統內建的選檔視窗（fileio.js）；叫不起來才顯示下面的網頁資料夾瀏覽
 }
 

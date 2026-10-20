@@ -170,7 +170,7 @@ class Closed(Exception):
 
 CLOSED_MSG = "這支影片已結案，這裡只能看紀錄。"
 # 已結案時照樣放行的 POST（不寫這個工作區）：結案框（再存一份紀錄）、切換／開始別的專案、設定包、複製工作、給新影片的選檔
-CLOSED_POST_OK = ("/api/close/", "/api/projects/")
+CLOSED_POST_OK = ("/api/close/", "/api/projects/", "/api/handoff/import/", "/api/handoff/clean-episode")
 CLOSED_POST_OK_EXACT = ("/api/profile/import", "/api/copy/cancel", "/api/pick/forget")
 # 已結案時擋的 GET（會在工作區裡切試聽檔、寫匯出檔）
 CLOSED_GET_BLOCK = ("/api/final/clip", "/api/final/vclip", "/api/review/export.zip")
@@ -180,6 +180,11 @@ def wd_no_writes():
     from bookclub.workdir import no_writes
 
     return no_writes()
+
+
+def _handoff_running(server) -> bool:
+    """33 號設計：交接打包或匯入交接包正在做（測試用的假伺服器沒有這兩欄＝沒在做）。"""
+    return any(j is not None and j.running for j in (getattr(server, "handoff_job", None), getattr(server, "import_job", None)))
 
 
 def _server_closed(server) -> bool:
@@ -242,6 +247,14 @@ def register_project(d: Path) -> None:
     if str(d) not in items:
         items.append(str(d))
         write_json(registry_path(), {**data, "專案": items})
+
+
+def unregister_project(d: Path) -> None:
+    """33 號設計 #260：整集清掉之後，從專案清單拿掉（「目前」指著它也一起清掉）。"""
+    data = read_json(registry_path(), default=None) or {}
+    items = [str(x) for x in data.get("專案", []) if str(x) != str(d)]
+    cur = data.get("目前")
+    write_json(registry_path(), {**data, "專案": items, "目前": None if cur == str(d) else cur})
 
 
 def remember_current(d: Path | None) -> None:
@@ -372,7 +385,17 @@ def _project_row(d: Path, current: Path | None) -> dict:
         "舊位置": d.parent == workroot(),
         "修改時間": datetime.fromtimestamp(d.stat().st_mtime).strftime("%m-%d %H:%M"),
         "已結案": _closed_info(d),   # 1015-8 第 3 段（§5.3）：總覽放到最下面「已結案」那一組
+        "交接": _handoff_info(d),    # 33 號設計 #260：已交出去（第 5 步交接打包）＋清掉這集要空出多少
     }
+
+
+def _handoff_info(d: Path) -> dict | None:
+    from bookclub import handoff
+
+    try:
+        return handoff.episode_clean_info(d)
+    except Exception:  # noqa: BLE001 — 讀不到當沒交出去（不擋總覽）
+        return None
 
 
 def _closed_info(d: Path) -> dict | None:
@@ -426,8 +449,10 @@ def unique_labels(rows: list[dict], max_depth: int = 4) -> None:
 # ---------------------------------------------------------------------------
 
 EXTRA_PURPOSES = ("片頭", "片尾")
-PICK_PURPOSES = ("影片", *EXTRA_PURPOSES)
-PICK_TITLES = {"影片": "選讀書會的影片", "片頭": "選片頭影片（可以不選）", "片尾": "選片尾影片（可以不選）"}
+HANDOFF_VIDEO = "交接原片"   # 33 號設計 #258：匯入交接包第 ② 格選的原片（跟「選影片」同一套：WSL2 會複製進 Ubuntu）
+PICK_PURPOSES = ("影片", *EXTRA_PURPOSES, HANDOFF_VIDEO)
+PICK_TITLES = {"影片": "選讀書會的影片", "片頭": "選片頭影片（可以不選）", "片尾": "選片尾影片（可以不選）",
+               HANDOFF_VIDEO: "選從雲端空間下載的原片"}
 _extras_lock = threading.Lock()
 
 
@@ -991,6 +1016,9 @@ class BookclubServer(ThreadingHTTPServer):
         self.pick_token: dict[tuple[str, str], str] = {}   # 每個 (用途, 去處) 最新的那一次選擇（見 accept_pick 上面的說明）
         self.exporting = False                     # 「複製成品到 Windows」正在準備（找下載資料夾）
         self.close_job = None                      # 1015-8：結案打包（closing.PackJob；同時只有一個，佔 pick_lock）
+        self.handoff_job = None                    # 33 號設計 #257：交接打包（handoff.PackJob；同時只有一個，佔 pick_lock）
+        self.import_job = None                     # 33 號設計 #258：匯入交接包（handoff.ImportJob）
+        self.handoff_zip: dict | None = None       # 匯入第 ① 格選好的交接包 {路徑, 檔名, 摘要}
         self.final_exporting = 0                   # 第 5 步「輸出成品」正在複製最終成品的個數（跟結案打包互擋，佔 pick_lock；
         #                                            第 2 段審查建議 (a)：計數器，同時兩個時第一個做完不會清成 0）
         try:   # 上次複製到一半伺服器被關掉留下的暫存檔（只清這個工具自己取名的 .*.複製中）
@@ -1054,7 +1082,7 @@ class BookclubServer(ThreadingHTTPServer):
                 cur = {"錯誤": f"讀不了工作區設定：{e}"}
         return {"系統": kind, "選檔方式": fileio.pick_method(kind), "選了": picks, "目前的專案": cur, "複製": jobs}
 
-    def pick(self, purpose: str, target: str = "新影片") -> dict:
+    def pick(self, purpose: str, target: str = "新影片", title: str | None = None) -> dict:
         """`POST /api/pick`：叫系統的選檔視窗。叫不起來或按取消 → {退回網頁: True, 說明}，網頁改用資料夾瀏覽。"""
         from bookclub import fileio
 
@@ -1067,7 +1095,7 @@ class BookclubServer(ThreadingHTTPServer):
                           f"（Mac 常駐小程式{'已經準備好' if fileio.MAC_PICKER.usable() else '還沒準備好，這次叫 osascript'}）"
                           if fileio.platform_kind() == "mac" else f"收到「選{purpose}」的請求，開始叫選檔視窗")
         try:
-            p = fileio.pick_file(PICK_TITLES[purpose])
+            p = fileio.pick_file(title or PICK_TITLES[purpose])
         except fileio.PickUnavailable as e:
             fileio.timing_log(f"叫不起來，退回網頁瀏覽（{time.time() - t0:.1f} 秒）")
             return {"退回網頁": True, "說明": f"{e}。改用下面的資料夾瀏覽選檔案。"}
@@ -1484,6 +1512,237 @@ class BookclubServer(ThreadingHTTPServer):
         job.start()
         return {"ok": True, "工作": job.to_dict()}
 
+    # ---------- 接力交接（33 號設計，#257–#260） ----------
+
+    def handoff_running(self) -> bool:
+        return any(j is not None and j.running for j in (self.handoff_job, self.import_job))
+
+    def _handoff_busy(self, what: str = "交接打包") -> str | None:
+        """不能開始交接打包／匯入的原因；沒有＝None。要在 pick_lock 外面呼叫（會拿 run_lock）。"""
+        if self.exec_running():
+            return f"第 4 步正在跑，跑完才能{what}。"
+        if self.run_status_running():
+            return f"影片分析正在跑，跑完才能{what}。"
+        if self._rescan_running():
+            return f"還在找老師提到的名字，等它做完再{what}。"
+        with self.pick_lock:
+            if self.final_exporting:
+                return f"成品正在輸出，等它做完再{what}。"
+            if self.close_job is not None and self.close_job.running:
+                return f"結案打包正在做，等它做完再{what}。"
+            if self.handoff_running():
+                return "上一個交接打包或匯入還沒做完。"
+        return None
+
+    def handoff_video_title(self) -> str:
+        name = ((self.handoff_zip or {}).get("摘要") or {}).get("原片檔名")
+        return f"選從雲端空間下載的「{name}」" if name else PICK_TITLES[HANDOFF_VIDEO]
+
+    def handoff_state(self) -> dict:
+        """`GET /api/handoff/state`：交接打包（目前這一集）、匯入交接包（選了哪個包、哪支原片、做到哪）的狀態。只讀。"""
+        from bookclub import fileio, handoff
+
+        out: dict = {"系統": fileio.platform_kind(), "系統視窗": fileio.folder_picker_enabled()}
+        job = self.handoff_job
+        cur = self._workdir
+        out["打包"] = job.to_dict() if job is not None and cur is not None and job.workdir == cur else None
+        if cur is not None:
+            why = self._handoff_busy()
+            out["可以打包"] = {
+                handoff.STAGE3: why or (None if (cur / "校對" / "段落.json").is_file() else "第 1 步影片分析還沒做完。"),
+                handoff.STAGE5: why or (None if handoff.current_products(cur) else "還沒有成品：先到第 4 步組裝一次。")}
+            out["已交出去"] = handoff.handed_over(cur)
+            e = handoff.last_export(cur)
+            out["最近一次"] = {k: e.get(k) for k in ("時間", "哪一段", "檔名", "位置顯示")} if e else None
+        with self.pick_lock:
+            pk = dict(self.picks.get(HANDOFF_VIDEO) or {})
+            pjob = self.copy_jobs.get(pk.get("複製")) if pk.get("複製") else None
+        ij = self.import_job
+        out["匯入"] = {"交接包": {k: v for k, v in (self.handoff_zip or {}).items() if k != "清單"} or None,
+                     "原片": pk or None, "複製": pjob.to_dict() if pjob else None,
+                     "工作": ij.to_dict() if ij is not None else None}
+        return out
+
+    def handoff_pick_folder(self) -> dict:
+        """`POST /api/handoff/pick-folder`：叫系統的選資料夾視窗（存交接包的地方）。取消 → {取消}；叫不起來 → {退回網頁, 說明}。"""
+        from bookclub import closing, fileio
+
+        try:
+            p = fileio.pick_folder("選放交接包的地方（例如雲端空間的資料夾、下載）")
+        except fileio.PickUnavailable as e:
+            return {"退回網頁": True, "說明": str(e)}
+        if p is None:
+            return {"取消": True}
+        kind = fileio.platform_kind()
+        return {"路徑": str(p), "位置顯示": closing.windows_display(p) if kind == "wsl" else str(p),
+                "提醒": closing.ubuntu_inside_warning(kind, p)}
+
+    def handoff_pack(self, body: dict) -> dict:
+        """`POST /api/handoff/pack` {段: 第3步｜第5步, 路徑}：檢查通過就開背景工作，回 `工作`。"""
+        from bookclub import closing, fileio, handoff
+
+        stage = str(body.get("段") or "")
+        if stage not in handoff.STAGES:
+            raise ValueError("不認得是第幾步的交接打包。")
+        why = self._handoff_busy()
+        if why:
+            raise ValueError(why)
+        loc = str(body.get("路徑") or "").strip()
+        if not loc or not Path(loc).expanduser().is_absolute():
+            raise ValueError("請選一個資料夾（要完整的路徑）。")
+        try:
+            items = handoff.pack_items(self.workdir, stage)
+            locp = handoff.check_location(self.workdir, loc, handoff.items_size(items))
+        except handoff.HandoffError as e:
+            raise ValueError(str(e)) from None
+        kind = fileio.platform_kind()
+        disp = closing.windows_display(locp) if kind == "wsl" else str(locp)
+        job = handoff.PackJob(self.workdir, locp, stage, display=disp)
+        with self.pick_lock:
+            if self.handoff_running() or (self.close_job is not None and self.close_job.running) or self.final_exporting:
+                raise ValueError("上一個存檔的工作還沒做完")
+            self.handoff_job = job
+            if self.exec_running() or self.run_status_running():
+                self.handoff_job = None
+                raise ValueError("第 4 步或影片分析剛開始跑，跑完才能交接打包。")
+        job.start()
+        return {"ok": True, "工作": job.to_dict(), "提醒": closing.ubuntu_inside_warning(kind, locp)}
+
+    def handoff_cancel(self) -> dict:
+        job = self.handoff_job
+        if job is None or not job.running:
+            raise ValueError("現在沒有在交接打包")
+        job.cancel()
+        return {"ok": True}
+
+    def handoff_clean_plan(self) -> dict:
+        """`GET /api/handoff/clean-plan`：第 3 步交接打包之後可以清的（只寫總大小與清單指紋）。"""
+        from bookclub import handoff
+
+        plan = handoff.copy_clean_plan(self.workdir)
+        return {"合計": plan["合計"], "清單指紋": plan["清單指紋"], "含原片複本": plan["含原片複本"],
+                "檔數": len(plan["檔案"]), "有交接包": handoff.last_export(self.workdir) is not None}
+
+    def handoff_clean_copy(self, body: dict) -> dict:
+        """`POST /api/handoff/clean-copy` {清單指紋}：「清掉（建議）」。"""
+        from bookclub import handoff
+
+        why = self._handoff_busy("清")
+        if why:
+            raise ValueError(why)
+        try:
+            return {"ok": True, **handoff.clean_copy(self.workdir, str(body.get("清單指紋") or ""),
+                                                     busy=self._clean_busy)}
+        except handoff.HandoffError as e:
+            raise ValueError(str(e)) from None
+
+    def handoff_clean_episode(self, body: dict) -> dict:
+        """`POST /api/handoff/clean-episode` {路徑}：總覽「清掉這集」（已交出去的才行）。"""
+        from bookclub import handoff
+
+        d = Path(str(body.get("路徑") or ""))
+        if not d.is_dir() or not known_project(d):
+            raise SecurityError(f"不是專案清單上的專案：{d}")
+        is_cur = self._workdir is not None and Path(self._workdir).resolve() == d.resolve()
+        why = self._handoff_busy("清")
+        if why:
+            raise ValueError(why)
+        with self.pick_lock:
+            if any(getattr(j, "running", False) for j in self.copy_jobs.values()):
+                raise ValueError("正在複製檔案，複製完才能清。")
+        try:
+            r = handoff.clean_episode(d)
+        except handoff.HandoffError as e:
+            raise ValueError(str(e)) from None
+        try:
+            unregister_project(d)
+        except (OSError, ValueError) as e:
+            print(f"⚠️ [網頁伺服器] 專案清單沒拿掉這一集：{e}")
+        if is_cur:
+            with self.run_lock:
+                self._workdir, self.video = None, None
+        return {"ok": True, **r}
+
+    def handoff_import_zip(self, body: dict) -> dict:
+        """`POST /api/handoff/import/zip` {路徑?}：第 ① 格——叫系統選檔視窗選 zip（或打的路徑），先讀交接清單（很快）。"""
+        from bookclub import fileio, handoff
+
+        if self.handoff_running():
+            raise ValueError("上一個匯入還沒做完。")
+        typed = str(body.get("路徑") or "").strip()
+        if typed:
+            p = Path(typed).expanduser()
+            if not p.is_absolute():
+                raise ValueError("請打完整的路徑。")
+        else:
+            try:
+                p = fileio.pick_file("選從雲端空間下載的交接包（zip）", exts=(".zip",))
+            except fileio.PickUnavailable as e:
+                return {"退回網頁": True, "說明": f"{e}。改在下面打交接包的完整路徑。"}
+            if p is None:
+                return {"取消": True}
+        if p.suffix.lower() != ".zip" or not p.is_file():
+            raise ValueError(f"這不是 zip 檔，或找不到：{p.name}")
+        try:
+            m = handoff.read_manifest(p)
+        except handoff.HandoffError as e:
+            raise ValueError(str(e)) from None
+        self.handoff_zip = {"路徑": str(p), "檔名": p.name, "摘要": handoff.summary(m)}
+        self.import_job = None
+        return {"ok": True, "交接包": self.handoff_zip}
+
+    def handoff_import_video(self, body: dict) -> dict:
+        """`POST /api/handoff/import/video` {路徑}：第 ② 格叫不起系統視窗時，打的原片路徑（家目錄或 Windows 的磁碟）。"""
+        from bookclub import fileio
+
+        p = Path(str(body.get("路徑") or "").strip()).expanduser()
+        if not p.is_absolute():
+            raise ValueError("請打完整的路徑。")
+        if not fileio.is_windows_mount(p):
+            p = home_path(str(p))
+        return self.accept_pick(HANDOFF_VIDEO, fileio.check_video(p))
+
+    def handoff_import_reset(self) -> dict:
+        if self.import_job is not None and self.import_job.running:
+            raise ValueError("正在匯入，等它做完。")
+        self.handoff_zip, self.import_job = None, None
+        self.forget_pick(HANDOFF_VIDEO)
+        return {"ok": True}
+
+    def handoff_import_start(self, body: dict) -> dict:
+        """`POST /api/handoff/import/start` {確認?}：兩格都選好了，開背景匯入（核對 → 原片比對 → 建新或換掉）。"""
+        from bookclub import handoff
+
+        if not self.handoff_zip:
+            raise ValueError("先選交接包（第 ① 格）。")
+        with self.pick_lock:
+            pk = dict(self.picks.get(HANDOFF_VIDEO) or {})
+            job = self.copy_jobs.get(pk.get("複製")) if pk.get("複製") else None
+        if not pk:
+            raise ValueError("先選原片（第 ② 格）。")
+        if not pk.get("路徑"):
+            raise ValueError("原片還在複製進 Ubuntu，等複製完再按。" if job and job.running
+                             else "原片沒有複製完成（取消或失敗了），重新選一次。")
+        why = self._handoff_busy("匯入交接包")
+        if why:
+            raise ValueError(why)
+        ij = handoff.ImportJob(Path(self.handoff_zip["路徑"]), Path(pk["路徑"]), confirm=bool(body.get("確認")))
+        ij.on_done = self._import_done
+        with self.pick_lock:
+            if self.handoff_running():
+                raise ValueError("上一個匯入還沒做完。")
+            self.import_job = ij
+        ij.start()
+        return {"ok": True, "工作": ij.to_dict()}
+
+    def _import_done(self, job) -> None:
+        """匯入好了：登記進專案清單、切到這一集（背景執行緒裡呼叫）。"""
+        d = Path(job.result["工作區"])
+        register_project(d)
+        self.use_project(d, job.video)
+        self.handoff_zip = None
+        self.forget_pick(HANDOFF_VIDEO)
+
     def exec_running(self) -> bool:
         with self.run_lock:
             return bool(self.exec_state["running"])
@@ -1522,6 +1781,8 @@ class BookclubServer(ThreadingHTTPServer):
                 return {"started": False, "error": "已經有分析或 AI 執行在跑，等它結束再按一次"}
             if self.close_packing():   # 1015-8 第 2 段審查必修 2
                 return {"started": False, "error": "結案打包正在存，等它存完再開始第 4 步。"}
+            if _handoff_running(self):   # 33 號設計：交接打包、匯入交接包做到一半不開始
+                return {"started": False, "error": "交接打包或匯入交接包正在做，等它做完再開始第 4 步。"}
             pre = precheck(self.workdir)
             if not pre["可以開始"]:
                 return {"started": False, "error": "還不能開始：" + "；".join(pre["缺"])}
@@ -1647,6 +1908,8 @@ class BookclubServer(ThreadingHTTPServer):
                 return {"started": False, "error": "已經有分析或 AI 執行在跑，請等它結束再按一次"}
             if self.close_packing():   # 1015-8 第 2 段審查必修 2
                 return {"started": False, "error": "結案打包正在存，等它存完再開始分析。"}
+            if _handoff_running(self):
+                return {"started": False, "error": "交接打包或匯入交接包正在做，等它做完再開始分析。"}
 
             video = opts.get("video") or (str(self.video) if self.video else None)
             if not video:
@@ -1938,6 +2201,10 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub import finalcheck
 
             self._send_json(200, finalcheck.goto_output_time(server.workdir, float(query["src"][0])))
+        elif path == "/api/handoff/state":   # 33 號設計：交接打包、匯入交接包（只讀）
+            self._send_json(200, server.handoff_state())
+        elif path == "/api/handoff/clean-plan":
+            self._send_json(200, server.handoff_clean_plan())
         elif path == "/api/close/state":   # 1015-8：第 5 步「結案打包」框（只讀）
             self._send_json(200, server.close_state())
         elif path == "/api/close/locations":   # 第 2 段審查必修 3：位置選項另外問（WSL 會叫 PowerShell）
@@ -2020,7 +2287,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "停止中": True})
             return
         if path == "/api/pick":   # 10-07：叫系統的選檔視窗（會等到人選好或按取消）
-            self._send_json(200, server.pick(str(body.get("用途", "影片")), str(body.get("給", "新影片"))))
+            purpose = str(body.get("用途", "影片"))
+            self._send_json(200, server.pick(purpose, str(body.get("給", "新影片")),
+                                             server.handoff_video_title() if purpose == HANDOFF_VIDEO else None))
             return
         if path == "/api/pick/browsed":   # 10-07：叫不起系統視窗時，網頁資料夾瀏覽選的（只能家目錄底下）
             p = home_path(str(body["路徑"]))
@@ -2056,6 +2325,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/close/clean":   # 1015-8 第 3 段：清空間（再確認 → 搬 → 刪）、繼續清
             self._send_json(200, server.close_clean(body))
+            return
+        if path.startswith("/api/handoff/"):   # 33 號設計 #257–#260：接力交接
+            routes = {"/api/handoff/pick-folder": lambda: server.handoff_pick_folder(),
+                      "/api/handoff/pack": lambda: server.handoff_pack(body),
+                      "/api/handoff/cancel": lambda: server.handoff_cancel(),
+                      "/api/handoff/clean-copy": lambda: server.handoff_clean_copy(body),
+                      "/api/handoff/clean-episode": lambda: server.handoff_clean_episode(body),
+                      "/api/handoff/import/zip": lambda: server.handoff_import_zip(body),
+                      "/api/handoff/import/video": lambda: server.handoff_import_video(body),
+                      "/api/handoff/import/start": lambda: server.handoff_import_start(body),
+                      "/api/handoff/import/reset": lambda: server.handoff_import_reset()}
+            if path not in routes:
+                raise FileNotFoundError(f"沒有這個功能：{path}")
+            self._send_json(200, routes[path]())
             return
         if path == "/api/final/to_windows":
             self._send_json(200, server.final_to_windows(confirm=bool(body.get("confirm"))))

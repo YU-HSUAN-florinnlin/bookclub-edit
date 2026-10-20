@@ -802,7 +802,11 @@ class ImportJob:
             self.result = self._run()
             if self.result is not None:
                 if self.on_done:
-                    self.on_done(self)
+                    try:
+                        self.on_done(self)
+                    except Exception as e:  # noqa: BLE001 — 已經匯入好了；只是沒切過去
+                        print(f"⚠️ [匯入交接包] 匯入好了，但沒有切到這一集：{type(e).__name__}：{e}")
+                        self.result.setdefault("提醒", []).append("匯入好了，但沒有自動切過去：到總覽「已有的專案」按「切換」。")
                 self.state = "完成"
         except HandoffError as e:
             self.state, self.error = "失敗", str(e)
