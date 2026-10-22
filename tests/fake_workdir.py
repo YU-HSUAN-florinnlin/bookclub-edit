@@ -8,6 +8,12 @@
 09-26 加：一段學員發言藏在老師段落裡（164–168 秒，段落分析判成老師）、兩位學員被分成同一人
 （學員1 的第二段其實是另一個人的聲音）、建議刪除 2 段（`校對/刪除建議.json`）。
 09-29 加：逐字時間（`merged.json` 的 `words`，每個字平均排在句子裡）。
+
+1022-2 加 `--with-step5`：再補假的生成紀錄、處理紀錄、成品影片（剪掉開頭 3.6 秒的假影片），第 5 步有卡片可以點：
+    .venv/bin/python tests/fake_workdir.py <資料夾> --with-step5
+    BOOKCLUB_DATA_DIR=<資料夾>/假資料 .venv/bin/bookclub serve <資料夾>/工作區 --port 8801 --no-open
+`<資料夾>/假資料/` 是虛構的名冊（小美→Amy、阿明→Tom），開服務時用 BOOKCLUB_DATA_DIR 指過去，不讀真的 ~/讀書會剪輯資料。
+做法照 tests/test_needs.py 的 `gen_logs`、`_log`、`_prod`（舊版工具留下的處理紀錄＋成品檢查 → `needs.upgrade` 建第 1 版）。
 """
 
 from __future__ import annotations
@@ -184,5 +190,79 @@ def _write(path: Path, data) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+FAKE_ROSTER = "中文名,其他寫法,英文代號,聲線,性別\n小美,,Amy,,女\n阿明,,Tom,,男\n"
+
+
+def _rec(kind, a, b, keys, f=None, out=None, sound=True):
+    o = out or [round(a - 3.6, 3), round(b - 3.6, 3)]   # 開頭 0–3.6 秒剪掉了
+    return {"類型": kind, "原片": [a, b], "成品": o, "動到聲音": sound, "要人聽": False, "檔案": f, "文字": None,
+            "覆核項目": keys, "做了什麼": kind, **({"檔案指紋": f"fp-{f}"} if f else {})}
+
+
+def add_step5(root: str | Path) -> Path:
+    """在 `make()` 建好的假工作區補第 5 步要的東西（全部合成、不跑模型）：
+    生成紀錄（每句假的 wav 檔，內容只是幾個位元組）、處理紀錄（剪掉開頭、學員重念 3 格、老師名字整句換掉、對不到卡片的停格、
+    一處沒登記的變動）、成品檢查、成品影片 `輸出/成品_0-3_sw.mp4`（假影片剪掉開頭 3.6 秒），最後 `needs.upgrade` 建第 1 版。
+    要先設好 BOOKCLUB_DATA_DIR（名冊影響老師名字的計畫）。"""
+    from datetime import datetime, timedelta
+
+    from bookclub import finalcheck as fc
+    from bookclub import needs, proclog
+    from bookclub import workdir as wd
+
+    root = Path(root)
+    w = root / "工作區"
+    # 生成紀錄：照現在排出來的計畫，生成程式看來全部做好了（tests/test_needs.py gen_logs）
+    for role, xs in fc._redo_ctx(w).items():
+        if not xs:
+            continue
+        lp, od = fc._role_paths(w, role)
+        od.mkdir(parents=True, exist_ok=True)
+        rel = od.relative_to(w)
+        wd.write_json(lp, {"句子": [{"id": x["id"], "text": x.get("text"), "slot": x["slot"], "嘗試": [{"種子": 7}],
+                                    "選定": 1, "第幾版": 1,
+                                    "放回時間格": {"檔案": str(rel / f"{x['id']}_放回時間格.wav")}} for x in xs]})
+        for x in xs:
+            (od / f"{x['id']}.wav").write_bytes(b"wav")
+            (od / f"{x['id']}_放回時間格.wav").write_bytes(b"wav")
+    stamp = (datetime.now() - timedelta(minutes=2)).isoformat(timespec="seconds")
+    recs = [_rec("刪除", 0.0, 3.6, ["刪除段落:S1"], out=[0.0, 0.0]),
+            _rec("學員重念", 40.0, 55.0, ["學員段落:T003"], "生成/學員/T003_01.wav"),
+            _rec("學員重念", 55.0, 71.6, ["學員段落:T003"], "生成/學員/T003_02.wav"),
+            _rec("名字整句換掉", 76.0, 80.0, ["名字:1"], "生成/老師/S001.wav"),
+            _rec("學員重念", 92.0, 111.6, ["學員段落:T005"], "生成/學員/T005_01.wav"),
+            _rec("停格", 99.0, 99.0, [], out=[95.4, 95.9])]   # 對不到卡片 → 第 5 步「待釐清」
+    log = {"版本": 1, "來源": "render video 0-3", "範圍": [0.0, DUR], "產生時間": stamp, "片段": None, "紀錄": recs,
+           "未登記的變動": [{"原片": [130.0, 130.4], "長度秒": 0.4, "格數": 20}]}
+    wd.write_json(proclog.log_path(w), log)   # 直接寫（像舊版工具留下的），下面 upgrade 才建版本
+    wd.write_json(fc.check_path(w), {"版本": 1, "處理紀錄產生時間": stamp, "指紋版本": 2, "處理紀錄快照": fc.snapshot(log),
+                                     "逐筆": {}, "整片退回": [], "未登記確認": {}, "看過區段": [], "成品影片": None})
+    prod = w / "輸出" / "成品_0-3_sw.mp4"
+    prod.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "3.6", "-i", str(root / "假影片.mp4"),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(prod)], check=True)
+    needs.upgrade(w)
+    return w
+
+
 if __name__ == "__main__":
-    print(make(sys.argv[1] if len(sys.argv) > 1 else "假工作區"))
+    import os
+
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    root = Path(args[0] if args else "假工作區")
+    if "--with-step5" in sys.argv:
+        data = root / "假資料"
+        data.mkdir(parents=True, exist_ok=True)
+        if not (data / "名冊.csv").exists():
+            (data / "名冊.csv").write_text(FAKE_ROSTER, encoding="utf-8")
+        ex = Path(__file__).resolve().parent.parent / "profile.example" / "settings.toml"
+        if ex.exists() and not (data / "settings.toml").exists():
+            (data / "settings.toml").write_bytes(ex.read_bytes())   # 範例設定（虛構），免得每次印「找不到 settings.toml」
+        os.environ["BOOKCLUB_DATA_DIR"] = str(data.resolve())
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        w = make(root)
+        add_step5(root)
+        print(w)
+        print(f"開網頁：BOOKCLUB_DATA_DIR={data.resolve()} .venv/bin/bookclub serve {w.resolve()} --port 8801 --no-open")
+    else:
+        print(make(root))
