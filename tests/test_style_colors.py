@@ -17,10 +17,10 @@ from pathlib import Path
 
 CSS = (Path(__file__).resolve().parent.parent / "bookclub" / "web" / "style.css").read_text(encoding="utf-8")
 CSS_NC = re.sub(r"/\*.*?\*/", "", CSS, flags=re.S)
-HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(|(?<![-\w])(?:white|black)\b")   # 1022-3 審查：rgb()/hsl()/顏色名也算寫死
 
 # 可以按的東西：選擇器有這些字就不准寫死十六進位顏色
-CLICKABLE = re.compile(r"button|\.ghost|chip|input|select|textarea|\.tool-btn|\.nav-toggle|\.fc-more|\.fc-foldbtn|\.ui-toast-x|\.help-tip-btn")
+CLICKABLE = re.compile(r"(?:^|[\s.>+~,(])(?:button|ghost|[\w-]*chip|input|select|textarea|summary|tool-btn|nav-toggle|fc-more|fc-foldbtn|ui-toast-x|help-tip-btn)(?![\w-])")   # 1022-3 審查：只比整個名稱，不比字串片段；summary（點了會展開）也算
 # 白名單：紅色橫幅上的白色按鈕（底色固定是紅的，深淺色都一樣）
 HEX_OK = {".save-error button", ".save-error button.ghost"}
 

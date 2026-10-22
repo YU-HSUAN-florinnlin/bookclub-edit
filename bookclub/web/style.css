@@ -1056,7 +1056,7 @@ body.ws-closed #rv-split, body.ws-closed #fc-fix-go {
 }
 body.ws-closed #foMain, body.ws-closed #fc-tl, body.ws-closed .rv-timebar, body.ws-closed .fc-seenpct { display: none; }
 .fc-gone { padding: 24px 0; }
-.pj-closed summary { cursor: pointer; margin: 8px 0; color: #555; }
+.pj-closed summary { cursor: pointer; margin: 8px 0; color: var(--muted); }   /* 1022-3 審查：深色原本 2.08:1 */
 
 /* 1022-1（#263）：工具自己的確認／輸入／提示視窗（ui.js），外框沿用 .rv-modal（上面那組），這裡只調寬度、段落、按鈕 */
 dialog.ui-dialog { width: min(520px, calc(100vw - 32px)); }
