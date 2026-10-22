@@ -61,6 +61,11 @@ def test_watched_only_counts_up_to_2x():
 def test_nav_toggle_exists():
     html = (WEB / "index.html").read_text(encoding="utf-8")
     assert 'id="navToggle"' in html
+    # 1022-1（#266）：三條線的圖示（內嵌 SVG），收合、展開都同一個，不再換成 « »
+    i = html.index('id="navToggle"')
+    assert "<svg" in html[i:i + 600] and "«" not in html and "»" not in html
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    assert '"»"' not in js and '"«"' not in js and 'b.setAttribute("aria-expanded"' in js
 
 
 

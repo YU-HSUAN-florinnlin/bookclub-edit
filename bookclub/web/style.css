@@ -103,12 +103,16 @@ html, body {
 
 .brand { display: flex; align-items: center; gap: 6px; }
 .brand-text { flex: 1; }
-.nav-toggle { padding: 2px 8px; font-size: 14px; line-height: 1.2; background: transparent; color: var(--muted); border: 1px solid var(--border); }
+/* 1022-1（#266）：收合鈕改成三條線的圖示，無框、滑過有淺底、圓角 */
+.nav-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 0;
+  background: transparent; color: var(--muted); border: none; border-radius: 8px; flex: 0 0 34px; }
 .nav-toggle:hover { background: var(--bg-soft); color: var(--fg); }
+.nav-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.nav-toggle-icon { display: block; }
 
 /* 收合：只留編號（完成打勾）＋AI／人工，主畫面變寬 */
 .app.nav-collapsed .sidebar { width: 64px; flex-basis: 64px; padding: 16px 6px; }
-.app.nav-collapsed .brand { padding: 4px 0 12px; justify-content: center; }
+.app.nav-collapsed .brand { padding: 0 0 12px; justify-content: center; }
 .app.nav-collapsed .brand-text, .app.nav-collapsed .videoinfo,
 .app.nav-collapsed .step-label, .app.nav-collapsed .step-badge { display: none; }
 .app.nav-collapsed .step-num { display: inline; font-weight: 600; }
@@ -304,7 +308,8 @@ table.kv td, .pj-list .muted, .pk-path, .pk-list li, .pk-sel { overflow-wrap: an
   button.secondary { background: #232323; color: #eee; border-color: var(--border); }
   .step-who.ai { background: #15263b; color: #a9cbf6; }
   .step-who.human { background: #3a2a10; color: #f0c27a; }
-  .nav-toggle { background: transparent; color: var(--muted); border-color: var(--border); }
+  .nav-toggle { background: transparent; color: var(--muted); }
+  .nav-toggle:hover { background: #2e2e2e; color: var(--fg); }
 }
 
 /* 第 3 步：學員逐字稿校對 */

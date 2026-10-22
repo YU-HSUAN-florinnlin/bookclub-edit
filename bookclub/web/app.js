@@ -334,8 +334,9 @@ function navCollapsedSaved() {
 function setNavCollapsed(on, save = true) {
   document.querySelector(".app").classList.toggle("nav-collapsed", on);
   const b = document.getElementById("navToggle");
-  b.textContent = on ? "»" : "«";
+  // 1022-1（#266）：按鈕是三條線的圖示（index.html 裡的 SVG），收合、展開都同一個，只換提示文字
   b.title = on ? "展開步驟列" : "收合步驟列";
+  b.setAttribute("aria-label", b.title);
   b.setAttribute("aria-expanded", String(!on));
   if (save) {
     try { localStorage.setItem(NAV_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係，只是下次不記得 */ }
