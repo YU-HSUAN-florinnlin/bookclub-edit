@@ -41,6 +41,8 @@ html, body {
   top: 0;
   height: 100vh;
   overflow-y: auto;
+  display: flex;            /* 1022-1（#267）：左下角「工具設定」固定在底部 */
+  flex-direction: column;
 }
 
 .brand {
@@ -119,6 +121,24 @@ html, body {
 .app.nav-collapsed .step-num.done { color: var(--accent); }
 .app.nav-collapsed .steps li a { flex-direction: column; gap: 2px; padding: 7px 2px; }
 .app.nav-collapsed .step-who { padding: 0 4px; font-size: 10px; }
+
+/* 1022-1（#267）：左下角齒輪「工具設定」＋往上展開的小選單 */
+.sidebar-foot { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
+.tool-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px; background: transparent; color: var(--fg);
+  border: none; border-radius: 8px; font-size: 14px; text-align: left; }
+.tool-btn:hover, .tool-btn.open { background: var(--bg-soft); color: var(--fg); }
+.tool-btn.active { background: var(--accent-bg); color: var(--accent); font-weight: bold; }
+.tool-btn:focus-visible, .tool-menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tool-btn-icon { flex: 0 0 20px; display: block; }
+.tool-menu { position: fixed; z-index: 950; min-width: 220px; max-width: 300px; padding: 6px; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.18); }
+.tool-menu[hidden] { display: none; }
+.tool-menu-item { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 6px; color: var(--fg); text-decoration: none; font-size: 14px; }
+.tool-menu-item:hover, .tool-menu-item:focus { background: var(--bg-soft); }
+.tool-menu-item.active { color: var(--accent); font-weight: bold; }
+.tool-menu-hint { font-size: 12px; color: var(--muted); font-weight: normal; }
+.app.nav-collapsed .tool-btn { justify-content: center; padding: 8px 0; }
+.app.nav-collapsed .tool-btn-label { display: none; }
 
 /* ---------- 內容區 ---------- */
 
@@ -310,6 +330,10 @@ table.kv td, .pj-list .muted, .pk-path, .pk-list li, .pk-sel { overflow-wrap: an
   .step-who.human { background: #3a2a10; color: #f0c27a; }
   .nav-toggle { background: transparent; color: var(--muted); }
   .nav-toggle:hover { background: #2e2e2e; color: var(--fg); }
+  .tool-btn { background: transparent; color: var(--fg); }
+  .tool-btn:hover, .tool-btn.open { background: #2e2e2e; color: var(--fg); }
+  .tool-btn.active { background: var(--accent-bg); color: var(--accent); }
+  .tool-menu { background: #232323; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
 }
 
 /* 第 3 步：學員逐字稿校對 */

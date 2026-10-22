@@ -373,6 +373,20 @@ def test_step4_whole_check_folded_by_default():
                                     "開始前總檢查：沒有要處理、要看的", False]   # 沒有 localStorage（讀不到）＝收合
 
 
+def test_step0_moved_to_tool_menu():
+    """1022-1（#267）：第 0 步不列在步驟列，收進左下角齒輪「工具設定」選單（第 3 步那顆「設定」不改名）。"""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    assert 'id="toolMenuBtn"' in html and "工具設定" in html and 'id="toolMenu"' in html and 'aria-haspopup="menu"' in html
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    assert 'id: "step0", num: 0, title: "初始化設定", real: true, who: "人工", nav: false' in js
+    assert 'STEP_DEFS.filter((s) => s.nav !== false)' in js
+    i = js.index("const TOOL_MENU = [")
+    assert 'route: "step0", label: "初始化設定"' in js[i:i + 300]
+    assert "<h1>0　初始化設定</h1>" not in js
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    assert 'id="rv-set-btn" aria-expanded="false">設定</button>' in rv
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

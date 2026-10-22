@@ -4,7 +4,7 @@
 const SHOW_EXEC_ETA = false;
 
 /* 讀書會剪輯工具｜前端骨架。原生 HTML/CSS/JS，不用打包工具、不用 CDN 套件。
- * 左側步驟列 0～5 步（09-25 宇軒：原本第 3、4 步合成第 3 步「覆核工作台」；09-29：原本第 5 步逐筆覆核、第 6 步整片檢查
+ * 左側步驟列 1～5 步（1022-1 #267：第 0 步「初始化設定」收進左下角齒輪「工具設定」選單，網址照舊 #step0）（09-25 宇軒：原本第 3、4 步合成第 3 步「覆核工作台」；09-29：原本第 5 步逐筆覆核、第 6 步整片檢查
  * 合成第 5 步「成品檢查」），每步標 AI／人工，可以收合；
  * 還沒做的步驟顯示「還沒做」的說明頁，不假裝可用。路由用 URL hash（#step1、#step2…）。
  * 第 3 步覆核工作台在 review.js，第 5 步成品檢查在 finalcheck.js。 */
@@ -12,7 +12,8 @@ const SHOW_EXEC_ETA = false;
 // who：這一步是誰做（09-29 宇軒：步驟列標「AI」或「人工」，一眼看出現在輪到誰）
 const STEP_DEFS = [
   { id: "overview", num: null, title: "總覽", real: true },
-  { id: "step0", num: 0, title: "初始化設定", real: true, who: "人工" },
+  // nav: false＝不列在步驟列（1022-1 #267：收進左下角「工具設定」選單，見 TOOL_MENU），網址照舊能開
+  { id: "step0", num: 0, title: "初始化設定", real: true, who: "人工", nav: false },
   { id: "step1", num: 1, title: "影片分析", real: true, who: "AI" },
   { id: "step2", num: 2, title: "挑選老師參考聲音片段", real: true, who: "人工" },
   { id: "step3", num: 3, title: "覆核工作台", real: true, who: "人工" },
@@ -249,7 +250,7 @@ async function renderSidebar() {
   }
 
   const active = currentRouteId();
-  stepsEl.innerHTML = STEP_DEFS.map((s) => {
+  stepsEl.innerHTML = STEP_DEFS.filter((s) => s.nav !== false).map((s) => {
     let badgeClass = "notyet";
     let badgeText = "·";
     if (s.real && state && !state["沒有專案"]) {
@@ -268,6 +269,7 @@ async function renderSidebar() {
     </a>${s.num === 3 && s.real && state && !state["沒有專案"] ? navSubHtml(state) : ""}</li>`;
   }).join("");
   navSubSync();
+  toolMenuSync();
 }
 
 // 10-16 宇軒：第 3 步下面兩個子步驟，點了切到那一頁、看得出現在在哪裡；做完前面綠色打勾
@@ -348,6 +350,95 @@ setNavCollapsed(navCollapsedSaved(), false);
 document.getElementById("navToggle").addEventListener("click", () => {
   setNavCollapsed(!document.querySelector(".app").classList.contains("nav-collapsed"));
 });
+
+// ---------------------------------------------------------------------------
+// 1022-1（#267）：左下角齒輪「工具設定」選單（往上展開）。第 0 步「初始化設定」收在這裡，不列在步驟列。
+// 第 3 步上方另有一顆「設定」（第 3 步自己的設定），所以這顆叫「工具設定」。之後要加項目：在 TOOL_MENU 加一列。
+// ---------------------------------------------------------------------------
+
+const TOOL_MENU = [
+  { route: "step0", label: "初始化設定", hint: "名冊、敏感詞、發音對照表、匿名聲線；設定包匯出匯入" },
+];
+
+function toolMenuEls() {
+  return { wrap: document.getElementById("toolMenuWrap"), btn: document.getElementById("toolMenuBtn"), menu: document.getElementById("toolMenu") };
+}
+
+function toolMenuOpen() { const { menu } = toolMenuEls(); return !!(menu && !menu.hidden); }
+
+function toolMenuRender() {
+  const { menu } = toolMenuEls();
+  if (!menu) return;
+  const cur = currentRouteId();
+  menu.innerHTML = TOOL_MENU.map((m) => `<a role="menuitem" href="#${esc(m.route)}" class="tool-menu-item${m.route === cur ? " active" : ""}"${m.route === cur ? ' aria-current="page"' : ""}>
+    <span class="tool-menu-label">${esc(m.label)}</span>${m.hint ? `<span class="tool-menu-hint">${esc(m.hint)}</span>` : ""}</a>`).join("");
+}
+
+// 選單用 fixed 定位貼在按鈕上方：步驟列收合後只有 64px 寬，放在裡面會被切掉
+function toolMenuPlace() {
+  const { btn, menu } = toolMenuEls();
+  if (!btn || !menu) return;
+  const r = btn.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, r.left)}px`;
+  menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`;
+}
+
+function toolMenuShow(on, { focus = false } = {}) {
+  const { btn, menu } = toolMenuEls();
+  if (!btn || !menu) return;
+  if (on) { toolMenuRender(); menu.hidden = false; toolMenuPlace(); }
+  else menu.hidden = true;
+  btn.setAttribute("aria-expanded", String(on));
+  btn.classList.toggle("open", on);
+  if (on && focus) { const first = menu.querySelector('[role="menuitem"]'); if (first) first.focus(); }
+}
+
+// 在初始化設定頁時，齒輪按鈕亮「目前在這裡」
+function toolMenuSync() {
+  const { btn } = toolMenuEls();
+  if (!btn) return;
+  const here = TOOL_MENU.some((m) => m.route === currentRouteId());
+  btn.classList.toggle("active", here);
+  if (here) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current");
+  if (toolMenuOpen()) toolMenuRender();
+}
+
+(function toolMenuBind() {
+  const { wrap, btn, menu } = toolMenuEls();
+  if (!wrap || !btn || !menu) return;
+  btn.addEventListener("click", (e) => {
+    // 用鍵盤（Enter／空白鍵）打開時，焦點直接進第一項；滑鼠點開不搶焦點
+    toolMenuShow(!toolMenuOpen(), { focus: e.detail === 0 });
+  });
+  btn.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); toolMenuShow(true, { focus: true }); }
+  });
+  menu.addEventListener("click", (e) => {
+    if (e.target.closest && e.target.closest('[role="menuitem"]')) toolMenuShow(false);   // 照連結走 #step0，選單收起
+  });
+  menu.addEventListener("keydown", (e) => {
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = items.length;
+      if (n) items[(i + (e.key === "ArrowDown" ? 1 : -1) + n) % n].focus();
+    } else if (e.key === "Tab" && ((!e.shiftKey && i === items.length - 1) || (e.shiftKey && i === 0))) {
+      toolMenuShow(false);   // Tab 離開選單就收起
+    }
+  });
+  document.addEventListener("click", (e) => {
+    if (toolMenuOpen() && !wrap.contains(e.target)) toolMenuShow(false);   // 點選單外面收起
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && toolMenuOpen() && !document.querySelector("dialog[open]")) {
+      e.preventDefault();
+      toolMenuShow(false);
+      btn.focus();
+    }
+  });
+  window.addEventListener("resize", () => { if (toolMenuOpen()) toolMenuPlace(); });
+})();
 
 function stepDoneFromState(num, state) {
   const sub = state.substeps || {};
@@ -1017,7 +1108,7 @@ async function renderProfile() {
       <td>${esc(f["最後修改"] || "—")}</td></tr>`).join("");
   const st = d["settings.toml"];
   contentEl.innerHTML = `
-    <h1>0　初始化設定</h1>
+    <h1>初始化設定</h1>
     <p class="muted">這些設定所有影片共用，放在 <code>${esc(d["資料夾"])}</code>。AI 之後發現新的念偏詞、排除詞會照舊寫進這裡；要給協作夥伴，用下面的設定包。</p>
     <div class="card"><table class="kv prof">
       <thead><tr><th style="text-align:left">項目</th><th style="text-align:left">筆數</th><th style="text-align:left">最後修改</th></tr></thead>
