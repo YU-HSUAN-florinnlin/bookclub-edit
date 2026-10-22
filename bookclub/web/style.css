@@ -669,8 +669,15 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 /* 開始前 3 件事 */
 .rv-prepside p { margin: 0 0 12px; }
 .rv-prepsteps { list-style: none; padding: 0; margin: 0 0 16px; }
-.rv-prepsteps li { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--rv-line); font-size: 16px; }
+/* 1022-4 #271：一列＝第一行「標題（左）＋狀態（右、不換行）」，有說明時放第二行、縮排在標題下方。
+ * 原本 flex 三段並排，窄的時候標題、狀態、說明各自換行，像三欄交錯。 */
+.rv-prepsteps li { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; row-gap: 2px; align-items: baseline;
+  padding: 10px 0; border-bottom: 1px solid var(--rv-line); font-size: 16px; }
+.rv-prepsteps li > button { justify-self: start; text-align: left; }
+.rv2 .rv-prepsteps li > button.linkish { padding-left: 1.45em; text-indent: -1.45em; }   /* 標題換行時第二行對齊在圈號後面 */
 .rv-prepsteps li span { color: var(--muted); font-size: 14px; }
+.rv-prepsteps li > span:not(.rv-meta) { white-space: nowrap; text-align: right; }
+.rv-prepsteps li > .rv-meta { grid-column: 1 / -1; margin: 0; padding-left: 1.45em; font-size: 13px; line-height: 1.5; }
 .rv-prepsteps li.ok span { color: var(--rv-stu); }
 .rv-prepsteps li.on button { font-weight: 700; text-decoration: none; }
 .rv-prep { background: var(--rv-card); border-radius: 14px; padding: 18px 22px; box-shadow: var(--card-ring); }
