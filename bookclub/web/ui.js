@@ -3,6 +3,7 @@
  * 內建框標題是「localhost:8766 顯示」、長文擠成一團、按鈕只有「確定／取消」，老師看不懂要按哪一顆。
  *
  *   await uiConfirm({title, message, ok, cancel, danger})  → true（按了主要按鈕）／false（取消、✕、Esc）
+ *     兩顆按鈕都是「要做的事」時加 dismiss: null → ✕、Esc 回 null（＝這次的修改不算），跟按取消鈕分開
  *   await uiPrompt({title, message, placeholder, ok, value}) → 打的字（去頭尾空白前的原樣）／null（取消）
  *   await uiAlert({title, message, ok})                     → 關掉時 resolve
  *
@@ -62,6 +63,7 @@ function uiButton(text, cls) {
 function uiOpen(kind, opts, finish) {
   const o = typeof opts === "string" ? { message: opts } : (opts || {});
   const cancelValue = kind === "confirm" ? false : kind === "prompt" ? null : undefined;
+  const dismissValue = "dismiss" in o ? o.dismiss : cancelValue;   // ✕、Esc、被別的程式關掉時回傳的值
   if (typeof HTMLDialogElement === "undefined" || !document.createElement("dialog").showModal) {
     // 退回內建的框（舊瀏覽器）
     const text = [o.title, o.message].filter(Boolean).join("\n\n");
@@ -135,11 +137,11 @@ function uiOpen(kind, opts, finish) {
 
   okBtn.addEventListener("click", () => { if (armed()) close(okValue()); });
   if (cancelBtn) cancelBtn.addEventListener("click", () => { if (armed()) close(cancelValue); });
-  x.addEventListener("click", () => close(cancelValue));
-  dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(cancelValue); });   // Esc＝取消
+  x.addEventListener("click", () => close(dismissValue));
+  dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(dismissValue); });   // Esc＝取消
   // 1022-1 審查修正：別的程式（例如第 3 步對 .rv-modal 綁的「點背景關掉」）直接 dlg.close() 時也要收尾，
   // 不然 finish 沒呼叫、uiBusy 一直是 true，之後的視窗全部排隊出不來。close() 本來就防重複
-  dlg.addEventListener("close", () => close(cancelValue));
+  dlg.addEventListener("close", () => close(dismissValue));
   // 1022-1 審查修正：Enter／空白鍵按住不放會連發，第二下落到主要按鈕上替人按掉 → 連發的那幾下不算
   dlg.addEventListener("keydown", (e) => {
     if (e.repeat && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); e.stopPropagation(); }

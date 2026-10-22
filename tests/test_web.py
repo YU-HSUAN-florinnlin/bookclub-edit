@@ -526,7 +526,7 @@ def test_review_fixes_1022_1():
     rv = (WEB / "review.js").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
     css = (WEB / "style.css").read_text(encoding="utf-8")
-    assert 'dlg.addEventListener("close", () => close(cancelValue));' in ui
+    assert 'dlg.addEventListener("close", () => close(dismissValue));' in ui   # 10-22 B9：預設 dismissValue＝cancelValue
     assert 'document.querySelectorAll(".rv-modal:not(.ui-dialog)")' in rv and 'document.querySelectorAll(".rv-modal")' not in rv
     i = app.index("// 第 2 步：← → 切換候選")
     assert 'if (document.querySelector("dialog[open]")) return;' in app[i:i + 400]
@@ -570,6 +570,42 @@ def test_review_fixes_1022_1():
     got = json.loads(out.stdout.strip().splitlines()[-1])
     assert got == {"r1": False, "opened2": True, "r2": False, "repBlocked": True, "firstPass": True}, got
 
+
+
+def test_range_dialog_close_reverts_1022():
+    """10-22 宇軒測 B9：「重念範圍改了」視窗按 ✕／Esc＝範圍不改、回到原本的時間；兩顆按鈕才是「重排／保留我改的字」。
+    uiConfirm 加 dismiss 選項：✕、Esc、被關掉時回 dismiss 的值，跟按取消鈕（false）分開；沒給時照舊回 false"""
+    import shutil
+    import subprocess
+
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    cards = (WEB / "cards.js").read_text(encoding="utf-8")
+    i = cards.index("async function rvSaveRange(")
+    seg = cards[i:i + 1200]
+    assert 'dismiss: null' in seg and "if (redo === null) { await cvReload(); return; }" in seg
+    assert seg.index("redo === null") < seg.index('cvPost("/api/review/name"')   # 關掉視窗時不送出新範圍
+    node = shutil.which("node")
+    if not node:
+        return
+    script = _UI_FAKE_DOM + ui + """
+(async () => {
+  const dialogs = () => made.filter((e) => e.tagName === "DIALOG" && e.ls.length);
+  const p1 = uiConfirm({ title: "一", dismiss: null });
+  dialogs()[0].close();
+  const r1 = await p1;
+  const p2 = uiConfirm({ title: "二" });
+  await Promise.resolve();
+  dialogs()[1].close();
+  const r2 = await p2;
+  console.log(JSON.stringify({ r1, r2 }));
+})();
+"""
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    import json
+
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got == {"r1": None, "r2": False}, got
 
 
 def test_review_fixes_1022_2():

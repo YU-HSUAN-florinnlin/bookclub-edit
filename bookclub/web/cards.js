@@ -411,9 +411,13 @@ async function rvSaveRange(it, a, b) {
   const w = it["整句"];
   if (b - a < 0.3) { uiAlert({ title: "時間不對", message: "重念範圍的結束要晚於開始" }); return; }
   const body = { id: it.id, "整句起訖": [a, b] };
-  // 1022-1（#263）：兩顆按鈕直接寫做法；關掉視窗（✕、Esc）＝保留你改的字（跟以前按「取消」一樣）
-  if (w["改稿"] && await uiConfirm({ title: "重念範圍改了", ok: "照新範圍重排", cancel: "保留我改的字",
-    message: "要念的句子要不要照新範圍的逐字稿重排？\n照新範圍重排：你改過的字會被蓋掉。\n保留我改的字：要念的句子不動。" })) body["改稿"] = "";
+  // 1022-1（#263）：兩顆按鈕直接寫做法。10-22 宇軒 B9：關掉視窗（✕、Esc）＝範圍也不改，回到原本的時間
+  if (w["改稿"]) {
+    const redo = await uiConfirm({ title: "重念範圍改了", ok: "照新範圍重排", cancel: "保留我改的字", dismiss: null,
+      message: "要念的句子要不要照新範圍的逐字稿重排？\n照新範圍重排：你改過的字會被蓋掉。\n保留我改的字：要念的句子不動。\n按右上角 ✕：範圍不改，回到原本的時間。" });
+    if (redo === null) { await cvReload(); return; }
+    if (redo) body["改稿"] = "";
+  }
   try { await cvPost("/api/review/name", body); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
   await cvReload();
 }
