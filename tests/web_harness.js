@@ -8,7 +8,7 @@
  *
  * 假 DOM 只做到測試要的：innerHTML 設下去時用簡單的方式拆出有 id／class／data-* 的元素（不建真的樹），
  * getElementById、querySelector(All)（只看最後一段的 #id、.class、[data-x]、[data-x="v"]、標籤名）、addEventListener（記下來，
- * `H.fireAll()` 依序觸發一次）。apiGet／apiPost／confirm／alert／prompt 都記進 `H.log`，不連網路。 */
+ * `H.fireAll()` 依序觸發一次）。apiGet／apiPost／confirm／alert／prompt（1022-1 起還有 uiConfirm／uiAlert／uiPrompt）都記進 `H.log`，不連網路。 */
 
 const fs = require("fs");
 const vm = require("vm");
@@ -113,6 +113,7 @@ function makeEnv(files, setup) {
   };
   function uniq(list) { return [...new Set(list)]; }
 
+  const uiText = (o) => (o && typeof o === "object" ? [o.title, o.message].filter(Boolean).join("\n") : String(o));
   const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/ /g, "&nbsp;");
   const clone = (x) => JSON.parse(JSON.stringify(x));
   const ctx = {
@@ -126,6 +127,11 @@ function makeEnv(files, setup) {
     alert: (m) => H.log.push(["alert", String(m)]),
     confirm: (m) => { H.log.push(["confirm", String(m)]); return H.confirm; },
     prompt: (m) => { H.log.push(["prompt", String(m)]); return "測試原因"; },
+    // 1022-1（#263）：工具自己的視窗（ui.js）不載進來，換成一樣記進 H.log 的假版本：
+    // 「按主要按鈕／取消」照 H.confirm；記的文字是標題＋訊息（跟以前內建框那一整段一樣看得到）
+    uiConfirm: async (o) => { H.log.push(["confirm", uiText(o)]); return H.confirm; },
+    uiPrompt: async (o) => { H.log.push(["prompt", uiText(o)]); return "測試原因"; },
+    uiAlert: async (o) => { H.log.push(["alert", uiText(o)]); },
     apiGet: async (url) => { H.log.push(["GET", url]); const k = Object.keys(H.apiGetData).find((p) => url.startsWith(p)); return clone(k ? H.apiGetData[k] : {}); },
     apiPost: async (url, body) => { H.log.push(["POST", url, clone(body === undefined ? null : body)]); return clone(H.api[url] || H.api["*"] || {}); },
     fmtStamp: (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(iso || "")); return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]}` : String(iso || ""); },

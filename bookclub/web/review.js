@@ -596,7 +596,7 @@ async function rvPassAll() {
   if (b) { b.disabled = true; b.textContent = "通過中…"; }
   let r;
   try { r = await apiPost("/api/review/passall", {}); }
-  catch (err) { alert(err.message); if (b) { b.disabled = false; b.textContent = "全部照建議通過"; } return; }
+  catch (err) { uiAlert({ title: "沒有成功", message: err.message }); if (b) { b.disabled = false; b.textContent = "全部照建議通過"; } return; }
   await rvReload();
   const m = rvPassAllMsg(r);
   const dlg = document.createElement("dialog");
@@ -779,7 +779,8 @@ async function rvPass() {
     if (rvInCut(it) || it["涵蓋"] || t === "改成老師") return;   // 不用按：已經處理好
     if (rvPassCuts(it)) {
       // 09-29 宇軒：不重要的短句，通過＝剪掉這段（聲音和畫面都拿掉，不用生成）；10-01：先確認、記下是哪一段剪的（可以取消）
-      if (!confirm(`按通過會把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 整段剪掉（聲音和畫面都拿掉，影片會變短）。\n要留下這段：按「取消」，在「改做法」選「學員重念」。`)) return;
+      if (!(await uiConfirm({ title: `通過＝把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 整段剪掉`, danger: true, ok: "剪掉這段", cancel: "留下這段",
+        message: "聲音和畫面都拿掉，影片會變短。\n要留下這段：按「留下這段」，再到「改做法」選「學員重念」。" }))) return;
       await apiPost("/api/review/cut", { start: it.start, end: it.end, "備註": "不重要的短句（通過＝剪掉）", "來源段落": it.id });
       await rvReload();
       return;
@@ -807,14 +808,14 @@ async function rvPass() {
         : { id: it.id, "做法": how, "排法": ar, "已確認": true });
       it["做法"] = how;
     } else if (t === "刪除段落" && it["來源"] === "建議") {
-      if (undo) { alert("建議刪除的段落用「改做法」選刪除或不刪"); return; }
+      if (undo) { uiAlert({ title: "用「改做法」改", message: "建議刪除的段落用「改做法」選刪除或不刪" }); return; }
       await apiPost("/api/review/cutsuggest", { id: it.id, "決定": rvChosen(it) });
       await rvReload();
       return;
     } else {
       return;   // 手動加的刪除段落、局部消音本來就算確認過
     }
-  } catch (err) { alert(err.message); return; }
+  } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
   it["已確認"] = !undo;
   rv.lastActivity = Date.now();
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();   // 通過＝打完字了，之後播到下一筆會自動換
@@ -1084,10 +1085,13 @@ function rvAutoHtml() {
 }
 
 // 10-07：手動選到跟名字撞的代號（名冊上有人、或這一集被叫到的人叫這個名字）→ 先問一次
+// 1022-1（#263）：改成工具自己的視窗。沒撞名直接回 true（不是 Promise：選了就立刻存，跟以前一樣不多等一拍）；
+// 撞名才回 Promise<boolean>。呼叫的地方：回 true 不用等，其他 await 視窗的答案
 function rvCodeClashOk(code) {
   const who = ((rv.data["代號對照"] || {})["撞名"] || {})[code];
   if (!who || !who.length) return true;
-  return confirm(`「${code}」跟名字撞名（${who.join("、")} 也叫這個）。成品裡會分不出是${rvWord()}還是真的在叫這個人。\n還是要用嗎？`);
+  return uiConfirm({ title: `「${code}」跟名字撞名`, ok: `還是用「${code}」`, cancel: "換一個",
+    message: `${who.join("、")} 也叫這個。成品裡會分不出是${rvWord()}還是真的在叫這個人。` });
 }
 
 function rvDupHtml() {
@@ -1304,7 +1308,7 @@ async function rvDecideName(name, body) {
         "代號": body["做法"] === "換成代號" ? body["代號"] : same ? ((rv.data["這一集代號"] || {})[same] || null) : null });
     }
   } catch (e) {
-    if (!e.shown) alert(e.message || e);
+    if (!e.shown) uiAlert({ title: "沒有存到", message: e.message || String(e) });
   } finally {
     delete rv.nameSaving[name];
     rvNameRowRefresh(name);
@@ -1330,8 +1334,10 @@ function rvBindNameRow(scope) {
     if (kind === "same") { await rvDecideName(name, { "做法": "是上面的學員", "同一人": val }); return; }
     if (kind === "code") {
       let code = val;
-      if (code === "__new") code = (prompt("輸入英文名（外國人名的中文寫法，例如 葛蕾絲）") || "").trim();
-      if (!code || !rvCodeClashOk(code)) { back(); return; }
+      if (code === "__new") code = ((await uiPrompt({ title: "輸入英文名", message: "外國人名的中文寫法，例如 葛蕾絲", placeholder: "例如 葛蕾絲", ok: "用這個英文名" })) || "").trim();
+      if (!code) { back(); return; }
+      const clash = rvCodeClashOk(code);
+      if (clash !== true && !(await clash)) { back(); return; }
       await rvDecideName(name, { "做法": "換成代號", "代號": code });
       return;
     }
@@ -1381,23 +1387,31 @@ function rvBindPrep(root) {
   const reload = async () => { await rvReload(); };
   root.querySelectorAll(".rv-real").forEach((el) => el.addEventListener("change", async () => {
     const tname = (rv.data["學員資料"] || {})["老師名稱"] || "老師";
-    if (el.value === tname && !confirm(`${el.dataset.person} 其實是${tname}？\n這一位的段落會全部改成老師（不重念），並補找裡面老師提到的名字。\n只有幾段是老師的話，改用下面「其他」→「拆開／有幾段其實是老師」。`)) { el.value = ""; return; }
+    if (el.value === tname && !(await uiConfirm({ title: `${el.dataset.person} 其實是${tname}？`, danger: true, ok: `全部改成${tname}`, cancel: "先不要",
+      message: `這一位的段落會全部改成${tname}（不重念），並補找裡面老師提到的名字。\n只有幾段是${tname}的話，改用下面「其他」→「拆開／有幾段其實是老師」。` }))) { el.value = ""; return; }
     const res = await apiPost("/api/turns/realname", { "學員": el.dataset.person, "本名": el.value || null });
     if (res["補找到的老師名字"]) alert(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
     await reload();
   }));
-  const askCode = (el) => {   // 「新的代號…」：自己打一個代號
-    let v = el.value;
-    if (v === "__new") {
-      v = (prompt("輸入新的代號（外國人名的中文寫法，例如 葛蕾絲）") || "").trim();
-      if (!v) { el.value = ""; return undefined; }
-    }
+  // 「新的代號…」：自己打一個代號。1022-1（#263）：要問人（打字、撞名）才回 Promise，其他照以前立刻回值
+  const askCodeCheck = (el, v) => {
     if (!v) return null;
-    if (!rvCodeClashOk(v)) { el.value = ""; return undefined; }
-    return v;
+    const clash = rvCodeClashOk(v);
+    if (clash === true) return v;
+    return clash.then((ok) => { if (!ok) { el.value = ""; return undefined; } return v; });
+  };
+  const askCode = (el) => {
+    const v = el.value;
+    if (v !== "__new") return askCodeCheck(el, v);
+    return (async () => {
+      const typed = ((await uiPrompt({ title: "輸入新的代號", message: "外國人名的中文寫法，例如 葛蕾絲", placeholder: "例如 葛蕾絲", ok: "用這個代號" })) || "").trim();
+      if (!typed) { el.value = ""; return undefined; }
+      return askCodeCheck(el, typed);
+    })();
   };
   root.querySelectorAll(".rv-namecode").forEach((el) => el.addEventListener("change", async () => {
-    const code = askCode(el);
+    let code = askCode(el);
+    if (code && typeof code.then === "function") code = await code;
     if (code === undefined) return;
     const res = await apiPost("/api/turns/namecode", { "本名": el.dataset.real, "代號": code });
     if (res["補找到的老師名字"]) alert(`加進名冊了，補找到 ${res["補找到的老師名字"]} 處老師提到這個名字，已經加進清單。`);
@@ -1410,15 +1424,16 @@ function rvBindPrep(root) {
     const map = {};
     root.querySelectorAll(".rv-cvt").forEach((el) => { map[el.dataset.old] = el.value; });
     const lack = Object.entries(map).filter(([, v]) => !v).map(([k]) => k);
-    if (lack.length) { alert(`還沒選：${lack.join("、")}`); return; }
+    if (lack.length) { uiAlert({ title: "還有沒選的", message: `還沒選：${lack.join("、")}` }); return; }
     const used = Object.values(map);
-    if (new Set(used).size !== used.length) { alert("同一集不能兩個人換成同一個代號"); return; }
-    if (!confirm(`要換成：${Object.entries(map).map(([o, n]) => `${o} → ${n}`).join("、")}？\n換之前會自動備份；換過的句子到第 4 步會重新生成。`)) return;
+    if (new Set(used).size !== used.length) { uiAlert({ title: "代號重複了", message: "同一集不能兩個人換成同一個代號" }); return; }
+    if (!(await uiConfirm({ title: "要換成這些代號嗎？", ok: "換成這些代號", cancel: "先不要",
+      message: `${Object.entries(map).map(([o, n]) => `${o} → ${n}`).join("、")}\n換之前會自動備份；換過的句子到第 4 步會重新生成。` }))) return;
     try {
       const r = await apiPost("/api/codes/convert", { "對照": map });
       alert(`換好了：${Object.entries(r["每個代號換了幾處"]).map(([o, n]) => `${o} ${n} 處`).join("、")}。備份在工作區的 ${r["備份"]}`
         + (r["還剩"] && r["還剩"].length ? `\n還有沒換到的：${r["還剩"].join("、")}` : ""));
-    } catch (e) { if (!e.shown) alert(e.message || e); }
+    } catch (e) { if (!e.shown) uiAlert({ title: "沒有換成", message: e.message || String(e) }); }
     await reload();
   });
   const auto = root.querySelector("#rv-autocode");
@@ -1426,7 +1441,7 @@ function rvBindPrep(root) {
     try {
       const r = await apiPost("/api/codes/auto", {});
       alert(`配好了：② ${r["②"]} 位、③ ${r["③"]} 個。${r["代號不夠"] ? `名單上的${rvWord()}不夠用，剩下的請自己打一個。` : "不喜歡的直接改。"}`);
-    } catch (e) { alert(e.message || e); }
+    } catch (e) { uiAlert({ title: "沒有配成", message: e.message || String(e) }); }
     await reload();
   });
   root.querySelectorAll(".rv-code").forEach((el) => el.addEventListener("change", async () => {
@@ -1437,7 +1452,8 @@ function rvBindPrep(root) {
   }));
   root.querySelectorAll(".rv-mergeto").forEach((el) => el.addEventListener("change", async () => {
     if (!el.value) return;
-    if (!confirm(`把 ${el.dataset.person} 的段落全部併進 ${el.value}？`)) { el.value = ""; return; }
+    if (!(await uiConfirm({ title: `把 ${el.dataset.person} 的段落全部併進 ${el.value}？`, danger: true, ok: `併進 ${el.value}`, cancel: "先不要",
+      message: `${el.dataset.person} 的每一段都會改成 ${el.value}。` }))) { el.value = ""; return; }
     await apiPost("/api/turns/merge_person", { "從": el.dataset.person, "併進": el.value }); await reload();
   }));
   root.querySelectorAll(".rv-splitopen").forEach((b) => b.addEventListener("click", () => { rv.splitOpen = b.dataset.person; rvRenderPrep(); }));
@@ -1446,7 +1462,7 @@ function rvBindPrep(root) {
   const go = root.querySelector("#rv-splitgo");
   if (go) go.addEventListener("click", async () => {
     const ids = [...root.querySelectorAll(".rv-splitck:checked")].map((x) => x.value);
-    if (!ids.length) { alert("先勾要改成新學員的段落"); return; }
+    if (!ids.length) { uiAlert({ title: "先勾段落", message: "先勾要改成新學員的段落" }); return; }
     await apiPost("/api/turns/reassign", { ids, "說話者": "新學員" });
     rv.splitOpen = null;
     await reload();
@@ -1455,8 +1471,9 @@ function rvBindPrep(root) {
   if (toT) toT.addEventListener("click", async () => {
     // 09-29 宇軒：聲音辨識把老師判成學員（例如「學員2」有一大段其實是老師在講話）
     const ids = [...root.querySelectorAll(".rv-splitck:checked")].map((x) => x.value);
-    if (!ids.length) { alert("先勾其實是老師在講話的段落"); return; }
-    if (!confirm(`把勾的 ${ids.length} 段改成老師？\n改了之後這幾段不會重念，也會補找裡面老師提到的名字。`)) return;
+    if (!ids.length) { uiAlert({ title: "先勾段落", message: "先勾其實是老師在講話的段落" }); return; }
+    if (!(await uiConfirm({ title: `把勾的 ${ids.length} 段改成老師？`, danger: true, ok: `${ids.length} 段改成老師`, cancel: "先不要",
+      message: "改了之後這幾段不會重念，也會補找裡面老師提到的名字。" }))) return;
     const res = await apiPost("/api/turns/reassign", { ids, "說話者": "老師" });
     if (res["補找到的老師名字"]) alert(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
     rv.splitOpen = null;
@@ -1515,7 +1532,11 @@ const rvEdCtx = {
       const kind = el.querySelector("[data-te-kind]");
       if (kind) kind.addEventListener("change", () => { ed.kind = kind.value || null; ed.result = null; rvRenderIO(); });
       const who = el.querySelector("#rv-ed-who"); if (who) who.addEventListener("change", () => { ed.who = who.value; });
-      const code = el.querySelector("#rv-ed-code"); if (code) code.addEventListener("change", () => { if (!rvCodeClashOk(code.value)) code.value = ""; ed.code = code.value; });
+      const code = el.querySelector("#rv-ed-code"); if (code) code.addEventListener("change", async () => {
+        const clash = rvCodeClashOk(code.value);
+        if (clash !== true && !(await clash)) code.value = "";
+        ed.code = code.value;
+      });
       const word = el.querySelector("#rv-ed-word"); if (word) word.addEventListener("change", () => { ed.word = word.value; });
       el.querySelectorAll(".rv-ed-way").forEach((r) => r.addEventListener("change", () => { ed.way = r.value; }));
     },
@@ -1619,11 +1640,13 @@ function rvRenderSettings() {
   el.querySelectorAll(".rv-voice-all").forEach((b) => b.addEventListener("click", async () => {
     // 09-30：一鍵生效太危險（保留原聲＝學員原本的聲音留在成品），先確認；取消不變
     const n = Object.values(rv.data["學員"] || {}).filter((p) => !p["都會刪掉"] && p["聲音"] !== b.dataset.v).length;
-    if (!n) { alert(`每位學員都已經是「${b.dataset.v}」了。`); return; }
-    const msg = b.dataset.v === "保留原聲"
-      ? `會讓 ${n} 位學員保留原聲、不換聲音。\n只有同意保留原聲的學員才可以這樣做。確定嗎？`
-      : `會讓 ${n} 位學員改成重新生成（用匿名聲音重念）。確定嗎？`;
-    if (!confirm(msg)) return;
+    if (!n) { uiAlert({ title: "不用改", message: `每位學員都已經是「${b.dataset.v}」了。` }); return; }
+    const keep = b.dataset.v === "保留原聲";
+    const msg = keep
+      ? `會讓 ${n} 位學員保留原聲、不換聲音。\n只有同意保留原聲的學員才可以這樣做。`
+      : `會讓 ${n} 位學員改成重新生成（用匿名聲音重念）。`;
+    if (!(await uiConfirm({ title: keep ? "全部保留原聲？" : "全部改成重新生成？", message: msg, danger: keep,
+      ok: keep ? `${n} 位全部保留原聲` : `${n} 位全部重新生成`, cancel: "先不要" }))) return;
     await apiPost("/api/review/voice", { "學員": "全部", "聲音": b.dataset.v }); await rvReload();
   }));
   rvApplyReadonly();

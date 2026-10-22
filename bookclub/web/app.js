@@ -709,8 +709,8 @@ function bindFinalCheck(reload) {
   // 10-02 第六批：老師重念範圍前後沒有人講話 →「照建議縮小」（改的是第 3 步同一個地方；不自動改）
   document.querySelectorAll("[data-fcshrink]").forEach((b) => b.addEventListener("click", async () => {
     const h = fcRowsCache[Number(b.dataset.fcshrink)]["縮小"];
-    if (!confirm(`把重念範圍改成 ${fcTime(h["建議"][0])}–${fcTime(h["建議"][1])}（原片時間）？\n這一句之後要重新生成。`)) return;
-    try { await apiPost("/api/review/shrink", { "鍵": h["鍵"] }); } catch (err) { alert(err.message); return; }
+    if (!(await uiConfirm({ title: `把重念範圍改成 ${fcTime(h["建議"][0])}–${fcTime(h["建議"][1])}（原片時間）？`, message: "這一句之後要重新生成。", ok: "照建議縮小", cancel: "先不要" }))) return;
+    try { await apiPost("/api/review/shrink", { "鍵": h["鍵"] }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
     await reload();
   }));
   // 10-05 #177：「回第 3 步補」（名字換不了代號、重疊缺東西）
@@ -721,7 +721,7 @@ function bindFinalCheck(reload) {
     const r = fcRowsCache[Number(i)];
     const [a, e] = r["段落外起訖"] || [r.start, r.end];
     try { await apiPost("/api/review/outside", { "鍵": r.key, start: a, end: e, "答案": v || null }); }
-    catch (err) { alert(err.message); return; }
+    catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
     await reload();
   }));
   const fold = document.getElementById("fcFold");
@@ -731,19 +731,19 @@ function bindFinalCheck(reload) {
   // 10-05 #177：「照目前設定做」／再按取消
   document.querySelectorAll("[data-fckeep]").forEach((b) => b.addEventListener("click", async () => {
     try { await apiPost("/api/execute/finalcheck", { key: b.dataset.fckeep, "照目前設定做": b.dataset.on === "1" }); }
-    catch (err) { if (!err.shown) alert(err.message); return; }   // 不開放的類別、列已經不在：伺服器回的原因
+    catch (err) { if (!err.shown) uiAlert({ title: "沒有成功", message: err.message }); return; }   // 不開放的類別、列已經不在：伺服器回的原因
     await reload();
   }));
   // 10-05 #178：「請看一眼」每一列的「我看過了」、整區的「全部看過了」（以前是最下面的一個勾選）
   document.querySelectorAll("[data-fclook]").forEach((b) => b.addEventListener("click", async () => {
     try { await apiPost("/api/execute/finalcheck", { "看一眼": b.dataset.fclook, "看過": b.dataset.on === "1", "看過的列": fcLookCache }); }
-    catch (err) { if (!err.shown) alert(err.message); return; }
+    catch (err) { if (!err.shown) uiAlert({ title: "沒有成功", message: err.message }); return; }
     await reload();
   }));
   const seenAll = document.getElementById("fcSeenAll");
   if (seenAll) seenAll.addEventListener("click", async () => {
     try { await apiPost("/api/execute/finalcheck", { "看過": seenAll.dataset.on === "1", "看過的列": fcLookCache }); }
-    catch (err) { if (!err.shown) alert(err.message); return; }
+    catch (err) { if (!err.shown) uiAlert({ title: "沒有成功", message: err.message }); return; }
     await reload();
   });
 }
@@ -846,36 +846,38 @@ async function renderExecuteBody() {
   });
   const redoBtn = document.getElementById("btnRedo");   // 10-01 第三批：只重做第 5 步要重做的（整支影片的範圍）
   if (redoBtn) redoBtn.addEventListener("click", async () => {
-    if (!confirm(`只重做第 5 步要重做的 ${redo.length} 張，再重新組裝？\n要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。`)) return;
+    if (!(await uiConfirm({ title: `只重做第 5 步要重做的 ${redo.length} 張，再重新組裝？`, ok: `重做這 ${redo.length} 張`, cancel: "先不要",
+      message: "要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。" }))) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value] }, { quiet: true }); }
-    catch (e) { alert(`無法開始：${e.message}`); return; }
+    catch (e) { uiAlert({ title: "無法開始", message: e.message }); return; }
     await renderExecuteBody();
   });
   const reBtn = document.getElementById("btnReassemble");   // 10-03 第八批 #23：只重新組裝（整支影片的範圍）
   if (reBtn) reBtn.addEventListener("click", async () => {
     // 10-15 總檢查修正（1015-7）：只重新組裝不會重新生成，等重做的卡留著（後端 build_version 只清真的重做的）——不再說「回到還沒看」
-    if (!confirm(`只重新組裝？\n生成的聲音不動、不重新生成，照現在的做法重新放回去。\n會多一個版本，舊的成品檔不動；第 5 步要重做的 ${redo.length} 張沒有重新生成，還是「要重做」。`)) return;
+    if (!(await uiConfirm({ title: "只重新組裝？", ok: "只重新組裝", cancel: "先不要",
+      message: `生成的聲音不動、不重新生成，照現在的做法重新放回去。\n會多一個版本，舊的成品檔不動；第 5 步要重做的 ${redo.length} 張沒有重新生成，還是「要重做」。` }))) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value], "只重新組裝": true }, { quiet: true }); }
-    catch (e) { alert(`無法開始：${e.message}`); return; }
+    catch (e) { uiAlert({ title: "無法開始", message: e.message }); return; }
     await renderExecuteBody();
   });
   const reAllBtn = document.getElementById("btnReassembleAll");   // 10-05 #97：沒有退回時的只重新組裝（整支影片的範圍）
   if (reAllBtn) reAllBtn.addEventListener("click", async () => {
     // 10-15 總檢查修正（1015-7）：0.2.2b1 起每次組裝都是一個新版本（舊的成品檔不蓋掉）、之前的通過沿用
-    if (!confirm(["只重新組裝（不重新生成）？", "",
+    if (!(await uiConfirm({ title: "只重新組裝（不重新生成）？", ok: "只重新組裝", cancel: "先不要", message: [
       "・生成好的聲音都不動，不會重新生成。",
       "・會多一個版本，舊的成品檔不動；之前的通過沿用。",
       "・第 5 步：內容變了的（例如接縫、停格的做法改了）回到「還沒看」，那附近看過的部分也要重看。",
-      `・${SHOW_EXEC_ETA ? `整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘，` : ""}跑的時候第 3 步不能修改。`].join("\n"))) return;
+      `・${SHOW_EXEC_ETA ? `整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘，` : ""}跑的時候第 3 步不能修改。`].join("\n") }))) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value], "只重新組裝": true }, { quiet: true }); }
-    catch (e) { alert(`無法開始：${e.message}`); return; }
+    catch (e) { uiAlert({ title: "無法開始", message: e.message }); return; }
     await renderExecuteBody();
   });
   document.getElementById("btnExec").addEventListener("click", async () => {
     const st = document.getElementById("exStart"), en = document.getElementById("exEnd");   // 開發者設定才有這兩格
     const body = { start: (st && st.value.trim()) || null, end: (en && en.value.trim()) || null,
       methods: [document.getElementById("exMethod").value] };
-    try { await apiPost("/api/execute/start", body, { quiet: true }); } catch (e) { alert(`無法開始：${e.message}`); return; }
+    try { await apiPost("/api/execute/start", body, { quiet: true }); } catch (e) { uiAlert({ title: "無法開始", message: e.message }); return; }
     await renderExecuteBody();
   });
   const auto = document.getElementById("btnAutoCode");   // 09-30：前置檢查缺代號時直接配
@@ -883,7 +885,7 @@ async function renderExecuteBody() {
     auto.disabled = true;
     try {
       const r = await apiPost("/api/codes/auto", {});
-      if (r["代號不夠"]) alert("代號名單不夠用，剩下的請到第 3 步 ②③ 自己打新代號。");
+      if (r["代號不夠"]) uiAlert({ title: "代號不夠用", message: "代號名單不夠用，剩下的請到第 3 步 ②③ 自己打新代號。" });
     } catch (e) { return; }
     await renderExecuteBody();
   });
@@ -891,7 +893,7 @@ async function renderExecuteBody() {
   if (stop) stop.addEventListener("click", async () => {
     stop.disabled = true;
     stop.textContent = "停止中…（等目前這一句生成完）";
-    try { await apiPost("/api/execute/stop", {}, { quiet: true }); } catch (e) { alert(`停不了：${e.message}`); }
+    try { await apiPost("/api/execute/stop", {}, { quiet: true }); } catch (e) { uiAlert({ title: "停不了", message: e.message }); }
   });
   if (running) startExecPoll();
 }
@@ -1202,8 +1204,9 @@ async function renderOverview() {
   contentEl.querySelectorAll(".pj-switch").forEach((b) => b.addEventListener("click", async () => {
     const p = list.find((x) => x["路徑"] === b.dataset.path) || {};
     // 10-08：切換前說清楚要切去哪一個（名稱一樣的專案分得出來）
-    if (!confirm(`切換到「${p["顯示名稱"] || p["名稱"] || ""}」（${p["標示"] || ""}）？\n${b.dataset.path}\n\n之後第 3、4、5 步看的、改的都是這個工作區。`)) return;
-    try { await apiPost("/api/projects/switch", { "路徑": b.dataset.path }); } catch (e) { alert(e.message); return; }
+    if (!(await uiConfirm({ title: `切換到「${p["顯示名稱"] || p["名稱"] || ""}」（${p["標示"] || ""}）？`, ok: "切換", cancel: "先不要",
+      message: `${b.dataset.path}\n之後第 3、4、5 步看的、改的都是這個工作區。` }))) return;
+    try { await apiPost("/api/projects/switch", { "路徑": b.dataset.path }); } catch (e) { uiAlert({ title: "沒有切換", message: e.message }); return; }
     await render();
   }));
   await bindPickCard(list);   // 10-07：系統內建的選檔視窗（fileio.js）；叫不起來才顯示下面的網頁資料夾瀏覽
@@ -1244,7 +1247,7 @@ async function startPicked() {
       r = await apiPost("/api/projects/start", body, { quiet: true });
     } catch (e) {
       // 10-02 第七批（B3）：找不到 claude 先說，確定要開始再送一次
-      if (!(e.data && e.data["找不到claude"]) || !confirm(`${e.message}\n\n還是要開始分析嗎？`)) throw e;
+      if (!(e.data && e.data["找不到claude"]) || !(await uiConfirm({ title: "還是要開始分析嗎？", message: e.message, ok: "還是開始分析", cancel: "先不要" }))) throw e;
       r = await apiPost("/api/projects/start", { ...body, "沒有claude也開始": true });
     }
     msg.textContent = r["接著做"] ? "接著做，已經完成的步驟會跳過" : "已建立專案";
@@ -1324,15 +1327,15 @@ async function startAnalyze() {
     await apiPost("/api/run/analyze", {}, { quiet: true });
   } catch (e) {
     // 10-02 第七批（B3）：找不到 claude 先說，確定要開始再送一次
-    if (e.data && e.data["找不到claude"] && confirm(`${e.message}\n\n還是要開始分析嗎？`)) {
+    if (e.data && e.data["找不到claude"] && await uiConfirm({ title: "還是要開始分析嗎？", message: e.message, ok: "還是開始分析", cancel: "先不要" })) {
       try {
         await apiPost("/api/run/analyze", { "沒有claude也開始": true }, { quiet: true });
       } catch (e2) {
-        alert(`無法開始分析：${e2.message}`);
+        uiAlert({ title: "無法開始分析", message: e2.message });
         return;
       }
     } else {
-      alert(`無法開始分析：${e.message}`);
+      uiAlert({ title: "無法開始分析", message: e.message });
       return;
     }
   }
@@ -1447,7 +1450,8 @@ function renderStep2Body(play = false) {
     const msgEl = document.getElementById("refMsg");
     const text = document.getElementById("refText").value;
     if (swapAudio && chosenRank != null &&
-        !confirm(`換了音檔之後，已經生成好的老師句子都要重新生成。確定要${isChosen ? "換成這個候選的新音檔" : `改用第 ${refsPointer + 1} 個`}？`)) return;
+        !(await uiConfirm({ title: `要${isChosen ? "換成這個候選的新音檔" : `改用第 ${refsPointer + 1} 個`}嗎？`, message: "換了音檔之後，已經生成好的老師句子都要重新生成。",
+          ok: isChosen ? "換成新音檔" : `改用第 ${refsPointer + 1} 個`, cancel: "先不要" }))) return;
     try {
       const r = await apiPost("/api/refs/use", { rank: c.rank, transcript: text, 換音檔: swapAudio });
       refsCache = await apiGet("/api/refs");
@@ -1492,7 +1496,7 @@ async function renderRoomCard() {
     </div>
     <p class="muted">還沒確認也可以先往下做：照樣用這一段（它本來就夠安靜），第 4 步開始前的總檢查會提醒你回來聽。</p>`;
   const act = async (v) => {
-    try { await apiPost("/api/roomtone", { "動作": v }); } catch (e) { alert(e.message); return; }
+    try { await apiPost("/api/roomtone", { "動作": v }); } catch (e) { uiAlert({ title: "沒有成功", message: e.message }); return; }
     await renderRoomCard();
     if (v === "換一段") { const au = document.getElementById("roomAudio"); if (au) au.play().catch(() => {}); }
   };

@@ -216,8 +216,9 @@ def test_keep_all_voices_needs_confirm():
     js = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     block = js[js.index('querySelectorAll(".rv-voice-all")'):]
     block = block[:block.index("}));")]
-    assert "confirm(" in block and "位學員保留原聲、不換聲音" in block
-    assert block.index("confirm(") < block.index('apiPost("/api/review/voice"')
+    # 1022-1（#263）：改成工具自己的視窗 uiConfirm
+    assert "uiConfirm(" in block and "位學員保留原聲、不換聲音" in block
+    assert block.index("uiConfirm(") < block.index('apiPost("/api/review/voice"')
 
 
 def test_interface_1001():
@@ -385,6 +386,32 @@ def test_step0_moved_to_tool_menu():
     assert "<h1>0　初始化設定</h1>" not in js
     rv = (WEB / "review.js").read_text(encoding="utf-8")
     assert 'id="rv-set-btn" aria-expanded="false">設定</button>' in rv
+
+
+def test_own_dialogs_replace_browser_boxes():
+    """1022-1（#263）：瀏覽器內建的 confirm／prompt 全部換成工具自己的視窗（ui.js），錯誤類的 alert 也換；
+    回報成功的 alert 留給下一批改成 Toast。"""
+    import re
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    assert html.index('src="ui.js"') < html.index('src="app.js"')   # 其他程式之前載入
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    for fn in ("function uiConfirm(", "function uiPrompt(", "function uiAlert(", "showModal()", '"cancel"'):
+        assert fn in ui, fn
+    assert ".innerHTML" not in ui and "textContent = line" in ui   # 文字一律 textContent，不拼 HTML
+    assert 'dlg.className = "rv-modal ui-dialog"' in ui and "document.body.appendChild(dlg)" in ui   # 掛在 body：第 3 步唯讀鎖不到
+    assert "o.danger && cancelBtn ? cancelBtn : okBtn" in ui   # 危險動作停在取消
+    others = {f: (WEB / f).read_text(encoding="utf-8") for f in ("app.js", "cards.js", "review.js", "finalcheck.js", "fileio.js")}
+    for f, js in others.items():
+        assert not re.search(r"(?<![\w.])confirm\(", js), f
+        assert not re.search(r"(?<![\w.])prompt\(", js), f
+        left = re.findall(r"(?<![\w.])alert\((.{0,40})", js)
+        assert all(("補找到" in x or "加進名冊了" in x or "換好了" in x or "配好了" in x) for x in left), (f, left)
+    cards = others["cards.js"]
+    # 重念範圍改了：兩顆按鈕直接寫做法，關掉視窗＝保留
+    assert 'ok: "照新範圍重排", cancel: "保留我改的字"' in cards
+    # 第 3 步唯讀時視窗裡的按鈕不在 #content 裡，鎖不到（rvApplyReadonly 只鎖 .rv2 底下）
+    rv = others["review.js"]
+    assert 'root.querySelectorAll("#rv-right, #rv-lower, #rv-settings, #rv-io, .rv-bar-btns")' in rv
 
 
 if __name__ == "__main__":

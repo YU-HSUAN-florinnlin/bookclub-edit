@@ -363,7 +363,7 @@ async function fcUndo() {
     fcFixReset();
     await fcReload();
   } catch (e) {
-    alert(`復原沒有成功：${e.message}\n可以到「要修改」→「其他」把說話者改回去。`);
+    uiAlert({ title: "復原沒有成功", message: `${e.message}\n可以到「要修改」→「其他」把說話者改回去。` });
     if (btn) { btn.disabled = false; btn.textContent = "復原"; }
   }
 }
@@ -474,7 +474,7 @@ async function fcRebase(btn) {
   let started = null;
   try {
     started = (await apiPost("/api/execute/start", { start: r[0], end: r[1], methods: null, "基礎版本": fc.data["目前版本"] }, { quiet: true }))["started_at"];
-  } catch (e) { alert(`還不能開始：${e.message}`); btn.disabled = false; return; }
+  } catch (e) { uiAlert({ title: "還不能開始", message: e.message }); btn.disabled = false; return; }
   fcRedoBackSet(started);
   fc.ver = null;
   location.hash = "#step4";
@@ -1109,7 +1109,7 @@ async function fcFixConfirm(c, it) {
     fcFixReset();
     await fcReload();
   } catch (e) {
-    if (fc.fix.open) { f.busy = false; f.err = e.message; fcRenderRight(); } else alert(e.message);
+    if (fc.fix.open) { f.busy = false; f.err = e.message; fcRenderRight(); } else uiAlert({ title: "沒有成功", message: e.message });
   }
 }
 
@@ -1121,7 +1121,7 @@ async function fcDecide(c, result, picks = [], extra = "", cancelRedo = false) {
   try {
     res = await apiPost("/api/final/card", { id: c.id, "結果": result, "選項": picks, "補充": extra, ...(ver ? { "版本": ver } : {}),
       ...(cancelRedo ? { "取消要重做": true } : {}) });
-  } catch (e) { alert(e.message); return; }
+  } catch (e) { uiAlert({ title: "沒有成功", message: e.message }); return; }
   fcFixReset();
   // 10-15 宇軒驗證回饋二：通過後留在這張（跟第 3 步一樣不自動跳下一張）。10-15 總檢查修正（1015-7）：等重做那條路的卡
   // （c["範圍外改了"]）取消要重做之後可能搬回跨版本卡、或回到「已通過（沿用上一版）」→ 整頁重新整理
@@ -1411,7 +1411,7 @@ async function fcRedo(btn) {
   try {
     started = (await apiPost("/api/execute/start", { start: null, end: null, methods: null }, { quiet: true }))["started_at"];
   } catch (e) {
-    if (!/已經有.*在跑/.test(e.message)) { alert(`還不能開始：${e.message}`); btn.disabled = false; return; }
+    if (!/已經有.*在跑/.test(e.message)) { uiAlert({ title: "還不能開始", message: e.message }); btn.disabled = false; return; }
     // 10-15 第2段審查二修正：已經在跑的是 AI 執行（running）才記那一次的開始時間；在跑的是分析時 /api/execute 的 started_at
     // 是上一次執行的，記了到第 4 步會馬上彈回第 5 步
     try { const ex = await apiGet("/api/execute"); started = ex.running ? ex["started_at"] : null; } catch (e2) { started = null; }
@@ -1603,12 +1603,12 @@ async function fcExport() {
   fc.nextData = null;   // 10-15 第2段審查二修正：輸出之後的重新整理不能用之前留的整頁資料
   let r;
   const ver = fcOld() ? { "版本": fc.data["目前版本"] } : {};   // 10-15 第5步2.0 第3段（§6.7）：輸出選中的那一版
-  try { r = await apiPost("/api/final/export", ver); } catch (e) { alert(e.message); return; }
+  try { r = await apiPost("/api/final/export", ver); } catch (e) { uiAlert({ title: "沒有成功", message: e.message }); return; }
   if (r["要確認"]) {
     let win = false;
     try { win = !!(await apiGet("/api/final/outputs"))["可以複製到Windows"]; } catch (e) { /* 讀不到就不提 Windows */ }
     if (!(await fcConfirmExport(r["還差"], win))) return;
-    try { r = await apiPost("/api/final/export", { "確定": true, ...ver }); } catch (e) { alert(e.message); return; }
+    try { r = await apiPost("/api/final/export", { "確定": true, ...ver }); } catch (e) { uiAlert({ title: "沒有成功", message: e.message }); return; }
   }
   await fcReload();
   fileOutInit(document.getElementById("fc-fileout"));
