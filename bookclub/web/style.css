@@ -976,6 +976,14 @@ button.ui-toast-x:hover { background: var(--bg-soft); color: var(--fg); }
 button.ui-toast-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (prefers-color-scheme: dark) { .ui-toast { box-shadow: 0 6px 24px rgba(0,0,0,.5); } }
 
+/* 1022-2（#265）：馬上出現的按鈕說明（ui.js，按鈕加 data-tip）。字級跟內文一樣、不擋滑鼠 */
+.ui-tip { position: fixed; z-index: 1300; max-width: min(320px, calc(100vw - 16px)); padding: 6px 10px; border-radius: 6px;
+  background: var(--fg); color: var(--bg); font-size: 15px; line-height: 1.5; font-weight: normal; text-align: left;
+  white-space: normal; overflow-wrap: anywhere; pointer-events: none; box-shadow: 0 4px 14px rgba(0,0,0,.2);
+  animation: ui-tip-in .12s ease; }
+.ui-tip[hidden] { display: none; }
+@keyframes ui-tip-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .ui-toast { transition: none; transform: none; }
+  .ui-tip { animation: none; }
 }

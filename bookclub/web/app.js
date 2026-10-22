@@ -337,8 +337,10 @@ function setNavCollapsed(on, save = true) {
   document.querySelector(".app").classList.toggle("nav-collapsed", on);
   const b = document.getElementById("navToggle");
   // 1022-1（#266）：按鈕是三條線的圖示（index.html 裡的 SVG），收合、展開都同一個，只換提示文字
-  b.title = on ? "展開步驟列" : "收合步驟列";
-  b.setAttribute("aria-label", b.title);
+  // 1022-2（#265）：說明改用馬上出現的提示框（ui.js data-tip），收合後只剩圖示，aria-label 留著給報讀軟體
+  const label = on ? "展開步驟列" : "收合步驟列";
+  b.dataset.tip = label;
+  b.setAttribute("aria-label", label);
   b.setAttribute("aria-expanded", String(!on));
   if (save) {
     try { localStorage.setItem(NAV_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係，只是下次不記得 */ }
@@ -562,7 +564,7 @@ function fcListenRange(start, end) {
 
 function fcListenBtn(start, end, label) {
   const rg = fcListenRange(start, end);
-  return rg ? `<button class="secondary small" data-fcplay="${rg[0]}|${rg[1]}" title="從 ${esc(fcTime(rg[0]))} 播到 ${esc(fcTime(rg[1]))} 就停（前後不多播）">${esc(label)}</button>` : "";
+  return rg ? `<button class="secondary small" data-fcplay="${rg[0]}|${rg[1]}" data-tip="從 ${esc(fcTime(rg[0]))} 播到 ${esc(fcTime(rg[1]))} 就停（前後不多播）">${esc(label)}</button>` : "";
 }
 
 // 10-05 #177（宇軒）：「一定要處理」每一列的「照目前設定做」＝按下去就照第 3 步的決定進行（純函式，回傳 HTML）。

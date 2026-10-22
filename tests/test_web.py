@@ -442,6 +442,43 @@ def test_success_toasts():
     assert 'uiAlert({ title: "沒有配成"' in rv and 'uiAlert({ title: "沒有換成"' in rv
 
 
+
+def test_button_tooltips():
+    """1022-2（#265）：重要按鈕的說明改成馬上出現的提示框（ui.js，按鈕加 data-tip），拿掉原本的 title；
+    停用時「為什麼不能按」、狀態標籤、時間軸、步驟列連結的 title 不動。"""
+    import re
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    for s in ("const UI_TIP_DELAY_MS = 150;", 'document.addEventListener("mouseover"', 'document.addEventListener("focusin"',
+              ':focus-visible', '"Escape"', 'setAttribute("role", "tooltip")', '"aria-describedby"', "uiTipEl.textContent = t.dataset.tip"):
+        assert s in ui, s
+    assert 'uiTipEl.classList.add("below")' in ui   # 上面放不下放下面
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    i = css.index(".ui-tip {")
+    assert "font-size: 15px" in css[i:i + 400] and "pointer-events: none" in css[i:i + 400]
+    web = {f: (WEB / f).read_text(encoding="utf-8") for f in ("app.js", "cards.js", "review.js", "finalcheck.js", "index.html")}
+    want = {
+        "cards.js": ['id="rv-isteacher" data-tip=', 'id="rv-retime" data-tip=', 'data-tip="抓錯了', 'id="rv-tai" data-tip=',
+                     'id="rv-del" data-tip=', 'data-tip="聽 ', 'data-te-now="${which}" data-tip='],
+        "review.js": ['id="rv-code-btn" aria-expanded="false" data-tip=', 'id="rv-export" data-tip=', 'data-tip="有建議、還沒確認',
+                      'id="rv-pass" data-tip=', 'data-tip="一位其實是兩個人'],
+        "finalcheck.js": ['id="fc-pass" data-tip='],
+        "app.js": ['data-fcplay="${rg[0]}|${rg[1]}" data-tip=', "b.dataset.tip = label;", 'b.setAttribute("aria-label", label)'],
+        "index.html": ['data-tip="收合步驟列" aria-label="收合步驟列"', 'data-tip="工具設定" aria-label="工具設定"'],
+    }
+    for f, keys in want.items():
+        for k in keys:
+            assert k in web[f], (f, k)
+    # 改了的按鈕不再同時有 title（兩個提示一起出現）
+    for f, js in web.items():
+        for m in re.finditer(r"<button[^>]*data-tip=[^>]*>", js):
+            assert " title=" not in m.group(0), (f, m.group(0)[:120])
+    assert "b.title =" not in web["app.js"]
+    # 刻意不動：停用時的原因、時間軸、狀態標籤
+    assert 'disabled title="${esc(fcFixOff(c, fcOld()))}"' in web["finalcheck.js"]
+    assert 'id="rv-tl" title="點一下或拖拉' in web["review.js"]
+    assert "btn.title = st.title;" in web["review.js"]   # 「開始 AI 修改」常常是停用的，原因留在 title
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:

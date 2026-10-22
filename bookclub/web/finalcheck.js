@@ -822,7 +822,7 @@ function fcRenderRight() {
         <button class="ghost small" data-ab="上一版">上一版 ▶</button>` : ""}
         ${cvPadHtml("fc-pad")}</div>
       <div class="rv-actions">
-        <button class="${passed ? "primary on" : "primary"}" id="fc-pass" title="已通過的再按一次會取消" aria-pressed="${passed}" ${canJudge ? "" : "disabled"}>${passed ? "✓ 已通過（再按取消）" : "通過"}<kbd>Enter</kbd></button>${canJudge ? "" : helpTip(fcPassOffText(c), "為什麼不能按通過")}
+        <button class="${passed ? "primary on" : "primary"}" id="fc-pass" data-tip="已通過的再按一次會取消" aria-pressed="${passed}" ${canJudge ? "" : "disabled"}>${passed ? "✓ 已通過（再按取消）" : "通過"}<kbd>Enter</kbd></button>${canJudge ? "" : helpTip(fcPassOffText(c), "為什麼不能按通過")}
         <button class="ghost${open ? " on" : ""}" id="fc-fix" aria-expanded="${open}" ${canFix ? "" : `disabled title="${esc(fcFixOff(c, fcOld()))}"`}>要修改<kbd>E</kbd></button>${back ? `
         <button class="ghost small" id="fc-back-undo">取消要重做</button>` : ""}
         <span class="spacer"></span>

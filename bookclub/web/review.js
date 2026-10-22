@@ -122,8 +122,8 @@ async function renderReview() {
           <button class="ghost" id="rv-prep-btn">開始前 4 件事</button>
           <button class="ghost" id="rv-set-btn" aria-expanded="false">設定</button>
           <button class="ghost" id="rv-key-btn" aria-expanded="false">快捷鍵</button>
-          <button class="ghost" id="rv-code-btn" aria-expanded="false" title="本名和代號的對照（截圖或分享螢幕時會露出本名）">代號對照</button>
-          <button class="ghost" id="rv-export" title="只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交接整個專案請複製整個工作區資料夾">匯出覆核結果</button>
+          <button class="ghost" id="rv-code-btn" aria-expanded="false" data-tip="本名和代號的對照（截圖或分享螢幕時會露出本名）">代號對照</button>
+          <button class="ghost" id="rv-export" data-tip="只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交接整個專案請複製整個工作區資料夾">匯出覆核結果</button>
           <button class="primary" id="rv-go4" disabled>開始 AI 修改</button>
         </div>
       </header>
@@ -574,7 +574,7 @@ async function rvConfirmGo4() {
 
 function rvPassAllHtml() {
   const left = rvLeft();
-  return `<button class="secondary" id="rv-passall" ${left ? "" : "disabled"} title="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>`;
+  return `<button class="secondary" id="rv-passall" ${left ? "" : "disabled"} data-tip="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>`;
 }
 
 function rvBindPassAll(box) {
@@ -677,7 +677,7 @@ function rvRenderCard() {
       </div>`}
       ${state ? `<div class="rv-statebox">${state}</div>` : ""}
       <div class="rv-actions">
-        <button class="primary" id="rv-pass" title="已通過的再按一次會取消">${rvInCut(it) || it["涵蓋"] ? "✓ 已處理" : it["類型"] === "改成老師" ? "不用處理" : it["已確認"] ? "✓ 已通過（再按取消）" : rvPassCuts(it) ? "通過（這一段會整段剪掉，畫面也剪）" : "通過"}<kbd>Enter</kbd></button>
+        <button class="primary" id="rv-pass" data-tip="已通過的再按一次會取消">${rvInCut(it) || it["涵蓋"] ? "✓ 已處理" : it["類型"] === "改成老師" ? "不用處理" : it["已確認"] ? "✓ 已通過（再按取消）" : rvPassCuts(it) ? "通過（這一段會整段剪掉，畫面也剪）" : "通過"}<kbd>Enter</kbd></button>
         <button class="ghost" id="rv-change" aria-expanded="${rv.open}">改做法<kbd>E</kbd></button>
         ${cvToolBtnsHtml(it)}
         <span class="spacer"></span>
@@ -852,7 +852,7 @@ function rvRenderList() {
       ${st}</li>`;
   }).join("");
   lower.innerHTML = `
-    <div class="rv-row rv-passbar"><button class="ghost small" id="rv-tostart" title="開始前 4 件事">開始前 4 件事${rvWhoDone() ? "" : "（② 還沒做）"}</button>${rvPassAllHtml()}
+    <div class="rv-row rv-passbar"><button class="ghost small" id="rv-tostart">開始前 4 件事${rvWhoDone() ? "" : "（② 還沒做）"}</button>${rvPassAllHtml()}
       <span class="rv-meta">還沒確認 ${rvLeft()} 張；不用全部看完也能「開始 AI 修改」，沒看的照建議做</span></div>
     <nav class="rv-filters" aria-label="篩選">${RV_FILTERS.map(([f, label]) =>
       `<button class="${rv.filter === f ? "on" : ""}" data-f="${esc(f)}">${esc(label)} <span>${count(f)}</span></button>`).join("")}</nav>
@@ -997,7 +997,7 @@ function rvPrepPeopleHtml() {
       </div>
       <details class="rv-more-ctl"><summary>其他（合併、拆開）</summary><div class="ctl">
         ${others ? `<label>跟誰是同一人 <select class="rv-mergeto" data-person="${esc(n)}"><option value="">—</option>${others}</select></label>` : ""}
-        <button class="ghost small rv-splitopen" data-person="${esc(n)}" title="一位其實是兩個人、或有幾段其實是老師">拆開／有幾段其實是老師</button>
+        <button class="ghost small rv-splitopen" data-person="${esc(n)}" data-tip="一位其實是兩個人、或有幾段其實是老師">拆開／有幾段其實是老師</button>
       </div></details>${split}</li>`;
   }).join("") + (cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只在要刪的段落裡講話（${cutOnly.length} 位：${esc(cutOnly.map(([n]) => n).join("、"))}），不用判斷</summary>
       <p class="rv-meta">例如結尾跟老師說再見。這幾段會整段刪掉；如果在「① 建議刪除段落」改成不刪，他們會回到上面。</p>

@@ -229,3 +229,103 @@ function uiToast(message) {
   return el;
 }
 
+/* 1022-2（#265）：重要按鈕的說明改成馬上出現的提示框（Tooltip），取代要停一秒才出現、字又小的 title。
+ *
+ *   <button data-tip="說明文字">…</button>
+ *
+ * - document 上掛一次事件（事件委派），卡片重畫、動態產生的按鈕不用各自綁。
+ * - 滑鼠移上去 UI_TIP_DELAY_MS 後出現、移開就收；用鍵盤（Tab）移到按鈕上也會出現；按 Esc、按下按鈕、捲動都會收。
+ * - 預設放在按鈕上方，上面放不下就放下方；左右不超出畫面。
+ * - 出現時按鈕加 aria-describedby 指到提示框，收起來就拿掉。
+ * - 按鈕本身停用（disabled）時的「為什麼不能按」仍用 title：停用的按鈕在部分瀏覽器不觸發滑鼠事件。 */
+
+const UI_TIP_DELAY_MS = 150;
+let uiTipEl = null;
+let uiTipFor = null;
+let uiTipTimer = 0;
+let uiTipPending = null;   // 正在等 UI_TIP_DELAY_MS 的那顆（滑過按鈕裡的 <kbd>、圖示時不重新計時）
+
+function uiTipTarget(node) {
+  const el = node && node.nodeType === 1 ? node : node && node.parentElement;
+  const t = el && el.closest ? el.closest("[data-tip]") : null;
+  return t && t.dataset.tip ? t : null;
+}
+
+function uiTipShow(t) {
+  clearTimeout(uiTipTimer);
+  uiTipPending = null;
+  if (!t || !document.body.contains(t)) return;
+  if (!uiTipEl) {
+    uiTipEl = document.createElement("div");
+    uiTipEl.id = "ui-tip";
+    uiTipEl.className = "ui-tip";
+    uiTipEl.setAttribute("role", "tooltip");
+    uiTipEl.hidden = true;
+    document.body.appendChild(uiTipEl);
+  }
+  if (uiTipFor && uiTipFor !== t) uiTipUnlink(uiTipFor);
+  uiTipFor = t;
+  uiTipEl.textContent = t.dataset.tip;
+  uiTipEl.hidden = false;
+  uiTipEl.classList.remove("below");
+  uiTipEl.style.left = "0px";
+  uiTipEl.style.top = "0px";
+  const r = t.getBoundingClientRect();
+  const w = uiTipEl.offsetWidth, h = uiTipEl.offsetHeight;
+  const gap = 8, edge = 8;
+  let top = r.top - h - gap;
+  if (top < edge) { top = r.bottom + gap; uiTipEl.classList.add("below"); }   // 上面放不下就放下面
+  top = Math.min(top, window.innerHeight - h - edge);
+  let left = r.left + r.width / 2 - w / 2;
+  left = Math.max(edge, Math.min(left, window.innerWidth - w - edge));
+  uiTipEl.style.left = `${Math.round(left)}px`;
+  uiTipEl.style.top = `${Math.round(Math.max(edge, top))}px`;
+  const ids = (t.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+  if (!ids.includes("ui-tip")) t.setAttribute("aria-describedby", ids.concat("ui-tip").join(" "));
+}
+
+function uiTipUnlink(t) {
+  const ids = (t.getAttribute("aria-describedby") || "").split(/\s+/).filter((x) => x && x !== "ui-tip");
+  if (ids.length) t.setAttribute("aria-describedby", ids.join(" ")); else t.removeAttribute("aria-describedby");
+}
+
+function uiTipHide() {
+  clearTimeout(uiTipTimer);
+  uiTipPending = null;
+  if (uiTipFor) uiTipUnlink(uiTipFor);
+  uiTipFor = null;
+  if (uiTipEl) uiTipEl.hidden = true;
+}
+
+function uiTipLater(t) {
+  if (uiTipPending === t) return;
+  clearTimeout(uiTipTimer);
+  uiTipPending = t;
+  uiTipTimer = setTimeout(() => uiTipShow(t), UI_TIP_DELAY_MS);
+}
+
+document.addEventListener("mouseover", (e) => {
+  const t = uiTipTarget(e.target);
+  if (t && t === uiTipFor) return;
+  if (!t) { if (uiTipFor || uiTipPending) uiTipHide(); return; }
+  uiTipLater(t);
+});
+document.addEventListener("mouseout", (e) => {
+  const t = uiTipTarget(e.target);
+  if (!t) return;
+  if (e.relatedTarget && t.contains(e.relatedTarget)) return;   // 還在同一顆按鈕裡（移到裡面的 <kbd>、圖示）
+  if (document.activeElement === t && uiTipFor === t && t.matches(":focus-visible")) return;   // 鍵盤焦點還在
+  uiTipHide();
+});
+document.addEventListener("focusin", (e) => {
+  const t = uiTipTarget(e.target);
+  if (!t) return;
+  let kb = true;
+  try { kb = t.matches(":focus-visible"); } catch (err) { /* 舊瀏覽器沒有 :focus-visible，照樣顯示 */ }
+  if (kb) uiTipShow(t);   // 滑鼠點下去的焦點不另外顯示（點了就收）
+});
+document.addEventListener("focusout", (e) => { if (uiTipTarget(e.target) === uiTipFor) uiTipHide(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && uiTipFor) uiTipHide(); });
+document.addEventListener("pointerdown", () => { if (uiTipFor || uiTipPending) uiTipHide(); }, true);
+window.addEventListener("scroll", () => { if (uiTipFor) uiTipHide(); }, true);
+window.addEventListener("resize", () => { if (uiTipFor) uiTipHide(); });

@@ -86,14 +86,14 @@ function cvPlayRange(a, b) { const [x, y] = cvPadRange(a, b); cvPlay(x, y); }
 // step5：第 5 步的字（10-15：學員段落的「這段其實是老師」寫成「裡面有老師的聲音」；這一段先做成整段改回老師原聲，
 // 選哪幾個字是老師的（#226）之後做）
 function cvToolBtnsHtml(it, step5 = false) {
-  const teacher = step5 ? `<button class="ghost" id="rv-isteacher" title="這一段改回老師的原聲，不重念（整段）">裡面有老師的聲音</button>`
-    : `<button class="ghost" id="rv-isteacher" title="聲音辨識判錯：這一段其實是老師在講話">這段其實是老師</button>`;
+  const teacher = step5 ? `<button class="ghost" id="rv-isteacher" data-tip="這一段改回老師的原聲，不重念（整段）">裡面有老師的聲音</button>`
+    : `<button class="ghost" id="rv-isteacher" data-tip="聲音辨識判錯：這一段其實是老師在講話">這段其實是老師</button>`;
   return [
-    RV_ITEM_KIND[it["類型"]] ? `<button class="ghost" id="rv-retime" title="用「新增修改」面板改這一筆的起點終點">改時間</button>` : "",
-    it["類型"] === "名字" ? `<button class="${rvNotName(it) ? "primary" : "ghost"}" id="rv-notname" aria-pressed="${rvNotName(it)}" title="抓錯了，這裡其實沒有人名：照原音不改，這個寫法以後也不會再抓（已選的再按一次取消）">${rvNotName(it) ? "✓ " : ""}${it["老師整段"] ? "不用改，保留老師原聲" : "不是名字，不用改"}</button>` : "",
+    RV_ITEM_KIND[it["類型"]] ? `<button class="ghost" id="rv-retime" data-tip="用「新增修改」面板改這一筆的起點終點">改時間</button>` : "",
+    it["類型"] === "名字" ? `<button class="${rvNotName(it) ? "primary" : "ghost"}" id="rv-notname" aria-pressed="${rvNotName(it)}" data-tip="抓錯了，這裡其實沒有人名：照原音不改，這個寫法以後也不會再抓（已選的再按一次取消）">${rvNotName(it) ? "✓ " : ""}${it["老師整段"] ? "不用改，保留老師原聲" : "不是名字，不用改"}</button>` : "",
     it["類型"] === "學員段落" ? teacher : "",
-    it["類型"] === "改成老師" ? `<button class="ghost" id="rv-tai" title="這一段照打的字老師重念（用老師的 AI 聲音，例如裡面有名字）">改成老師重念</button>` : "",
-    it["可以刪"] ? `<button class="ghost" id="rv-del" title="人工新增的加錯了：整筆刪掉（會留一筆紀錄，在「設定」看得到）">刪掉這一筆</button>` : "",
+    it["類型"] === "改成老師" ? `<button class="ghost" id="rv-tai" data-tip="這一段照打的字老師重念（用老師的 AI 聲音，例如裡面有名字）">改成老師重念</button>` : "",
+    it["可以刪"] ? `<button class="ghost" id="rv-del" data-tip="人工新增的加錯了：整筆刪掉（會留一筆紀錄，在「設定」看得到）">刪掉這一筆</button>` : "",
   ].join("\n        ");
 }
 
@@ -340,7 +340,7 @@ function rvPlayOnlyHtml(it) {
   const w = it["整句"];
   if (it["類型"] === "名字" && (!w || it["老師整段"] || (cv.ctx && cv.ctx.mode === "第5步"))) return "";
   const [s0, e0] = it["類型"] === "名字" ? [Number(w.start), Number(w.end)] : [a, b];
-  return ` <button class="ghost small" id="rv-playonly" data-s="${s0}" data-e="${e0}" title="聽 ${esc(rvFmt(s0, 1))}–${esc(rvFmt(e0, 1))}（開了「前後多聽 2 秒」就前後各多 2 秒）">聽這一段</button>${cvPadHtml("rv-pad")}`;
+  return ` <button class="ghost small" id="rv-playonly" data-s="${s0}" data-e="${e0}" data-tip="聽 ${esc(rvFmt(s0, 1))}–${esc(rvFmt(e0, 1))}（開了「前後多聽 2 秒」就前後各多 2 秒）">聽這一段</button>${cvPadHtml("rv-pad")}`;
 }
 
 // 10-02 第六批：老師重念範圍開頭或結尾有一段沒有人講話：提醒＋「照建議縮小」（不自動改；改了這一句要重新生成）
@@ -991,7 +991,7 @@ function teTimeRow(ctx, which, label) {
   const t = ctx.st[which];
   return `<div class="rv-edrow"><span class="rv-edlab">${label}</span>
       <input class="rv-t" data-te-t="${which}" value="${t != null ? esc(rvFmt(t, 2)) : ""}" placeholder="43:15.2" aria-label="${label}（例如 43:15.2）">
-      ${ctx.o.now ? `<button class="ghost small" data-te-now="${which}" title="${which === "a" ? "快捷鍵 I" : "快捷鍵 O"}">${esc(ctx.o.nowLabel || "用目前播放位置")}</button>` : ""}
+      ${ctx.o.now ? `<button class="ghost small" data-te-now="${which}" data-tip="${which === "a" ? "快捷鍵 I" : "快捷鍵 O"}">${esc(ctx.o.nowLabel || "用目前播放位置")}</button>` : ""}
       <button class="ghost small" data-te-nudge="${which}" data-d="-0.1" aria-label="${label}往前 0.1 秒">−0.1</button>
       <button class="ghost small" data-te-nudge="${which}" data-d="0.1" aria-label="${label}往後 0.1 秒">＋0.1</button></div>`;
 }
