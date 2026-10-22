@@ -1,6 +1,6 @@
 "use strict";
 /* 33 號設計（#257–#260）接力交接：第 3 步、第 5 步的「交接打包…」「匯入交接包…」，總覽的「匯入交接包…」與「清掉這集」。
- * 後端 /api/handoff/…（bookclub/server.py、handoff.py）。依賴 app.js 的 apiGet／apiPost／esc／render，fileio.js 的 clGB。
+ * 後端 /api/handoff/…（bookclub/server.py、handoff.py）。依賴 app.js 的 apiGet／apiPost／esc／render，fileio.js 的 clGB，ui.js 的 uiConfirm／uiAlert／uiToast。
  * 畫面一律寫「雲端空間」。 */
 
 const HO_HINT = {
@@ -99,31 +99,14 @@ async function hoAskClean(msg) {
   let plan;
   try { plan = await apiGet("/api/handoff/clean-plan"); } catch (e) { return; }
   if (!plan["合計"] || !plan["有交接包"]) return;
-  const ok = await hoDialog("交接包已存好",
-    [`交接包已存好。建議清掉這一集在 Ubuntu 裡的原片複本和暫存檔（約 ${hoSize(plan["合計"])}），之後匯入夥伴交回的包時，再選一次原片就好。判斷紀錄會留著。`],
-    "清掉（建議）", "先留著");
+  // 1022-1 起用工具自己的確認視窗（ui.js）；清掉是刪檔，danger
+  const ok = await uiConfirm({ title: "交接包已存好", danger: true, ok: "清掉（建議）", cancel: "先留著",
+    message: `交接包已存好。建議清掉這一集在 Ubuntu 裡的原片複本和暫存檔（約 ${hoSize(plan["合計"])}），之後匯入夥伴交回的包時，再選一次原片就好。判斷紀錄會留著。` });
   if (!ok) return;
   try {
     const r = await apiPost("/api/handoff/clean-copy", { "清單指紋": plan["清單指紋"] }, { quiet: true });
-    if (msg) msg.insertAdjacentHTML("beforeend", ` <span class="muted">已清掉，空出 ${esc(hoSize(r["省下位元組"]))}。</span>`);
+    uiToast(`已清掉，空出 ${hoSize(r["省下位元組"])}。`);
   } catch (e) { if (msg) msg.insertAdjacentHTML("beforeend", ` <span class="badge error">沒有清</span> ${esc(e.message)}`); }
-}
-
-// 兩顆按鈕的小視窗（回 true＝按了 yes）
-function hoDialog(title, lines, yes, no) {
-  return new Promise((resolve) => {
-    const dlg = document.createElement("dialog");
-    dlg.className = "rv-confirm";
-    dlg.setAttribute("aria-labelledby", "ho-dlg-title");
-    dlg.innerHTML = `<h2 id="ho-dlg-title">${esc(title)}</h2>${lines.map((x) => `<p>${esc(x)}</p>`).join("")}
-      <div class="rv-confirm-btns"><button class="ghost" id="ho-dlg-no">${esc(no)}</button><button class="primary" id="ho-dlg-yes">${esc(yes)}</button></div>`;
-    document.body.appendChild(dlg);
-    const done = (v) => { dlg.close(); dlg.remove(); resolve(v); };
-    dlg.addEventListener("cancel", (e) => { e.preventDefault(); done(false); });
-    dlg.querySelector("#ho-dlg-no").addEventListener("click", () => done(false));
-    dlg.querySelector("#ho-dlg-yes").addEventListener("click", () => done(true));
-    dlg.showModal();
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -329,13 +312,14 @@ function hoBindOverview(root, list) {
   root.querySelectorAll(".ho-clean").forEach((btn) => btn.addEventListener("click", async () => {
     const p = (list || []).find((x) => x["路徑"] === btn.dataset.path) || {};
     const h = p["交接"] || {};
-    const ok = await hoDialog("清掉這集？", [
-      `「${p["顯示名稱"] || p["名稱"] || ""}」已經交出去了。清掉之後，這台的整個工作資料夾${h["含原片複本"] ? "和複製進 Ubuntu 的原片" : ""}都會移除（約 ${hoSize(h["大小"])}）。`,
-      "請確認交接包已經上傳到雲端空間。要回頭看可以重新匯入。"], "清掉這集", "先留著");
+    const ok = await uiConfirm({ title: "清掉這集？", danger: true, ok: "清掉這集", cancel: "先留著",
+      message: `「${p["顯示名稱"] || p["名稱"] || ""}」已經交出去了。清掉之後，這台的整個工作資料夾${h["含原片複本"] ? "和複製進 Ubuntu 的原片" : ""}都會移除（約 ${hoSize(h["大小"])}）。\n請確認交接包已經上傳到雲端空間。要回頭看可以重新匯入。` });
     if (!ok) return;
     btn.disabled = true;
-    try { await apiPost("/api/handoff/clean-episode", { "路徑": btn.dataset.path }, { quiet: true }); }
-    catch (e) { btn.disabled = false; alert(e.message); return; }
+    let r;
+    try { r = await apiPost("/api/handoff/clean-episode", { "路徑": btn.dataset.path }, { quiet: true }); }
+    catch (e) { btn.disabled = false; await uiAlert({ title: "沒有清掉", message: e.message }); return; }
+    uiToast(`已清掉這集，空出 ${hoSize(r["省下位元組"])}。`);
     if (typeof render === "function") render();
   }));
 }

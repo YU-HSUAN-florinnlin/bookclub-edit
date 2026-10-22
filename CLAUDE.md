@@ -6,7 +6,7 @@
 ## 專案是什麼
 
 - 讀書會 Zoom 錄影的隱私處理工具：學員聲音換成匿名聲線、說出口的名字換成代號，老師維持原音（`bookclub/__init__.py`）。
-- 使用者是讀書會老師與協作夥伴，在本機網頁（`bookclub serve`，<http://localhost:8766>）照第 0～5 步操作。
+- 使用者是讀書會老師與協作夥伴，在本機網頁（`bookclub serve`，<http://localhost:8766>）照第 1～5 步操作（初始化設定在左下角「工具設定」選單，網址 `#step0`）。
 - 平台：macOS（Apple Silicon、Intel）與 Windows 的 WSL2 Ubuntu；維護者在 macOS 開發。Windows 上有不少功能還沒實機驗過（見 `docs/之後要做.md`）。
 
 ## 目錄地圖
@@ -90,6 +90,32 @@
 - 給使用者看的文字（網頁、README、終端機訊息）用白話，不用專有名詞；終端機與 `報告.md` 只印統計數字，不印逐字稿內容。
 - 不寫入 `/Users/<名字>/…` 這類絕對路徑，一律用 `~` 或相對於工具資料夾的路徑。
 - 不 commit、不 push，除非被明確要求。
+
+## 畫面元件名稱對照
+
+使用者用畫面上的叫法描述位置時，照這張表找程式。左欄是使用者會說的，中欄是通用元件名稱，右欄是程式位置（`bookclub/web/`）。
+
+| 使用者會說 | 通用名稱 | 程式位置 |
+|---|---|---|
+| 左邊的步驟列 | Sidebar | `index.html` `#sidebar`、`.steps`；步驟清單在 `app.js` 開頭 |
+| 步驟列左上的三條線 | Hamburger（收合鈕） | `#navToggle`、`app.js` `setNavCollapsed` |
+| 左下角齒輪「工具設定」 | 設定選單（往上展開） | `app.js` `TOOL_MENU`、`.sidebar-foot`；第 0 步「初始化設定」收在這裡 |
+| 步驟列上的影片資訊 | — | `#videoinfo` |
+| 「?」說明 | Popover（按了才出現） | `app.js` `helpTip`，class `.help-tip` |
+| 滑鼠移到按鈕上馬上出現的說明 | Tooltip | `ui.js`，按鈕加 `data-tip`；停用按鈕的原因、時間軸仍用原生 `title=` |
+| 第 3 步「設定」「快捷鍵」視窗 | Modal | `review.js` `<dialog class="rv-modal">`、`rvOpenModal` |
+| 「代號對照」右側面板 | Side panel／Drawer | `review.js` `#rv-side-codes`（`.rv-side`） |
+| 跳出來要按按鈕的視窗（確認、輸入、錯誤） | Modal | `ui.js` `uiConfirm`／`uiPrompt`／`uiAlert`（不再用瀏覽器內建框） |
+| 右下角幾秒後自己消失的通知 | Toast | `ui.js` `uiToast`（5 秒、最多 3 則） |
+| 畫面頂端紅色的存檔失敗／斷線提示 | Banner | `index.html` `#saveError`、`app.js` 同名處理 |
+| 第 3 步上方那排按鈕 | Toolbar | `review.js` `.rv-bar-btns` |
+| 第 3 步的時間軸 | Timeline／Scrubber | `review.js` `#rv-tl` |
+| 點一下會展開的「進階設定」「詳細」「其他做法」 | Accordion（`<details>`） | 各 `.js` 搜尋 `<details` |
+| 第 3、5 步的一張張卡片 | Card | `cards.js`（共用）、`review.js`、`finalcheck.js` |
+| 卡片上「改時間」「這段其實是老師」那排 | 卡片動作按鈕 | `cards.js` `cvToolBtnsHtml` |
+| 換頁時的「載入中…」 | Loading 文字（還不是 Skeleton） | 各頁 render 函式開頭 |
+
+工具目前只有電腦版，不做手機版介面。
 
 ## 相關文件
 

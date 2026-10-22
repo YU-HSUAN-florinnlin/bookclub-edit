@@ -61,6 +61,11 @@ def test_watched_only_counts_up_to_2x():
 def test_nav_toggle_exists():
     html = (WEB / "index.html").read_text(encoding="utf-8")
     assert 'id="navToggle"' in html
+    # 1022-1（#266）：三條線的圖示（內嵌 SVG），收合、展開都同一個，不再換成 « »
+    i = html.index('id="navToggle"')
+    assert "<svg" in html[i:i + 600] and "«" not in html and "»" not in html
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    assert '"»"' not in js and '"«"' not in js and 'b.setAttribute("aria-expanded"' in js
 
 
 
@@ -211,8 +216,9 @@ def test_keep_all_voices_needs_confirm():
     js = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
     block = js[js.index('querySelectorAll(".rv-voice-all")'):]
     block = block[:block.index("}));")]
-    assert "confirm(" in block and "位學員保留原聲、不換聲音" in block
-    assert block.index("confirm(") < block.index('apiPost("/api/review/voice"')
+    # 1022-1（#263）：改成工具自己的視窗 uiConfirm
+    assert "uiConfirm(" in block and "位學員保留原聲、不換聲音" in block
+    assert block.index("uiConfirm(") < block.index('apiPost("/api/review/voice"')
 
 
 def test_interface_1001():
@@ -366,6 +372,296 @@ def test_step4_whole_check_folded_by_default():
     assert json.loads(r.stdout) == ["開始前總檢查：一定要處理 8 列、請看一眼 24 處（預設先略過）",
                                     "開始前總檢查：一定要處理 0 列、請看一眼 0 處（都處理好了）",
                                     "開始前總檢查：沒有要處理、要看的", False]   # 沒有 localStorage（讀不到）＝收合
+
+
+def test_step0_moved_to_tool_menu():
+    """1022-1（#267）：第 0 步不列在步驟列，收進左下角齒輪「工具設定」選單（第 3 步那顆「設定」不改名）。"""
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    assert 'id="toolMenuBtn"' in html and "工具設定" in html and 'id="toolMenu"' in html and 'aria-haspopup="menu"' in html
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    assert 'id: "step0", num: 0, title: "初始化設定", real: true, who: "人工", nav: false' in js
+    assert 'STEP_DEFS.filter((s) => s.nav !== false)' in js
+    i = js.index("const TOOL_MENU = [")
+    assert 'route: "step0", label: "初始化設定"' in js[i:i + 300]
+    assert "<h1>0　初始化設定</h1>" not in js
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    assert 'id="rv-set-btn" aria-expanded="false">設定</button>' in rv
+
+
+def test_own_dialogs_replace_browser_boxes():
+    """1022-1（#263）：瀏覽器內建的 confirm／prompt 全部換成工具自己的視窗（ui.js），錯誤類的 alert 也換；
+    回報成功的 alert 在 1022-2（#264）改成 Toast（見 test_success_toasts）。"""
+    import re
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    assert html.index('src="ui.js"') < html.index('src="app.js"')   # 其他程式之前載入
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    for fn in ("function uiConfirm(", "function uiPrompt(", "function uiAlert(", "showModal()", '"cancel"'):
+        assert fn in ui, fn
+    assert ".innerHTML" not in ui and "textContent = line" in ui   # 文字一律 textContent，不拼 HTML
+    assert 'dlg.className = "rv-modal ui-dialog"' in ui and "document.body.appendChild(dlg)" in ui   # 掛在 body：第 3 步唯讀鎖不到
+    assert "o.danger && cancelBtn ? cancelBtn : okBtn" in ui   # 危險動作停在取消
+    others = {f: (WEB / f).read_text(encoding="utf-8") for f in ("app.js", "cards.js", "review.js", "finalcheck.js", "fileio.js")}
+    for f, js in others.items():
+        assert not re.search(r"(?<![\w.])confirm\(", js), f
+        assert not re.search(r"(?<![\w.])prompt\(", js), f
+        # 1022-2（#264）：回報成功的 alert 也改成浮動通知 uiToast，一個裸的 alert( 都不留
+        assert not re.search(r"(?<![\w.])alert\(", js), (f, re.findall(r"(?<![\w.])alert\((.{0,40})", js))
+    cards = others["cards.js"]
+    # 重念範圍改了：兩顆按鈕直接寫做法，關掉視窗＝保留
+    assert 'ok: "照新範圍重排", cancel: "保留我改的字"' in cards
+    # 第 3 步唯讀時視窗裡的按鈕不在 #content 裡，鎖不到（rvApplyReadonly 只鎖 .rv2 底下）
+    rv = others["review.js"]
+    assert 'root.querySelectorAll("#rv-right, #rv-lower, #rv-settings, #rv-io, .rv-bar-btns")' in rv
+
+
+
+def test_success_toasts():
+    """1022-2（#264）：成功／完成的訊息改成右下角浮動通知（ui.js uiToast），5 秒自己消失、滑上去暫停、最多 3 則；
+    要人接著動手的那一句（代號不夠、還有沒換到的）仍用要按「知道了」的視窗。"""
+    import re
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    assert "const UI_TOAST_MS = 5000;" in ui and "const UI_TOAST_MAX = 3;" in ui
+    for s in ('function uiToast(', 'uiToastEl.setAttribute("role", "status")', 'uiToastEl.setAttribute("aria-live", "polite")',
+              '"mouseenter"', '"mouseleave"', '"focusin"', '"focusout"', '"關閉通知"', "prefers-reduced-motion: reduce"):
+        assert s in ui, s
+    toast = ui[ui.index("function uiToast("):].split("/* 1022-2（#265）")[0]
+    assert ".focus(" not in toast and ".innerHTML" not in toast   # 不搶焦點、文字不拼 HTML
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    i = css.index(".ui-toasts {")
+    assert "right: 16px" in css[i:i + 200] and "bottom: 16px" in css[i:i + 200]   # 右下角，不擋左下角齒輪
+    cards = (WEB / "cards.js").read_text(encoding="utf-8")
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    assert len(re.findall(r"uiToast\(", cards + rv)) == 8   # 7 處成功通知＋1022-1 審查決定的「每位學員都已經是…了」
+    i = rv.index('apiPost("/api/codes/auto"')
+    block = rv[i:i + 700]
+    assert 'if (r["代號不夠"]) uiAlert(' in block and "剩下的請自己打一個" in block and "else uiToast(" in block
+    i = rv.index('apiPost("/api/codes/convert"')
+    block = rv[i:i + 700]
+    assert 'r["還剩"].length) uiAlert(' in block and "else uiToast(msg)" in block
+    # 錯誤一律還是視窗
+    assert 'uiAlert({ title: "沒有配成"' in rv and 'uiAlert({ title: "沒有換成"' in rv
+
+
+
+def test_button_tooltips():
+    """1022-2（#265）：重要按鈕的說明改成馬上出現的提示框（ui.js，按鈕加 data-tip），拿掉原本的 title；
+    停用時「為什麼不能按」、狀態標籤、時間軸、步驟列連結的 title 不動。"""
+    import re
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    for s in ("const UI_TIP_DELAY_MS = 150;", 'document.addEventListener("mouseover"', 'document.addEventListener("focusin"',
+              ':focus-visible', 'e.key !== "Tab"', 'setAttribute("role", "tooltip")', '"aria-describedby"', "uiTipEl.textContent = t.dataset.tip"):
+        assert s in ui, s
+    assert 'uiTipEl.classList.add("below")' in ui   # 上面放不下放下面
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    i = css.index(".ui-tip {")
+    assert "font-size: 15px" in css[i:i + 400] and "pointer-events: none" in css[i:i + 400]
+    web = {f: (WEB / f).read_text(encoding="utf-8") for f in ("app.js", "cards.js", "review.js", "finalcheck.js", "index.html")}
+    want = {
+        "cards.js": ['id="rv-isteacher" data-tip=', 'id="rv-retime" data-tip=', 'data-tip="抓錯了', 'id="rv-tai" data-tip=',
+                     'id="rv-del" data-tip=', 'data-tip="聽 ', 'data-te-now="${which}" data-tip='],
+        "review.js": ['id="rv-code-btn" aria-expanded="false" data-tip=', 'id="rv-export" data-tip=', 'data-tip="有建議、還沒確認',
+                      'id="rv-pass" data-tip=', 'data-tip="一位其實是兩個人'],
+        "finalcheck.js": ['id="fc-pass" data-tip='],
+        "app.js": ['data-fcplay="${rg[0]}|${rg[1]}" data-tip=', "b.dataset.tip = label;", 'b.setAttribute("aria-label", label)'],
+        "index.html": ['data-tip="收合步驟列" aria-label="收合步驟列"', 'data-tip="工具設定" aria-label="工具設定"'],
+    }
+    for f, keys in want.items():
+        for k in keys:
+            assert k in web[f], (f, k)
+    # 改了的按鈕不再同時有 title（兩個提示一起出現）
+    for f, js in web.items():
+        for m in re.finditer(r"<button[^>]*data-tip=[^>]*>", js):
+            assert " title=" not in m.group(0), (f, m.group(0)[:120])
+    assert "b.title =" not in web["app.js"]
+    # 刻意不動：停用時的原因、時間軸、狀態標籤
+    assert 'disabled title="${esc(fcFixOff(c, fcOld()))}"' in web["finalcheck.js"]
+    assert 'id="rv-tl" title="點一下或拖拉' in web["review.js"]
+    assert "btn.title = st.title;" in web["review.js"]   # 「開始 AI 修改」常常是停用的，原因留在 title
+
+
+
+_UI_FAKE_DOM = r"""
+const made = [];
+function mk(tag) {
+  const el = { tagName: String(tag).toUpperCase(), children: [], attrs: {}, ls: [], dataset: {}, style: {}, className: "", textContent: "",
+    nodeType: 1, open: false, hidden: false, isConnected: true, offsetWidth: 100, offsetHeight: 30,
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    getBoundingClientRect: () => ({ top: 300, bottom: 330, left: 300, right: 400, width: 100, height: 30 }),
+    closest(sel) { return sel === "[data-tip]" && this.dataset.tip ? this : null; }, matches: () => true, contains(k) { return k === this; },
+    addEventListener(t, f, cap) { this.ls.push({ t, f, cap: !!cap }); },
+    fire(t, ev) { ev = Object.assign({ type: t, defaultPrevented: false, stopped: false,
+        preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; } }, ev || {});
+      for (const l of this.ls.filter((x) => x.t === t)) l.f(ev); return ev; },
+    append(...k) { this.children.push(...k); }, appendChild(k) { this.children.push(k); k.parentNode = this; return k; },
+    setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; },
+    removeAttribute(k) { delete this.attrs[k]; }, remove() { this.removed = true; }, focus() {},
+    showModal() { this.open = true; }, close() { if (this.open) { this.open = false; this.fire("close"); } } };
+  made.push(el);
+  return el;
+}
+global.HTMLDialogElement = function () {};
+const docLs = [];
+global.__openDialogs = [];
+const body = { tagName: "BODY", appendChild(k) { k.parentNode = body; return k; }, contains: () => true };
+global.document = { createElement: mk, createDocumentFragment: () => mk("frag"), activeElement: null, body,
+  addEventListener(t, f) { docLs.push({ t, f }); }, getElementById: () => null,
+  querySelectorAll: (sel) => (sel === "dialog[open]" ? global.__openDialogs : []) };
+const docFire = (t, ev) => docLs.filter((l) => l.t === t).forEach((l) => l.f(Object.assign({ type: t }, ev)));
+global.window = { addEventListener() {}, matchMedia: () => ({ matches: false }), innerWidth: 1000, innerHeight: 800 };
+"""
+
+
+def test_review_fixes_1022_1():
+    """1022-1 審查修正：
+    1. 別的程式直接 dlg.close()（第 3 步「點背景關掉」）時，工具視窗照樣收尾，後面排隊的視窗出得來；第 3 步那段不再綁到工具視窗
+    2. 第 2 步 ←→ 切換候選：有視窗開著時不穿透
+    3. Enter 按住不放的連發不算（capture 階段擋掉）
+    4. README 不再寫「第 0 步」
+    5. 齒輪黏在側欄底部；側欄捲動時收起選單
+    6.「每位學員都已經是…了」改浮動通知"""
+    import shutil
+    import subprocess
+
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert 'dlg.addEventListener("close", () => close(dismissValue));' in ui   # 10-22 B9：預設 dismissValue＝cancelValue
+    assert 'document.querySelectorAll(".rv-modal:not(.ui-dialog)")' in rv and 'document.querySelectorAll(".rv-modal")' not in rv
+    i = app.index("// 第 2 步：← → 切換候選")
+    assert 'if (document.querySelector("dialog[open]")) return;' in app[i:i + 400]
+    readme = (WEB.parent.parent / "README.md").read_text(encoding="utf-8")
+    assert "（見「怎麼用」第 0 步）" not in readme
+    i = css.index(".sidebar-foot {")
+    assert "position: sticky; bottom: 0" in css[i:i + 250]
+    assert 'side.addEventListener("scroll"' in app
+    i = rv.index("每位學員都已經是")
+    assert "uiToast(" in rv[i - 80:i] and "uiAlert(" not in rv[i - 80:i]
+    node = shutil.which("node")
+    if not node:
+        return
+    script = _UI_FAKE_DOM + ui + """
+(async () => {
+  const dialogs = () => made.filter((e) => e.tagName === "DIALOG" && e.ls.length);   // 第一個是偵測有沒有 <dialog> 建的
+  const p1 = uiConfirm({ title: "一" });
+  const d1 = dialogs()[0];
+  d1.close();                       // 像第 3 步點背景：原生關掉，沒經過 ui.js 的按鈕
+  const r1 = await p1;
+  const p2 = uiConfirm({ title: "二" });
+  await Promise.resolve();
+  const d2 = dialogs()[1];
+  const opened2 = !!(d2 && d2.open);
+  const rep = d2.ls.filter((l) => l.t === "keydown" && l.cap);
+  const ev = { key: "Enter", repeat: true, defaultPrevented: false, stopped: false,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; } };
+  rep.forEach((l) => l.f(ev));
+  const ev2 = { key: "Enter", repeat: false, defaultPrevented: false, stopped: false,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; } };
+  rep.forEach((l) => l.f(ev2));
+  d2.close();
+  const r2 = await p2;
+  console.log(JSON.stringify({ r1, opened2, r2, repBlocked: ev.defaultPrevented && ev.stopped, firstPass: !ev2.defaultPrevented }));
+})();
+"""
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    import json
+
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got == {"r1": False, "opened2": True, "r2": False, "repBlocked": True, "firstPass": True}, got
+
+
+
+def test_range_dialog_close_reverts_1022():
+    """10-22 宇軒測 B9：「重念範圍改了」視窗按 ✕／Esc＝範圍不改、回到原本的時間；兩顆按鈕才是「重排／保留我改的字」。
+    uiConfirm 加 dismiss 選項：✕、Esc、被關掉時回 dismiss 的值，跟按取消鈕（false）分開；沒給時照舊回 false"""
+    import shutil
+    import subprocess
+
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    cards = (WEB / "cards.js").read_text(encoding="utf-8")
+    i = cards.index("async function rvSaveRange(")
+    seg = cards[i:i + 1200]
+    assert 'dismiss: null' in seg and "if (redo === null) { await cvReload(); return; }" in seg
+    assert seg.index("redo === null") < seg.index('cvPost("/api/review/name"')   # 關掉視窗時不送出新範圍
+    node = shutil.which("node")
+    if not node:
+        return
+    script = _UI_FAKE_DOM + ui + """
+(async () => {
+  const dialogs = () => made.filter((e) => e.tagName === "DIALOG" && e.ls.length);
+  const p1 = uiConfirm({ title: "一", dismiss: null });
+  dialogs()[0].close();
+  const r1 = await p1;
+  const p2 = uiConfirm({ title: "二" });
+  await Promise.resolve();
+  dialogs()[1].close();
+  const r2 = await p2;
+  console.log(JSON.stringify({ r1, r2 }));
+})();
+"""
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    import json
+
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got == {"r1": None, "r2": False}, got
+
+
+def test_review_fixes_1022_2():
+    """1022-2 審查修正：
+    1. 有視窗（showModal，最上層）開著時，浮動通知搬進那個視窗，不被蓋住；視窗關了搬回 <body>
+    2. 卡片重畫後提示框對的按鈕不在畫面上了 → 收起；按任何鍵（Tab 除外）都收起
+    3. 齒輪黏底蓋到側欄最底
+    4. .gitignore 擋 mp4 與「假工作區/」
+    5. 頁面載入就建好通知容器（live region）
+    6. 觸控的事記在 docs/之後要做.md"""
+    import json
+    import shutil
+    import subprocess
+
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    root = WEB.parent.parent
+    assert 'attributeFilter: ["open"]' in ui and "if (document.body) uiToastBox();" in ui
+    i = css.index(".sidebar-foot {")
+    assert "margin-bottom: -16px; padding-bottom: 16px;" in css[i:i + 300]
+    gi = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "*.mp4" in gi and "假工作區/" in gi
+    assert "觸控螢幕上的按鈕說明" in (root / "docs" / "之後要做.md").read_text(encoding="utf-8")
+    node = shutil.which("node")
+    if not node:
+        return
+    script = _UI_FAKE_DOM + ui + """
+const out = {};
+out.boxAtLoad = !!uiToastEl && uiToastEl.parentNode === body && uiToastEl.attrs["aria-live"] === "polite";
+const dlg = mk("dialog"); dlg.open = true; __openDialogs = [dlg];
+uiToast("在視窗裡");
+out.inDialog = uiToastEl.parentNode === dlg;
+__openDialogs = []; uiToastBox();      // 視窗關掉（MutationObserver 會叫 uiToastBox）
+out.backToBody = uiToastEl.parentNode === body;
+const b1 = mk("button"); b1.dataset.tip = "上一張卡";
+uiTipShow(b1);
+out.shown = uiTipEl.hidden === false && uiTipEl.textContent === "上一張卡";
+docFire("keydown", { key: "Tab" });
+out.tabKeeps = uiTipEl.hidden === false;
+b1.isConnected = false;                  // 卡片重畫，按鈕不在了
+const other = mk("button"); other.dataset.tip = "別顆";
+docFire("mouseover", { target: other });   // 滑到新卡的另一顆按鈕：還沒到 0.15 秒，舊的提示框要先收
+out.staleMouse = uiTipEl.hidden === true;
+const b2 = mk("button"); b2.dataset.tip = "這張卡";
+uiTipShow(b2);
+docFire("keydown", { key: "Enter" });   // Enter 通過、快捷鍵換卡
+out.keyHides = uiTipEl.hidden === true && !("aria-describedby" in b2.attrs);
+const b3 = mk("button"); b3.dataset.tip = "孤兒"; b3.isConnected = false;
+uiTipShow(b3);
+out.noShowDetached = uiTipEl.hidden === true;
+console.log(JSON.stringify(out));
+"""
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+    assert all(got.values()) and len(got) == 8, got
 
 
 if __name__ == "__main__":

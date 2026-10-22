@@ -86,14 +86,14 @@ function cvPlayRange(a, b) { const [x, y] = cvPadRange(a, b); cvPlay(x, y); }
 // step5：第 5 步的字（10-15：學員段落的「這段其實是老師」寫成「裡面有老師的聲音」；這一段先做成整段改回老師原聲，
 // 選哪幾個字是老師的（#226）之後做）
 function cvToolBtnsHtml(it, step5 = false) {
-  const teacher = step5 ? `<button class="ghost" id="rv-isteacher" title="這一段改回老師的原聲，不重念（整段）">裡面有老師的聲音</button>`
-    : `<button class="ghost" id="rv-isteacher" title="聲音辨識判錯：這一段其實是老師在講話">這段其實是老師</button>`;
+  const teacher = step5 ? `<button class="ghost" id="rv-isteacher" data-tip="這一段改回老師的原聲，不重念（整段）">裡面有老師的聲音</button>`
+    : `<button class="ghost" id="rv-isteacher" data-tip="聲音辨識判錯：這一段其實是老師在講話">這段其實是老師</button>`;
   return [
-    RV_ITEM_KIND[it["類型"]] ? `<button class="ghost" id="rv-retime" title="用「新增修改」面板改這一筆的起點終點">改時間</button>` : "",
-    it["類型"] === "名字" ? `<button class="${rvNotName(it) ? "primary" : "ghost"}" id="rv-notname" aria-pressed="${rvNotName(it)}" title="抓錯了，這裡其實沒有人名：照原音不改，這個寫法以後也不會再抓（已選的再按一次取消）">${rvNotName(it) ? "✓ " : ""}${it["老師整段"] ? "不用改，保留老師原聲" : "不是名字，不用改"}</button>` : "",
+    RV_ITEM_KIND[it["類型"]] ? `<button class="ghost" id="rv-retime" data-tip="用「新增修改」面板改這一筆的起點終點">改時間</button>` : "",
+    it["類型"] === "名字" ? `<button class="${rvNotName(it) ? "primary" : "ghost"}" id="rv-notname" aria-pressed="${rvNotName(it)}" data-tip="抓錯了，這裡其實沒有人名：照原音不改，這個寫法以後也不會再抓（已選的再按一次取消）">${rvNotName(it) ? "✓ " : ""}${it["老師整段"] ? "不用改，保留老師原聲" : "不是名字，不用改"}</button>` : "",
     it["類型"] === "學員段落" ? teacher : "",
-    it["類型"] === "改成老師" ? `<button class="ghost" id="rv-tai" title="這一段照打的字老師重念（用老師的 AI 聲音，例如裡面有名字）">改成老師重念</button>` : "",
-    it["可以刪"] ? `<button class="ghost" id="rv-del" title="人工新增的加錯了：整筆刪掉（會留一筆紀錄，在「設定」看得到）">刪掉這一筆</button>` : "",
+    it["類型"] === "改成老師" ? `<button class="ghost" id="rv-tai" data-tip="這一段照打的字老師重念（用老師的 AI 聲音，例如裡面有名字）">改成老師重念</button>` : "",
+    it["可以刪"] ? `<button class="ghost" id="rv-del" data-tip="人工新增的加錯了：整筆刪掉（會留一筆紀錄，在「設定」看得到）">刪掉這一筆</button>` : "",
   ].join("\n        ");
 }
 
@@ -124,13 +124,14 @@ function cvBindTools(it) {
     // 10-15：第 5 步的按鈕叫「改」（不是「改做法」）；整段改回老師原聲，選字（#226）之後做
     // 10-15 要修改合併（1015-4）：第 5 步這顆在「要修改」→「其他」裡，切開也在同一塊
     const where = cv.ctx.mode === "第5步" ? "改按「從游標處切開」" : "先按「改做法」→「從游標處切開」";
-    if (!confirm(`把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 這一段改成老師？\n改了之後這段不會重念，也會補找這段裡老師提到的名字。\n只有一部分是老師的話，${where}。`)) return;
+    if (!(await uiConfirm({ title: `把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 這一段改成老師？`, danger: true, ok: "整段改成老師", cancel: "先不要",
+      message: `改了之後這段不會重念，也會補找這段裡老師提到的名字。\n只有一部分是老師的話，${where}。` }))) return;
     cvNoteUndo({ kind: "teacher", ...cvTurnSnap(it) });
     await cvToTeacher(it);
   });
   const uncut = document.getElementById("rv-uncut");   // 10-01 2-4：「通過＝剪掉」產生的剪掉片段，在原本那一段取消
   if (uncut) uncut.addEventListener("click", async () => {
-    if (!confirm("取消剪掉：這一段的聲音和畫面留著，改成學員重念？")) return;
+    if (!(await uiConfirm({ title: "取消剪掉？", message: "這一段的聲音和畫面留著，改成學員重念。", ok: "不剪了，改成學員重念", cancel: "照舊剪掉" }))) return;
     await cvPost("/api/review/cut", { id: it["剪掉的片段"], "狀態": "還原" });
     await cvPost("/api/turns/save", { id: it.id, "短句保留": true });
     await cvReload();
@@ -145,8 +146,8 @@ function cvBindTools(it) {
   });
   const tai = document.getElementById("rv-tai");   // 10-01 2-3：改成老師的段落 → 老師 AI 重念
   if (tai) tai.addEventListener("click", async () => {
-    if (!confirm(`${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 這一段改成老師重念（用老師的 AI 聲音）？新增後在那一筆卡片上確認要念的字。`)) return;
-    try { await cvPost("/api/review/manual", { "類型": "學員發言", start: it.start, end: it.end, "說話者": "老師" }); } catch (err) { alert(err.message); return; }
+    if (!(await uiConfirm({ title: `${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 這一段改成老師重念？`, message: "用老師的 AI 聲音重念。新增後在那一筆卡片上確認要念的字。", ok: "改成老師重念", cancel: "先不要" }))) return;
+    try { await cvPost("/api/review/manual", { "類型": "學員發言", start: it.start, end: it.end, "說話者": "老師" }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
     await cvReload();
   });
   const del = document.getElementById("rv-del");
@@ -158,10 +159,10 @@ function cvBindTools(it) {
 async function cvToTeacher(it) {
   await rvSaveTurnText(it);
   const res = await cvPost("/api/turns/save", { id: it.id, "說話者": "老師" });
-  if (res["補找到的老師名字"]) alert(`這段裡補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
+  if (res["補找到的老師名字"]) uiToast(`這段裡補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
   await cvReload();
   if (res["改成老師重念"]) {   // 09-30：沒有逐字稿句子的段落，沒辦法自動找名字 → 改成一筆「老師這一段用 AI 聲音重念」
-    alert("這一段沒有逐字稿句子，沒辦法自動找名字：已經改成「老師這一段用 AI 聲音重念」，請確認要念的字。\n不用重念的話，按「不用改，保留老師原聲」。");
+    uiAlert({ title: "請確認要念的字", message: "這一段沒有逐字稿句子，沒辦法自動找名字：已經改成「老師這一段用 AI 聲音重念」，請確認要念的字。\n不用重念的話，按「不用改，保留老師原聲」。" });
     const key = `名字:${res["改成老師重念"]}`;
     if (cvItem(key)) cvSelect(key, { seek: false });
   }
@@ -339,7 +340,7 @@ function rvPlayOnlyHtml(it) {
   const w = it["整句"];
   if (it["類型"] === "名字" && (!w || it["老師整段"] || (cv.ctx && cv.ctx.mode === "第5步"))) return "";
   const [s0, e0] = it["類型"] === "名字" ? [Number(w.start), Number(w.end)] : [a, b];
-  return ` <button class="ghost small" id="rv-playonly" data-s="${s0}" data-e="${e0}" title="聽 ${esc(rvFmt(s0, 1))}–${esc(rvFmt(e0, 1))}（開了「前後多聽 2 秒」就前後各多 2 秒）">聽這一段</button>${cvPadHtml("rv-pad")}`;
+  return ` <button class="ghost small" id="rv-playonly" data-s="${s0}" data-e="${e0}" data-tip="聽 ${esc(rvFmt(s0, 1))}–${esc(rvFmt(e0, 1))}（開了「前後多聽 2 秒」就前後各多 2 秒）">聽這一段</button>${cvPadHtml("rv-pad")}`;
 }
 
 // 10-02 第六批：老師重念範圍開頭或結尾有一段沒有人講話：提醒＋「照建議縮小」（不自動改；改了這一句要重新生成）
@@ -353,8 +354,8 @@ function rvEdgeHtml(it) {
 
 async function rvShrink(it) {
   const h = it["前後沒聲音"];
-  if (!confirm(`把重念範圍改成 ${rvFmt(h["建議"][0], 1)}–${rvFmt(h["建議"][1], 1)}？\n這一句之後要重新生成。`)) return;
-  try { await cvPost("/api/review/shrink", { "鍵": h["鍵"] }); } catch (err) { alert(err.message); return; }
+  if (!(await uiConfirm({ title: `把重念範圍改成 ${rvFmt(h["建議"][0], 1)}–${rvFmt(h["建議"][1], 1)}？`, message: "這一句之後要重新生成。", ok: "照建議縮小", cancel: "先不要" }))) return;
+  try { await cvPost("/api/review/shrink", { "鍵": h["鍵"] }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
   await cvReload();
 }
 
@@ -408,10 +409,16 @@ function rvRangeHtml(it) {   // 10-01 宇軒 7-1：名字的重念範圍（可�
 
 async function rvSaveRange(it, a, b) {
   const w = it["整句"];
-  if (b - a < 0.3) { alert("重念範圍的結束要晚於開始"); return; }
+  if (b - a < 0.3) { uiAlert({ title: "時間不對", message: "重念範圍的結束要晚於開始" }); return; }
   const body = { id: it.id, "整句起訖": [a, b] };
-  if (w["改稿"] && confirm("重念範圍改了。要念的句子要不要照新範圍的逐字稿重排？\n按「確定」重排（你改過的字會被蓋掉）；按「取消」保留你改的字。")) body["改稿"] = "";
-  try { await cvPost("/api/review/name", body); } catch (err) { alert(err.message); return; }
+  // 1022-1（#263）：兩顆按鈕直接寫做法。10-22 宇軒 B9：關掉視窗（✕、Esc）＝範圍也不改，回到原本的時間
+  if (w["改稿"]) {
+    const redo = await uiConfirm({ title: "重念範圍改了", ok: "照新範圍重排", cancel: "保留我改的字", dismiss: null,
+      message: "要念的句子要不要照新範圍的逐字稿重排？\n• 照新範圍重排：你改過的字會被蓋掉。\n• 保留我改的字：要念的句子不動。\n• 按右上角 ✕：範圍不改，回到原本的時間範圍。" });
+    if (redo === null) { await cvReload(); return; }
+    if (redo) body["改稿"] = "";
+  }
+  try { await cvPost("/api/review/name", body); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
   await cvReload();
 }
 
@@ -451,7 +458,7 @@ function rvOutQHtml(it, q, i) {
 
 async function rvAnswerOutside(it, q, v) {
   try { await cvPost("/api/review/outside", { "鍵": q["鍵"], start: q.start, end: q.end, "答案": v || null }); }
-  catch (err) { alert(err.message); return false; }
+  catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return false; }
   await cvReload();
   if (v === "老師重念") cvPrefill("學員發言", q.start, q.end, "老師", "下面的起訖已經填好、說話的人選了老師：聽過沒問題按「新增」，這幾秒就會用老師的聲音重念");
   if (v === "好幾個人") cvPrefill("學員發言", q.start, q.end, it["說話者"], "把起點或終點縮到只有一個人講話的那一段，選是誰說的，再按「新增」；剩下的幾秒會再問一次");
@@ -692,7 +699,7 @@ function rvAlsoHtml(it) {
 
 function rvBindAlso(it) {
   document.querySelectorAll(".rv-alsopick").forEach((b) => b.addEventListener("click", async () => {
-    try { await cvPost("/api/review/name", { id: it.id, "選的人": b.dataset.who || "" }); } catch (err) { alert(err.message); return; }
+    try { await cvPost("/api/review/name", { id: it.id, "選的人": b.dataset.who || "" }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
     await cvReload();
   }));
 }
@@ -793,7 +800,8 @@ function rvBindMore(it) {
   const cutThis = document.getElementById("rv-cutthis");   // 09-29 宇軒：改做法裡直接刪掉這一段
   if (cutThis) cutThis.addEventListener("click", async () => {
     const [a, b] = rvCutRange(it);
-    if (!confirm(`剪掉 ${rvFmt(a, 1)}–${rvFmt(b, 1)}？聲音和畫面都拿掉（影片會變短），這段就不用生成。\n只想拿掉聲音、畫面留著：用「新增修改」→ 消音。\n之後不剪了：在清單找這筆「剪掉片段」按「還原」。`)) return;
+    if (!(await uiConfirm({ title: `剪掉 ${rvFmt(a, 1)}–${rvFmt(b, 1)}？`, danger: true, ok: "剪掉這段", cancel: "先不要",
+      message: "聲音和畫面都拿掉（影片會變短），這段就不用生成。\n只想拿掉聲音、畫面留著：用「新增修改」→ 消音。\n之後不剪了：在清單找這筆「剪掉片段」按「還原」。" }))) return;
     await cvPost("/api/review/cut", { start: a, end: b, "備註": `從「${it["類型"]}」這一筆刪除` });
     await cvReload();
   });
@@ -816,26 +824,26 @@ function rvBindMore(it) {
     q("rv-merge").addEventListener("click", async () => {
       await rvSaveTurnText(it);
       const before = rvOutKeys();
-      try { await cvPost("/api/turns/merge", { id: it.id }); } catch (err) { alert(err.message); return; }
+      try { await cvPost("/api/turns/merge", { id: it.id }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
       await cvReload();
       cvAskOutside(before);
     });
     q("rv-split").addEventListener("mousedown", (e) => e.preventDefault());
     q("rv-split").addEventListener("click", async () => {
       const ta = q("rv-text");
-      if (!ta) { alert("這段落在剪掉的片段裡，不用切開"); return; }   // 10-16 #225：剪掉的卡沒有輸入框
+      if (!ta) { uiAlert({ title: "不用切開", message: "這段落在剪掉的片段裡，不用切開" }); return; }   // 10-16 #225：剪掉的卡沒有輸入框
       const at = ta.selectionStart;
-      if (!at || at >= ta.value.length) { alert("先在逐字稿裡把游標放在要切開的地方（換人的第一個字前面）"); return; }
+      if (!at || at >= ta.value.length) { uiAlert({ title: "先放好游標", message: "先在逐字稿裡把游標放在要切開的地方（換人的第一個字前面）" }); return; }
       const snap = cvTurnSnap(it);
       await rvSaveTurnText(it);
       const before = rvOutKeys();
       let sp;
-      try { sp = await cvPost("/api/turns/split", { id: it.id, at }); } catch (err) { alert(err.message); return; }
+      try { sp = await cvPost("/api/turns/split", { id: it.id, at }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
       cvNoteUndo({ kind: "split", ...snap, made: (sp && sp["新段落"]) || [] });
       await cvReload();
       cvAskOutside(before);
       if (sp && String(sp["切在"] || "").startsWith("一句話裡面")) {   // 09-30：切在一句話裡面，切點是照逐字稿每個字的時間找的
-        alert(`切在${sp["切在"]}：切點 ${rvFmt(sp["切點"], 1)}。\n前後兩段請各聽一下開頭結尾，不準的話用「改時間」調整。後面那一段如果是老師講的，${cv.ctx.mode === "第5步" ? "到那一段按「整段改成老師」" : "按「這段其實是老師」"}。`);
+        uiAlert({ title: "切好了，請聽一下前後", message: `切在${sp["切在"]}：切點 ${rvFmt(sp["切點"], 1)}。\n前後兩段請各聽一下開頭結尾，不準的話用「改時間」調整。後面那一段如果是老師講的，${cv.ctx.mode === "第5步" ? "到那一段按「整段改成老師」" : "按「這段其實是老師」"}。` });
       }
     });
     q("rv-ask").addEventListener("change", async (e) => {
@@ -865,13 +873,13 @@ function rvBindMore(it) {
       const cur = { 0: g.start, 1: g.end };
       rvBindTimeRows("gs", (k) => cur[k], async (k, t) => {
         cur[k] = t;
-        if (cur[1] - cur[0] < 0.1) { alert("結束要晚於開始"); return; }
+        if (cur[1] - cur[0] < 0.1) { uiAlert({ title: "時間不對", message: "結束要晚於開始" }); return; }
         await rvSaveOverlap(it, { "學員起訖": [cur[0], cur[1]] });
         await cvReload();
       });
       q("rv-genplay")?.addEventListener("click", () => { cvPlayRange(g.start, g.end); });
       q("rv-genreset")?.addEventListener("click", async () => {
-        if (!confirm("會換掉的範圍回到預設（學員那一整句）？")) return;
+        if (!(await uiConfirm({ title: "回到預設範圍？", message: "會換掉的範圍回到預設（學員那一整句）。", ok: "回到預設範圍", cancel: "先不要" }))) return;
         await rvSaveOverlap(it, { "回到預設範圍": true });
         await cvReload();
       });
@@ -888,7 +896,7 @@ function rvBindMore(it) {
       rvBindTimeRows("sd", get, async (k, t) => {
         const [key, i] = k.split(":");
         const pair = [...it[key]]; pair[Number(i)] = t;
-        if (pair[1] - pair[0] < 0.1) { alert("結束要晚於開始"); return; }
+        if (pair[1] - pair[0] < 0.1) { uiAlert({ title: "時間不對", message: "結束要晚於開始" }); return; }
         await rvSaveOverlap(it, { [key]: pair });
         it[key] = pair;
         q("rv-sidesbox").innerHTML = rvSidesHtml(it);
@@ -942,7 +950,7 @@ async function rvSaveOverlap(it, fields) {
     const res = await cvPost("/api/review/overlap", { id: it.id, ...fields });
     Object.assign(it, res["決定"]);
     cvRefreshSug();
-  } catch (err) { alert(err.message); }
+  } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); }
 }
 
 // 10-01 第三批：人工新增的（剪掉、消音、漏抓的重疊、漏抓的名字、老師這一段 AI 重念）加錯了可以刪；刪掉的留一筆紀錄
@@ -954,8 +962,9 @@ function rvDeleteName(it) {
 }
 
 async function rvDeleteManual(it) {
-  if (!confirm(`刪掉這一筆人工新增的「${rvDeleteName(it)}」？\n刪掉之後清單裡不會再有它，成品也不會照它處理；會留一筆紀錄（在「設定」→「刪掉的紀錄」看得到），但不能救回，要的話重新新增。`)) return;
-  try { await cvPost("/api/review/delete", { "類型": it["類型"], id: it.id }); } catch (err) { alert(err.message); return; }
+  if (!(await uiConfirm({ title: `刪掉這一筆人工新增的「${rvDeleteName(it)}」？`, danger: true, ok: "刪掉這一筆", cancel: "先不要",
+    message: "刪掉之後清單裡不會再有它，成品也不會照它處理；會留一筆紀錄（在「設定」→「刪掉的紀錄」看得到），但不能救回，要的話重新新增。" }))) return;
+  try { await cvPost("/api/review/delete", { "類型": it["類型"], id: it.id }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
   await cvReload();
 }
 
@@ -986,7 +995,7 @@ function teTimeRow(ctx, which, label) {
   const t = ctx.st[which];
   return `<div class="rv-edrow"><span class="rv-edlab">${label}</span>
       <input class="rv-t" data-te-t="${which}" value="${t != null ? esc(rvFmt(t, 2)) : ""}" placeholder="43:15.2" aria-label="${label}（例如 43:15.2）">
-      ${ctx.o.now ? `<button class="ghost small" data-te-now="${which}" title="${which === "a" ? "快捷鍵 I" : "快捷鍵 O"}">${esc(ctx.o.nowLabel || "用目前播放位置")}</button>` : ""}
+      ${ctx.o.now ? `<button class="ghost small" data-te-now="${which}" data-tip="${which === "a" ? "快捷鍵 I" : "快捷鍵 O"}">${esc(ctx.o.nowLabel || "用目前播放位置")}</button>` : ""}
       <button class="ghost small" data-te-nudge="${which}" data-d="-0.1" aria-label="${label}往前 0.1 秒">−0.1</button>
       <button class="ghost small" data-te-nudge="${which}" data-d="0.1" aria-label="${label}往後 0.1 秒">＋0.1</button></div>`;
 }

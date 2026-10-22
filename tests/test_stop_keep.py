@@ -187,7 +187,7 @@ def test_web_pure_functions():
     fcj = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     assert 'id="rv-confirm-main"' in rv and '<details class="rv-confirm-more"><summary>詳細</summary>' in rv
     assert "略過或照建議通過的項目，第 5 步都可以再檢查。要開始 AI 修改嗎？" in rv
-    assert "confirm(`切換到「" in app                                     # 切換專案前先說要切去哪一個
+    assert "uiConfirm({ title: `切換到「" in app                          # 切換專案前先說要切去哪一個（1022-1 #263：工具自己的視窗）
     # 10-15 第5步2.0 第2段：第 4 步上次沒做完改成頂端一句「上次重做沒做完：按『重做這幾張』繼續」（fcStatusLine）；沒有成品時一句話＋連結
     assert "上次重做沒做完" in _fn(fcj, "fcStatusLine") and "還沒有成品，請先到" in _fn(fcj, "renderFinal")
     if not NODE:

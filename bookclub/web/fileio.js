@@ -119,7 +119,7 @@ function pkBind(box) {
     await pkRefresh();
   }));
   box.querySelectorAll(".pk-clear").forEach((b) => b.addEventListener("click", async () => {
-    if (!confirm(`拿掉這個專案的${b.dataset.p}？（只是不用它，影片檔本身不會刪）`)) return;
+    if (!(await uiConfirm({ title: `拿掉這個專案的${b.dataset.p}？`, message: "只是這個專案不用它，影片檔本身不會刪。", ok: "拿掉", cancel: "留著" }))) return;
     await apiPost("/api/extras/clear", { "用途": b.dataset.p });
     await pkRefresh();
   }));
@@ -174,7 +174,7 @@ async function pkPick(purpose, target, btn) {
   } catch (e) {
     clearTimeout(later);
     btn.disabled = false; btn.textContent = old;
-    alert(e.message);
+    uiAlert({ title: "沒有選到", message: e.message });
     return;
   }
   clearTimeout(later);
@@ -189,7 +189,7 @@ async function pkPick(purpose, target, btn) {
 async function pickBrowsed(path) {
   try {
     await apiPost("/api/pick/browsed", { ...pkFallbackFor, "路徑": path }, { quiet: true });
-  } catch (e) { alert(e.message); return; }
+  } catch (e) { uiAlert({ title: "沒有選到", message: e.message }); return; }
   const fb = document.getElementById("pkFallback");
   if (fb) fb.hidden = true;   // 選好了就收起來（要再選就再按一次按鈕）
   await pkRefresh();
@@ -268,7 +268,7 @@ async function fileOutInit(el) {
     try {
       const r = await apiPost("/api/final/to_windows", {}, { quiet: true });
       if (r && r["要確認"]) {   // 10-13 bug 二：上次輸出的是重做前的版本，先問一次
-        if (!confirm(foStaleAsk(r["說明"], r["版本"]))) { win.disabled = false; return; }   // 10-15 第3段審查修正：拿的不是最新版也先問
+        if (!(await uiConfirm({ title: "要複製這一版嗎？", message: foStaleAsk(r["說明"], r["版本"]), ok: "複製這一版", cancel: "先不要" }))) { win.disabled = false; return; }   // 10-15 第3段審查修正：拿的不是最新版也先問
         await apiPost("/api/final/to_windows", { confirm: true }, { quiet: true });
       }
     }
