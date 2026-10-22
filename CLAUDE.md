@@ -98,13 +98,15 @@
 | 使用者會說 | 通用名稱 | 程式位置 |
 |---|---|---|
 | 左邊的步驟列 | Sidebar | `index.html` `#sidebar`、`.steps`；步驟清單在 `app.js` 開頭 |
-| 步驟列上收合的按鈕 | 收合鈕（目前是「«」「»」） | `#navToggle`、`app.js` `setNavCollapsed` |
+| 步驟列左上的三條線 | Hamburger（收合鈕） | `#navToggle`、`app.js` `setNavCollapsed` |
+| 左下角齒輪「工具設定」 | 設定選單（往上展開） | `app.js` `TOOL_MENU`、`.sidebar-foot`；第 0 步「初始化設定」收在這裡 |
 | 步驟列上的影片資訊 | — | `#videoinfo` |
 | 「?」說明 | Popover（按了才出現） | `app.js` `helpTip`，class `.help-tip` |
-| 滑鼠停在按鈕上出現的小字 | Tooltip（瀏覽器原生） | 各按鈕的 `title=` |
+| 滑鼠移到按鈕上馬上出現的說明 | Tooltip | `ui.js`，按鈕加 `data-tip`；停用按鈕的原因、時間軸仍用原生 `title=` |
 | 第 3 步「設定」「快捷鍵」視窗 | Modal | `review.js` `<dialog class="rv-modal">`、`rvOpenModal` |
 | 「代號對照」右側面板 | Side panel／Drawer | `review.js` `#rv-side-codes`（`.rv-side`） |
-| 瀏覽器跳出來要按確定的框 | 原生 alert／confirm／prompt | 散在各 `.js`，搜尋 `alert(`、`confirm(` |
+| 跳出來要按按鈕的視窗（確認、輸入、錯誤） | Modal | `ui.js` `uiConfirm`／`uiPrompt`／`uiAlert`（不再用瀏覽器內建框） |
+| 右下角幾秒後自己消失的通知 | Toast | `ui.js` `uiToast`（5 秒、最多 3 則） |
 | 畫面頂端紅色的存檔失敗／斷線提示 | Banner | `index.html` `#saveError`、`app.js` 同名處理 |
 | 第 3 步上方那排按鈕 | Toolbar | `review.js` `.rv-bar-btns` |
 | 第 3 步的時間軸 | Timeline／Scrubber | `review.js` `#rv-tl` |
