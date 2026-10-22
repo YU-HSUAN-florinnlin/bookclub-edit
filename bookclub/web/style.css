@@ -11,6 +11,7 @@
   --bg-soft: #f5f5f5;
   --page-bg: #f5f5f5;      /* 整頁底色 */
   --card-bg: #fff;         /* 步驟列、卡片、第 3 步各區塊 */
+  --card-ring: 0 0 0 0 transparent;   /* 第 3、5 步卡片外框（淺色不需要，深色加一圈，10-22 宇軒 A8） */
   --surface-soft: #fafafa; /* 「還沒到這一步」這類淡底框 */
   --hover-bg: #f5f5f5;     /* 滑過的淡底 */
   --accent: #2a6f2a;
@@ -93,7 +94,8 @@
     --bg: #1c1c1c;
     --bg-soft: #262626;
     --page-bg: #161616;
-    --card-bg: #242424;
+    --card-bg: #2a2a2a;   /* 10-22 宇軒 A8：原本 #242424 跟整頁底色太接近，看不出是卡片 */
+    --card-ring: 0 0 0 1px #555;
     --surface-soft: #202020;
     --hover-bg: #333;
     --accent: #6fcf6f;
@@ -522,7 +524,7 @@ tr.t-hide { display:none; }
 .rv-progress .bar { flex: 0 1 180px; height: 6px; border-radius: 3px; background: var(--rv-line); overflow: hidden; }
 .rv-progress .bar i { display: block; height: 100%; background: var(--rv-stu); }
 .rv-bar-btns { display: flex; gap: 8px; flex-wrap: wrap; }
-.rv-drawer { background: var(--rv-card); border-radius: 12px; padding: 14px 20px; margin-bottom: 14px; }
+.rv-drawer { background: var(--rv-card); border-radius: 12px; padding: 14px 20px; margin-bottom: 14px; box-shadow: var(--card-ring); }
 .rv-drawer h3 { font-size: 15px; margin: 6px 0; }
 .rv-drawer section + section { margin-top: 14px; }
 .rv-keylist { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 0; font-size: 15px; }
@@ -557,7 +559,7 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 /* 上半部 */
 .rv-upper { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(330px, 1fr); gap: 28px; align-items: start; }
 .rv-left video, .rv-novideo { width: 100%; aspect-ratio: 16 / 9; max-height: 52vh; background: #000; border-radius: 10px; display: block; }
-.rv-novideo { background: var(--rv-card); color: var(--muted); padding: 24px; aspect-ratio: auto; }
+.rv-novideo { background: var(--rv-card); color: var(--muted); padding: 24px; aspect-ratio: auto; box-shadow: var(--card-ring); }
 .rv-timebar { display: flex; align-items: center; gap: 12px; margin: 10px 0 8px; font-size: 15px; }
 .rv-clock { font-variant-numeric: tabular-nums; color: var(--muted); margin-right: auto; }
 .rv-clock b { color: var(--fg); font-size: 18px; font-weight: 600; }
@@ -585,7 +587,7 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .rv-t { width: 96px; font-variant-numeric: tabular-nums; }
 .rv-stu-mark { display: inline-flex; gap: 4px; align-items: center; }
 /* 「＋新增修改」面板（09-29） */
-.rv-editor { width: 100%; background: var(--rv-card); border-radius: 12px; padding: 12px 16px; display: grid; gap: 8px; }
+.rv-editor { width: 100%; background: var(--rv-card); border-radius: 12px; padding: 12px 16px; display: grid; gap: 8px; box-shadow: var(--card-ring); }
 .rv-edrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .rv-edrow .spacer { flex: 1; }
 .rv-edlab { min-width: 2.5em; font-weight: 600; }
@@ -596,7 +598,7 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
   background: var(--human-bg); color: var(--human-fg); vertical-align: 1px; }
 
 /* 右欄：目前這一筆 */
-.rv-card { background: var(--rv-card); border-radius: 14px; padding: 18px 22px 16px; }
+.rv-card { background: var(--rv-card); border-radius: 14px; padding: 18px 22px 16px; box-shadow: var(--card-ring); }
 .rv-card.empty { color: var(--muted); }
 .rv-card > header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .rv-when { font-variant-numeric: tabular-nums; font-size: 17px; font-weight: 600; }
@@ -644,7 +646,7 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .rv2 .rv-filters button:hover:not(.on) { background: var(--hover-bg); color: var(--fg); }
 .rv2 .rv-filters button span { font-variant-numeric: tabular-nums; margin-left: 2px; opacity: .8; }
 .rv2 .rv-filters button.on { background: var(--fg); color: var(--bg); }
-.rv-list { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow-y: auto; background: var(--rv-card); border-radius: 12px; }
+.rv-list { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow-y: auto; background: var(--rv-card); border-radius: 12px; box-shadow: var(--card-ring); }
 .rv-list li { display: grid; grid-template-columns: 70px 128px minmax(0, 1fr) minmax(0, 190px) 86px; gap: 12px; align-items: center;
   padding: 9px 16px; cursor: pointer; font-size: 15px; border-bottom: 1px solid var(--rv-line); }
 .rv-list li:last-child { border-bottom: none; }
@@ -667,7 +669,7 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 .rv-prepsteps li span { color: var(--muted); font-size: 14px; }
 .rv-prepsteps li.ok span { color: var(--rv-stu); }
 .rv-prepsteps li.on button { font-weight: 700; text-decoration: none; }
-.rv-prep { background: var(--rv-card); border-radius: 14px; padding: 18px 22px; }
+.rv-prep { background: var(--rv-card); border-radius: 14px; padding: 18px 22px; box-shadow: var(--card-ring); }
 .rv-prep h2 { font-size: 18px; margin: 0 0 8px; }
 .rv-people, .rv-cuts { list-style: none; padding: 0; margin: 12px 0 18px; }
 .rv-person { padding: 12px 0; border-bottom: 1px solid var(--rv-line); }
@@ -745,7 +747,7 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
   background: var(--danger); margin-left: 5px; vertical-align: middle; }
 .fc-curhint:empty { display: none; }
 .fc-curhint, .fc-tabdone { margin: 0 0 6px; font-size: 14px; }
-.fc-ugroups { max-height: 55vh; overflow-y: auto; background: var(--rv-card); border-radius: 12px; margin-bottom: 14px; }
+.fc-ugroups { max-height: 55vh; overflow-y: auto; background: var(--rv-card); border-radius: 12px; margin-bottom: 14px; box-shadow: var(--card-ring); }
 .fc-sub { font-size: 15px; margin: 0; padding: 10px 14px 4px; }
 .fc-sub .rv-meta { display: block; font-weight: normal; font-size: 13px; margin-top: 2px; }
 .fc-ulist { list-style: none; margin: 0; padding: 0; }
