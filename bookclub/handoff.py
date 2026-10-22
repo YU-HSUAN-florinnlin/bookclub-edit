@@ -657,7 +657,7 @@ class PackJob:
             self.state, self.error = "失敗", closing.os_message(e).replace("再按「繼續」", "再試一次")
         except Exception as e:  # noqa: BLE001 — 背景執行緒要把失敗記下來給網頁看
             print(f"⚠️ [交接打包] {type(e).__name__}：{e}")
-            self.state, self.error = "失敗", "存的時候出了問題，換個位置再試；還是不行，把終端機最後幾行給開發者。"
+            self.state, self.error = "失敗", "存的時候出了問題，換個位置再試；還是不行，把終端機最後幾行傳給宇軒。"
 
     def _run(self) -> None:
         w = self.workdir
@@ -973,7 +973,9 @@ def _registered() -> list[Path]:
 
 class ImportJob:
     """背景匯入一次。狀態：等待／核對中／比對原片／匯入中／要確認／完成／失敗。
-    要確認＝這台已經有這一集，而且交接之後動過（或沒有交接紀錄）：列出改過的檔，`confirm=True` 再開一次才換。"""
+    要確認＝要先問人的情況（`_ask`：這台交接之後又改過、比較舊的包、已經匯入過、找不到原本那份、有好幾份、自己交出的第 3 步包⋯），
+    確認內容是一句重點＋一行說明＋白話分類，不列檔名；`confirm=True` 再開一次才換。
+    人選了某一份或打了位置（target）：先確認工作區 ID 跟包一樣，再照常跑一次 `_ask`（總審 T1、T2），不會因為選了就跳過比對。"""
 
     def __init__(self, zip_path: Path, video: Path, *, confirm: bool = False, probe=None, extract_audio=None,
                  target: Path | None = None, candidates: list[Path] | None = None):
@@ -1027,10 +1029,10 @@ class ImportJob:
 
             print(f"⚠️ [匯入交接包] {type(e).__name__}：{e}")
             self.state, self.error = "失敗", ("空間不夠了：清出空間再匯入一次（這台的紀錄沒有被換掉）。" if e.errno == errno.ENOSPC
-                                            else "匯入的時候出了問題（這台的紀錄沒有被換掉）；把終端機最後幾行給開發者。")
+                                            else "匯入的時候出了問題（這台的紀錄沒有被換掉）；把終端機最後幾行傳給宇軒。")
         except Exception as e:  # noqa: BLE001
             print(f"⚠️ [匯入交接包] {type(e).__name__}：{e}")
-            self.state, self.error = "失敗", "匯入的時候出了問題；把終端機最後幾行給開發者。"
+            self.state, self.error = "失敗", "匯入的時候出了問題；把終端機最後幾行傳給宇軒。"
 
     def _progress(self, i: int, n: int, _rel: str) -> None:
         self.index, self.total = i, n
@@ -1040,7 +1042,8 @@ class ImportJob:
         回 {重點, 說明, 改過類別, 工作區, 工作區名稱, 選項, 可以另建, 可以指定, 建議不匯入, 只能不匯入}。"""
         target = targets[0]
         base = {"改過類別": [], "工作區": str(target), "工作區名稱": target.name, "選項": [], "可以另建": False,
-                "可以指定": False, "建議不匯入": False, "只能不匯入": False}
+                "可以指定": False, "建議不匯入": False, "只能不匯入": False,
+                "已指定": how == "指定"}   # 總審 T1：人選／打的那一份，確認時要再帶回來
 
         def ask(head: str, line: str, **kw) -> dict:
             return {**base, "重點": head, "說明": line, **kw}
@@ -1115,13 +1118,17 @@ class ImportJob:
                 return None
         target = targets[0]
         self.resolved = target
+        if how == "指定":   # 總審 T1：人選或打的位置，工作區 ID 要跟包一樣（是同一集、交出這一包的那一份）
+            rid = read_record(target).get("工作區ID") if target.is_dir() else None
+            if not m.get("工作區ID") or rid != m.get("工作區ID"):
+                raise HandoffError("這不是同一集的工作區：選的位置不是當初交出這個交接包的那一份，沒有匯入。")
         if target.is_symlink():
-            raise HandoffError("這一集的工作資料夾是捷徑，不能匯入；請開發者看過再處理。")
+            raise HandoffError("這一集的工作資料夾是捷徑，不能匯入；先不要動，請找宇軒看過。")
         existing = is_existing(target)
         if existing and closing.closed(target):
             raise HandoffError("這支影片在這台已經結案了，不能匯入。要重做請找宇軒。")
         if existing and any(e.get("交接編號") == m.get("交接編號") for e in read_record(target).get("交出") or []):
-            raise HandoffError("選的原片旁邊就是交出這個交接包的那一份工作區。要在同一台演練另一邊，請把原片另外放一份在別的資料夾再匯入。")
+            raise HandoffError("這個交接包是這台交出去的，不用在這台匯入。")
         space_check(target, m)   # 審查 S4：開始搬之前先看空間
         if not self.confirm:
             ask = self._ask(m, targets, how, existing)
@@ -1160,7 +1167,7 @@ def _move_in(src: Path, dst: Path, root: Path) -> None:
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     if not closing._inside_real(dst, root):
-        raise HandoffError(f"工作資料夾裡的「{dst.parent.relative_to(root)}」是捷徑，指到工作資料夾外面，不能匯入；請開發者看過再處理。")
+        raise HandoffError(f"工作資料夾裡的「{dst.parent.relative_to(root)}」是捷徑，指到工作資料夾外面，不能匯入；先不要動，請找宇軒看過。")
     if dst.is_symlink():
         dst.unlink()   # 要換的是捷徑：拿掉捷徑本身，不寫到它指的地方
     os.replace(src, dst)
@@ -1216,12 +1223,12 @@ def import_into(target: Path, zip_path: Path, m: dict, video: Path, *, existing:
     `web快取/` 直接丟掉）再換成包裡的；出錯時把備份搬回去。回 {工作區, 去哪一步, 備份, 新建, 聲線不同, 提醒}。"""
     target = Path(target)
     if target.is_symlink():
-        raise HandoffError("這一集的工作資料夾是捷徑，不能匯入；請開發者看過再處理。")
+        raise HandoffError("這一集的工作資料夾是捷徑，不能匯入；先不要動，請找宇軒看過。")
     created = not target.exists()
     target.mkdir(parents=True, exist_ok=True)
     staging = target / STAGING_DIR
     if staging.is_symlink():
-        raise HandoffError("這一集的工作資料夾裡有一個奇怪的捷徑（.交接匯入中），請開發者看過再處理。")
+        raise HandoffError("這一集的工作資料夾裡有一個奇怪的捷徑（.交接匯入中），先不要動，請找宇軒看過。")
     if staging.exists():
         shutil.rmtree(staging)   # 上次匯入到一半留下的（自己的暫存資料夾）
     staging.mkdir()
@@ -1435,7 +1442,7 @@ def episode_clean_check(workdir: str | Path, *, kind: str | None = None, data: P
     from bookclub.workdir import WORKSPACE_SUFFIX
 
     if w.is_symlink() or not w.is_dir() or not w.name.endswith(WORKSPACE_SUFFIX) or not wd.analysis_result_path(w).is_file():
-        raise HandoffError("這個資料夾看起來不是這個工具建的工作資料夾，不清；請開發者看過。")
+        raise HandoffError("這個資料夾看起來不是這個工具建的工作資料夾，不清；請找宇軒看過。")
     if closing.closed(w):
         raise HandoffError("這支影片已結案。")
     return closing._video_copy_row(w, kind, data)

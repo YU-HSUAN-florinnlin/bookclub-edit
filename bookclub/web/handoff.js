@@ -280,11 +280,15 @@ async function hoRenderImport(dlg) {
   const yes = dlg.querySelector("#ho-yes");
   if (yes) yes.addEventListener("click", async () => {
     yes.disabled = true;
-    const body = { "確認": true };
+    // 總審 T1、T2：選位置跟確認分開——選了（或打了）哪一份，先送去重新比對一次（不帶確認），有事會再問；
+    // 已經是針對那一份在問的，才帶確認＋那一份
+    const ask = (v.job && v.job["要確認"]) || {};
     const pick = dlg.querySelector('input[name="ho-pick"]:checked');
     const where = dlg.querySelector("#ho-where");
-    if (pick) body["工作區"] = pick.value;
-    if (where && where.value.trim()) body["工作區"] = where.value.trim();
+    let body = { "確認": true };
+    if (pick) body = { "工作區": pick.value };
+    else if (where && where.value.trim()) body = { "工作區": where.value.trim() };
+    else if (ask["已指定"]) body = { "確認": true, "工作區": ask["工作區"] };
     try { await apiPost("/api/handoff/import/start", body, { quiet: true }); }
     catch (e) {
       yes.disabled = false;

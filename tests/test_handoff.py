@@ -794,7 +794,7 @@ def test_n6_same_machine_original_video_refused():
     w, video = _teacher()
     z = _pack(w, handoff.STAGE3)
     job = _import(z, video, candidates=[])   # 清單上沒有、但原片旁邊就是交出它的那份
-    assert job.state == "失敗" and "另外放一份" in job.error
+    assert job.state == "失敗" and job.error == "這個交接包是這台交出去的，不用在這台匯入。"
 
 
 # ---------------------------------------------------------------------------
@@ -893,6 +893,41 @@ def test_summary_shows_only_system():
     z = _pack(w, handoff.STAGE3)
     s = handoff.summary(handoff.read_manifest(z))
     assert s["電腦"] in ("Mac", "Windows", "Linux")
+
+
+def test_t1_typed_location_of_another_episode_refused():
+    """總審 T1：「找不到原本那份」時打了另一集的位置 → 停，不換掉那一集。"""
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    z5 = _pack(w2, handoff.STAGE5)
+    other, _ov = _teacher()
+    _pack(other, handoff.STAGE3)   # 另一集（另一個工作區 ID）
+    before = (other / "校對" / "段落.json").read_bytes()
+    elsewhere = _download(video, "老師下載")
+    job = _import(z5, elsewhere, target=other)
+    assert job.state == "失敗" and "不是同一集的工作區" in job.error
+    job = _import(z5, elsewhere, confirm=True, target=other)   # 帶了確認也一樣擋
+    assert job.state == "失敗" and (other / "校對" / "段落.json").read_bytes() == before
+    assert not (other / handoff.BACKUP_DIR).exists()
+
+
+def test_t2_chosen_copy_still_compared():
+    """總審 T2：好幾份讓人選，選了交接後改過的那份 → 先再問一次（交接之後又改過），確認才換。"""
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    z5 = _pack(w2, handoff.STAGE5)
+    copy = w.parent.parent / "副本" / w.name
+    shutil.copytree(w, copy)
+    _edit_seg(w, "交出去之後老師又改了。")
+    job = _import(z5, video, candidates=[copy, w])
+    assert job.state == "要確認" and job.ask["選項"]
+    job = _import(z5, video, candidates=[copy, w], target=w)   # 選了 w（不帶確認）
+    assert job.state == "要確認" and job.ask["重點"] == "你交接之後，這台又改過這一集" and job.ask["已指定"]
+    assert _seg0(w) == "交出去之後老師又改了。"
+    job = _import(z5, video, confirm=True, candidates=[copy, w], target=w)
+    assert job.state == "完成" and Path(job.result["工作區"]) == w
 
 
 if __name__ == "__main__":
