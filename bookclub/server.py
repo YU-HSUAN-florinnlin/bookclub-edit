@@ -39,6 +39,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from bookclub import names as names_mod
 from bookclub import namespage as namespage_mod
 from bookclub.config import data_dir, load_settings
+from bookclub.workdir import same_path  # noqa: E402  1020-2 三審
 from bookclub.workdir import (
     analysis_result_path,
     audio_path,
@@ -244,7 +245,7 @@ def registered_projects() -> list[Path]:
 def register_project(d: Path) -> None:
     data = read_json(registry_path(), default=None) or {}
     items = [str(x) for x in data.get("專案", [])]
-    if str(d) not in items:
+    if not any(same_path(x, d) for x in items):   # 1020-2 三審：Mac 不分大小寫，同一個資料夾不重複登記
         items.append(str(d))
         write_json(registry_path(), {**data, "專案": items})
 
@@ -252,9 +253,9 @@ def register_project(d: Path) -> None:
 def unregister_project(d: Path) -> None:
     """33 號設計 #260：整集清掉之後，從專案清單拿掉（「目前」指著它也一起清掉）。"""
     data = read_json(registry_path(), default=None) or {}
-    items = [str(x) for x in data.get("專案", []) if str(x) != str(d)]
+    items = [str(x) for x in data.get("專案", []) if not same_path(x, d)]
     cur = data.get("目前")
-    write_json(registry_path(), {**data, "專案": items, "目前": None if cur == str(d) else cur})
+    write_json(registry_path(), {**data, "專案": items, "目前": None if cur and same_path(cur, d) else cur})
 
 
 def remember_current(d: Path | None) -> None:
@@ -288,9 +289,9 @@ def recall_current() -> Path | None:
 
 def known_project(d: Path) -> bool:
     """只能切換到清單上的專案，或舊的 `~/讀書會剪輯資料/工作區/` 底下的資料夾。"""
-    d = Path(d).resolve()
-    if any(d == x.resolve() for x in registered_projects()):
+    if any(same_path(d, x) for x in registered_projects()):   # 1020-2 三審：大小寫不同也算同一個
         return True
+    d = Path(d).resolve()
     try:
         d.relative_to(workroot().resolve())
         return d.parent == workroot().resolve()
@@ -1643,7 +1644,7 @@ class BookclubServer(ThreadingHTTPServer):
         d = Path(str(body.get("路徑") or ""))
         if not d.is_dir() or not known_project(d):
             raise SecurityError(f"不是專案清單上的專案：{d}")
-        is_cur = self._workdir is not None and Path(self._workdir).resolve() == d.resolve()
+        is_cur = self._workdir is not None and same_path(self._workdir, d)
         why = self._handoff_busy("清")
         if why:
             raise ValueError(why)
@@ -1745,8 +1746,9 @@ class BookclubServer(ThreadingHTTPServer):
         return {"ok": True, "工作": ij.to_dict()}
 
     def _import_done(self, job) -> None:
-        """匯入好了：登記進專案清單、切到這一集（背景執行緒裡呼叫）。"""
+        """匯入好了：登記進專案清單、切到這一集（背景執行緒裡呼叫）。專案清單上已經有（大小寫不同）就用清單記的寫法。"""
         d = Path(job.result["工作區"])
+        d = next((x for x in registered_projects() if same_path(x, d)), d)
         register_project(d)
         self.use_project(d, job.video)
         self.handoff_zip = None
@@ -2287,7 +2289,7 @@ class Handler(BaseHTTPRequestHandler):
             raise Closed(CLOSED_MSG)
         ij = getattr(server, "import_job", None)
         if ij is not None and ij.running and ij.resolved is not None and server.has_workdir \
-                and Path(ij.resolved) == Path(server.workdir) \
+                and same_path(ij.resolved, server.workdir) \
                 and (path.startswith(STEP3_WRITES) or path.startswith("/api/final/") or path.startswith("/api/execute/")):
             raise Busy("正在匯入交接包、換掉這一集，等它做完再改。")   # 二審 S6
         if path.startswith(STEP3_WRITES) and path not in STEP3_WRITES_OK and server.exec_running():

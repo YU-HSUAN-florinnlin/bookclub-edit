@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -221,6 +222,21 @@ def localize(path: str | Path | None, workdir: Path, old_roots: list[Path] | Non
         return workdir / p
     rel = foreign_rel(p, workdir, old_roots)
     return workdir / rel if rel is not None else p
+
+
+def same_path(a: str | Path | None, b: str | Path | None) -> bool:
+    """兩個路徑是不是同一個地方（Mac 預設不分大小寫：系統選檔回來的寫法可能跟專案清單記的大小寫不同）。
+    都在的話用 samefile；有一邊不在就比正規化後的完整路徑（不分大小寫只在 Mac 上）。"""
+    if not a or not b:
+        return False
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        pass
+    ra, rb = os.path.realpath(str(a)), os.path.realpath(str(b))
+    if sys.platform == "darwin":
+        ra, rb = ra.casefold(), rb.casefold()
+    return os.path.normpath(ra) == os.path.normpath(rb)
 
 
 def same_stored_file(a: str | Path | None, b: str | Path | None) -> bool:

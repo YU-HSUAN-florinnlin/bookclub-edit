@@ -333,8 +333,8 @@ def test_teacher_changed_after_export_is_listed():
     sdata["段落"][0]["校對稿"] = "老師後來又改了這一句。"
     wd.write_json(seg, sdata)
     job = _import(z5, video)
-    assert job.state == "要確認" and "校對/段落.json" in job.ask["改過"] \
-        and not any("沒有交接打包過" in x for x in job.ask["說明"]) and job.ask["工作區名稱"] == w.name
+    assert job.state == "要確認" and job.ask["重點"] == "你交接之後，這台又改過這一集" \
+        and job.ask["改過類別"] == ["第 3 步的段落與校對稿"] and job.ask["工作區名稱"] == w.name
     assert json.loads(seg.read_text(encoding="utf-8"))["段落"][0]["校對稿"] == "老師後來又改了這一句。", "還沒確認不能動"
     job = _import(z5, video, confirm=True)
     assert job.state == "完成" and job.result["備份"]
@@ -349,7 +349,7 @@ def test_existing_without_record_asks():
     # 夥伴那台已經有這一集、沒交接打包過，又匯入一次 → 要確認（沒有交接紀錄）
     v2 = Path(json.loads((w2 / "分析結果.json").read_text(encoding="utf-8"))["video"])
     job = _import(z, v2)
-    assert job.state == "要確認" and any("沒有交接打包過" in x for x in job.ask["說明"])
+    assert job.state == "要確認" and job.ask["重點"] == "這個交接包已經匯入過了" and job.ask["建議不匯入"]
 
 
 def _wsl_setup(w: Path, video: Path) -> Path:
@@ -542,15 +542,15 @@ def test_m3_teacher_downloaded_video_elsewhere_still_replaces_original():
     wd.write_json(seg, data)
     cands = [w, w2]   # 同一台演練：兩份都在專案清單上
     job = _import(z5, elsewhere, candidates=cands)
-    assert job.state == "要確認" and Path(job.ask["工作區"]) == w and "校對/段落.json" in job.ask["改過"]
+    assert job.state == "要確認" and Path(job.ask["工作區"]) == w and "第 3 步的段落與校對稿" in job.ask["改過類別"]
     job = _import(z5, elsewhere, confirm=True, candidates=cands)
     assert job.state == "完成" and Path(job.result["工作區"]) == w and job.result["備份"]
     ana = json.loads((w / "分析結果.json").read_text(encoding="utf-8"))
     assert ana["video"] == str(elsewhere)
     assert not (elsewhere.parent / "假影片_剪輯工作區").exists(), "不另建一份"
-    # 夥伴那台匯入第 3 步包：同一個工作區 ID 的老師那份（交出這個包的）不算，照原片旁邊建新的
+    # 夥伴那台（清單上沒有老師那份）匯入第 3 步包：照原片旁邊建新的，工作區 ID 跟著包
     v3 = _download(video, "夥伴二")
-    job = _import(z3, v3, candidates=[w])
+    job = _import(z3, v3, candidates=[])
     assert job.state == "完成" and Path(job.result["工作區"]) == v3.parent / "假影片_剪輯工作區"
     assert handoff.read_record(Path(job.result["工作區"]))["工作區ID"] == handoff.read_record(w)["工作區ID"]
 
@@ -734,8 +734,8 @@ def test_n1_package_from_older_export_asks():
     _partner_stage5(w2)
     z5 = _pack(w2, handoff.STAGE5)
     job = _import(z5, video, candidates=[w])
-    assert job.state == "要確認" and any("比較舊的那次" in x for x in job.ask["說明"]), job.ask
-    assert "校對/段落.json" in job.ask["改過"], "跟 A1 比：A1 之後改的那句要列出來"
+    assert job.state == "要確認" and job.ask["重點"] == "這包是照你比較早交出去的那一份做的", job.ask
+    assert "第 3 步的段落與校對稿" in job.ask["改過類別"], "跟 A1 比：A1 之後改的那句要列出來"
     assert _seg0(w) == "A1 之後老師改的。", "還沒確認不能動"
     job = _import(z5, video, confirm=True, candidates=[w])
     assert job.state == "完成"
@@ -759,7 +759,8 @@ def test_n2_older_than_last_import_says_so():
     b2 = _pack(w2, handoff.STAGE5)
     assert _import(b2, video, candidates=[w]).state == "完成"
     job = _import(b1, video, candidates=[w])
-    assert job.state == "要確認" and "比你上次匯入的" in job.ask["說明"][0], job.ask
+    assert job.state == "要確認" and job.ask["重點"] == "這是比較舊的交接包" and job.ask["建議不匯入"], job.ask
+    assert "已經匯入過比較新的版本" in job.ask["說明"] and job.ask["改過類別"] == []
 
 
 def test_n3_original_not_found_asks_before_creating():
@@ -792,8 +793,99 @@ def test_n5_two_copies_let_user_choose():
 def test_n6_same_machine_original_video_refused():
     w, video = _teacher()
     z = _pack(w, handoff.STAGE3)
-    job = _import(z, video, candidates=[w])
+    job = _import(z, video, candidates=[])   # 清單上沒有、但原片旁邊就是交出它的那份
     assert job.state == "失敗" and "另外放一份" in job.error
+
+
+# ---------------------------------------------------------------------------
+# 1020-2 三審修正
+# ---------------------------------------------------------------------------
+
+def test_reimport_after_import_no_false_alarm():
+    """D3：匯回第 5 步包之後，再匯入同一包只說「已經匯入過了」；夥伴做的內容不算老師改的。"""
+    w, video = _teacher()
+    w2 = Path(_import(_pack(w, handoff.STAGE3), _download(video)).result["工作區"])
+    _partner_stage5(w2)
+    z5 = _pack(w2, handoff.STAGE5)
+    dl = _download(video, "老師下載")
+    assert _import(z5, dl, candidates=[w]).state == "完成"
+    job = _import(z5, dl, candidates=[w])
+    assert job.state == "要確認" and job.ask["重點"] == "這個交接包已經匯入過了" and job.ask["改過類別"] == []
+    # 夥伴再交一包（比較新），老師這邊匯入後沒動 → 不用問
+    time.sleep(1.1)
+    _edit_seg(w2, "夥伴又改了一句。")
+    z6 = _pack(w2, handoff.STAGE5)
+    j6 = _import(z6, dl, candidates=[w])
+    assert j6.state == "完成", (j6.state, j6.ask, j6.error)
+    # 匯入之後老師自己改 → 才算改過
+    _edit_seg(w, "老師匯入後自己改的。")
+    time.sleep(1.1)
+    _edit_seg(w2, "夥伴第三包。")
+    z7 = _pack(w2, handoff.STAGE5)
+    job = _import(z7, dl, candidates=[w])
+    assert job.state == "要確認" and job.ask["重點"] == "你交接之後，這台又改過這一集"
+
+
+def test_auto_codes_file_not_compared():
+    w, video = _teacher()
+    _pack(w, handoff.STAGE3)
+    wd.write_json(w / "校對" / "代號自動配.json", {"開始前③已配": True, "自動配": {}})
+    assert handoff.changes_after_export(w) == []
+
+
+def test_own_stage3_package_on_same_machine():
+    """三審 4a：老師在交出它的同一台匯入自己的第 3 步包（原片選下載的那份）→ 停下來說不用匯入，不另建。"""
+    w, video = _teacher()
+    z = _pack(w, handoff.STAGE3)
+    dl = _download(video, "老師下載")
+    job = _import(z, dl, candidates=[w])
+    assert job.state == "要確認" and job.ask["重點"] == "這是這台自己交出去的交接包" and job.ask["只能不匯入"]
+    assert not (dl.parent / "假影片_剪輯工作區").exists()
+
+
+def test_case_insensitive_paths_match():
+    """三審 4b：Mac 不分大小寫，系統選檔回來的路徑大小寫跟專案清單不同也算同一個。"""
+    base = Path(tempfile.mkdtemp()) / "Case"
+    d = base / "AbC_剪輯工作區"
+    d.mkdir(parents=True)
+    upper = base / "ABC_剪輯工作區"
+    if not upper.exists():
+        print("（這個檔案系統分大小寫，跳過）")
+        return
+    assert wd.same_path(d, upper) and not wd.same_path(d, base / "別的")
+    from bookclub import server as srv
+
+    saved = srv.registry_path().read_bytes() if srv.registry_path().is_file() else None
+    try:
+        srv.register_project(d)
+        srv.register_project(upper)
+        assert [str(x) for x in srv.registered_projects()].count(str(d)) == 1
+        assert str(upper) not in [str(x) for x in srv.registered_projects()]
+        assert srv.known_project(upper)
+    finally:
+        if saved is None:
+            srv.registry_path().unlink(missing_ok=True)
+        else:
+            srv.registry_path().write_bytes(saved)
+    # 交接：選的原片路徑大小寫跟清單不同，原片旁邊就是清單上那一份 → 用清單記的寫法
+    w, video = _teacher()
+    z = _pack(w, handoff.STAGE3)
+    v2 = _download(video, "Partner")
+    shouted = Path(str(v2.parent).replace("Partner", "PARTNER")) / v2.name
+    assert shouted.exists()
+    j1 = _import(z, v2, candidates=[])
+    w2 = Path(j1.result["工作區"])
+    _partner_stage5(w2)
+    time.sleep(1.1)
+    z5 = _pack(w2, handoff.STAGE5)
+    targets, how = handoff.find_targets(handoff.read_manifest(z5), shouted, [w2])
+    assert targets == [w2] and how == "原片旁邊"
+
+
+def test_change_kinds_plain_words():
+    assert handoff.change_kinds(["校對/段落.json", "生成/老師紀錄.json（新的）", "修改需求/卡片.json",
+                                 "覆核/成品檢查.json"]) == ["第 3 步的段落與校對稿", "第 4 步的 AI 修改紀錄",
+                                                         "第 5 步的通過／退回", "第 5 步的修改需求卡片"]
 
 
 def test_summary_shows_only_system():

@@ -151,7 +151,6 @@ function hoImportView(st) {
   return { z, v, cp, job, js, running, copying, ready, status };
 }
 
-function hoStepName(go) { return go === "step5" ? "第 5 步" : "第 4 步"; }
 
 async function hoOpenImport() {
   let dlg = document.getElementById("ho-import");
@@ -191,22 +190,38 @@ async function hoRenderImport(dlg) {
   }
   let bottom = "";
   if (v.js === "要確認") {
+    // 宇軒 10-22：粗體一句重點＋一行說明；改過的地方最多列 3 類白話，不列檔名
     const ask = v.job["要確認"] || {};
     const opts = ask["選項"] || [];
-    bottom = `<div class="ho-ask"><p>要換掉的工作區：<b>${esc(ask["工作區名稱"] || "")}</b></p>
-      ${(ask["說明"] || []).map((x) => `<p>${esc(x)}</p>`).join("")}
-      ${(ask["改過"] || []).length ? `<ul class="ho-list">${ask["改過"].map((x) => `<li>${esc(x)}</li>`).join("")}${ask["共幾個"] > ask["改過"].length ? `<li>⋯</li>` : ""}</ul>` : ""}
+    const kinds = ask["改過類別"] || [];
+    const kindLine = kinds.length ? `<p>改過的地方：${esc(kinds.slice(0, 3).join("、"))}${kinds.length > 3 ? `等 ${kinds.length} 類` : ""}</p>` : "";
+    const yesLabel = ask["可以另建"] ? "繼續" : ask["建議不匯入"] ? "還是要匯入" : "繼續匯入";
+    const btns = ask["只能不匯入"] ? `<button class="primary" id="ho-no">不匯入</button>`
+      : ask["建議不匯入"] ? `<button class="ghost" id="ho-yes">${yesLabel}</button><button class="primary" id="ho-no">不匯入（建議）</button>`
+      : `<button class="ghost" id="ho-no">不匯入</button><button class="primary" id="ho-yes">${yesLabel}</button>`;
+    bottom = `<div class="ho-ask"><p><b>${esc(ask["重點"] || "")}</b></p><p>${esc(ask["說明"] || "")}</p>${kindLine}
+      ${ask["只能不匯入"] ? "" : `<p class="muted">要換掉的工作區：${esc(ask["工作區名稱"] || "")}</p>`}
       ${opts.length ? `<ul class="ho-list">${opts.map((x, i) => `<li><label><input type="radio" name="ho-pick" value="${esc(x)}" ${i ? "" : "checked"}> ${esc(x)}</label></li>`).join("")}</ul>` : ""}
-      ${ask["可以指定"] ? `<p><input type="text" id="ho-where" size="44" placeholder="原本那一份工作資料夾的完整位置（可以不填）"></p>` : ""}
-      ${ask["可以另建"] ? "" : `<p>繼續的話，會先把這台的紀錄備份到「備份/交接前_日期」，再換成包裡的。</p>`}</div>
+      ${ask["可以指定"] ? `<p><input type="text" id="ho-where" size="44" placeholder="原本那一份工作資料夾的完整位置（可以不填）"></p>` : ""}</div>
       <p id="ho-imp-msg" role="status"></p>
-      <div class="rv-confirm-btns"><button class="ghost" id="ho-no">不匯入</button><button class="primary" id="ho-yes">${ask["可以另建"] ? "繼續" : "繼續匯入"}</button></div>`;
+      <div class="rv-confirm-btns">${btns}</div>`;
   } else if (v.js === "完成") {
+    // 宇軒 10-22：匯入成功只留「匯入好了」＋按鈕（有提醒才多一行）
     const r = v.job["結果"] || {};
-    bottom = `<p><span class="badge done">匯入好了</span> ${r["新建"] ? "已經建好這一集。" : "已經換成包裡的內容，原本的紀錄備份在「" + esc(r["備份"] || "") + "」。"}（工作區：${esc(String(r["工作區"] || "").split("/").pop())}）</p>
+    const go = r["去哪一步"] === "step5" ? `<button class="primary ho-go" data-go="step5">到第 5 步檢查成品</button>`
+      : `<button class="ghost ho-go" data-go="step3">到第 3 步檢查修改需求</button><button class="primary ho-go" data-go="step4">到第 4 步做 AI 修改</button>`;
+    dlg.innerHTML = `<h2 id="ho-import-title">匯入交接包</h2>
+      <p><span class="badge done">匯入好了</span></p>
       ${(r["提醒"] || []).map((x) => `<p class="rv-warnline">${esc(x)}</p>`).join("")}
-      <p class="muted">下載的交接包（zip）可以刪了。</p>
-      <div class="rv-confirm-btns"><button class="primary" id="ho-go">到${esc(hoStepName(r["去哪一步"]))}</button></div>`;
+      <div class="rv-confirm-btns">${go}</div>`;
+    dlg.querySelectorAll(".ho-go").forEach((b) => b.addEventListener("click", async () => {
+      try { await apiPost("/api/handoff/import/reset", {}, { quiet: true }); } catch (e) { /* 已經清了 */ }
+      dlg.close();
+      const want = `#${b.dataset.go}`;
+      if (location.hash === want && typeof render === "function") render(); else location.hash = want;
+    }));
+    clearTimeout(hoImpTimer);
+    return;
   } else {
     bottom = `<p id="ho-imp-msg" role="status">${v.status ? (v.js === "失敗" ? `<span class="badge error">沒有匯入</span> ` : "") + esc(v.status) : ""}</p>
       <div class="rv-confirm-btns"><button class="ghost" id="ho-cancel" ${v.running ? "disabled" : ""}>取消</button>
@@ -282,14 +297,6 @@ async function hoRenderImport(dlg) {
   if (no) no.addEventListener("click", async () => {
     try { await apiPost("/api/handoff/import/reset", {}, { quiet: true }); } catch (e) { /* 沒東西可取消 */ }
     dlg.close();
-  });
-  const go = dlg.querySelector("#ho-go");
-  if (go) go.addEventListener("click", async () => {
-    const r = (v.job && v.job["結果"]) || {};
-    try { await apiPost("/api/handoff/import/reset", {}, { quiet: true }); } catch (e) { /* 已經清了 */ }
-    dlg.close();
-    const want = `#${r["去哪一步"] || "step4"}`;
-    if (location.hash === want && typeof render === "function") render(); else location.hash = want;
   });
   clearTimeout(hoImpTimer);
   if (v.running || v.copying) hoImpTimer = setTimeout(() => { if (dlg.open) hoRenderImport(dlg); }, 1000);

@@ -61,7 +61,7 @@ VOLATILE_KEYS = {"覆核/覆核決定.json": ("覆核秒數",)}
 # `校對/代號表紀錄.json`（代號對齊時自動記的上一份代號表）（這些是分析結果或工具自己寫的）。
 JUDGED_FILES = ("校對/段落.json", "名字覆核決定.json", "覆核/覆核決定.json", "學員名字覆核決定.json", "名字候選.json",
                 "校對/刪除建議.json", "重疊.json",          # needs.STEP3_FILES 扣掉打開第 3 步就會自動產生的「學員名字候選.json」
-                "校對/人名決定.json", "校對/代號自動配.json", "生成/學員聲線.json",
+                "校對/人名決定.json", "生成/學員聲線.json",   # 代號自動配.json 進第 3 步就會寫（三審），不比
                 "參考音/ref.wav", "參考音/ref.txt", "參考音/底噪.json", "工作區設定.json",
                 "覆核/成品檢查.json", "修改需求/卡片.json", "修改需求/版本.json", "修改需求/成品狀態.json",
                 "生成/老師紀錄.json", "生成/學員紀錄.json", "生成/保留原聲學員紀錄.json", "生成/處理紀錄.json")
@@ -471,6 +471,29 @@ def norm_print(rel: str, path: Path) -> str | None:
         return _sha_file(path)
     except (OSError, ValueError):
         return None
+
+
+CHANGE_LABELS = (   # 確認視窗用的白話分類（不列檔名；宇軒 10-22）
+    (("校對/段落.json",), "第 3 步的段落與校對稿"),
+    (("名字覆核決定.json", "學員名字覆核決定.json", "名字候選.json", "校對/人名決定.json"), "第 3 步名字的處理與代號"),
+    (("覆核/覆核決定.json", "校對/刪除建議.json", "重疊.json"), "第 3 步的覆核決定（刪除、重疊、消音）"),
+    (("生成/學員聲線.json",), "第 3 步的學員聲線"),
+    (("參考音/",), "第 2 步的老師參考音或底噪"),
+    (("生成/",), "第 4 步的 AI 修改紀錄"),
+    (("覆核/成品檢查.json",), "第 5 步的通過／退回"),
+    (("修改需求/",), "第 5 步的修改需求卡片"),
+    (("工作區設定.json",), "片頭片尾設定"),
+)
+
+
+def change_kinds(changes: list[str]) -> list[str]:
+    """（純函式）改過的檔 → 白話分類（照固定順序、不重複）。"""
+    rels = [c.split("（")[0] for c in changes]
+    out = []
+    for keys, label in CHANGE_LABELS:
+        if any(r == k or (k.endswith("/") and r.startswith(k)) for r in rels for k in keys) and label not in out:
+            out.append(label)
+    return out or (["其他紀錄"] if changes else [])
 
 
 def judged_print(rel: str, data: bytes | None) -> str | None:
@@ -895,11 +918,30 @@ def find_targets(m: dict, video: str | Path, candidates: list[Path] | None = Non
                 hit.append(d)
         if hit:
             return hit, "工作區ID"
-    return [target_for(video)], "原片旁邊"
+    t = target_for(video)
+    for d in cands:   # 三審 4b：Mac 路徑不分大小寫，用 samefile 比，回專案清單上記的那個寫法
+        if wd.same_path(d, t):
+            return [d], "原片旁邊"
+    return [t], "原片旁邊"
 
 
 def find_target(m: dict, video: str | Path, candidates: list[Path] | None = None) -> Path:
     return find_targets(m, video, candidates)[0][0]
+
+
+def own_package(m: dict, candidates: list[Path] | None) -> Path | None:
+    """這台專案清單上交出過這個包的那一份工作區（同一個工作區 ID、交出紀錄有這個交接編號）；沒有回 None。"""
+    for d in candidates or []:
+        try:
+            if not Path(d).is_dir():
+                continue
+            rec = read_record(d)
+        except OSError:
+            continue
+        if rec.get("工作區ID") == m.get("工作區ID") and any(
+                e.get("交接編號") == m.get("交接編號") for e in rec.get("交出") or []):
+            return Path(d)
+    return None
 
 
 def export_after(workdir: str | Path, num: str | None) -> tuple[dict | None, list[dict]]:
@@ -994,45 +1036,57 @@ class ImportJob:
         self.index, self.total = i, n
 
     def _ask(self, m: dict, targets: list[Path], how: str, existing: bool) -> dict | None:
-        """要不要先問（回確認內容或 None）。二審 N1、N2、N3、N5。"""
+        """要不要先問（回確認內容或 None）。宇軒 10-22：每種情況「粗體一句重點＋一行說明」，不列檔名。
+        回 {重點, 說明, 改過類別, 工作區, 工作區名稱, 選項, 可以另建, 可以指定, 建議不匯入, 只能不匯入}。"""
         target = targets[0]
-        lines: list[str] = []
-        changes: list[str] = []
+        base = {"改過類別": [], "工作區": str(target), "工作區名稱": target.name, "選項": [], "可以另建": False,
+                "可以指定": False, "建議不匯入": False, "只能不匯入": False}
+
+        def ask(head: str, line: str, **kw) -> dict:
+            return {**base, "重點": head, "說明": line, **kw}
+
         prev = m.get("上一棒交接編號")
         if len(targets) > 1:
-            lines.append("這台有好幾份工作區都是這一集，請選要換掉哪一份：")
+            return ask("這台有好幾份工作區都是這一集", "請選要換掉哪一份，其他的不會動。",
+                       選項=[str(t) for t in targets])
         if not existing:
             if m.get("哪一段") == STAGE5 and prev and how == "原片旁邊":
-                lines.append("這台的專案清單裡找不到當初交出去的那一份工作區（可能改過名或搬過）。"
-                             "要另外建一份嗎？或在下面打原本那一份工作資料夾的位置。")
-                return {"說明": lines, "改過": [], "共幾個": 0, "工作區": str(target), "工作區名稱": target.name,
-                        "選項": [], "可以另建": True, "可以指定": True}
+                return ask("找不到你當初交出去的那一份工作區",
+                           "可能改過名或搬過。可以另外建一份，或在下面打原本那一份工作資料夾的位置。",
+                           可以另建=True, 可以指定=True)
             return None
         rec = read_record(target)
+        imports = [e for e in rec.get("匯入") or [] if e.get("時間")]
+        same = next((e for e in reversed(imports) if e.get("交接編號") and e.get("交接編號") == m.get("交接編號")), None)
+        if same:
+            return ask("這個交接包已經匯入過了", f"{_short_time(same.get('時間'))} 已經匯入過這一包，通常不用再匯入。",
+                       建議不匯入=True)
+        olds = [e for e in imports if e.get("哪一段") == m.get("哪一段") and e.get("匯出時間")]
+        if olds and str(olds[-1]["匯出時間"]) > str(m.get("匯出時間") or ""):
+            return ask("這是比較舊的交接包",
+                       f"你在 {_short_time(olds[-1].get('時間'))} 已經匯入過比較新的版本，通常不用再匯入這包。",
+                       建議不匯入=True)
         if rec.get("工作區ID") and m.get("工作區ID") and rec["工作區ID"] != m["工作區ID"]:
-            lines.append("這台的這一集是另一份工作區（不是這個交接包那一份），匯入會把它的紀錄換成包裡的（先備份）。")
-        else:
-            base, later = export_after(target, prev)
-            if base is not None:
-                changes = _changes(base.get("紀錄指紋") or {}, record_prints(target))
-                if later:
-                    lines.append(f"你在這包之後又交接過一次（{_short_time(later[-1].get('時間'))}），這包是比較舊的那次做的。"
-                                 "繼續的話，那次之後的修改會換成包裡的（先備份）。")
-            else:
-                ch = changes_after_export(target)
-                if ch is None:
-                    lines.append("這台的這一集沒有交接打包過的紀錄，看不出來交出去之後有沒有改過。")
-                changes = ch or []
-            if changes:
-                lines.append(f"這台的這一集在交接打包之後又改過（{len(changes)} 個檔）：")
-            olds = [e for e in rec.get("匯入") or [] if e.get("哪一段") == m.get("哪一段") and e.get("匯出時間")]
-            if olds and str(olds[-1]["匯出時間"]) > str(m.get("匯出時間") or ""):
-                lines.insert(0, f"這個交接包比你上次匯入的（{_short_time(olds[-1]['匯出時間'])} 交出的）還舊。")
-        if not lines and len(targets) == 1:
-            return None
-        return {"說明": lines, "改過": changes[:20], "共幾個": len(changes), "工作區": str(target),
-                "工作區名稱": target.name, "選項": [str(t) for t in targets] if len(targets) > 1 else [],
-                "可以另建": False, "可以指定": False}
+            return ask("這台的這一集是另一份工作區",
+                       "不是這個交接包那一份。繼續匯入會換成包裡的版本，這台原本的會先備份起來。")
+        exp, later = export_after(target, prev)
+        if exp is None:
+            exp = last_export(target)
+        # 三審：比對基準拿「上一棒那次交出」和「最近一次匯入」比較晚的那一筆（匯入過之後，夥伴的內容不算老師改的）
+        cands = [e for e in ([exp] if exp else []) + imports[-1:] if isinstance(e.get("紀錄指紋"), dict)]
+        if not cands:
+            return ask("看不出來這台交出去之後有沒有改過", "這台的這一集沒有交接打包過的紀錄。繼續匯入會換成包裡的版本，原本的會先備份起來。")
+        ref = max(cands, key=lambda e: (str(e.get("時間") or ""), e is not exp))   # 同一秒：匯入在交出之後
+        if later and ref is exp:
+            return ask("這包是照你比較早交出去的那一份做的",
+                       f"你在 {_short_time(later[-1].get('時間'))} 又交接過一次。繼續匯入會換成夥伴的版本，你後來改的部分會先備份起來，不會出現在新版本裡。",
+                       改過類別=change_kinds(_changes(ref["紀錄指紋"], record_prints(target))))
+        changes = _changes(ref["紀錄指紋"], record_prints(target))
+        if changes:
+            return ask("你交接之後，這台又改過這一集",
+                       "繼續匯入會換成夥伴的版本，你後來改的部分會先備份起來，不會出現在新版本裡。",
+                       改過類別=change_kinds(changes))
+        return None
 
     def _run(self) -> dict | None:
         from bookclub import closing
@@ -1050,6 +1104,15 @@ class ImportJob:
             targets, how = [self.target], "指定"
         else:
             targets, how = find_targets(m, self.video, self.candidates if self.candidates is not None else _registered())
+        if m.get("哪一段") == STAGE3 and how != "指定":
+            mine = own_package(m, self.candidates if self.candidates is not None else _registered())
+            if mine is not None:   # 三審 4a：這台自己交出去的第 3 步包
+                self.state = "要確認"
+                self.ask = {"重點": "這是這台自己交出去的交接包", "說明": "不用在這台匯入；這個包是要給夥伴的。",
+                            "改過類別": [], "工作區": str(mine), "工作區名稱": mine.name, "選項": [],
+                            "可以另建": False, "可以指定": False, "建議不匯入": True, "只能不匯入": True}
+                self.resolved = mine
+                return None
         target = targets[0]
         self.resolved = target
         if target.is_symlink():
@@ -1227,6 +1290,13 @@ def import_into(target: Path, zip_path: Path, m: dict, video: Path, *, existing:
                 os.utime(p, ns=(f["修改時間"], f["修改時間"]))
         except OSError:
             pass
+    try:   # 三審：記下匯入後的樣子，之後再匯入時拿它比（夥伴的內容不算這台改的）
+        rec = read_record(target)
+        if rec.get("匯入"):
+            rec["匯入"][-1]["紀錄指紋"] = record_prints(target)
+            _write_record(target, rec)
+    except OSError:
+        pass
     notes = []
     if not wd.audio_path(target).is_file():
         try:
