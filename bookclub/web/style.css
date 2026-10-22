@@ -123,7 +123,8 @@ html, body {
 .app.nav-collapsed .step-who { padding: 0 4px; font-size: 10px; }
 
 /* 1022-1（#267）：左下角齒輪「工具設定」＋往上展開的小選單 */
-.sidebar-foot { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); }
+.sidebar-foot { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border);
+  position: sticky; bottom: 0; background: inherit; z-index: 1; }   /* 1022-1 審查修正：視窗矮、步驟列要捲動時齒輪仍貼在底部看得到 */
 .tool-btn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px; background: transparent; color: var(--fg);
   border: none; border-radius: 8px; font-size: 14px; text-align: left; }
 .tool-btn:hover, .tool-btn.open { background: var(--bg-soft); color: var(--fg); }
@@ -303,6 +304,7 @@ table.kv td, .pj-list .muted, .pk-path, .pk-list li, .pk-sel { overflow-wrap: an
   .content { padding: 16px 16px 60px; max-width: none; }
   .nav-toggle { display: none; }
   .app.nav-collapsed .sidebar { width: 100%; flex-basis: auto; }
+  .sidebar-foot { position: static; }   /* 窄畫面步驟列在上方、不捲動，不用黏底 */
   .app.nav-collapsed .brand-text, .app.nav-collapsed .step-label { display: inline; }
   .app.nav-collapsed .step-num { display: none; }
   .namecard .players { flex-direction: column; }

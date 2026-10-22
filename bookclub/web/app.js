@@ -432,6 +432,9 @@ function toolMenuSync() {
   document.addEventListener("click", (e) => {
     if (toolMenuOpen() && !wrap.contains(e.target)) toolMenuShow(false);   // 點選單外面收起
   });
+  // 1022-1 審查修正：選單是 fixed 定位，側欄捲動時不會跟著動 → 捲動就收起
+  const side = document.getElementById("sidebar");
+  if (side) side.addEventListener("scroll", () => { if (toolMenuOpen()) toolMenuShow(false); }, { passive: true });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && toolMenuOpen() && !document.querySelector("dialog[open]")) {
       e.preventDefault();
@@ -1525,6 +1528,7 @@ function refAudioNote(c, isChosen) {
 
 document.addEventListener("keydown", (e) => {   // 第 2 步：← → 切換候選（在打字時不搶）
   if (!document.getElementById("refText") || !document.querySelector(".ref-chips")) return;
+  if (document.querySelector("dialog[open]")) return;   // 1022-1 審查修正：視窗開著時方向鍵不穿透到底下切換候選
   if (e.target && ["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName)) return;
   if (e.key === "ArrowLeft") { e.preventDefault(); refsGo(refsPointer - 1, true); }
   if (e.key === "ArrowRight") { e.preventDefault(); refsGo(refsPointer + 1, true); }

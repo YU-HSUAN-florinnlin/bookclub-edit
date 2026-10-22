@@ -431,7 +431,7 @@ def test_success_toasts():
     assert "right: 16px" in css[i:i + 200] and "bottom: 16px" in css[i:i + 200]   # 右下角，不擋左下角齒輪
     cards = (WEB / "cards.js").read_text(encoding="utf-8")
     rv = (WEB / "review.js").read_text(encoding="utf-8")
-    assert len(re.findall(r"uiToast\(", cards + rv)) == 7
+    assert len(re.findall(r"uiToast\(", cards + rv)) == 8   # 7 處成功通知＋1022-1 審查決定的「每位學員都已經是…了」
     i = rv.index('apiPost("/api/codes/auto"')
     block = rv[i:i + 700]
     assert 'if (r["代號不夠"]) uiAlert(' in block and "剩下的請自己打一個" in block and "else uiToast(" in block
@@ -477,6 +477,90 @@ def test_button_tooltips():
     assert 'disabled title="${esc(fcFixOff(c, fcOld()))}"' in web["finalcheck.js"]
     assert 'id="rv-tl" title="點一下或拖拉' in web["review.js"]
     assert "btn.title = st.title;" in web["review.js"]   # 「開始 AI 修改」常常是停用的，原因留在 title
+
+
+
+_UI_FAKE_DOM = r"""
+const made = [];
+function mk(tag) {
+  const el = { tagName: String(tag).toUpperCase(), children: [], attrs: {}, ls: [], dataset: {}, style: {}, className: "", textContent: "",
+    open: false, hidden: false, classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    addEventListener(t, f, cap) { this.ls.push({ t, f, cap: !!cap }); },
+    fire(t, ev) { ev = Object.assign({ type: t, defaultPrevented: false, stopped: false,
+        preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; } }, ev || {});
+      for (const l of this.ls.filter((x) => x.t === t)) l.f(ev); return ev; },
+    append(...k) { this.children.push(...k); }, appendChild(k) { this.children.push(k); return k; },
+    setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; },
+    removeAttribute(k) { delete this.attrs[k]; }, remove() { this.removed = true; }, focus() {},
+    showModal() { this.open = true; }, close() { if (this.open) { this.open = false; this.fire("close"); } } };
+  made.push(el);
+  return el;
+}
+global.HTMLDialogElement = function () {};
+global.document = { createElement: mk, createDocumentFragment: () => mk("frag"), activeElement: null,
+  body: { appendChild() {}, contains: () => true }, addEventListener() {}, getElementById: () => null };
+global.window = { addEventListener() {}, matchMedia: () => ({ matches: false }), innerWidth: 1000, innerHeight: 800 };
+"""
+
+
+def test_review_fixes_1022_1():
+    """1022-1 審查修正：
+    1. 別的程式直接 dlg.close()（第 3 步「點背景關掉」）時，工具視窗照樣收尾，後面排隊的視窗出得來；第 3 步那段不再綁到工具視窗
+    2. 第 2 步 ←→ 切換候選：有視窗開著時不穿透
+    3. Enter 按住不放的連發不算（capture 階段擋掉）
+    4. README 不再寫「第 0 步」
+    5. 齒輪黏在側欄底部；側欄捲動時收起選單
+    6.「每位學員都已經是…了」改浮動通知"""
+    import shutil
+    import subprocess
+
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert 'dlg.addEventListener("close", () => close(cancelValue));' in ui
+    assert 'document.querySelectorAll(".rv-modal:not(.ui-dialog)")' in rv and 'document.querySelectorAll(".rv-modal")' not in rv
+    i = app.index("// 第 2 步：← → 切換候選")
+    assert 'if (document.querySelector("dialog[open]")) return;' in app[i:i + 400]
+    readme = (WEB.parent.parent / "README.md").read_text(encoding="utf-8")
+    assert "（見「怎麼用」第 0 步）" not in readme
+    i = css.index(".sidebar-foot {")
+    assert "position: sticky; bottom: 0" in css[i:i + 250]
+    assert 'side.addEventListener("scroll"' in app
+    i = rv.index("每位學員都已經是")
+    assert "uiToast(" in rv[i - 80:i] and "uiAlert(" not in rv[i - 80:i]
+    node = shutil.which("node")
+    if not node:
+        return
+    script = _UI_FAKE_DOM + ui + """
+(async () => {
+  const dialogs = () => made.filter((e) => e.tagName === "DIALOG" && e.ls.length);   // 第一個是偵測有沒有 <dialog> 建的
+  const p1 = uiConfirm({ title: "一" });
+  const d1 = dialogs()[0];
+  d1.close();                       // 像第 3 步點背景：原生關掉，沒經過 ui.js 的按鈕
+  const r1 = await p1;
+  const p2 = uiConfirm({ title: "二" });
+  await Promise.resolve();
+  const d2 = dialogs()[1];
+  const opened2 = !!(d2 && d2.open);
+  const rep = d2.ls.filter((l) => l.t === "keydown" && l.cap);
+  const ev = { key: "Enter", repeat: true, defaultPrevented: false, stopped: false,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; } };
+  rep.forEach((l) => l.f(ev));
+  const ev2 = { key: "Enter", repeat: false, defaultPrevented: false, stopped: false,
+    preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; } };
+  rep.forEach((l) => l.f(ev2));
+  d2.close();
+  const r2 = await p2;
+  console.log(JSON.stringify({ r1, opened2, r2, repBlocked: ev.defaultPrevented && ev.stopped, firstPass: !ev2.defaultPrevented }));
+})();
+"""
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    import json
+
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got == {"r1": False, "opened2": True, "r2": False, "repBlocked": True, "firstPass": True}, got
 
 
 if __name__ == "__main__":

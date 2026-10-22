@@ -60,7 +60,7 @@
 | 3 | Groq API 金鑰 | 語音轉文字（免費額度通常夠） | 到 [console.groq.com](https://console.groq.com) 申請。把 `export GROQ_API_KEY=你的金鑰` 加進：**macOS → `~/.zshrc`**；**WSL2 → `~/.profile`**（不要放 `~/.bashrc`：Ubuntu 的 `.bashrc` 在非互動模式會提早結束，工具讀不到）。加完開新的終端機視窗（WSL2 的一行指令寫法見「Windows：第一次安裝 WSL2 與 Ubuntu」第 9 步）。**金鑰不要寫進其他檔案、也不要貼給 AI** |
 | 4 | Hugging Face 帳號與同意條款 | 分辨誰在說話（pyannote 是要先同意條款的模型） | ① 註冊／登入 [huggingface.co](https://huggingface.co) ② 打開 [pyannote/segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) 與 [pyannote/speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) 各按一次同意 ③ Settings → Access Tokens 建一把 **Read** 金鑰。登入指令在安裝完之後跑（見下一節） |
 | 5 | Claude Code（登入過） | 段落分析、建議刪除段落、人名清單（第 1 步） | macOS 裝好 Claude Code 即可。**✱ WSL2 要在 WSL2 裡面另外裝一份**（Windows 那份 WSL2 用不到）：`curl -fsSL https://claude.ai/install.sh \| bash`，裝完執行 `claude` 登入一次。沒裝的話第 1 步會跳過段落分析，第 3 步沒有學員段落可以覆核 |
-| 6 | 設定包（向開發者拿） | 名冊、敏感詞、名字排除清單、發音對照表、**匿名聲線**（學員重念用的男聲、女聲） | 安裝完用 `bookclub profile import 設定包.zip` 匯入（見「怎麼用」第 0 步）。沒有設定包時，安裝會放範例檔，名冊要自己填、匿名聲線要另外準備 |
+| 6 | 設定包（向開發者拿） | 名冊、敏感詞、名字排除清單、發音對照表、**匿名聲線**（學員重念用的男聲、女聲） | 安裝完用 `bookclub profile import 設定包.zip` 匯入（網頁左下角「工具設定」→「初始化設定」也能匯入，見「怎麼用」〈初始化設定與設定包〉）。沒有設定包時，安裝會放範例檔，名冊要自己填、匿名聲線要另外準備 |
 | 7 | 影片檔 | 讀書會的 Zoom 錄影（.mp4） | 放在哪裡都可以，在網頁「總覽」按「選影片」選它。工作區會建在影片旁邊，所以影片放哪裡，工作區就在哪裡（Mac 上直接用原本那一份）。**✱ WSL2：選到 Windows 裡的檔案（C 槽、D 槽…），工具會先自動複製一份進 Ubuntu 的 `~/讀書會剪輯資料/影片/`**，工作區建在複製過來的那一份旁邊。見下面「WSL2：影片放進去、成品拿出來」 |
 
 名冊欄位：`中文名`（學員本名）、`其他寫法`（同音字、暱稱、轉文字常聽錯的寫法，多個用「、」分隔）、`性別`（決定用男聲或女聲重念）。**代號不寫在名冊**：每一集在第 3 步選（代號是外國人名的中文寫法，例如「潔西」；同一集同一人同一個代號就好）。敏感詞欄位：`原詞`、`替代詞`。這幾份含真實姓名，放在 `~/讀書會剪輯資料/`，不要提交進任何 git 倉庫。

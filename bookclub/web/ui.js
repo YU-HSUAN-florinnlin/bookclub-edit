@@ -137,6 +137,13 @@ function uiOpen(kind, opts, finish) {
   if (cancelBtn) cancelBtn.addEventListener("click", () => { if (armed()) close(cancelValue); });
   x.addEventListener("click", () => close(cancelValue));
   dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(cancelValue); });   // Esc＝取消
+  // 1022-1 審查修正：別的程式（例如第 3 步對 .rv-modal 綁的「點背景關掉」）直接 dlg.close() 時也要收尾，
+  // 不然 finish 沒呼叫、uiBusy 一直是 true，之後的視窗全部排隊出不來。close() 本來就防重複
+  dlg.addEventListener("close", () => close(cancelValue));
+  // 1022-1 審查修正：Enter／空白鍵按住不放會連發，第二下落到主要按鈕上替人按掉 → 連發的那幾下不算
+  dlg.addEventListener("keydown", (e) => {
+    if (e.repeat && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
   if (input) {
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) return;   // 中文輸入法選字的 Enter 不算

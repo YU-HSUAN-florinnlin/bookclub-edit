@@ -187,7 +187,8 @@ async function renderReview() {
   document.getElementById("rv-key-btn").addEventListener("click", (e) => rvOpenModal("rv-modal-keys", e.currentTarget));
   document.getElementById("rv-code-btn").addEventListener("click", (e) => rvToggleSide(e.currentTarget));
   document.getElementById("rv-side-x").addEventListener("click", () => rvToggleSide(document.getElementById("rv-code-btn"), false));
-  document.querySelectorAll(".rv-modal").forEach((d) => {
+  // 1022-1 審查修正：工具自己的視窗（ui.js，class 也有 rv-modal）自己管關閉，不綁這裡的「點背景關掉」
+  document.querySelectorAll(".rv-modal:not(.ui-dialog)").forEach((d) => {
     d.querySelectorAll("[data-modal-close]").forEach((b) => b.addEventListener("click", () => d.close()));
     d.addEventListener("click", (e) => { if (e.target === d) d.close(); });   // 點視窗外面（背景）也關
     d.addEventListener("close", () => { const b = d._opener; if (b) { b.setAttribute("aria-expanded", "false"); b.focus(); } });
@@ -1645,7 +1646,7 @@ function rvRenderSettings() {
   el.querySelectorAll(".rv-voice-all").forEach((b) => b.addEventListener("click", async () => {
     // 09-30：一鍵生效太危險（保留原聲＝學員原本的聲音留在成品），先確認；取消不變
     const n = Object.values(rv.data["學員"] || {}).filter((p) => !p["都會刪掉"] && p["聲音"] !== b.dataset.v).length;
-    if (!n) { uiAlert({ title: "不用改", message: `每位學員都已經是「${b.dataset.v}」了。` }); return; }
+    if (!n) { uiToast(`不用改：每位學員都已經是「${b.dataset.v}」了。`); return; }   // 1022-2：什麼都沒做的資訊提示，用浮動通知
     const keep = b.dataset.v === "保留原聲";
     const msg = keep
       ? `會讓 ${n} 位學員保留原聲、不換聲音。\n只有同意保留原聲的學員才可以這樣做。`
