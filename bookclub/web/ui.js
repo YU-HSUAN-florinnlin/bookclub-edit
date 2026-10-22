@@ -40,10 +40,19 @@ function uiNext() {
   try { build(finish); } catch (e) { finish(undefined); throw e; }
 }
 
-function uiParas(message) {
+function uiParas(message) {   // 10-22 宇軒 B9：「• 」開頭的連續幾行變成項目清單
   const frag = document.createDocumentFragment();
+  let ul = null;
   String(message == null ? "" : message).split(/\n/).forEach((line) => {
-    if (!line.trim()) return;   // 空行只是段落間距，不另外畫
+    if (!line.trim()) { ul = null; return; }   // 空行只是段落間距，不另外畫
+    if (line.startsWith("• ")) {
+      if (!ul) { ul = document.createElement("ul"); frag.appendChild(ul); }
+      const li = document.createElement("li");
+      li.textContent = line.slice(2);
+      ul.appendChild(li);
+      return;
+    }
+    ul = null;
     const p = document.createElement("p");
     p.textContent = line;
     frag.appendChild(p);

@@ -948,6 +948,9 @@ dialog.ui-dialog { width: min(520px, calc(100vw - 32px)); }
 dialog.ui-dialog .rv-modal-head h2 { font-size: 17px; line-height: 1.4; }
 dialog.ui-dialog .rv-modal-body p { margin: 0 0 8px; line-height: 1.65; font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; }
 dialog.ui-dialog .rv-modal-body p:last-child { margin-bottom: 0; }
+dialog.ui-dialog .rv-modal-body ul { margin: 0 0 8px; padding-left: 1.4em; line-height: 1.65; font-size: 15px; }
+dialog.ui-dialog .rv-modal-body ul:last-child { margin-bottom: 0; }
+dialog.ui-dialog .rv-modal-body li { margin: 2px 0; overflow-wrap: anywhere; }
 dialog.ui-dialog .rv-modal-foot { gap: 10px; flex-wrap: wrap; }
 dialog.ui-dialog button { font-size: 14px; }
 dialog.ui-dialog button.primary { background: var(--fg); color: var(--bg); border: 1px solid var(--fg); font-weight: 600; }

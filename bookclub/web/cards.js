@@ -414,7 +414,7 @@ async function rvSaveRange(it, a, b) {
   // 1022-1（#263）：兩顆按鈕直接寫做法。10-22 宇軒 B9：關掉視窗（✕、Esc）＝範圍也不改，回到原本的時間
   if (w["改稿"]) {
     const redo = await uiConfirm({ title: "重念範圍改了", ok: "照新範圍重排", cancel: "保留我改的字", dismiss: null,
-      message: "要念的句子要不要照新範圍的逐字稿重排？\n照新範圍重排：你改過的字會被蓋掉。\n保留我改的字：要念的句子不動。\n按右上角 ✕：範圍不改，回到原本的時間。" });
+      message: "要念的句子要不要照新範圍的逐字稿重排？\n• 照新範圍重排：你改過的字會被蓋掉。\n• 保留我改的字：要念的句子不動。\n• 按右上角 ✕：範圍不改，回到原本的時間範圍。" });
     if (redo === null) { await cvReload(); return; }
     if (redo) body["改稿"] = "";
   }
