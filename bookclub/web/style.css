@@ -959,3 +959,23 @@ dialog.ui-dialog .ui-dialog-input { margin-top: 10px; padding: 8px 10px; font-si
 @media (prefers-color-scheme: dark) {
   dialog.ui-dialog button.primary.danger { background: #c0392b; border-color: #c0392b; color: #fff; }
 }
+
+/* 1022-2（#264）：右下角的浮動通知（ui.js uiToast）。左下角是「工具設定」齒輪，放右邊不擋它 */
+.ui-toasts { position: fixed; right: 16px; bottom: 16px; z-index: 1200; display: flex; flex-direction: column; align-items: flex-end;
+  gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+.ui-toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 8px; width: 100%; box-sizing: border-box;
+  padding: 10px 8px 10px 14px; background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-left: 4px solid var(--accent); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.18);
+  opacity: 0; transform: translateY(8px); transition: opacity .22s ease, transform .22s ease; }
+.ui-toast.show { opacity: 1; transform: none; }
+.ui-toast-body { flex: 1; min-width: 0; }
+.ui-toast-body p { margin: 0 0 4px; font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
+.ui-toast-body p:last-child { margin-bottom: 0; }
+button.ui-toast-x { flex: 0 0 auto; background: transparent; color: var(--muted); border: none; padding: 2px 8px; font-size: 15px; line-height: 1.4; border-radius: 6px; }
+button.ui-toast-x:hover { background: var(--bg-soft); color: var(--fg); }
+button.ui-toast-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (prefers-color-scheme: dark) { .ui-toast { box-shadow: 0 6px 24px rgba(0,0,0,.5); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-toast { transition: none; transform: none; }
+}

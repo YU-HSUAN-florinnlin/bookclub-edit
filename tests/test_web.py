@@ -390,7 +390,7 @@ def test_step0_moved_to_tool_menu():
 
 def test_own_dialogs_replace_browser_boxes():
     """1022-1（#263）：瀏覽器內建的 confirm／prompt 全部換成工具自己的視窗（ui.js），錯誤類的 alert 也換；
-    回報成功的 alert 留給下一批改成 Toast。"""
+    回報成功的 alert 在 1022-2（#264）改成 Toast（見 test_success_toasts）。"""
     import re
     html = (WEB / "index.html").read_text(encoding="utf-8")
     assert html.index('src="ui.js"') < html.index('src="app.js"')   # 其他程式之前載入
@@ -404,14 +404,42 @@ def test_own_dialogs_replace_browser_boxes():
     for f, js in others.items():
         assert not re.search(r"(?<![\w.])confirm\(", js), f
         assert not re.search(r"(?<![\w.])prompt\(", js), f
-        left = re.findall(r"(?<![\w.])alert\((.{0,40})", js)
-        assert all(("補找到" in x or "加進名冊了" in x or "換好了" in x or "配好了" in x) for x in left), (f, left)
+        # 1022-2（#264）：回報成功的 alert 也改成浮動通知 uiToast，一個裸的 alert( 都不留
+        assert not re.search(r"(?<![\w.])alert\(", js), (f, re.findall(r"(?<![\w.])alert\((.{0,40})", js))
     cards = others["cards.js"]
     # 重念範圍改了：兩顆按鈕直接寫做法，關掉視窗＝保留
     assert 'ok: "照新範圍重排", cancel: "保留我改的字"' in cards
     # 第 3 步唯讀時視窗裡的按鈕不在 #content 裡，鎖不到（rvApplyReadonly 只鎖 .rv2 底下）
     rv = others["review.js"]
     assert 'root.querySelectorAll("#rv-right, #rv-lower, #rv-settings, #rv-io, .rv-bar-btns")' in rv
+
+
+
+def test_success_toasts():
+    """1022-2（#264）：成功／完成的訊息改成右下角浮動通知（ui.js uiToast），5 秒自己消失、滑上去暫停、最多 3 則；
+    要人接著動手的那一句（代號不夠、還有沒換到的）仍用要按「知道了」的視窗。"""
+    import re
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    assert "const UI_TOAST_MS = 5000;" in ui and "const UI_TOAST_MAX = 3;" in ui
+    for s in ('function uiToast(', 'box.setAttribute("role", "status")', 'box.setAttribute("aria-live", "polite")',
+              '"mouseenter"', '"mouseleave"', '"focusin"', '"focusout"', '"關閉通知"', "prefers-reduced-motion: reduce"):
+        assert s in ui, s
+    toast = ui[ui.index("function uiToast("):].split("/* 1022-2（#265）")[0]
+    assert ".focus(" not in toast and ".innerHTML" not in toast   # 不搶焦點、文字不拼 HTML
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    i = css.index(".ui-toasts {")
+    assert "right: 16px" in css[i:i + 200] and "bottom: 16px" in css[i:i + 200]   # 右下角，不擋左下角齒輪
+    cards = (WEB / "cards.js").read_text(encoding="utf-8")
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    assert len(re.findall(r"uiToast\(", cards + rv)) == 7
+    i = rv.index('apiPost("/api/codes/auto"')
+    block = rv[i:i + 700]
+    assert 'if (r["代號不夠"]) uiAlert(' in block and "剩下的請自己打一個" in block and "else uiToast(" in block
+    i = rv.index('apiPost("/api/codes/convert"')
+    block = rv[i:i + 700]
+    assert 'r["還剩"].length) uiAlert(' in block and "else uiToast(msg)" in block
+    # 錯誤一律還是視窗
+    assert 'uiAlert({ title: "沒有配成"' in rv and 'uiAlert({ title: "沒有換成"' in rv
 
 
 if __name__ == "__main__":

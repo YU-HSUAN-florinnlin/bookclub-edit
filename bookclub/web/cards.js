@@ -159,7 +159,7 @@ function cvBindTools(it) {
 async function cvToTeacher(it) {
   await rvSaveTurnText(it);
   const res = await cvPost("/api/turns/save", { id: it.id, "說話者": "老師" });
-  if (res["補找到的老師名字"]) alert(`這段裡補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
+  if (res["補找到的老師名字"]) uiToast(`這段裡補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
   await cvReload();
   if (res["改成老師重念"]) {   // 09-30：沒有逐字稿句子的段落，沒辦法自動找名字 → 改成一筆「老師這一段用 AI 聲音重念」
     uiAlert({ title: "請確認要念的字", message: "這一段沒有逐字稿句子，沒辦法自動找名字：已經改成「老師這一段用 AI 聲音重念」，請確認要念的字。\n不用重念的話，按「不用改，保留老師原聲」。" });

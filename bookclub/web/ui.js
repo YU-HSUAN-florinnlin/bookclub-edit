@@ -154,3 +154,78 @@ function uiOpen(kind, opts, finish) {
 function uiConfirm(opts) { return uiEnqueue((finish) => uiOpen("confirm", opts, finish)); }
 function uiPrompt(opts) { return uiEnqueue((finish) => uiOpen("prompt", opts, finish)); }
 function uiAlert(opts) { return uiEnqueue((finish) => uiOpen("alert", opts, finish)); }
+
+/* 1022-2（#264）：成功／完成的通知改成右下角的浮動通知（Toast），不用再按「知道了」。
+ *
+ *   uiToast(訊息)   → 不用 await；畫面右下角跳一則，停 UI_TOAST_MS 後自己淡出
+ *
+ * - 只給「做好了」這類訊息用；錯誤、或要人接著動手的話（例如「剩下的請自己打一個」）一律用 uiAlert，
+ *   會自己消失的通知容易錯過。
+ * - 滑鼠移到通知上、或通知裡的 ✕ 有焦點時暫停倒數；移開後重新算一次完整的秒數。
+ * - 同時多則往上疊，最多 UI_TOAST_MAX 則，再多就把最舊的收掉。
+ * - 位置在右下角（左下角是「工具設定」齒輪，不擋它）；不搶焦點；容器 role="status" aria-live="polite"，報讀軟體會念。
+ * - 系統設定「減少動態效果」時不做淡入淡出。 */
+
+const UI_TOAST_MS = 5000;   // 每則停留多久（毫秒），宇軒 10-22 定 5 秒
+const UI_TOAST_MAX = 3;     // 最多同時幾則
+const UI_TOAST_FADE_MS = 220;
+
+function uiReducedMotion() {
+  try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; }
+}
+
+function uiToastBox() {
+  let box = document.getElementById("ui-toasts");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "ui-toasts";
+    box.className = "ui-toasts";
+    box.setAttribute("role", "status");
+    box.setAttribute("aria-live", "polite");
+    document.body.appendChild(box);
+  }
+  return box;
+}
+
+function uiToastClose(el) {
+  if (!el || el.dataset.leaving) return;
+  el.dataset.leaving = "1";
+  clearTimeout(el._uiTimer);
+  el.classList.remove("show");
+  const remove = () => el.remove();
+  if (uiReducedMotion()) remove(); else setTimeout(remove, UI_TOAST_FADE_MS);
+}
+
+function uiToast(message) {
+  const box = uiToastBox();
+  const el = document.createElement("div");
+  el.className = "ui-toast";
+  const body = document.createElement("div");
+  body.className = "ui-toast-body";
+  body.appendChild(uiParas(message));
+  const x = uiButton("✕", "ui-toast-x");
+  x.setAttribute("aria-label", "關閉通知");
+  el.append(body, x);
+
+  let hover = false, focus = false;
+  const start = () => { clearTimeout(el._uiTimer); el._uiTimer = setTimeout(() => uiToastClose(el), UI_TOAST_MS); };
+  const pause = () => clearTimeout(el._uiTimer);
+  el.addEventListener("mouseenter", () => { hover = true; pause(); });
+  el.addEventListener("mouseleave", () => { hover = false; if (!focus) start(); });
+  el.addEventListener("focusin", () => { focus = true; pause(); });
+  el.addEventListener("focusout", (e) => {
+    if (e.relatedTarget && el.contains(e.relatedTarget)) return;
+    focus = false;
+    if (!hover) start();
+  });
+  x.addEventListener("click", () => uiToastClose(el));
+
+  box.appendChild(el);   // 新的放最下面（最靠近角落），舊的往上推
+  const live = [...box.children].filter((c) => !c.dataset.leaving);
+  live.slice(0, Math.max(0, live.length - UI_TOAST_MAX)).forEach(uiToastClose);
+  void el.offsetWidth;   // 先排版一次，淡入的 transition 才會跑
+  el.classList.add("show");
+  start();
+  return el;
+}
+

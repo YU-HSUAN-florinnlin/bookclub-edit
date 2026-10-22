@@ -1281,7 +1281,7 @@ async function rvRescanPoll() {
           let ok = false;
           try { await apiPost("/api/people/rescan/seen", {}, { quiet: true }); ok = true; } catch (e) { rv.rescanMute = true; }
           rv.data["人名補找"] = { ...st, "未通知": ok ? 0 : st["未通知"] };
-          if (ok) alert(`補找到 ${st["未通知"]} 處老師提到這些名字，已經加進清單。`);
+          if (ok) uiToast(`補找到 ${st["未通知"]} 處老師提到這些名字，已經加進清單。`);
         }
         break;
       }
@@ -1390,7 +1390,7 @@ function rvBindPrep(root) {
     if (el.value === tname && !(await uiConfirm({ title: `${el.dataset.person} 其實是${tname}？`, danger: true, ok: `全部改成${tname}`, cancel: "先不要",
       message: `這一位的段落會全部改成${tname}（不重念），並補找裡面老師提到的名字。\n只有幾段是${tname}的話，改用下面「其他」→「拆開／有幾段其實是老師」。` }))) { el.value = ""; return; }
     const res = await apiPost("/api/turns/realname", { "學員": el.dataset.person, "本名": el.value || null });
-    if (res["補找到的老師名字"]) alert(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
+    if (res["補找到的老師名字"]) uiToast(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
     await reload();
   }));
   // 「新的代號…」：自己打一個代號。1022-1（#263）：要問人（打字、撞名）才回 Promise，其他照以前立刻回值
@@ -1414,7 +1414,7 @@ function rvBindPrep(root) {
     if (code && typeof code.then === "function") code = await code;
     if (code === undefined) return;
     const res = await apiPost("/api/turns/namecode", { "本名": el.dataset.real, "代號": code });
-    if (res["補找到的老師名字"]) alert(`加進名冊了，補找到 ${res["補找到的老師名字"]} 處老師提到這個名字，已經加進清單。`);
+    if (res["補找到的老師名字"]) uiToast(`加進名冊了，補找到 ${res["補找到的老師名字"]} 處老師提到這個名字，已經加進清單。`);
     if (res["補找中"]) rv.data["人名補找"] = { ...(rv.data["人名補找"] || {}), "補找中": true };   // 10-16 審查：背景補找，reload 後輪詢、做完通知
     await reload();
   }));
@@ -1431,8 +1431,10 @@ function rvBindPrep(root) {
       message: `${Object.entries(map).map(([o, n]) => `${o} → ${n}`).join("、")}\n換之前會自動備份；換過的句子到第 4 步會重新生成。` }))) return;
     try {
       const r = await apiPost("/api/codes/convert", { "對照": map });
-      alert(`換好了：${Object.entries(r["每個代號換了幾處"]).map(([o, n]) => `${o} ${n} 處`).join("、")}。備份在工作區的 ${r["備份"]}`
-        + (r["還剩"] && r["還剩"].length ? `\n還有沒換到的：${r["還剩"].join("、")}` : ""));
+      // 1022-2（#264）：全部換好用會自己消失的通知；還有沒換到的（要人自己處理）才跳要按「知道了」的視窗
+      const msg = `換好了：${Object.entries(r["每個代號換了幾處"]).map(([o, n]) => `${o} ${n} 處`).join("、")}。備份在工作區的 ${r["備份"]}`;
+      if (r["還剩"] && r["還剩"].length) uiAlert({ title: "換好了，還有幾個沒換到", message: `${msg}\n還有沒換到的：${r["還剩"].join("、")}` });
+      else uiToast(msg);
     } catch (e) { if (!e.shown) uiAlert({ title: "沒有換成", message: e.message || String(e) }); }
     await reload();
   });
@@ -1440,7 +1442,10 @@ function rvBindPrep(root) {
   if (auto) auto.addEventListener("click", async () => {
     try {
       const r = await apiPost("/api/codes/auto", {});
-      alert(`配好了：② ${r["②"]} 位、③ ${r["③"]} 個。${r["代號不夠"] ? `名單上的${rvWord()}不夠用，剩下的請自己打一個。` : "不喜歡的直接改。"}`);
+      // 1022-2（#264）：代號不夠時要人自己打，不能只靠會消失的通知 → 用要按「知道了」的視窗
+      const msg = `配好了：② ${r["②"]} 位、③ ${r["③"]} 個。`;
+      if (r["代號不夠"]) uiAlert({ title: "代號不夠用", message: `${msg}\n名單上的${rvWord()}不夠用，剩下的請自己打一個。` });
+      else uiToast(`${msg}不喜歡的直接改。`);
     } catch (e) { uiAlert({ title: "沒有配成", message: e.message || String(e) }); }
     await reload();
   });
@@ -1475,7 +1480,7 @@ function rvBindPrep(root) {
     if (!(await uiConfirm({ title: `把勾的 ${ids.length} 段改成老師？`, danger: true, ok: `${ids.length} 段改成老師`, cancel: "先不要",
       message: "改了之後這幾段不會重念，也會補找裡面老師提到的名字。" }))) return;
     const res = await apiPost("/api/turns/reassign", { ids, "說話者": "老師" });
-    if (res["補找到的老師名字"]) alert(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
+    if (res["補找到的老師名字"]) uiToast(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
     rv.splitOpen = null;
     await reload();
   });

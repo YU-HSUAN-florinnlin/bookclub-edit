@@ -8,7 +8,7 @@
  *
  * 假 DOM 只做到測試要的：innerHTML 設下去時用簡單的方式拆出有 id／class／data-* 的元素（不建真的樹），
  * getElementById、querySelector(All)（只看最後一段的 #id、.class、[data-x]、[data-x="v"]、標籤名）、addEventListener（記下來，
- * `H.fireAll()` 依序觸發一次）。apiGet／apiPost／confirm／alert／prompt（1022-1 起還有 uiConfirm／uiAlert／uiPrompt）都記進 `H.log`，不連網路。 */
+ * `H.fireAll()` 依序觸發一次）。apiGet／apiPost／confirm／alert／prompt（1022-1 起還有 uiConfirm／uiAlert／uiPrompt，1022-2 起還有 uiToast）都記進 `H.log`，不連網路。 */
 
 const fs = require("fs");
 const vm = require("vm");
@@ -132,6 +132,8 @@ function makeEnv(files, setup) {
     uiConfirm: async (o) => { H.log.push(["confirm", uiText(o)]); return H.confirm; },
     uiPrompt: async (o) => { H.log.push(["prompt", uiText(o)]); return "測試原因"; },
     uiAlert: async (o) => { H.log.push(["alert", uiText(o)]); },
+    // 1022-2（#264）：右下角浮動通知，記成 toast（跟要按「知道了」的 alert 分開）
+    uiToast: (m) => { H.log.push(["toast", String(m)]); },
     apiGet: async (url) => { H.log.push(["GET", url]); const k = Object.keys(H.apiGetData).find((p) => url.startsWith(p)); return clone(k ? H.apiGetData[k] : {}); },
     apiPost: async (url, body) => { H.log.push(["POST", url, clone(body === undefined ? null : body)]); return clone(H.api[url] || H.api["*"] || {}); },
     fmtStamp: (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(iso || "")); return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]}` : String(iso || ""); },
