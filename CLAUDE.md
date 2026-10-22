@@ -91,6 +91,30 @@
 - 不寫入 `/Users/<名字>/…` 這類絕對路徑，一律用 `~` 或相對於工具資料夾的路徑。
 - 不 commit、不 push，除非被明確要求。
 
+## 畫面元件名稱對照
+
+使用者用畫面上的叫法描述位置時，照這張表找程式。左欄是使用者會說的，中欄是通用元件名稱，右欄是程式位置（`bookclub/web/`）。
+
+| 使用者會說 | 通用名稱 | 程式位置 |
+|---|---|---|
+| 左邊的步驟列 | Sidebar | `index.html` `#sidebar`、`.steps`；步驟清單在 `app.js` 開頭 |
+| 步驟列上收合的按鈕 | 收合鈕（目前是「«」「»」） | `#navToggle`、`app.js` `setNavCollapsed` |
+| 步驟列上的影片資訊 | — | `#videoinfo` |
+| 「?」說明 | Popover（按了才出現） | `app.js` `helpTip`，class `.help-tip` |
+| 滑鼠停在按鈕上出現的小字 | Tooltip（瀏覽器原生） | 各按鈕的 `title=` |
+| 第 3 步「設定」「快捷鍵」視窗 | Modal | `review.js` `<dialog class="rv-modal">`、`rvOpenModal` |
+| 「代號對照」右側面板 | Side panel／Drawer | `review.js` `#rv-side-codes`（`.rv-side`） |
+| 瀏覽器跳出來要按確定的框 | 原生 alert／confirm／prompt | 散在各 `.js`，搜尋 `alert(`、`confirm(` |
+| 畫面頂端紅色的存檔失敗／斷線提示 | Banner | `index.html` `#saveError`、`app.js` 同名處理 |
+| 第 3 步上方那排按鈕 | Toolbar | `review.js` `.rv-bar-btns` |
+| 第 3 步的時間軸 | Timeline／Scrubber | `review.js` `#rv-tl` |
+| 點一下會展開的「進階設定」「詳細」「其他做法」 | Accordion（`<details>`） | 各 `.js` 搜尋 `<details` |
+| 第 3、5 步的一張張卡片 | Card | `cards.js`（共用）、`review.js`、`finalcheck.js` |
+| 卡片上「改時間」「這段其實是老師」那排 | 卡片動作按鈕 | `cards.js` `cvToolBtnsHtml` |
+| 換頁時的「載入中…」 | Loading 文字（還不是 Skeleton） | 各頁 render 函式開頭 |
+
+工具目前只有電腦版，不做手機版介面。
+
 ## 相關文件
 
 - `README.md`：§3 準備什麼（含 WSL2 檔案進出、防睡眠）、§4 安裝與〈更新到新版本〉、§5 怎麼用（每一步注意事項）、§6 產出在哪、§8 隱私與授權（哪些資料送 Groq、Claude）
