@@ -3,7 +3,7 @@
 `doctor`、`inspect`（10-02 第六批：安全查詢工作區）、`upgrade`（10-14：舊工作區升級成修改需求紀錄）、`models download`、`run analyze`、`run turns`、`run execute`（10-01 起每一段開一支 `run part` 子程式）、`serve`、`ref`、`gen teacher`、`gen names`、
 `gen students`、`render audio`、`render video`、`redo list`、`review export`／`review import`、`proofread prepare`
 是真的會動的指令；`bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
-功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列第 0～5 步都有頁面。
+功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列第 1～5 步都有頁面（初始化設定在左下角「工具設定」選單）。
 """
 
 from __future__ import annotations
@@ -203,7 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     rimp.add_argument("--video", required=True, help="原片路徑（要跟匯出時同一支，會比對長度）")
     rimp.add_argument("--force", action="store_true", help="影片長度對不上也照樣匯入")
 
-    prof_parser = sub.add_parser("profile", help="第 0 步初始化設定：設定包匯出／匯入（給協作夥伴）")
+    prof_parser = sub.add_parser("profile", help="初始化設定（網頁左下角「工具設定」）：設定包匯出／匯入（給協作夥伴）")
     prof_sub = prof_parser.add_subparsers(dest="profile_command")
     pexp = prof_sub.add_parser("export", help="把名冊、敏感詞、名字排除清單、發音對照表、settings.toml 打包成一個 zip")
     pexp.add_argument("--out", help="zip 存到哪裡（預設 ~/讀書會剪輯資料/設定包/設定包_時間.zip）")

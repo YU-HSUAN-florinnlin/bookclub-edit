@@ -122,8 +122,8 @@ async function renderReview() {
           <button class="ghost" id="rv-prep-btn">開始前 4 件事</button>
           <button class="ghost" id="rv-set-btn" aria-expanded="false">設定</button>
           <button class="ghost" id="rv-key-btn" aria-expanded="false">快捷鍵</button>
-          <button class="ghost" id="rv-code-btn" aria-expanded="false" title="本名和代號的對照（截圖或分享螢幕時會露出本名）">代號對照</button>
-          <button class="ghost" id="rv-export" title="只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交接整個專案請複製整個工作區資料夾">匯出覆核結果</button>
+          <button class="ghost" id="rv-code-btn" aria-expanded="false" data-tip="本名和代號的對照（截圖或分享螢幕時會露出本名）">代號對照</button>
+          <button class="ghost" id="rv-export" data-tip="只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交接整個專案請複製整個工作區資料夾">匯出覆核結果</button>
           <button class="primary" id="rv-go4" disabled>開始 AI 修改</button>
         </div>
       </header>
@@ -187,7 +187,8 @@ async function renderReview() {
   document.getElementById("rv-key-btn").addEventListener("click", (e) => rvOpenModal("rv-modal-keys", e.currentTarget));
   document.getElementById("rv-code-btn").addEventListener("click", (e) => rvToggleSide(e.currentTarget));
   document.getElementById("rv-side-x").addEventListener("click", () => rvToggleSide(document.getElementById("rv-code-btn"), false));
-  document.querySelectorAll(".rv-modal").forEach((d) => {
+  // 1022-1 審查修正：工具自己的視窗（ui.js，class 也有 rv-modal）自己管關閉，不綁這裡的「點背景關掉」
+  document.querySelectorAll(".rv-modal:not(.ui-dialog)").forEach((d) => {
     d.querySelectorAll("[data-modal-close]").forEach((b) => b.addEventListener("click", () => d.close()));
     d.addEventListener("click", (e) => { if (e.target === d) d.close(); });   // 點視窗外面（背景）也關
     d.addEventListener("close", () => { const b = d._opener; if (b) { b.setAttribute("aria-expanded", "false"); b.focus(); } });
@@ -574,7 +575,7 @@ async function rvConfirmGo4() {
 
 function rvPassAllHtml() {
   const left = rvLeft();
-  return `<button class="secondary" id="rv-passall" ${left ? "" : "disabled"} title="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>`;
+  return `<button class="secondary" id="rv-passall" ${left ? "" : "disabled"} data-tip="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>`;
 }
 
 function rvBindPassAll(box) {
@@ -596,7 +597,7 @@ async function rvPassAll() {
   if (b) { b.disabled = true; b.textContent = "通過中…"; }
   let r;
   try { r = await apiPost("/api/review/passall", {}); }
-  catch (err) { alert(err.message); if (b) { b.disabled = false; b.textContent = "全部照建議通過"; } return; }
+  catch (err) { uiAlert({ title: "沒有成功", message: err.message }); if (b) { b.disabled = false; b.textContent = "全部照建議通過"; } return; }
   await rvReload();
   const m = rvPassAllMsg(r);
   const dlg = document.createElement("dialog");
@@ -677,7 +678,7 @@ function rvRenderCard() {
       </div>`}
       ${state ? `<div class="rv-statebox">${state}</div>` : ""}
       <div class="rv-actions">
-        <button class="primary" id="rv-pass" title="已通過的再按一次會取消">${rvInCut(it) || it["涵蓋"] ? "✓ 已處理" : it["類型"] === "改成老師" ? "不用處理" : it["已確認"] ? "✓ 已通過（再按取消）" : rvPassCuts(it) ? "通過（這一段會整段剪掉，畫面也剪）" : "通過"}<kbd>Enter</kbd></button>
+        <button class="primary" id="rv-pass" data-tip="已通過的再按一次會取消">${rvInCut(it) || it["涵蓋"] ? "✓ 已處理" : it["類型"] === "改成老師" ? "不用處理" : it["已確認"] ? "✓ 已通過（再按取消）" : rvPassCuts(it) ? "通過（這一段會整段剪掉，畫面也剪）" : "通過"}<kbd>Enter</kbd></button>
         <button class="ghost" id="rv-change" aria-expanded="${rv.open}">改做法<kbd>E</kbd></button>
         ${cvToolBtnsHtml(it)}
         <span class="spacer"></span>
@@ -779,7 +780,8 @@ async function rvPass() {
     if (rvInCut(it) || it["涵蓋"] || t === "改成老師") return;   // 不用按：已經處理好
     if (rvPassCuts(it)) {
       // 09-29 宇軒：不重要的短句，通過＝剪掉這段（聲音和畫面都拿掉，不用生成）；10-01：先確認、記下是哪一段剪的（可以取消）
-      if (!confirm(`按通過會把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 整段剪掉（聲音和畫面都拿掉，影片會變短）。\n要留下這段：按「取消」，在「改做法」選「學員重念」。`)) return;
+      if (!(await uiConfirm({ title: `通過＝把 ${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 整段剪掉`, danger: true, ok: "剪掉這段", cancel: "留下這段",
+        message: "聲音和畫面都拿掉，影片會變短。\n要留下這段：按「留下這段」，再到「改做法」選「學員重念」。" }))) return;
       await apiPost("/api/review/cut", { start: it.start, end: it.end, "備註": "不重要的短句（通過＝剪掉）", "來源段落": it.id });
       await rvReload();
       return;
@@ -807,14 +809,14 @@ async function rvPass() {
         : { id: it.id, "做法": how, "排法": ar, "已確認": true });
       it["做法"] = how;
     } else if (t === "刪除段落" && it["來源"] === "建議") {
-      if (undo) { alert("建議刪除的段落用「改做法」選刪除或不刪"); return; }
+      if (undo) { uiAlert({ title: "用「改做法」改", message: "建議刪除的段落用「改做法」選刪除或不刪" }); return; }
       await apiPost("/api/review/cutsuggest", { id: it.id, "決定": rvChosen(it) });
       await rvReload();
       return;
     } else {
       return;   // 手動加的刪除段落、局部消音本來就算確認過
     }
-  } catch (err) { alert(err.message); return; }
+  } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
   it["已確認"] = !undo;
   rv.lastActivity = Date.now();
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();   // 通過＝打完字了，之後播到下一筆會自動換
@@ -851,7 +853,7 @@ function rvRenderList() {
       ${st}</li>`;
   }).join("");
   lower.innerHTML = `
-    <div class="rv-row rv-passbar"><button class="ghost small" id="rv-tostart" title="開始前 4 件事">開始前 4 件事${rvWhoDone() ? "" : "（② 還沒做）"}</button>${rvPassAllHtml()}
+    <div class="rv-row rv-passbar"><button class="ghost small" id="rv-tostart">開始前 4 件事${rvWhoDone() ? "" : "（② 還沒做）"}</button>${rvPassAllHtml()}
       <span class="rv-meta">還沒確認 ${rvLeft()} 張；不用全部看完也能「開始 AI 修改」，沒看的照建議做</span></div>
     <nav class="rv-filters" aria-label="篩選">${RV_FILTERS.map(([f, label]) =>
       `<button class="${rv.filter === f ? "on" : ""}" data-f="${esc(f)}">${esc(label)} <span>${count(f)}</span></button>`).join("")}</nav>
@@ -996,7 +998,7 @@ function rvPrepPeopleHtml() {
       </div>
       <details class="rv-more-ctl"><summary>其他（合併、拆開）</summary><div class="ctl">
         ${others ? `<label>跟誰是同一人 <select class="rv-mergeto" data-person="${esc(n)}"><option value="">—</option>${others}</select></label>` : ""}
-        <button class="ghost small rv-splitopen" data-person="${esc(n)}" title="一位其實是兩個人、或有幾段其實是老師">拆開／有幾段其實是老師</button>
+        <button class="ghost small rv-splitopen" data-person="${esc(n)}" data-tip="一位其實是兩個人、或有幾段其實是老師">拆開／有幾段其實是老師</button>
       </div></details>${split}</li>`;
   }).join("") + (cutOnly.length ? `<li class="rv-person"><details><summary class="rv-meta">只在要刪的段落裡講話（${cutOnly.length} 位：${esc(cutOnly.map(([n]) => n).join("、"))}），不用判斷</summary>
       <p class="rv-meta">例如結尾跟老師說再見。這幾段會整段刪掉；如果在「① 建議刪除段落」改成不刪，他們會回到上面。</p>
@@ -1084,10 +1086,13 @@ function rvAutoHtml() {
 }
 
 // 10-07：手動選到跟名字撞的代號（名冊上有人、或這一集被叫到的人叫這個名字）→ 先問一次
+// 1022-1（#263）：改成工具自己的視窗。沒撞名直接回 true（不是 Promise：選了就立刻存，跟以前一樣不多等一拍）；
+// 撞名才回 Promise<boolean>。呼叫的地方：回 true 不用等，其他 await 視窗的答案
 function rvCodeClashOk(code) {
   const who = ((rv.data["代號對照"] || {})["撞名"] || {})[code];
   if (!who || !who.length) return true;
-  return confirm(`「${code}」跟名字撞名（${who.join("、")} 也叫這個）。成品裡會分不出是${rvWord()}還是真的在叫這個人。\n還是要用嗎？`);
+  return uiConfirm({ title: `「${code}」跟名字撞名`, ok: `還是用「${code}」`, cancel: "換一個",
+    message: `${who.join("、")} 也叫這個。成品裡會分不出是${rvWord()}還是真的在叫這個人。` });
 }
 
 function rvDupHtml() {
@@ -1277,7 +1282,7 @@ async function rvRescanPoll() {
           let ok = false;
           try { await apiPost("/api/people/rescan/seen", {}, { quiet: true }); ok = true; } catch (e) { rv.rescanMute = true; }
           rv.data["人名補找"] = { ...st, "未通知": ok ? 0 : st["未通知"] };
-          if (ok) alert(`補找到 ${st["未通知"]} 處老師提到這些名字，已經加進清單。`);
+          if (ok) uiToast(`補找到 ${st["未通知"]} 處老師提到這些名字，已經加進清單。`);
         }
         break;
       }
@@ -1304,7 +1309,7 @@ async function rvDecideName(name, body) {
         "代號": body["做法"] === "換成代號" ? body["代號"] : same ? ((rv.data["這一集代號"] || {})[same] || null) : null });
     }
   } catch (e) {
-    if (!e.shown) alert(e.message || e);
+    if (!e.shown) uiAlert({ title: "沒有存到", message: e.message || String(e) });
   } finally {
     delete rv.nameSaving[name];
     rvNameRowRefresh(name);
@@ -1330,8 +1335,10 @@ function rvBindNameRow(scope) {
     if (kind === "same") { await rvDecideName(name, { "做法": "是上面的學員", "同一人": val }); return; }
     if (kind === "code") {
       let code = val;
-      if (code === "__new") code = (prompt("輸入英文名（外國人名的中文寫法，例如 葛蕾絲）") || "").trim();
-      if (!code || !rvCodeClashOk(code)) { back(); return; }
+      if (code === "__new") code = ((await uiPrompt({ title: "輸入英文名", message: "外國人名的中文寫法，例如 葛蕾絲", placeholder: "例如 葛蕾絲", ok: "用這個英文名" })) || "").trim();
+      if (!code) { back(); return; }
+      const clash = rvCodeClashOk(code);
+      if (clash !== true && !(await clash)) { back(); return; }
       await rvDecideName(name, { "做法": "換成代號", "代號": code });
       return;
     }
@@ -1381,26 +1388,34 @@ function rvBindPrep(root) {
   const reload = async () => { await rvReload(); };
   root.querySelectorAll(".rv-real").forEach((el) => el.addEventListener("change", async () => {
     const tname = (rv.data["學員資料"] || {})["老師名稱"] || "老師";
-    if (el.value === tname && !confirm(`${el.dataset.person} 其實是${tname}？\n這一位的段落會全部改成老師（不重念），並補找裡面老師提到的名字。\n只有幾段是老師的話，改用下面「其他」→「拆開／有幾段其實是老師」。`)) { el.value = ""; return; }
+    if (el.value === tname && !(await uiConfirm({ title: `${el.dataset.person} 其實是${tname}？`, danger: true, ok: `全部改成${tname}`, cancel: "先不要",
+      message: `這一位的段落會全部改成${tname}（不重念），並補找裡面老師提到的名字。\n只有幾段是${tname}的話，改用下面「其他」→「拆開／有幾段其實是老師」。` }))) { el.value = ""; return; }
     const res = await apiPost("/api/turns/realname", { "學員": el.dataset.person, "本名": el.value || null });
-    if (res["補找到的老師名字"]) alert(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
+    if (res["補找到的老師名字"]) uiToast(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
     await reload();
   }));
-  const askCode = (el) => {   // 「新的代號…」：自己打一個代號
-    let v = el.value;
-    if (v === "__new") {
-      v = (prompt("輸入新的代號（外國人名的中文寫法，例如 葛蕾絲）") || "").trim();
-      if (!v) { el.value = ""; return undefined; }
-    }
+  // 「新的代號…」：自己打一個代號。1022-1（#263）：要問人（打字、撞名）才回 Promise，其他照以前立刻回值
+  const askCodeCheck = (el, v) => {
     if (!v) return null;
-    if (!rvCodeClashOk(v)) { el.value = ""; return undefined; }
-    return v;
+    const clash = rvCodeClashOk(v);
+    if (clash === true) return v;
+    return clash.then((ok) => { if (!ok) { el.value = ""; return undefined; } return v; });
+  };
+  const askCode = (el) => {
+    const v = el.value;
+    if (v !== "__new") return askCodeCheck(el, v);
+    return (async () => {
+      const typed = ((await uiPrompt({ title: "輸入新的代號", message: "外國人名的中文寫法，例如 葛蕾絲", placeholder: "例如 葛蕾絲", ok: "用這個代號" })) || "").trim();
+      if (!typed) { el.value = ""; return undefined; }
+      return askCodeCheck(el, typed);
+    })();
   };
   root.querySelectorAll(".rv-namecode").forEach((el) => el.addEventListener("change", async () => {
-    const code = askCode(el);
+    let code = askCode(el);
+    if (code && typeof code.then === "function") code = await code;
     if (code === undefined) return;
     const res = await apiPost("/api/turns/namecode", { "本名": el.dataset.real, "代號": code });
-    if (res["補找到的老師名字"]) alert(`加進名冊了，補找到 ${res["補找到的老師名字"]} 處老師提到這個名字，已經加進清單。`);
+    if (res["補找到的老師名字"]) uiToast(`加進名冊了，補找到 ${res["補找到的老師名字"]} 處老師提到這個名字，已經加進清單。`);
     if (res["補找中"]) rv.data["人名補找"] = { ...(rv.data["人名補找"] || {}), "補找中": true };   // 10-16 審查：背景補找，reload 後輪詢、做完通知
     await reload();
   }));
@@ -1410,23 +1425,29 @@ function rvBindPrep(root) {
     const map = {};
     root.querySelectorAll(".rv-cvt").forEach((el) => { map[el.dataset.old] = el.value; });
     const lack = Object.entries(map).filter(([, v]) => !v).map(([k]) => k);
-    if (lack.length) { alert(`還沒選：${lack.join("、")}`); return; }
+    if (lack.length) { uiAlert({ title: "還有沒選的", message: `還沒選：${lack.join("、")}` }); return; }
     const used = Object.values(map);
-    if (new Set(used).size !== used.length) { alert("同一集不能兩個人換成同一個代號"); return; }
-    if (!confirm(`要換成：${Object.entries(map).map(([o, n]) => `${o} → ${n}`).join("、")}？\n換之前會自動備份；換過的句子到第 4 步會重新生成。`)) return;
+    if (new Set(used).size !== used.length) { uiAlert({ title: "代號重複了", message: "同一集不能兩個人換成同一個代號" }); return; }
+    if (!(await uiConfirm({ title: "要換成這些代號嗎？", ok: "換成這些代號", cancel: "先不要",
+      message: `${Object.entries(map).map(([o, n]) => `${o} → ${n}`).join("、")}\n換之前會自動備份；換過的句子到第 4 步會重新生成。` }))) return;
     try {
       const r = await apiPost("/api/codes/convert", { "對照": map });
-      alert(`換好了：${Object.entries(r["每個代號換了幾處"]).map(([o, n]) => `${o} ${n} 處`).join("、")}。備份在工作區的 ${r["備份"]}`
-        + (r["還剩"] && r["還剩"].length ? `\n還有沒換到的：${r["還剩"].join("、")}` : ""));
-    } catch (e) { if (!e.shown) alert(e.message || e); }
+      // 1022-2（#264）：全部換好用會自己消失的通知；還有沒換到的（要人自己處理）才跳要按「知道了」的視窗
+      const msg = `換好了：${Object.entries(r["每個代號換了幾處"]).map(([o, n]) => `${o} ${n} 處`).join("、")}。備份在工作區的 ${r["備份"]}`;
+      if (r["還剩"] && r["還剩"].length) uiAlert({ title: "換好了，還有幾個沒換到", message: `${msg}\n還有沒換到的：${r["還剩"].join("、")}` });
+      else uiToast(msg);
+    } catch (e) { if (!e.shown) uiAlert({ title: "沒有換成", message: e.message || String(e) }); }
     await reload();
   });
   const auto = root.querySelector("#rv-autocode");
   if (auto) auto.addEventListener("click", async () => {
     try {
       const r = await apiPost("/api/codes/auto", {});
-      alert(`配好了：② ${r["②"]} 位、③ ${r["③"]} 個。${r["代號不夠"] ? `名單上的${rvWord()}不夠用，剩下的請自己打一個。` : "不喜歡的直接改。"}`);
-    } catch (e) { alert(e.message || e); }
+      // 1022-2（#264）：代號不夠時要人自己打，不能只靠會消失的通知 → 用要按「知道了」的視窗
+      const msg = `配好了：② ${r["②"]} 位、③ ${r["③"]} 個。`;
+      if (r["代號不夠"]) uiAlert({ title: "代號不夠用", message: `${msg}\n名單上的${rvWord()}不夠用，剩下的請自己打一個。` });
+      else uiToast(`${msg}不喜歡的直接改。`);
+    } catch (e) { uiAlert({ title: "沒有配成", message: e.message || String(e) }); }
     await reload();
   });
   root.querySelectorAll(".rv-code").forEach((el) => el.addEventListener("change", async () => {
@@ -1437,7 +1458,8 @@ function rvBindPrep(root) {
   }));
   root.querySelectorAll(".rv-mergeto").forEach((el) => el.addEventListener("change", async () => {
     if (!el.value) return;
-    if (!confirm(`把 ${el.dataset.person} 的段落全部併進 ${el.value}？`)) { el.value = ""; return; }
+    if (!(await uiConfirm({ title: `把 ${el.dataset.person} 的段落全部併進 ${el.value}？`, danger: true, ok: `併進 ${el.value}`, cancel: "先不要",
+      message: `${el.dataset.person} 的每一段都會改成 ${el.value}。` }))) { el.value = ""; return; }
     await apiPost("/api/turns/merge_person", { "從": el.dataset.person, "併進": el.value }); await reload();
   }));
   root.querySelectorAll(".rv-splitopen").forEach((b) => b.addEventListener("click", () => { rv.splitOpen = b.dataset.person; rvRenderPrep(); }));
@@ -1446,7 +1468,7 @@ function rvBindPrep(root) {
   const go = root.querySelector("#rv-splitgo");
   if (go) go.addEventListener("click", async () => {
     const ids = [...root.querySelectorAll(".rv-splitck:checked")].map((x) => x.value);
-    if (!ids.length) { alert("先勾要改成新學員的段落"); return; }
+    if (!ids.length) { uiAlert({ title: "先勾段落", message: "先勾要改成新學員的段落" }); return; }
     await apiPost("/api/turns/reassign", { ids, "說話者": "新學員" });
     rv.splitOpen = null;
     await reload();
@@ -1455,10 +1477,11 @@ function rvBindPrep(root) {
   if (toT) toT.addEventListener("click", async () => {
     // 09-29 宇軒：聲音辨識把老師判成學員（例如「學員2」有一大段其實是老師在講話）
     const ids = [...root.querySelectorAll(".rv-splitck:checked")].map((x) => x.value);
-    if (!ids.length) { alert("先勾其實是老師在講話的段落"); return; }
-    if (!confirm(`把勾的 ${ids.length} 段改成老師？\n改了之後這幾段不會重念，也會補找裡面老師提到的名字。`)) return;
+    if (!ids.length) { uiAlert({ title: "先勾段落", message: "先勾其實是老師在講話的段落" }); return; }
+    if (!(await uiConfirm({ title: `把勾的 ${ids.length} 段改成老師？`, danger: true, ok: `${ids.length} 段改成老師`, cancel: "先不要",
+      message: "改了之後這幾段不會重念，也會補找裡面老師提到的名字。" }))) return;
     const res = await apiPost("/api/turns/reassign", { ids, "說話者": "老師" });
-    if (res["補找到的老師名字"]) alert(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
+    if (res["補找到的老師名字"]) uiToast(`補找到 ${res["補找到的老師名字"]} 個老師提到的名字，已經加進清單。`);
     rv.splitOpen = null;
     await reload();
   });
@@ -1515,7 +1538,11 @@ const rvEdCtx = {
       const kind = el.querySelector("[data-te-kind]");
       if (kind) kind.addEventListener("change", () => { ed.kind = kind.value || null; ed.result = null; rvRenderIO(); });
       const who = el.querySelector("#rv-ed-who"); if (who) who.addEventListener("change", () => { ed.who = who.value; });
-      const code = el.querySelector("#rv-ed-code"); if (code) code.addEventListener("change", () => { if (!rvCodeClashOk(code.value)) code.value = ""; ed.code = code.value; });
+      const code = el.querySelector("#rv-ed-code"); if (code) code.addEventListener("change", async () => {
+        const clash = rvCodeClashOk(code.value);
+        if (clash !== true && !(await clash)) code.value = "";
+        ed.code = code.value;
+      });
       const word = el.querySelector("#rv-ed-word"); if (word) word.addEventListener("change", () => { ed.word = word.value; });
       el.querySelectorAll(".rv-ed-way").forEach((r) => r.addEventListener("change", () => { ed.way = r.value; }));
     },
@@ -1619,11 +1646,13 @@ function rvRenderSettings() {
   el.querySelectorAll(".rv-voice-all").forEach((b) => b.addEventListener("click", async () => {
     // 09-30：一鍵生效太危險（保留原聲＝學員原本的聲音留在成品），先確認；取消不變
     const n = Object.values(rv.data["學員"] || {}).filter((p) => !p["都會刪掉"] && p["聲音"] !== b.dataset.v).length;
-    if (!n) { alert(`每位學員都已經是「${b.dataset.v}」了。`); return; }
-    const msg = b.dataset.v === "保留原聲"
-      ? `會讓 ${n} 位學員保留原聲、不換聲音。\n只有同意保留原聲的學員才可以這樣做。確定嗎？`
-      : `會讓 ${n} 位學員改成重新生成（用匿名聲音重念）。確定嗎？`;
-    if (!confirm(msg)) return;
+    if (!n) { uiToast(`不用改：每位學員都已經是「${b.dataset.v}」了。`); return; }   // 1022-2：什麼都沒做的資訊提示，用浮動通知
+    const keep = b.dataset.v === "保留原聲";
+    const msg = keep
+      ? `會讓 ${n} 位學員保留原聲、不換聲音。\n只有同意保留原聲的學員才可以這樣做。`
+      : `會讓 ${n} 位學員改成重新生成（用匿名聲音重念）。`;
+    if (!(await uiConfirm({ title: keep ? "全部保留原聲？" : "全部改成重新生成？", message: msg, danger: keep,
+      ok: keep ? `${n} 位全部保留原聲` : `${n} 位全部重新生成`, cancel: "先不要" }))) return;
     await apiPost("/api/review/voice", { "學員": "全部", "聲音": b.dataset.v }); await rvReload();
   }));
   rvApplyReadonly();

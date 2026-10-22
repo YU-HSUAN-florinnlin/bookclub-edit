@@ -6,7 +6,7 @@
 ## 專案是什麼
 
 - 讀書會 Zoom 錄影的隱私處理工具：學員聲音換成匿名聲線、說出口的名字換成代號，老師維持原音（`bookclub/__init__.py`）。
-- 使用者是讀書會老師與協作夥伴，在本機網頁（`bookclub serve`，<http://localhost:8766>）照第 0～5 步操作。
+- 使用者是讀書會老師與協作夥伴，在本機網頁（`bookclub serve`，<http://localhost:8766>）照第 1～5 步操作（初始化設定在左下角「工具設定」選單，網址 `#step0`）。
 - 平台：macOS（Apple Silicon、Intel）與 Windows 的 WSL2 Ubuntu；維護者在 macOS 開發。Windows 上有不少功能還沒實機驗過（見 `docs/之後要做.md`）。
 
 ## 目錄地圖

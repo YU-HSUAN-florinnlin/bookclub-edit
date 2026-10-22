@@ -13,3 +13,7 @@ prototype/audio/
 
 # 維護者本機的 AI 規則捷徑，不公開
 CLAUDE.local.md
+
+# 1022-2：tests/fake_workdir.py 建的假影片、成品（預設在目前資料夾建「假工作區/」）
+*.mp4
+假工作區/

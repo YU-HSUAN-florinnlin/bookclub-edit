@@ -849,7 +849,8 @@ const { makeEnv } = require(process.argv[2]);
       globalThis.apiGet = async (u) => { H.log.push(["GET", u]); return {"補找中": false, "未通知": 3, "錯誤": null}; };
       globalThis.apiPost = async (u) => { H.log.push(["POST", u]); if (!${ok}) throw new Error("第 4 步執行中"); return {ok: true}; };
       await rvRescanPoll();
-      return {alerts: H.log.filter((x) => x[0] === "alert").length, mute: !!rv.rescanMute};
+      // 1022-2（#264）：補找到的通知改成浮動通知（假瀏覽器記成 toast），算 toast＋alert 兩種，跳一次就是一次
+      return {alerts: H.log.filter((x) => x[0] === "alert" || x[0] === "toast").length, mute: !!rv.rescanMute};
     })()`, ctx);
   }
   process.stdout.write(JSON.stringify(out));

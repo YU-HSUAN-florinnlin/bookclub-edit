@@ -4,7 +4,7 @@
 const SHOW_EXEC_ETA = false;
 
 /* 讀書會剪輯工具｜前端骨架。原生 HTML/CSS/JS，不用打包工具、不用 CDN 套件。
- * 左側步驟列 0～5 步（09-25 宇軒：原本第 3、4 步合成第 3 步「覆核工作台」；09-29：原本第 5 步逐筆覆核、第 6 步整片檢查
+ * 左側步驟列 1～5 步（1022-1 #267：第 0 步「初始化設定」收進左下角齒輪「工具設定」選單，網址照舊 #step0）（09-25 宇軒：原本第 3、4 步合成第 3 步「覆核工作台」；09-29：原本第 5 步逐筆覆核、第 6 步整片檢查
  * 合成第 5 步「成品檢查」），每步標 AI／人工，可以收合；
  * 還沒做的步驟顯示「還沒做」的說明頁，不假裝可用。路由用 URL hash（#step1、#step2…）。
  * 第 3 步覆核工作台在 review.js，第 5 步成品檢查在 finalcheck.js。 */
@@ -12,7 +12,8 @@ const SHOW_EXEC_ETA = false;
 // who：這一步是誰做（09-29 宇軒：步驟列標「AI」或「人工」，一眼看出現在輪到誰）
 const STEP_DEFS = [
   { id: "overview", num: null, title: "總覽", real: true },
-  { id: "step0", num: 0, title: "初始化設定", real: true, who: "人工" },
+  // nav: false＝不列在步驟列（1022-1 #267：收進左下角「工具設定」選單，見 TOOL_MENU），網址照舊能開
+  { id: "step0", num: 0, title: "初始化設定", real: true, who: "人工", nav: false },
   { id: "step1", num: 1, title: "影片分析", real: true, who: "AI" },
   { id: "step2", num: 2, title: "挑選老師參考聲音片段", real: true, who: "人工" },
   { id: "step3", num: 3, title: "覆核工作台", real: true, who: "人工" },
@@ -249,7 +250,7 @@ async function renderSidebar() {
   }
 
   const active = currentRouteId();
-  stepsEl.innerHTML = STEP_DEFS.map((s) => {
+  stepsEl.innerHTML = STEP_DEFS.filter((s) => s.nav !== false).map((s) => {
     let badgeClass = "notyet";
     let badgeText = "·";
     if (s.real && state && !state["沒有專案"]) {
@@ -268,6 +269,7 @@ async function renderSidebar() {
     </a>${s.num === 3 && s.real && state && !state["沒有專案"] ? navSubHtml(state) : ""}</li>`;
   }).join("");
   navSubSync();
+  toolMenuSync();
 }
 
 // 10-16 宇軒：第 3 步下面兩個子步驟，點了切到那一頁、看得出現在在哪裡；做完前面綠色打勾
@@ -334,8 +336,11 @@ function navCollapsedSaved() {
 function setNavCollapsed(on, save = true) {
   document.querySelector(".app").classList.toggle("nav-collapsed", on);
   const b = document.getElementById("navToggle");
-  b.textContent = on ? "»" : "«";
-  b.title = on ? "展開步驟列" : "收合步驟列";
+  // 1022-1（#266）：按鈕是三條線的圖示（index.html 裡的 SVG），收合、展開都同一個，只換提示文字
+  // 1022-2（#265）：說明改用馬上出現的提示框（ui.js data-tip），收合後只剩圖示，aria-label 留著給報讀軟體
+  const label = on ? "展開步驟列" : "收合步驟列";
+  b.dataset.tip = label;
+  b.setAttribute("aria-label", label);
   b.setAttribute("aria-expanded", String(!on));
   if (save) {
     try { localStorage.setItem(NAV_KEY, on ? "1" : "0"); } catch (e) { /* 存不了也沒關係，只是下次不記得 */ }
@@ -347,6 +352,98 @@ setNavCollapsed(navCollapsedSaved(), false);
 document.getElementById("navToggle").addEventListener("click", () => {
   setNavCollapsed(!document.querySelector(".app").classList.contains("nav-collapsed"));
 });
+
+// ---------------------------------------------------------------------------
+// 1022-1（#267）：左下角齒輪「工具設定」選單（往上展開）。第 0 步「初始化設定」收在這裡，不列在步驟列。
+// 第 3 步上方另有一顆「設定」（第 3 步自己的設定），所以這顆叫「工具設定」。之後要加項目：在 TOOL_MENU 加一列。
+// ---------------------------------------------------------------------------
+
+const TOOL_MENU = [
+  { route: "step0", label: "初始化設定", hint: "名冊、敏感詞、發音對照表、匿名聲線；設定包匯出匯入" },
+];
+
+function toolMenuEls() {
+  return { wrap: document.getElementById("toolMenuWrap"), btn: document.getElementById("toolMenuBtn"), menu: document.getElementById("toolMenu") };
+}
+
+function toolMenuOpen() { const { menu } = toolMenuEls(); return !!(menu && !menu.hidden); }
+
+function toolMenuRender() {
+  const { menu } = toolMenuEls();
+  if (!menu) return;
+  const cur = currentRouteId();
+  menu.innerHTML = TOOL_MENU.map((m) => `<a role="menuitem" href="#${esc(m.route)}" class="tool-menu-item${m.route === cur ? " active" : ""}"${m.route === cur ? ' aria-current="page"' : ""}>
+    <span class="tool-menu-label">${esc(m.label)}</span>${m.hint ? `<span class="tool-menu-hint">${esc(m.hint)}</span>` : ""}</a>`).join("");
+}
+
+// 選單用 fixed 定位貼在按鈕上方：步驟列收合後只有 64px 寬，放在裡面會被切掉
+function toolMenuPlace() {
+  const { btn, menu } = toolMenuEls();
+  if (!btn || !menu) return;
+  const r = btn.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, r.left)}px`;
+  menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`;
+}
+
+function toolMenuShow(on, { focus = false } = {}) {
+  const { btn, menu } = toolMenuEls();
+  if (!btn || !menu) return;
+  if (on) { toolMenuRender(); menu.hidden = false; toolMenuPlace(); }
+  else menu.hidden = true;
+  btn.setAttribute("aria-expanded", String(on));
+  btn.classList.toggle("open", on);
+  if (on && focus) { const first = menu.querySelector('[role="menuitem"]'); if (first) first.focus(); }
+}
+
+// 在初始化設定頁時，齒輪按鈕亮「目前在這裡」
+function toolMenuSync() {
+  const { btn } = toolMenuEls();
+  if (!btn) return;
+  const here = TOOL_MENU.some((m) => m.route === currentRouteId());
+  btn.classList.toggle("active", here);
+  if (here) btn.setAttribute("aria-current", "page"); else btn.removeAttribute("aria-current");
+  if (toolMenuOpen()) toolMenuRender();
+}
+
+(function toolMenuBind() {
+  const { wrap, btn, menu } = toolMenuEls();
+  if (!wrap || !btn || !menu) return;
+  btn.addEventListener("click", (e) => {
+    // 用鍵盤（Enter／空白鍵）打開時，焦點直接進第一項；滑鼠點開不搶焦點
+    toolMenuShow(!toolMenuOpen(), { focus: e.detail === 0 });
+  });
+  btn.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); toolMenuShow(true, { focus: true }); }
+  });
+  menu.addEventListener("click", (e) => {
+    if (e.target.closest && e.target.closest('[role="menuitem"]')) toolMenuShow(false);   // 照連結走 #step0，選單收起
+  });
+  menu.addEventListener("keydown", (e) => {
+    const items = [...menu.querySelectorAll('[role="menuitem"]')];
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const n = items.length;
+      if (n) items[(i + (e.key === "ArrowDown" ? 1 : -1) + n) % n].focus();
+    } else if (e.key === "Tab" && ((!e.shiftKey && i === items.length - 1) || (e.shiftKey && i === 0))) {
+      toolMenuShow(false);   // Tab 離開選單就收起
+    }
+  });
+  document.addEventListener("click", (e) => {
+    if (toolMenuOpen() && !wrap.contains(e.target)) toolMenuShow(false);   // 點選單外面收起
+  });
+  // 1022-1 審查修正：選單是 fixed 定位，側欄捲動時不會跟著動 → 捲動就收起
+  const side = document.getElementById("sidebar");
+  if (side) side.addEventListener("scroll", () => { if (toolMenuOpen()) toolMenuShow(false); }, { passive: true });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && toolMenuOpen() && !document.querySelector("dialog[open]")) {
+      e.preventDefault();
+      toolMenuShow(false);
+      btn.focus();
+    }
+  });
+  window.addEventListener("resize", () => { if (toolMenuOpen()) toolMenuPlace(); });
+})();
 
 function stepDoneFromState(num, state) {
   const sub = state.substeps || {};
@@ -470,7 +567,7 @@ function fcListenRange(start, end) {
 
 function fcListenBtn(start, end, label) {
   const rg = fcListenRange(start, end);
-  return rg ? `<button class="secondary small" data-fcplay="${rg[0]}|${rg[1]}" title="從 ${esc(fcTime(rg[0]))} 播到 ${esc(fcTime(rg[1]))} 就停（前後不多播）">${esc(label)}</button>` : "";
+  return rg ? `<button class="secondary small" data-fcplay="${rg[0]}|${rg[1]}" data-tip="從 ${esc(fcTime(rg[0]))} 播到 ${esc(fcTime(rg[1]))} 就停（前後不多播）">${esc(label)}</button>` : "";
 }
 
 // 10-05 #177（宇軒）：「一定要處理」每一列的「照目前設定做」＝按下去就照第 3 步的決定進行（純函式，回傳 HTML）。
@@ -617,8 +714,8 @@ function bindFinalCheck(reload) {
   // 10-02 第六批：老師重念範圍前後沒有人講話 →「照建議縮小」（改的是第 3 步同一個地方；不自動改）
   document.querySelectorAll("[data-fcshrink]").forEach((b) => b.addEventListener("click", async () => {
     const h = fcRowsCache[Number(b.dataset.fcshrink)]["縮小"];
-    if (!confirm(`把重念範圍改成 ${fcTime(h["建議"][0])}–${fcTime(h["建議"][1])}（原片時間）？\n這一句之後要重新生成。`)) return;
-    try { await apiPost("/api/review/shrink", { "鍵": h["鍵"] }); } catch (err) { alert(err.message); return; }
+    if (!(await uiConfirm({ title: `把重念範圍改成 ${fcTime(h["建議"][0])}–${fcTime(h["建議"][1])}（原片時間）？`, message: "這一句之後要重新生成。", ok: "照建議縮小", cancel: "先不要" }))) return;
+    try { await apiPost("/api/review/shrink", { "鍵": h["鍵"] }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
     await reload();
   }));
   // 10-05 #177：「回第 3 步補」（名字換不了代號、重疊缺東西）
@@ -629,7 +726,7 @@ function bindFinalCheck(reload) {
     const r = fcRowsCache[Number(i)];
     const [a, e] = r["段落外起訖"] || [r.start, r.end];
     try { await apiPost("/api/review/outside", { "鍵": r.key, start: a, end: e, "答案": v || null }); }
-    catch (err) { alert(err.message); return; }
+    catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
     await reload();
   }));
   const fold = document.getElementById("fcFold");
@@ -639,19 +736,19 @@ function bindFinalCheck(reload) {
   // 10-05 #177：「照目前設定做」／再按取消
   document.querySelectorAll("[data-fckeep]").forEach((b) => b.addEventListener("click", async () => {
     try { await apiPost("/api/execute/finalcheck", { key: b.dataset.fckeep, "照目前設定做": b.dataset.on === "1" }); }
-    catch (err) { if (!err.shown) alert(err.message); return; }   // 不開放的類別、列已經不在：伺服器回的原因
+    catch (err) { if (!err.shown) uiAlert({ title: "沒有成功", message: err.message }); return; }   // 不開放的類別、列已經不在：伺服器回的原因
     await reload();
   }));
   // 10-05 #178：「請看一眼」每一列的「我看過了」、整區的「全部看過了」（以前是最下面的一個勾選）
   document.querySelectorAll("[data-fclook]").forEach((b) => b.addEventListener("click", async () => {
     try { await apiPost("/api/execute/finalcheck", { "看一眼": b.dataset.fclook, "看過": b.dataset.on === "1", "看過的列": fcLookCache }); }
-    catch (err) { if (!err.shown) alert(err.message); return; }
+    catch (err) { if (!err.shown) uiAlert({ title: "沒有成功", message: err.message }); return; }
     await reload();
   }));
   const seenAll = document.getElementById("fcSeenAll");
   if (seenAll) seenAll.addEventListener("click", async () => {
     try { await apiPost("/api/execute/finalcheck", { "看過": seenAll.dataset.on === "1", "看過的列": fcLookCache }); }
-    catch (err) { if (!err.shown) alert(err.message); return; }
+    catch (err) { if (!err.shown) uiAlert({ title: "沒有成功", message: err.message }); return; }
     await reload();
   });
 }
@@ -754,36 +851,38 @@ async function renderExecuteBody() {
   });
   const redoBtn = document.getElementById("btnRedo");   // 10-01 第三批：只重做第 5 步要重做的（整支影片的範圍）
   if (redoBtn) redoBtn.addEventListener("click", async () => {
-    if (!confirm(`只重做第 5 步要重做的 ${redo.length} 張，再重新組裝？\n要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。`)) return;
+    if (!(await uiConfirm({ title: `只重做第 5 步要重做的 ${redo.length} 張，再重新組裝？`, ok: `重做這 ${redo.length} 張`, cancel: "先不要",
+      message: "要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。" }))) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value] }, { quiet: true }); }
-    catch (e) { alert(`無法開始：${e.message}`); return; }
+    catch (e) { uiAlert({ title: "無法開始", message: e.message }); return; }
     await renderExecuteBody();
   });
   const reBtn = document.getElementById("btnReassemble");   // 10-03 第八批 #23：只重新組裝（整支影片的範圍）
   if (reBtn) reBtn.addEventListener("click", async () => {
     // 10-15 總檢查修正（1015-7）：只重新組裝不會重新生成，等重做的卡留著（後端 build_version 只清真的重做的）——不再說「回到還沒看」
-    if (!confirm(`只重新組裝？\n生成的聲音不動、不重新生成，照現在的做法重新放回去。\n會多一個版本，舊的成品檔不動；第 5 步要重做的 ${redo.length} 張沒有重新生成，還是「要重做」。`)) return;
+    if (!(await uiConfirm({ title: "只重新組裝？", ok: "只重新組裝", cancel: "先不要",
+      message: `生成的聲音不動、不重新生成，照現在的做法重新放回去。\n會多一個版本，舊的成品檔不動；第 5 步要重做的 ${redo.length} 張沒有重新生成，還是「要重做」。` }))) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value], "只重新組裝": true }, { quiet: true }); }
-    catch (e) { alert(`無法開始：${e.message}`); return; }
+    catch (e) { uiAlert({ title: "無法開始", message: e.message }); return; }
     await renderExecuteBody();
   });
   const reAllBtn = document.getElementById("btnReassembleAll");   // 10-05 #97：沒有退回時的只重新組裝（整支影片的範圍）
   if (reAllBtn) reAllBtn.addEventListener("click", async () => {
     // 10-15 總檢查修正（1015-7）：0.2.2b1 起每次組裝都是一個新版本（舊的成品檔不蓋掉）、之前的通過沿用
-    if (!confirm(["只重新組裝（不重新生成）？", "",
+    if (!(await uiConfirm({ title: "只重新組裝（不重新生成）？", ok: "只重新組裝", cancel: "先不要", message: [
       "・生成好的聲音都不動，不會重新生成。",
       "・會多一個版本，舊的成品檔不動；之前的通過沿用。",
       "・第 5 步：內容變了的（例如接縫、停格的做法改了）回到「還沒看」，那附近看過的部分也要重看。",
-      `・${SHOW_EXEC_ETA ? `整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘，` : ""}跑的時候第 3 步不能修改。`].join("\n"))) return;
+      `・${SHOW_EXEC_ETA ? `整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘，` : ""}跑的時候第 3 步不能修改。`].join("\n") }))) return;
     try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value], "只重新組裝": true }, { quiet: true }); }
-    catch (e) { alert(`無法開始：${e.message}`); return; }
+    catch (e) { uiAlert({ title: "無法開始", message: e.message }); return; }
     await renderExecuteBody();
   });
   document.getElementById("btnExec").addEventListener("click", async () => {
     const st = document.getElementById("exStart"), en = document.getElementById("exEnd");   // 開發者設定才有這兩格
     const body = { start: (st && st.value.trim()) || null, end: (en && en.value.trim()) || null,
       methods: [document.getElementById("exMethod").value] };
-    try { await apiPost("/api/execute/start", body, { quiet: true }); } catch (e) { alert(`無法開始：${e.message}`); return; }
+    try { await apiPost("/api/execute/start", body, { quiet: true }); } catch (e) { uiAlert({ title: "無法開始", message: e.message }); return; }
     await renderExecuteBody();
   });
   const auto = document.getElementById("btnAutoCode");   // 09-30：前置檢查缺代號時直接配
@@ -791,7 +890,7 @@ async function renderExecuteBody() {
     auto.disabled = true;
     try {
       const r = await apiPost("/api/codes/auto", {});
-      if (r["代號不夠"]) alert("代號名單不夠用，剩下的請到第 3 步 ②③ 自己打新代號。");
+      if (r["代號不夠"]) uiAlert({ title: "代號不夠用", message: "代號名單不夠用，剩下的請到第 3 步 ②③ 自己打新代號。" });
     } catch (e) { return; }
     await renderExecuteBody();
   });
@@ -799,7 +898,7 @@ async function renderExecuteBody() {
   if (stop) stop.addEventListener("click", async () => {
     stop.disabled = true;
     stop.textContent = "停止中…（等目前這一句生成完）";
-    try { await apiPost("/api/execute/stop", {}, { quiet: true }); } catch (e) { alert(`停不了：${e.message}`); }
+    try { await apiPost("/api/execute/stop", {}, { quiet: true }); } catch (e) { uiAlert({ title: "停不了", message: e.message }); }
   });
   if (running) startExecPoll();
 }
@@ -1016,7 +1115,7 @@ async function renderProfile() {
       <td>${esc(f["最後修改"] || "—")}</td></tr>`).join("");
   const st = d["settings.toml"];
   contentEl.innerHTML = `
-    <h1>0　初始化設定</h1>
+    <h1>初始化設定</h1>
     <p class="muted">這些設定所有影片共用，放在 <code>${esc(d["資料夾"])}</code>。AI 之後發現新的念偏詞、排除詞會照舊寫進這裡；要給協作夥伴，用下面的設定包。</p>
     <div class="card"><table class="kv prof">
       <thead><tr><th style="text-align:left">項目</th><th style="text-align:left">筆數</th><th style="text-align:left">最後修改</th></tr></thead>
@@ -1110,8 +1209,9 @@ async function renderOverview() {
   contentEl.querySelectorAll(".pj-switch").forEach((b) => b.addEventListener("click", async () => {
     const p = list.find((x) => x["路徑"] === b.dataset.path) || {};
     // 10-08：切換前說清楚要切去哪一個（名稱一樣的專案分得出來）
-    if (!confirm(`切換到「${p["顯示名稱"] || p["名稱"] || ""}」（${p["標示"] || ""}）？\n${b.dataset.path}\n\n之後第 3、4、5 步看的、改的都是這個工作區。`)) return;
-    try { await apiPost("/api/projects/switch", { "路徑": b.dataset.path }); } catch (e) { alert(e.message); return; }
+    if (!(await uiConfirm({ title: `切換到「${p["顯示名稱"] || p["名稱"] || ""}」（${p["標示"] || ""}）？`, ok: "切換", cancel: "先不要",
+      message: `${b.dataset.path}\n之後第 3、4、5 步看的、改的都是這個工作區。` }))) return;
+    try { await apiPost("/api/projects/switch", { "路徑": b.dataset.path }); } catch (e) { uiAlert({ title: "沒有切換", message: e.message }); return; }
     await render();
   }));
   await bindPickCard(list);   // 10-07：系統內建的選檔視窗（fileio.js）；叫不起來才顯示下面的網頁資料夾瀏覽
@@ -1152,7 +1252,7 @@ async function startPicked() {
       r = await apiPost("/api/projects/start", body, { quiet: true });
     } catch (e) {
       // 10-02 第七批（B3）：找不到 claude 先說，確定要開始再送一次
-      if (!(e.data && e.data["找不到claude"]) || !confirm(`${e.message}\n\n還是要開始分析嗎？`)) throw e;
+      if (!(e.data && e.data["找不到claude"]) || !(await uiConfirm({ title: "還是要開始分析嗎？", message: e.message, ok: "還是開始分析", cancel: "先不要" }))) throw e;
       r = await apiPost("/api/projects/start", { ...body, "沒有claude也開始": true });
     }
     msg.textContent = r["接著做"] ? "接著做，已經完成的步驟會跳過" : "已建立專案";
@@ -1232,15 +1332,15 @@ async function startAnalyze() {
     await apiPost("/api/run/analyze", {}, { quiet: true });
   } catch (e) {
     // 10-02 第七批（B3）：找不到 claude 先說，確定要開始再送一次
-    if (e.data && e.data["找不到claude"] && confirm(`${e.message}\n\n還是要開始分析嗎？`)) {
+    if (e.data && e.data["找不到claude"] && await uiConfirm({ title: "還是要開始分析嗎？", message: e.message, ok: "還是開始分析", cancel: "先不要" })) {
       try {
         await apiPost("/api/run/analyze", { "沒有claude也開始": true }, { quiet: true });
       } catch (e2) {
-        alert(`無法開始分析：${e2.message}`);
+        uiAlert({ title: "無法開始分析", message: e2.message });
         return;
       }
     } else {
-      alert(`無法開始分析：${e.message}`);
+      uiAlert({ title: "無法開始分析", message: e.message });
       return;
     }
   }
@@ -1355,7 +1455,8 @@ function renderStep2Body(play = false) {
     const msgEl = document.getElementById("refMsg");
     const text = document.getElementById("refText").value;
     if (swapAudio && chosenRank != null &&
-        !confirm(`換了音檔之後，已經生成好的老師句子都要重新生成。確定要${isChosen ? "換成這個候選的新音檔" : `改用第 ${refsPointer + 1} 個`}？`)) return;
+        !(await uiConfirm({ title: `要${isChosen ? "換成這個候選的新音檔" : `改用第 ${refsPointer + 1} 個`}嗎？`, message: "換了音檔之後，已經生成好的老師句子都要重新生成。",
+          ok: isChosen ? "換成新音檔" : `改用第 ${refsPointer + 1} 個`, cancel: "先不要" }))) return;
     try {
       const r = await apiPost("/api/refs/use", { rank: c.rank, transcript: text, 換音檔: swapAudio });
       refsCache = await apiGet("/api/refs");
@@ -1400,7 +1501,7 @@ async function renderRoomCard() {
     </div>
     <p class="muted">還沒確認也可以先往下做：照樣用這一段（它本來就夠安靜），第 4 步開始前的總檢查會提醒你回來聽。</p>`;
   const act = async (v) => {
-    try { await apiPost("/api/roomtone", { "動作": v }); } catch (e) { alert(e.message); return; }
+    try { await apiPost("/api/roomtone", { "動作": v }); } catch (e) { uiAlert({ title: "沒有成功", message: e.message }); return; }
     await renderRoomCard();
     if (v === "換一段") { const au = document.getElementById("roomAudio"); if (au) au.play().catch(() => {}); }
   };
@@ -1427,6 +1528,7 @@ function refAudioNote(c, isChosen) {
 
 document.addEventListener("keydown", (e) => {   // 第 2 步：← → 切換候選（在打字時不搶）
   if (!document.getElementById("refText") || !document.querySelector(".ref-chips")) return;
+  if (document.querySelector("dialog[open]")) return;   // 1022-1 審查修正：視窗開著時方向鍵不穿透到底下切換候選
   if (e.target && ["TEXTAREA", "INPUT", "SELECT"].includes(e.target.tagName)) return;
   if (e.key === "ArrowLeft") { e.preventDefault(); refsGo(refsPointer - 1, true); }
   if (e.key === "ArrowRight") { e.preventDefault(); refsGo(refsPointer + 1, true); }
