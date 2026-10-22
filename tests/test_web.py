@@ -421,7 +421,7 @@ def test_success_toasts():
     import re
     ui = (WEB / "ui.js").read_text(encoding="utf-8")
     assert "const UI_TOAST_MS = 5000;" in ui and "const UI_TOAST_MAX = 3;" in ui
-    for s in ('function uiToast(', 'box.setAttribute("role", "status")', 'box.setAttribute("aria-live", "polite")',
+    for s in ('function uiToast(', 'uiToastEl.setAttribute("role", "status")', 'uiToastEl.setAttribute("aria-live", "polite")',
               '"mouseenter"', '"mouseleave"', '"focusin"', '"focusout"', '"關閉通知"', "prefers-reduced-motion: reduce"):
         assert s in ui, s
     toast = ui[ui.index("function uiToast("):].split("/* 1022-2（#265）")[0]
@@ -449,7 +449,7 @@ def test_button_tooltips():
     import re
     ui = (WEB / "ui.js").read_text(encoding="utf-8")
     for s in ("const UI_TIP_DELAY_MS = 150;", 'document.addEventListener("mouseover"', 'document.addEventListener("focusin"',
-              ':focus-visible', '"Escape"', 'setAttribute("role", "tooltip")', '"aria-describedby"', "uiTipEl.textContent = t.dataset.tip"):
+              ':focus-visible', 'e.key !== "Tab"', 'setAttribute("role", "tooltip")', '"aria-describedby"', "uiTipEl.textContent = t.dataset.tip"):
         assert s in ui, s
     assert 'uiTipEl.classList.add("below")' in ui   # 上面放不下放下面
     css = (WEB / "style.css").read_text(encoding="utf-8")
@@ -484,12 +484,15 @@ _UI_FAKE_DOM = r"""
 const made = [];
 function mk(tag) {
   const el = { tagName: String(tag).toUpperCase(), children: [], attrs: {}, ls: [], dataset: {}, style: {}, className: "", textContent: "",
-    open: false, hidden: false, classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    nodeType: 1, open: false, hidden: false, isConnected: true, offsetWidth: 100, offsetHeight: 30,
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    getBoundingClientRect: () => ({ top: 300, bottom: 330, left: 300, right: 400, width: 100, height: 30 }),
+    closest(sel) { return sel === "[data-tip]" && this.dataset.tip ? this : null; }, matches: () => true, contains(k) { return k === this; },
     addEventListener(t, f, cap) { this.ls.push({ t, f, cap: !!cap }); },
     fire(t, ev) { ev = Object.assign({ type: t, defaultPrevented: false, stopped: false,
         preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; } }, ev || {});
       for (const l of this.ls.filter((x) => x.t === t)) l.f(ev); return ev; },
-    append(...k) { this.children.push(...k); }, appendChild(k) { this.children.push(k); return k; },
+    append(...k) { this.children.push(...k); }, appendChild(k) { this.children.push(k); k.parentNode = this; return k; },
     setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; },
     removeAttribute(k) { delete this.attrs[k]; }, remove() { this.removed = true; }, focus() {},
     showModal() { this.open = true; }, close() { if (this.open) { this.open = false; this.fire("close"); } } };
@@ -497,8 +500,13 @@ function mk(tag) {
   return el;
 }
 global.HTMLDialogElement = function () {};
-global.document = { createElement: mk, createDocumentFragment: () => mk("frag"), activeElement: null,
-  body: { appendChild() {}, contains: () => true }, addEventListener() {}, getElementById: () => null };
+const docLs = [];
+global.__openDialogs = [];
+const body = { tagName: "BODY", appendChild(k) { k.parentNode = body; return k; }, contains: () => true };
+global.document = { createElement: mk, createDocumentFragment: () => mk("frag"), activeElement: null, body,
+  addEventListener(t, f) { docLs.push({ t, f }); }, getElementById: () => null,
+  querySelectorAll: (sel) => (sel === "dialog[open]" ? global.__openDialogs : []) };
+const docFire = (t, ev) => docLs.filter((l) => l.t === t).forEach((l) => l.f(Object.assign({ type: t }, ev)));
 global.window = { addEventListener() {}, matchMedia: () => ({ matches: false }), innerWidth: 1000, innerHeight: 800 };
 """
 
@@ -561,6 +569,63 @@ def test_review_fixes_1022_1():
 
     got = json.loads(out.stdout.strip().splitlines()[-1])
     assert got == {"r1": False, "opened2": True, "r2": False, "repBlocked": True, "firstPass": True}, got
+
+
+
+def test_review_fixes_1022_2():
+    """1022-2 審查修正：
+    1. 有視窗（showModal，最上層）開著時，浮動通知搬進那個視窗，不被蓋住；視窗關了搬回 <body>
+    2. 卡片重畫後提示框對的按鈕不在畫面上了 → 收起；按任何鍵（Tab 除外）都收起
+    3. 齒輪黏底蓋到側欄最底
+    4. .gitignore 擋 mp4 與「假工作區/」
+    5. 頁面載入就建好通知容器（live region）
+    6. 觸控的事記在 docs/之後要做.md"""
+    import json
+    import shutil
+    import subprocess
+
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    root = WEB.parent.parent
+    assert 'attributeFilter: ["open"]' in ui and "if (document.body) uiToastBox();" in ui
+    i = css.index(".sidebar-foot {")
+    assert "margin-bottom: -16px; padding-bottom: 16px;" in css[i:i + 300]
+    gi = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "*.mp4" in gi and "假工作區/" in gi
+    assert "觸控螢幕上的按鈕說明" in (root / "docs" / "之後要做.md").read_text(encoding="utf-8")
+    node = shutil.which("node")
+    if not node:
+        return
+    script = _UI_FAKE_DOM + ui + """
+const out = {};
+out.boxAtLoad = !!uiToastEl && uiToastEl.parentNode === body && uiToastEl.attrs["aria-live"] === "polite";
+const dlg = mk("dialog"); dlg.open = true; __openDialogs = [dlg];
+uiToast("在視窗裡");
+out.inDialog = uiToastEl.parentNode === dlg;
+__openDialogs = []; uiToastBox();      // 視窗關掉（MutationObserver 會叫 uiToastBox）
+out.backToBody = uiToastEl.parentNode === body;
+const b1 = mk("button"); b1.dataset.tip = "上一張卡";
+uiTipShow(b1);
+out.shown = uiTipEl.hidden === false && uiTipEl.textContent === "上一張卡";
+docFire("keydown", { key: "Tab" });
+out.tabKeeps = uiTipEl.hidden === false;
+b1.isConnected = false;                  // 卡片重畫，按鈕不在了
+const other = mk("button"); other.dataset.tip = "別顆";
+docFire("mouseover", { target: other });   // 滑到新卡的另一顆按鈕：還沒到 0.15 秒，舊的提示框要先收
+out.staleMouse = uiTipEl.hidden === true;
+const b2 = mk("button"); b2.dataset.tip = "這張卡";
+uiTipShow(b2);
+docFire("keydown", { key: "Enter" });   // Enter 通過、快捷鍵換卡
+out.keyHides = uiTipEl.hidden === true && !("aria-describedby" in b2.attrs);
+const b3 = mk("button"); b3.dataset.tip = "孤兒"; b3.isConnected = false;
+uiTipShow(b3);
+out.noShowDetached = uiTipEl.hidden === true;
+console.log(JSON.stringify(out));
+"""
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+    assert all(got.values()) and len(got) == 8, got
 
 
 if __name__ == "__main__":

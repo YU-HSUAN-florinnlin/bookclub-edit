@@ -181,17 +181,34 @@ function uiReducedMotion() {
   try { return window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; }
 }
 
+let uiToastEl = null;
+
+// 1022-2 審查修正：用 showModal() 開的視窗在最上層（top layer），掛在 <body> 的通知會被它和灰色背景蓋住。
+// 有視窗開著時，把通知容器搬進最上面那個開著的視窗裡（通知是 position: fixed，在視窗裡一樣貼畫面右下角）；
+// 視窗關了搬回 <body>。視窗開關由下面的 MutationObserver（看 open 屬性）觸發，新增通知時也再對一次。
+function uiToastHost() {
+  const open = document.querySelectorAll("dialog[open]");
+  return open.length ? open[open.length - 1] : document.body;
+}
+
 function uiToastBox() {
-  let box = document.getElementById("ui-toasts");
-  if (!box) {
-    box = document.createElement("div");
-    box.id = "ui-toasts";
-    box.className = "ui-toasts";
-    box.setAttribute("role", "status");
-    box.setAttribute("aria-live", "polite");
-    document.body.appendChild(box);
+  if (!uiToastEl) {
+    uiToastEl = document.getElementById("ui-toasts") || document.createElement("div");
+    uiToastEl.id = "ui-toasts";
+    uiToastEl.className = "ui-toasts";
+    uiToastEl.setAttribute("role", "status");
+    uiToastEl.setAttribute("aria-live", "polite");
   }
-  return box;
+  const host = uiToastHost();
+  if (uiToastEl.parentNode !== host) host.appendChild(uiToastEl);
+  return uiToastEl;
+}
+
+// 頁面載入就先建好容器（報讀軟體要先看到 live region，第一則通知才會被念出來）
+if (document.body) uiToastBox();
+if (typeof MutationObserver !== "undefined" && document.body) {
+  new MutationObserver(() => { if (uiToastEl) uiToastBox(); })
+    .observe(document.body, { subtree: true, attributes: true, attributeFilter: ["open"] });
 }
 
 function uiToastClose(el) {
@@ -258,10 +275,16 @@ function uiTipTarget(node) {
   return t && t.dataset.tip ? t : null;
 }
 
+// 1022-2 審查修正：卡片重畫後原本那顆按鈕已經不在畫面上，提示框不能留著（字還是上一張卡的）
+function uiTipStale() {
+  if (uiTipFor && !uiTipFor.isConnected) uiTipHide();
+}
+
 function uiTipShow(t) {
   clearTimeout(uiTipTimer);
   uiTipPending = null;
-  if (!t || !document.body.contains(t)) return;
+  uiTipStale();
+  if (!t || !t.isConnected) return;
   if (!uiTipEl) {
     uiTipEl = document.createElement("div");
     uiTipEl.id = "ui-tip";
@@ -312,6 +335,7 @@ function uiTipLater(t) {
 }
 
 document.addEventListener("mouseover", (e) => {
+  uiTipStale();
   const t = uiTipTarget(e.target);
   if (t && t === uiTipFor) return;
   if (!t) { if (uiTipFor || uiTipPending) uiTipHide(); return; }
@@ -332,7 +356,8 @@ document.addEventListener("focusin", (e) => {
   if (kb) uiTipShow(t);   // 滑鼠點下去的焦點不另外顯示（點了就收）
 });
 document.addEventListener("focusout", (e) => { if (uiTipTarget(e.target) === uiTipFor) uiTipHide(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && uiTipFor) uiTipHide(); });
+// 按任何鍵都收起（快捷鍵換卡、Enter 通過、Esc⋯）；Tab 例外：Tab 移到下一顆按鈕時由 focusin 顯示那一顆的說明
+document.addEventListener("keydown", (e) => { if (e.key !== "Tab" && (uiTipFor || uiTipPending)) uiTipHide(); }, true);
 document.addEventListener("pointerdown", () => { if (uiTipFor || uiTipPending) uiTipHide(); }, true);
 window.addEventListener("scroll", () => { if (uiTipFor) uiTipHide(); }, true);
 window.addEventListener("resize", () => { if (uiTipFor) uiTipHide(); });
