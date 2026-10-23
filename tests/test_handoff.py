@@ -930,6 +930,20 @@ def test_t2_chosen_copy_still_compared():
     assert job.state == "完成" and Path(job.result["工作區"]) == w
 
 
+def test_user_messages_no_personal_name():
+    """宇軒 10-23：給使用者看的錯誤訊息不寫「宇軒」，叫人回報的一律「請將錯誤訊息通知開發者。」。"""
+    import ast
+
+    tree = ast.parse((REPO_ROOT / "bookclub" / "handoff.py").read_text(encoding="utf-8"))
+    docs = {id(n.body[0].value) for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.ClassDef, ast.Module)) and n.body
+            and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+    strs = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs]
+    assert not [x for x in strs if "宇軒" in x], [x for x in strs if "宇軒" in x]
+    assert not [x for x in strs if "終端機最後幾行" in x or "找開發者" in x or "給開發者" in x]
+    assert sum("請將錯誤訊息通知開發者。" in x for x in strs) >= 6
+
+
 if __name__ == "__main__":
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for name, fn in tests:

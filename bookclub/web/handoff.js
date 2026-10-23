@@ -1,6 +1,6 @@
 "use strict";
 /* 33 號設計（#257–#260）接力交接：第 3 步、第 5 步的「交接打包…」「匯入交接包…」，總覽的「匯入交接包…」與「清掉這集」。
- * 後端 /api/handoff/…（bookclub/server.py、handoff.py）。依賴 app.js 的 apiGet／apiPost／esc／render，fileio.js 的 clGB，ui.js 的 uiConfirm／uiAlert／uiToast。
+ * 後端 /api/handoff/…（bookclub/server.py、handoff.py）。依賴 app.js 的 apiGet／apiPost／esc／render，fileio.js 的 clGB，ui.js 的 uiConfirm／uiAlert（成功訊息一律用彈出視窗，不用浮動通知；宇軒 10-23）。
  * 畫面一律寫「雲端空間」。 */
 
 const HO_HINT = {
@@ -90,22 +90,28 @@ async function hoBoxInit(el, stage) {
   if (line.running) hoPollTimer = setTimeout(() => { if (document.body.contains(el)) hoBoxInit(el, stage); }, 1000);
   else if (hoWatch === stage && job && job["狀態"] === "已存好") {
     hoWatch = null;
-    if (stage === "第3步") hoAskClean(msg);   // 段 1：老師交出去之後，建議清掉 Ubuntu 裡的原片複本和暫存
+    // 宇軒 10-23：成功訊息一律彈出視窗。第 3 步：存好的那一句跟「建議清掉」放同一個視窗（沒有可清的才單獨說存好了）
+    const saved = job["說明"] || "交接包已存好。";
+    if (stage === "第3步") hoAskClean(msg, saved);   // 段 1：老師交出去之後，建議清掉 Ubuntu 裡的原片複本和暫存
+    else uiAlert({ title: "交接包已存好", message: saved, ok: "好" });
   } else if (hoWatch === stage && job) hoWatch = null;
 }
 
 // 第 3 步交接打包成功、核對過之後：建議清掉這一集的原片複本和暫存（33 號設計 §6，宇軒 10-20 定的字句）
-async function hoAskClean(msg) {
-  let plan;
-  try { plan = await apiGet("/api/handoff/clean-plan"); } catch (e) { return; }
-  if (!plan["合計"] || !plan["有交接包"]) return;
+async function hoAskClean(msg, saved) {
+  let plan = null;
+  try { plan = await apiGet("/api/handoff/clean-plan"); } catch (e) { plan = null; }
+  if (!plan || !plan["合計"] || !plan["有交接包"]) {
+    if (saved) await uiAlert({ title: "交接包已存好", message: saved, ok: "好" });
+    return;
+  }
   // 1022-1 起用工具自己的確認視窗（ui.js）；清掉是刪檔，danger
   const ok = await uiConfirm({ title: "交接包已存好", danger: true, ok: "清掉（建議）", cancel: "先留著",
-    message: `交接包已存好。建議清掉這一集在 Ubuntu 裡的原片複本和暫存檔（約 ${hoSize(plan["合計"])}），之後匯入夥伴交回的包時，再選一次原片就好。判斷紀錄會留著。` });
+    message: `${saved ? `${saved}\n` : ""}建議清掉這一集在 Ubuntu 裡的原片複本和暫存檔（約 ${hoSize(plan["合計"])}），之後匯入夥伴交回的包時，再選一次原片就好。判斷紀錄會留著。` });
   if (!ok) return;
   try {
     const r = await apiPost("/api/handoff/clean-copy", { "清單指紋": plan["清單指紋"] }, { quiet: true });
-    uiToast(`已清掉，空出 ${hoSize(r["省下位元組"])}。`);
+    await uiAlert({ title: "清掉了", message: `已清掉，空出 ${hoSize(r["省下位元組"])}。`, ok: "好" });
   } catch (e) { if (msg) msg.insertAdjacentHTML("beforeend", ` <span class="badge error">沒有清</span> ${esc(e.message)}`); }
 }
 
@@ -319,7 +325,7 @@ function hoBindOverview(root, list) {
     let r;
     try { r = await apiPost("/api/handoff/clean-episode", { "路徑": btn.dataset.path }, { quiet: true }); }
     catch (e) { btn.disabled = false; await uiAlert({ title: "沒有清掉", message: e.message }); return; }
-    uiToast(`已清掉這集，空出 ${hoSize(r["省下位元組"])}。`);
+    await uiAlert({ title: "清掉了", message: `已清掉這集，空出 ${hoSize(r["省下位元組"])}。`, ok: "好" });
     if (typeof render === "function") render();
   }));
 }
