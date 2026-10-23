@@ -18,6 +18,7 @@ let hoInfo = null;           // 最近一次 /api/handoff/state（錯誤資訊�
 function hoScrub(text) {
   return String(text == null ? "" : text)
     .replace(/(^|[\s「『（("'：:])(?:[A-Za-z]:\\|~\/|\/)[^「」『』，。、；：（）"'\n]*/g, (m, pre) => `${pre}（路徑略）`)
+    .replace(/「[^「」\n]*\.(?:mp4|mov|m4v|mkv|webm|avi|zip|wav|flac|json|csv)」/gi, "「（路徑略）」")   // 引號裡的檔名（可以有空格）
     .replace(/[^\s「」『』，。、；：（）()"'／]+\.(?:mp4|mov|m4v|mkv|webm|avi|zip|wav|flac|json|csv)\b/gi, "（路徑略）");
 }
 
