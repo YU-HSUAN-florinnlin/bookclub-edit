@@ -14,7 +14,8 @@
 - `bookclub/`：主套件，指令入口 `cli.py`（`bookclub = "bookclub.cli:main"`）。工作區路徑一律問 `workdir.py`，不要自己組字串。
   - 第 1 步分析：`analyze.py`（串流程）、`transcribe.py`（Groq 轉文字）、`speakers.py`（認老師）、`overlap.py`（重疊、分辨說話者）、`names.py`（找名字）、`namespage.py`（名字覆核頁）、`turns.py`（段落分析）、`cutsuggest.py`（建議刪除段落）、`personnames.py`（整集人名）、`untranscribed.py`（有人聲沒字）、`turnvoice.py`（學員段落像老師）
   - 參考音與底噪：`refpick.py`（挑老師參考音）、`roomtone.py`（墊底噪）、`silentedge.py`（重念範圍前後沒聲音）
-  - 第 3 步覆核：`review.py`（覆核工作台）、`proofread.py`（校對資料）、`align.py`（新增修改對齊時間）、`epcodes.py`／`codeswap.py`（這一集的代號）、`studentnames.py`（保留原聲學員講到名字）、`exchange.py`（覆核結果匯出入）
+  - 第 3 步覆核：`review.py`（覆核工作台）、`proofread.py`（校對資料）、`align.py`（新增修改對齊時間）、`epcodes.py`／`codeswap.py`（這一集的代號）、`studentnames.py`（保留原聲學員講到名字）
+  - 接力交接：`handoff.py`（交接打包、匯入交接包、設定快照、交接後清理）
   - 第 4 步生成與組裝：`execute.py`（一次跑完）、`tts.py`（老師 AI 聲音）、`nameplan.py`（名字處理計畫）、`students.py`（學員匿名聲線）、`studentgen.py`（學員自己聲音念代號）、`fit.py`（放回時間格）、`pauses.py`（插入停頓）、`assemble.py`（組新聲音軌）、`render.py`（組影片）、`proclog.py`（處理紀錄）、`execcounts.py`（逐類統計）、`timemap.py`（原片↔成品時間）
   - 第 5 步成品檢查：`finalcheck.py`、`finalcards.py`（卡片）、`needs.py`（修改需求紀錄、`bookclub upgrade`）
   - 環境與共用：`config.py`、`profile.py`（第 0 步設定包）、`doctor.py`（健檢）、`detect.py`、`system_info.py`、`models.py`（模型下載）、`keepawake.py`（防睡眠）、`fileio.py`（選檔、Windows 檔案進出）、`csvfile.py`（Big5／UTF-8 CSV）、`safeview.py`（`bookclub inspect`）、`server.py`（網頁伺服器）、`_cosyvoice_compat.py`（CosyVoice 相容修補）

@@ -9,6 +9,31 @@ const HO_HINT = {
 };
 let hoPollTimer = null;
 let hoWatch = null;          // 這一頁按了哪一段的交接打包（做完要不要問清理）
+let hoInfo = null;           // 最近一次 /api/handoff/state（錯誤資訊要用的工具版本、系統）
+
+// 10-23（#258）：錯誤視窗的「複製錯誤資訊」——工具版本、系統、在哪裡、錯誤訊息、時間；路徑與檔名一律換成「（路徑略）」，
+// 不放逐字稿、名字（錯誤訊息本來就不帶這些）
+function hoScrub(text) {
+  return String(text == null ? "" : text)
+    .replace(/(?:[A-Za-z]:\\|~\/|\/)[^\s「」『』，。、；：（）()"']*/g, "（路徑略）")
+    .replace(/[^\s「」『』，。、；：（）()"'／]+\.(?:mp4|mov|m4v|mkv|webm|avi|zip|wav|flac|json|csv)\b/gi, "（路徑略）");
+}
+
+function hoErrText(st, where, message, now) {
+  const s = st || {};
+  const sys = s["系統"] === "mac" ? "Mac" : s["系統"] === "wsl" ? "Windows" : "其他";
+  const d = now || new Date();
+  const p2 = (n) => String(n).padStart(2, "0");
+  return ["讀書會剪輯工具：錯誤資訊", `工具版本：${s["工具版本"] || "不知道"}`, `系統：${sys}`, `在哪裡：${where}`,
+    `錯誤訊息：${hoScrub(message)}`,
+    `時間：${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`].join("\n");
+}
+
+async function hoErrAlert(title, message, where) {
+  let st = hoInfo;
+  if (!st) { try { st = await apiGet("/api/handoff/state"); } catch (e) { st = {}; } }
+  await uiAlert({ title, message, copy: hoErrText(st, where, message) });
+}
 
 function hoSize(n) { return typeof clGB === "function" ? clGB(n) : `${Math.round(Number(n || 0) / 1e6)} MB`; }
 
@@ -27,6 +52,7 @@ async function hoBoxInit(el, stage) {
   if (!el) return;
   let d;
   try { d = await apiGet("/api/handoff/state"); } catch (e) { return; }
+  hoInfo = d;
   if (!document.body.contains(el)) return;
   const job = d["打包"] && d["打包"]["哪一段"] === stage ? d["打包"] : null;
   const line = hoPackLine(job);
@@ -94,7 +120,10 @@ async function hoBoxInit(el, stage) {
     const saved = job["說明"] || "交接包已存好。";
     if (stage === "第3步") hoAskClean(msg, saved);   // 段 1：老師交出去之後，建議清掉 Ubuntu 裡的原片複本和暫存
     else uiAlert({ title: "交接包已存好", message: saved, ok: "好" });
-  } else if (hoWatch === stage && job) hoWatch = null;
+  } else if (hoWatch === stage && job) {
+    hoWatch = null;
+    if (job["狀態"] === "失敗") hoErrAlert("交接包沒有存好", job["錯誤"] || "沒有存好", `第 ${stage === "第5步" ? 5 : 3} 步・交接打包`);
+  }
 }
 
 // 第 3 步交接打包成功、核對過之後：建議清掉這一集的原片複本和暫存（33 號設計 §6，宇軒 10-20 定的字句）
@@ -112,7 +141,7 @@ async function hoAskClean(msg, saved) {
   try {
     const r = await apiPost("/api/handoff/clean-copy", { "清單指紋": plan["清單指紋"] }, { quiet: true });
     await uiAlert({ title: "清掉了", message: `已清掉，空出 ${hoSize(r["省下位元組"])}。`, ok: "好" });
-  } catch (e) { if (msg) msg.insertAdjacentHTML("beforeend", ` <span class="badge error">沒有清</span> ${esc(e.message)}`); }
+  } catch (e) { await hoErrAlert("沒有清掉", e.message, "第 3 步・清掉暫存"); }
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +149,7 @@ async function hoAskClean(msg, saved) {
 // ---------------------------------------------------------------------------
 
 let hoImpTimer = null;
+let hoImpRunning = false;    // 上一次畫的時候匯入是不是還在做（做到「失敗」那一下跳錯誤視窗，只跳一次）
 
 // 匯入工作那一段的文字（純函式）
 function hoImportView(st) {
@@ -164,7 +194,10 @@ async function hoRenderImport(dlg) {
     return;
   }
   if (!dlg.open) return;
+  hoInfo = st;
   const v = hoImportView(st);
+  if (hoImpRunning && v.js === "失敗") hoErrAlert("沒有匯入", (v.job && v.job["錯誤"]) || "沒有匯入", "匯入交接包");
+  hoImpRunning = v.running;
   const s = (v.z || {})["摘要"] || {};
   const name = s["原片檔名"] || "原片";
   const zipHtml = v.z
@@ -324,7 +357,7 @@ function hoBindOverview(root, list) {
     btn.disabled = true;
     let r;
     try { r = await apiPost("/api/handoff/clean-episode", { "路徑": btn.dataset.path }, { quiet: true }); }
-    catch (e) { btn.disabled = false; await uiAlert({ title: "沒有清掉", message: e.message }); return; }
+    catch (e) { btn.disabled = false; await hoErrAlert("沒有清掉", e.message, "總覽・清掉這集"); return; }
     await uiAlert({ title: "清掉了", message: `已清掉這集，空出 ${hoSize(r["省下位元組"])}。`, ok: "好" });
     if (typeof render === "function") render();
   }));

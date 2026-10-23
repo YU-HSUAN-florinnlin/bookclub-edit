@@ -1,7 +1,7 @@
 "use strict";
 
 /* 第 3 步「覆核工作台」（09-26 改版：邊看影片邊逐筆通過）。
- * 版面：頂端一行（進度、花了多少時間、推算整支要多久、開始前 4 件事、設定、快捷鍵、匯出）
+ * 版面：頂端一行（進度、花了多少時間、推算整支要多久、開始前 4 件事、設定、快捷鍵）
  *   → 上半部左欄：影片、時間列、整支時間軸（老師灰、學員綠、冥想導讀淡藍；名字、重疊、刪除標記）、圖例
  *     上半部右欄：「目前這一筆」卡片（內容、藍底建議＋原因、通過／改做法／上一筆／下一筆）
  *   → 下半部：篩選列＋一行一筆的清單。
@@ -123,7 +123,6 @@ async function renderReview() {
           <button class="ghost" id="rv-set-btn" aria-expanded="false">設定</button>
           <button class="ghost" id="rv-key-btn" aria-expanded="false">快捷鍵</button>
           <button class="ghost" id="rv-code-btn" aria-expanded="false" data-tip="本名和代號的對照（截圖或分享螢幕時會露出本名）">代號對照</button>
-          <button class="ghost" id="rv-export" data-tip="只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交給夥伴做第 4、5 步請用下面的「交接打包…」">匯出覆核結果</button>
           <button class="primary" id="rv-go4" disabled>開始 AI 修改</button>
         </div>
       </header>
@@ -194,7 +193,6 @@ async function renderReview() {
     d.addEventListener("click", (e) => { if (e.target === d) d.close(); });   // 點視窗外面（背景）也關
     d.addEventListener("close", () => { const b = d._opener; if (b) { b.setAttribute("aria-expanded", "false"); b.focus(); } });
   });
-  document.getElementById("rv-export").addEventListener("click", rvExport);
   document.getElementById("rv-go4").addEventListener("click", rvConfirmGo4);
   // 33 號設計：交接打包、匯入交接包（handoff.js）；已結案不顯示
   if (typeof hoBoxInit === "function" && !(typeof wsClosed === "function" && wsClosed())) hoBoxInit(document.getElementById("rv-handoff"), "第3步");
@@ -294,12 +292,12 @@ function rvRenderAll() {
 // 看、播放、篩選、上一筆下一筆照常；其他按鈕與輸入框鎖住，上方橫幅說明。後端也擋（409）。
 // ---------------------------------------------------------------------------
 
-const RV_RO_ALLOW = ".help-tip-btn, [data-modal-close], #rv-side-x, #rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-export, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
+const RV_RO_ALLOW = ".help-tip-btn, [data-modal-close], #rv-side-x, #rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
 
 function rvReadonly() { return !!(rv.data && rv.data["AI執行中"]); }
 
 // 10-17 畫面測試：已結案（瘦身版）第 3 步所有按鈕灰掉（style.css body.ws-closed-all），只看不改的導覽按鈕例外——
-// 「開始前 4 件事」開關與 ①～④ 分頁、篩選、上一筆下一筆、設定／快捷鍵／代號對照、說明與關閉。播放（聲音清掉了）、匯出（會寫檔）不在內。
+// 「開始前 4 件事」開關與 ①～④ 分頁、篩選、上一筆下一筆、設定／快捷鍵／代號對照、說明與關閉。播放（聲音清掉了）不在內。
 const RV_CLOSED_NAV = ".help-tip-btn, [data-modal-close], #rv-side-x, #rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-prev, #rv-next, .rv-filters [data-f], [data-tab]";
 
 function rvApplyReadonly() {
@@ -1662,20 +1660,8 @@ function rvRenderSettings() {
 }
 
 // ---------------------------------------------------------------------------
-// 匯出、計時
+// 計時
 // ---------------------------------------------------------------------------
-
-async function rvExport() {
-  const msg = document.getElementById("rv-export-msg");
-  msg.textContent = "匯出中…";
-  try {
-    const r = await apiPost("/api/review/export", {});
-    const warn = (r["未確認數"] ? `還有 ${r["未確認數"]} 筆沒通過。` : "")
-      + ((r["還有本名的地方"] || []).length ? `${r["還有本名的地方"].length} 處還有本名：${esc(r["還有本名的地方"].slice(0, 5).join("、"))}。` : "")
-      + ((r["缺參考音"] || []).length ? "還沒選定老師參考音（第 2 步）。" : "");
-    msg.innerHTML = `${warn ? `<span class="rv-warnline">${warn}</span> ` : ""}已匯出：<code>${esc(r["檔案"])}</code>（<a href="/api/review/export.zip">下載</a>）。只含老師提到名字的部分，匯入後不能跑第 4、5 步；要交給夥伴做第 4、5 步，請在第 3 步按『交接打包…』。`;
-  } catch (err) { msg.innerHTML = `<span class="rv-warnline">匯出失敗：${esc(err.message)}</span>`; }
-}
 
 function rvStartTimeTracking() {
   if (rv.timeTimer) clearInterval(rv.timeTimer);

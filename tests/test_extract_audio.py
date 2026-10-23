@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import numpy as np
 import soundfile as sf
 
-from bookclub import analyze, exchange, refpick
+from bookclub import analyze, refpick
 from bookclub import transcribe as tc
 
 VIDEO_S = 4.0
@@ -116,11 +116,6 @@ def test_ffmpeg_failure_leaves_no_audio():
         except subprocess.CalledProcessError:
             pass
         assert not (w2 / "audio.flac").exists() and not (w2 / refpick.AUDIO_TMP_NAME).exists()
-
-
-def test_import_review_uses_shared_extract():
-    """匯入覆核結果也走同一支（不再自己只看檔案在不在）。"""
-    assert "ensure_audio" in Path(exchange.__file__).read_text(encoding="utf-8")
 
 
 def test_transcript_tail_warning():

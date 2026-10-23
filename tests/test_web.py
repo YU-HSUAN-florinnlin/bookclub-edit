@@ -459,7 +459,7 @@ def test_button_tooltips():
     want = {
         "cards.js": ['id="rv-isteacher" data-tip=', 'id="rv-retime" data-tip=', 'data-tip="抓錯了', 'id="rv-tai" data-tip=',
                      'id="rv-del" data-tip=', 'data-tip="聽 ', 'data-te-now="${which}" data-tip='],
-        "review.js": ['id="rv-code-btn" aria-expanded="false" data-tip=', 'id="rv-export" data-tip=', 'data-tip="有建議、還沒確認',
+        "review.js": ['id="rv-code-btn" aria-expanded="false" data-tip=', 'data-tip="有建議、還沒確認',
                       'id="rv-pass" data-tip=', 'data-tip="一位其實是兩個人'],
         "finalcheck.js": ['id="fc-pass" data-tip='],
         "app.js": ['data-fcplay="${rg[0]}|${rg[1]}" data-tip=', "b.dataset.tip = label;", 'b.setAttribute("aria-label", label)'],
@@ -664,6 +664,61 @@ console.log(JSON.stringify(out));
     assert all(got.values()) and len(got) == 8, got
 
 
+def test_error_copy_button_1023():
+    """10-23（#258）：錯誤視窗「複製錯誤資訊」——剪貼簿可用就複製、按鈕變「已複製」；不行就把文字放進可全選的框。
+    交接的錯誤資訊不帶路徑、檔名（換成「（路徑略）」）；README 第 9 節寫先按這顆再截圖。"""
+    import json
+    import shutil
+    import subprocess
+
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    ho = (WEB / "handoff.js").read_text(encoding="utf-8")
+    readme = (WEB.parent.parent / "README.md").read_text(encoding="utf-8")
+    assert "複製錯誤資訊" in readme[readme.index("## 9. 回報與聯絡"):]
+    for where in ('"第 3 步・清掉暫存"', '"總覽・清掉這集"', '"匯入交接包"', '・交接打包`'):
+        assert where in ho, where
+    assert "uiToast(" not in ho, "交接的成功訊息一律彈出視窗"
+    node = shutil.which("node")
+    if not node:
+        return
+    i, j = ho.index("function hoScrub("), ho.index("async function hoErrAlert(")
+    helpers = ho[i:j]
+    script = _UI_FAKE_DOM + ui + helpers + """
+(async () => {
+  const btn = () => made.filter((e) => e.tagName === "BUTTON" && e.textContent === "複製錯誤資訊").slice(-1)[0];
+  let copied = null;
+  Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: async (t) => { copied = t; } } }, configurable: true });
+  const p1 = uiAlert({ title: "沒有匯入", message: "壞了", copy: "資訊一" });
+  await Promise.resolve();
+  const b1 = btn();
+  b1.fire("click");
+  await new Promise((r) => setTimeout(r, 10));
+  const after1 = b1.textContent;
+  made.filter((e) => e.tagName === "DIALOG" && e.open).forEach((d) => d.close());
+  await p1;
+  Object.defineProperty(globalThis, "navigator", { value: {}, configurable: true });
+  const p2 = uiAlert({ title: "沒有匯入", message: "壞了", copy: "資訊二" });
+  await Promise.resolve();
+  btn().fire("click");
+  const ta = made.filter((e) => e.tagName === "TEXTAREA").slice(-1)[0];
+  made.filter((e) => e.tagName === "DIALOG" && e.open).forEach((d) => d.close());
+  await p2;
+  const text = hoErrText({ "系統": "wsl", "工具版本": "9.9.9" }, "匯入交接包",
+    "請選從雲端空間下載的「第一集.mp4」 /home/someone/讀書會/第一集_剪輯工作區 D:\\\\下載\\\\x.zip", new Date(2026, 9, 23, 9, 5));
+  console.log(JSON.stringify({ copied, after1, ta: ta && ta.value, ro: ta && ta.readOnly, text }));
+})();
+"""
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got["copied"] == "資訊一" and got["after1"] == "已複製", got
+    assert got["ta"] == "資訊二" and got["ro"] is True, got
+    t = got["text"]
+    assert t.splitlines()[1:5] == ["工具版本：9.9.9", "系統：Windows", "在哪裡：匯入交接包", t.splitlines()[4]], t
+    assert "時間：2026-10-23 09:05" in t and "第一集" not in t and "/home" not in t and "下載" not in t.split("錯誤訊息：")[1].split("\n")[0].replace("雲端空間下載", ""), t
+    assert t.count("（路徑略）") >= 3, t
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
@@ -671,3 +726,4 @@ if __name__ == "__main__":
         print(f"✓ {fn.__name__}")
     print(f"{len(tests)}/{len(tests)} 通過")
     sys.exit(0)
+

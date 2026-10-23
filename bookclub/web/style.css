@@ -999,3 +999,8 @@ button.ui-toast-x:focus-visible { outline: 2px solid var(--accent); outline-offs
 .ho-box3 h3, #hoBox5 h3 { margin: 4px 0; font-size: 15px; }
 dialog.rv-confirm.ho-import { max-width: min(640px, calc(100vw - 32px)); width: 100%; }
 .ho-list { margin: 0 0 10px 1.2em; padding: 0; font-size: 14px; max-height: 12em; overflow: auto; }
+
+/* 10-23（#258）：錯誤視窗「複製錯誤資訊」剪貼簿不能用時，放文字的框 */
+dialog.ui-dialog textarea.ui-copy-box { width: 100%; box-sizing: border-box; margin-top: 10px; padding: 8px; font-size: 13px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-soft); color: var(--fg); resize: vertical; }

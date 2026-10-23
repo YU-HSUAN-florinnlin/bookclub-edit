@@ -5,7 +5,8 @@
  *   await uiConfirm({title, message, ok, cancel, danger})  → true（按了主要按鈕）／false（取消、✕、Esc）
  *     兩顆按鈕都是「要做的事」時加 dismiss: null → ✕、Esc 回 null（＝這次的修改不算），跟按取消鈕分開
  *   await uiPrompt({title, message, placeholder, ok, value}) → 打的字（去頭尾空白前的原樣）／null（取消）
- *   await uiAlert({title, message, ok})                     → 關掉時 resolve
+ *   await uiAlert({title, message, ok, copy})               → 關掉時 resolve
+ *     錯誤視窗加 copy（純文字）→ 多一顆「複製錯誤資訊」，按了複製到剪貼簿（10-23，#258）
  *
  * - 用原生 <dialog> + showModal()，樣式沿用第 3 步的 .rv-modal（style.css），深色模式跟著走。
  * - 訊息裡的換行（\n）變成一段一段；所有文字都用 textContent 放，不用 innerHTML 拼字串。
@@ -120,6 +121,11 @@ function uiOpen(kind, opts, finish) {
     cancelBtn = uiButton(o.cancel || "取消", "ghost");
     foot.appendChild(cancelBtn);
   }
+  if (kind === "alert" && o.copy) {   // 10-23（#258）：錯誤視窗「複製錯誤資訊」（文字由呼叫端組好、已去掉路徑）
+    const cp = uiButton("複製錯誤資訊", "ghost");
+    foot.appendChild(cp);
+    cp.addEventListener("click", () => uiCopyText(String(o.copy), cp, body));
+  }
   foot.appendChild(okBtn);
   dlg.append(head, body, foot);
 
@@ -167,6 +173,33 @@ function uiOpen(kind, opts, finish) {
   dlg.showModal();
   const first = input || (o.danger && cancelBtn ? cancelBtn : okBtn);
   first.focus();
+}
+
+// 複製純文字：剪貼簿可以用就複製、按鈕暫時變「已複製」；不行就把文字放進可全選的框，讓人自己複製
+function uiCopyText(text, btn, box) {
+  const label = "複製錯誤資訊";
+  const ok = () => {
+    btn.textContent = "已複製";
+    setTimeout(() => { btn.textContent = label; }, 2000);
+  };
+  const fallback = () => {
+    let ta = box.querySelector ? box.querySelector("textarea.ui-copy-box") : null;
+    if (!ta) {
+      ta = document.createElement("textarea");
+      ta.className = "ui-copy-box";
+      ta.readOnly = true;
+      ta.rows = 7;
+      ta.setAttribute("aria-label", "錯誤資訊（全選後複製）");
+      box.appendChild(ta);
+    }
+    ta.value = text;
+    try { ta.focus(); ta.select(); } catch (e) { /* 選不起來也沒關係，字在框裡 */ }
+    btn.textContent = "請全選框裡的字複製";
+  };
+  try {
+    const cb = typeof navigator !== "undefined" && navigator.clipboard;
+    if (cb && cb.writeText) cb.writeText(text).then(ok, fallback); else fallback();
+  } catch (e) { fallback(); }
 }
 
 function uiConfirm(opts) { return uiEnqueue((finish) => uiOpen("confirm", opts, finish)); }

@@ -1,4 +1,4 @@
-"""bookclub/review.py（覆核工作台）與 bookclub/exchange.py（匯出／匯入）的測試：用 tests/fake_workdir.py
+"""bookclub/review.py（覆核工作台）的測試：用 tests/fake_workdir.py
 的合成資料（電子音、假逐字稿），不碰真的影片、不呼叫 Claude／Groq。
 
 獨立可跑：.venv/bin/python tests/test_review.py
@@ -131,74 +131,6 @@ def test_progress_estimate():
     items = [{"類型": "a", "已確認": True}, {"類型": "a", "已確認": False}, {"類型": "b", "已確認": False}]
     p = review.progress(items, {"覆核秒數": 120}, 1000)
     assert p["已確認"] == 1 and p["總數"] == 3 and p["推算全部秒數"] == 360
-
-
-def test_export_import_roundtrip_same_name_plan():
-    import zipfile
-
-    from bookclub import exchange, nameplan
-
-    w = _fresh()
-    review.save_name(w, "1", {"做法": "整句換掉", "已確認": True})
-    review.save_name(w, "2", {"做法": "直接消音"})
-    review.save_cut(w, {"start": 31.3, "end": 35.9})
-    stu2 = next(x for x in review.page_data(w)["項目"] if x["id"] == "T005")
-    assert "Amy" in stu2["建議稿"] and stu2["換過的字"][0]["原字"] == "小美"      # 學員說到的本名自動換成代號
-    from bookclub import turns
-    turns.save_turn(w, "T005", {"校對稿": stu2["建議稿"], "已確認": True})     # 覆核時按「通過」
-    r = exchange.export_review(w, out=w.parent / "匯出.zip")
-    assert r["未確認數"] == 6 and "ref.wav" in r["內含"]      # 2 學員段落＋名字 1＋重疊 1＋建議刪除 2
-    with zipfile.ZipFile(r["檔案"]) as z:
-        res = json.loads(z.read("覆核結果.json").decode("utf-8"))
-        text = z.read("覆核結果.json").decode("utf-8")
-        assert "給夥伴的說明.txt" in z.namelist()
-    assert "小美" not in text and "阿明" not in text and "原文" not in text     # 不帶本名、不帶原始逐字稿
-    assert res["影片"]["長度"] == 180.0 and res["名字處理"][0]["生成"]["文字"].startswith("剛剛Amy")
-    assert res["刪除段落"][0]["id"] == "D001"
-
-    src_plan = nameplan.make_plan(w)
-    new = w.parent / "夥伴工作區"
-    video = Path(json.loads((w / "分析結果.json").read_text(encoding="utf-8"))["video"])
-    exchange.import_review(r["檔案"], new, video)
-    assert (new / "audio.flac").exists() and (new / "參考音" / "ref.wav").exists()
-    assert nameplan.make_plan(new) == src_plan
-    assert nameplan.sentences_path(new).read_text(encoding="utf-8") == nameplan.sentences_path(w).read_text(encoding="utf-8")
-    try:
-        exchange.import_review(r["檔案"], new, video)                      # 不蓋掉已經匯入的工作區
-        raise AssertionError
-    except FileExistsError:
-        pass
-
-
-def test_export_lists_places_with_real_names():
-    from bookclub import exchange
-
-    w = _fresh()
-    orig = review.roster_words
-    review.roster_words = lambda: ["學員1分享"]          # 假的「本名」：假資料學員 1 的句子都有這幾個字
-    try:
-        d = review.page_data(w)
-        assert [x["含本名"] for x in d["項目"] if x["類型"] == "學員段落"] == [True, False, False]
-        r = exchange.export_review(w, out=w.parent / "匯出.zip")
-        assert r["還有本名的地方"][:1] == ["學員段落 T003"]
-    finally:
-        review.roster_words = orig
-
-
-def test_import_rejects_wrong_video_length():
-    import subprocess
-
-    from bookclub import exchange
-
-    w = _fresh()
-    r = exchange.export_review(w, out=w.parent / "匯出.zip")
-    short = w.parent / "短影片.mp4"
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=5", str(short)], check=True)
-    try:
-        exchange.import_review(r["檔案"], w.parent / "新", short)
-        raise AssertionError
-    except ValueError as e:
-        assert "長度對不上" in str(e)
 
 
 def test_suggest_overlap_rules():
@@ -594,22 +526,6 @@ def test_item_index_names_and_teacher_whole_retime_aligns_sentences():
     assert review.item_name(idx, "學員段落:T999") == "學員段落（第 3 步現在找不到這一筆）"
     r = review.manual_edit(w, {"類型": "名字", "id": nm, "start": 112.1, "end": 119.4})
     assert r["對齊結果"]["end"] == 119.6 and "句子" in r["對齊結果"]["對齊到"], r
-
-
-def test_export_with_manual_teacher_line():
-    """10-01 走查：有人工新增的「老師這一段用 AI 聲音重念」（id 是 NM001）時，匯出以前整個失敗。"""
-    import json
-    import zipfile
-
-    from bookclub import exchange
-
-    w = _fresh()
-    review.add_teacher_item(w, 10.0, 12.0, "老師的話")
-    r = exchange.export_review(w, out=w.parent / "匯出_人工老師.zip")
-    assert Path(r["檔案"]).is_file()
-    with zipfile.ZipFile(r["檔案"]) as z:
-        res = json.loads(z.read("覆核結果.json").decode("utf-8"))
-    assert any(str(x["候選"]).startswith("NM") for x in res["名字處理"]), res["名字處理"]
 
 
 def test_overlap_student_gen_slot_is_whole_student_sentence():

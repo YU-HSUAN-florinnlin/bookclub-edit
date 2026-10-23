@@ -1,7 +1,7 @@
 """指令列入口：`bookclub`。
 
 `doctor`、`inspect`（10-02 第六批：安全查詢工作區）、`upgrade`（10-14：舊工作區升級成修改需求紀錄）、`models download`、`run analyze`、`run turns`、`run execute`（10-01 起每一段開一支 `run part` 子程式）、`serve`、`ref`、`gen teacher`、`gen names`、
-`gen students`、`render audio`、`render video`、`redo list`、`review export`／`review import`、`proofread prepare`
+`gen students`、`render audio`、`render video`、`redo list`、`proofread prepare`
 是真的會動的指令；`bench`、`export` 還沒做，執行會印出「哪個階段才會做」然後結束，讓還沒做完的
 功能不會假裝成功，也不會讓人以為指令打錯了。`serve` 開的網頁裡，左側步驟列第 1～5 步都有頁面（初始化設定在左下角「工具設定」選單）。
 """
@@ -190,18 +190,6 @@ def build_parser() -> argparse.ArgumentParser:
     pr_prep.add_argument("--start", default="0:00", help="從幾分幾秒開始（例如 43:15 或 1:05:00）")
     pr_prep.add_argument("--minutes", type=float, help="處理幾分鐘（不給就到影片結尾）")
 
-    review_parser = sub.add_parser("review", help="第 3 步覆核結果：匯出給夥伴、在夥伴的電腦匯入")
-    review_sub = review_parser.add_subparsers(dest="review_command")
-    rexp = review_sub.add_parser("export", help="把覆核結果打包成一個 zip（第 3 步也有按鈕）；只含老師提到名字的部分")
-    rexp.add_argument("workdir", help="工作區路徑")
-    rexp.add_argument("--out", help="zip 存到哪裡（預設 工作區/匯出/覆核結果_影片名_時間.zip）")
-    rexp.add_argument("--video", help="原片路徑（預設讀分析結果記錄的影片，用來記下長度與大小）")
-    rimp = review_sub.add_parser("import", help="匯入覆核結果：建工作區、抽聲音，接著就能 gen names、render audio。只能做老師提到名字的部分，"
-                                             "不能跑第 4 步（run execute）與第 5 步；要交給夥伴做第 4、5 步，請在第 3 步按『交接打包…』")
-    rimp.add_argument("zip", help="匯出的 zip")
-    rimp.add_argument("workdir", help="新的工作區資料夾")
-    rimp.add_argument("--video", required=True, help="原片路徑（要跟匯出時同一支，會比對長度）")
-    rimp.add_argument("--force", action="store_true", help="影片長度對不上也照樣匯入")
 
     prof_parser = sub.add_parser("profile", help="初始化設定（網頁左下角「工具設定」）：設定包匯出／匯入（給協作夥伴）")
     prof_sub = prof_parser.add_subparsers(dest="profile_command")
@@ -501,21 +489,6 @@ def main(argv: list[str] | None = None) -> int:
             print("下一步：bookclub serve <工作區>，打開第 3 步")
             return 0
         print("用法：bookclub proofread prepare <工作區> [--start 43:15] [--minutes 5]")
-        return 2
-
-    if args.command == "review":
-        if args.review_command == "export":
-            from bookclub.exchange import export_review
-
-            export_review(args.workdir, out=args.out, video=args.video)
-            return 0
-        if args.review_command == "import":
-            from bookclub.exchange import import_review
-
-            import_review(args.zip, args.workdir, args.video, force=args.force)
-            return 0
-        print("用法：bookclub review export <工作區> [--out 檔案.zip]")
-        print("     bookclub review import <zip> <新工作區> --video <影片> [--force]")
         return 2
 
     if args.command == "profile":

@@ -174,7 +174,7 @@ CLOSED_MSG = "這支影片已結案，這裡只能看紀錄。"
 CLOSED_POST_OK = ("/api/close/", "/api/projects/", "/api/handoff/import/", "/api/handoff/clean-episode")
 CLOSED_POST_OK_EXACT = ("/api/profile/import", "/api/copy/cancel", "/api/pick/forget")
 # 已結案時擋的 GET（會在工作區裡切試聽檔、寫匯出檔）
-CLOSED_GET_BLOCK = ("/api/final/clip", "/api/final/vclip", "/api/review/export.zip")
+CLOSED_GET_BLOCK = ("/api/final/clip", "/api/final/vclip")   # 10-23：匯出覆核結果刪了（交接打包取代）
 
 
 def wd_no_writes():
@@ -221,7 +221,7 @@ class Busy(Exception):
 
 # 第 4 步跑的時候擋掉的寫入（第 3 步覆核工作台的存檔）；計時、匯出不算修改
 STEP3_WRITES = ("/api/review/", "/api/turns/", "/api/people/", "/api/codes/", "/api/students/")
-STEP3_WRITES_OK = ("/api/review/time", "/api/review/export", "/api/people/rescan/seen")   # 10-16 #234：通知看過歸零，第 4 步執行中也要能記
+STEP3_WRITES_OK = ("/api/review/time", "/api/people/rescan/seen")   # 10-16 #234：通知看過歸零，第 4 步執行中也要能記
 
 
 def workroot() -> Path:
@@ -1543,7 +1543,9 @@ class BookclubServer(ThreadingHTTPServer):
         """`GET /api/handoff/state`：交接打包（目前這一集）、匯入交接包（選了哪個包、哪支原片、做到哪）的狀態。只讀。"""
         from bookclub import fileio, handoff
 
-        out: dict = {"系統": fileio.platform_kind(), "系統視窗": fileio.folder_picker_enabled()}
+        from bookclub import __version__
+
+        out: dict = {"系統": fileio.platform_kind(), "系統視窗": fileio.folder_picker_enabled(), "工具版本": __version__}
         job = self.handoff_job
         cur = self._workdir
         out["打包"] = job.to_dict() if job is not None and cur is not None and job.workdir == cur else None
@@ -2170,11 +2172,6 @@ class Handler(BaseHTTPRequestHandler):
             if vp is None:
                 raise FileNotFoundError("找不到原片：啟動伺服器時帶 --video，或確認分析結果記錄的影片路徑還在")
             self._serve_file(vp)
-        elif path == "/api/review/export.zip":
-            from bookclub.exchange import export_review
-
-            out = export_review(server.workdir, video=server.video)
-            self._serve_file(Path(out["檔案"]), content_type="application/zip")
         elif path == "/api/audio":
             self._handle_audio(query)
         elif path == "/api/final":
@@ -2496,10 +2493,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, rv.decide_cut_suggestion(server.workdir, str(body["id"]), str(body["決定"])))
             elif path == "/api/review/time":
                 self._send_json(200, rv.add_time(server.workdir, float(body.get("秒數", 0))))
-            elif path == "/api/review/export":
-                from bookclub.exchange import export_review
-
-                self._send_json(200, export_review(server.workdir, video=server.video))
             else:
                 self._send_json(404, {"error": f"沒有這個 API：{path}"})
         elif path.startswith("/api/final/"):

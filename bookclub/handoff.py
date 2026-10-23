@@ -854,10 +854,11 @@ def verify_zip(zip_path: str | Path, *, cancel: threading.Event | None = None, p
 
 
 def probe_duration(video: Path) -> float | None:
-    from bookclub import exchange
+    from bookclub import finalcheck
 
     try:
-        return float(exchange.probe_duration(Path(video)))
+        got = float(finalcheck.probe_duration(Path(video)))   # 10-23：匯出覆核結果刪了，量長度改用第 5 步同一支
+        return got if got > 0 else None
     except Exception:  # noqa: BLE001 — 量不到就不比長度
         return None
 
