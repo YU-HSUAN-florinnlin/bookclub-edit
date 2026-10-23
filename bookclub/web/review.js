@@ -598,7 +598,7 @@ async function rvPassAll() {
   if (b) { b.disabled = true; b.textContent = "通過中…"; }
   let r;
   try { r = await apiPost("/api/review/passall", {}); }
-  catch (err) { uiAlert({ title: "沒有成功", message: err.message }); if (b) { b.disabled = false; b.textContent = "全部照建議通過"; } return; }
+  catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); if (b) { b.disabled = false; b.textContent = "全部照建議通過"; } return; }
   await rvReload();
   const m = rvPassAllMsg(r);
   const dlg = document.createElement("dialog");
@@ -817,7 +817,7 @@ async function rvPass() {
     } else {
       return;   // 手動加的刪除段落、局部消音本來就算確認過
     }
-  } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
+  } catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); return; }
   it["已確認"] = !undo;
   rv.lastActivity = Date.now();
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();   // 通過＝打完字了，之後播到下一筆會自動換
@@ -1310,7 +1310,7 @@ async function rvDecideName(name, body) {
         "代號": body["做法"] === "換成代號" ? body["代號"] : same ? ((rv.data["這一集代號"] || {})[same] || null) : null });
     }
   } catch (e) {
-    if (!e.shown) uiAlert({ title: "沒有存到", message: e.message || String(e) });
+    if (!e.shown) uiErrorAlert({ title: "沒有存到", message: e.message || String(e) });
   } finally {
     delete rv.nameSaving[name];
     rvNameRowRefresh(name);
@@ -1437,7 +1437,7 @@ function rvBindPrep(root) {
       const msg = `換好了：${Object.entries(r["每個代號換了幾處"]).map(([o, n]) => `${o} ${n} 處`).join("、")}。備份在工作區的 ${r["備份"]}`;
       if (r["還剩"] && r["還剩"].length) uiAlert({ title: "換好了，還有幾個沒換到", message: `${msg}\n還有沒換到的：${r["還剩"].join("、")}` });
       else uiToast(msg);
-    } catch (e) { if (!e.shown) uiAlert({ title: "沒有換成", message: e.message || String(e) }); }
+    } catch (e) { if (!e.shown) uiErrorAlert({ title: "沒有換成", message: e.message || String(e) }); }
     await reload();
   });
   const auto = root.querySelector("#rv-autocode");
@@ -1448,7 +1448,7 @@ function rvBindPrep(root) {
       const msg = `配好了：② ${r["②"]} 位、③ ${r["③"]} 個。`;
       if (r["代號不夠"]) uiAlert({ title: "代號不夠用", message: `${msg}\n名單上的${rvWord()}不夠用，剩下的請自己打一個。` });
       else uiToast(`${msg}不喜歡的直接改。`);
-    } catch (e) { uiAlert({ title: "沒有配成", message: e.message || String(e) }); }
+    } catch (e) { uiErrorAlert({ title: "沒有配成", message: e.message || String(e) }); }
     await reload();
   });
   root.querySelectorAll(".rv-code").forEach((el) => el.addEventListener("change", async () => {

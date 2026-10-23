@@ -79,7 +79,13 @@ UPLOAD_LINE = "已存成 {}，請上傳到雲端空間。"
 
 
 class HandoffError(Exception):
-    """交接打包、匯入、清理不能做（訊息是給人看的一句）。"""
+    """交接打包、匯入、清理不能做（訊息是給人看的一句）。使用者自己可以改正的（選錯原片、選錯檔、打錯位置⋯）用這個：
+    畫面留在原處顯示紅字，讓人改了再試（宇軒 10-23）。"""
+
+
+class HandoffProblem(HandoffError):
+    """意外的錯誤（zip 壞掉或沒下載完、寫檔失敗、空間不夠、工作資料夾裡有奇怪的捷徑⋯使用者自己改不了的）：
+    畫面跳錯誤視窗，有「複製錯誤資訊」（宇軒 10-23）。"""
 
 
 def _now() -> str:
@@ -623,6 +629,7 @@ class PackJob:
         self._fail_hook = fail_hook   # 測試用：fail_hook(zip 路徑) → 把存好的 zip 改壞
         self.thread: threading.Thread | None = None
         self.purpose = "交接打包"
+        self.unexpected = False
 
     @property
     def running(self) -> bool:
@@ -643,7 +650,7 @@ class PackJob:
         return {"用途": self.purpose, "哪一段": self.stage, "狀態": self.state, "第幾個": self.index, "共幾個": self.total,
                 "檔名": name, "錯誤": self.error, "位置顯示": self.display, "大小": self.size,
                 "位置": closing.windows_display(self.dest.parent) if self.dest else None,
-                "說明": UPLOAD_LINE.format(name) if self.state == "已存好" and name else None}
+                "說明": UPLOAD_LINE.format(name) if self.state == "已存好" and name else None, "意外": self.unexpected}
 
     def run(self) -> None:
         from bookclub import closing
@@ -652,10 +659,13 @@ class PackJob:
             self._run()
         except HandoffError as e:
             self.state, self.error = ("停止" if self._cancel.is_set() else "失敗"), str(e)
+            self.unexpected = isinstance(e, HandoffProblem) and not self._cancel.is_set()
         except OSError as e:
+            self.unexpected = True
             print(f"⚠️ [交接打包] {type(e).__name__}：{e}")
             self.state, self.error = "失敗", closing.os_message(e).replace("再按「繼續」", "再試一次")
         except Exception as e:  # noqa: BLE001 — 背景執行緒要把失敗記下來給網頁看
+            self.unexpected = True
             print(f"⚠️ [交接打包] {type(e).__name__}：{e}")
             self.state, self.error = "失敗", "存的時候出了問題，換個位置再試；還是不行，請將錯誤訊息通知開發者。"
 
@@ -700,7 +710,7 @@ class PackJob:
             verify_zip(dest, cancel=self._cancel)
         except HandoffError:
             dest.unlink(missing_ok=True)   # 存過去不一樣：刪掉自己剛存的這一份
-            raise HandoffError("存過去的交接包核對不對，換個位置再試。") from None
+            raise HandoffProblem("存過去的交接包核對不對，換個位置再試。") from None
         self.size = dest.stat().st_size
         rec = read_record(w)
         rec["工作區ID"] = manifest["工作區ID"]
@@ -793,11 +803,11 @@ def read_manifest(zip_path: str | Path) -> dict:
             except KeyError:
                 raise HandoffError(NOT_PACKAGE) from None
     except (zipfile.BadZipFile, OSError, EOFError):
-        raise HandoffError(NOT_READY) from None
+        raise HandoffProblem(NOT_READY) from None
     try:
         m = json.loads(raw.decode("utf-8"))
     except ValueError:
-        raise HandoffError(NOT_READY) from None
+        raise HandoffProblem(NOT_READY) from None
     if not isinstance(m, dict) or not isinstance(m.get("檔案"), list):
         raise HandoffError(NOT_PACKAGE)
     if int(m.get("格式版本") or 0) > FORMAT_VERSION:
@@ -836,7 +846,7 @@ def verify_zip(zip_path: str | Path, *, cancel: threading.Event | None = None, p
                     progress(i, len(m["檔案"]), f["路徑"])
                 arc = f"{ZIP_ROOT}/{f['路徑']}"
                 if arc not in names:
-                    raise HandoffError(NOT_READY)
+                    raise HandoffProblem(NOT_READY)
                 h = hashlib.sha256()
                 n = 0
                 with zf.open(arc) as fi:
@@ -847,9 +857,9 @@ def verify_zip(zip_path: str | Path, *, cancel: threading.Event | None = None, p
                         h.update(b)
                         n += len(b)
                 if n != int(f["大小"]) or h.hexdigest() != f["sha256"]:
-                    raise HandoffError(NOT_READY)
+                    raise HandoffProblem(NOT_READY)
     except (zipfile.BadZipFile, OSError, EOFError, KeyError, ValueError):
-        raise HandoffError(NOT_READY) from None
+        raise HandoffProblem(NOT_READY) from None
     return m
 
 
@@ -994,6 +1004,8 @@ class ImportJob:
         self._cancel = threading.Event()
         self.thread: threading.Thread | None = None
         self.purpose = "匯入交接包"
+        self.id = uuid.uuid4().hex[:12]
+        self.unexpected = False   # 失敗的是不是意外的錯誤（畫面跳錯誤視窗）；使用者可以改正的留在原處紅字
         self.on_done = None   # 伺服器：匯入好了登記專案、切過去
 
     @property
@@ -1009,8 +1021,8 @@ class ImportJob:
         return self
 
     def to_dict(self) -> dict:
-        return {"用途": self.purpose, "狀態": self.state, "錯誤": self.error, "要確認": self.ask, "結果": self.result,
-                "第幾個": self.index, "共幾個": self.total}
+        return {"用途": self.purpose, "編號": self.id, "狀態": self.state, "錯誤": self.error, "意外": self.unexpected,
+                "要確認": self.ask, "結果": self.result, "第幾個": self.index, "共幾個": self.total}
 
     def run(self) -> None:
         try:
@@ -1025,13 +1037,16 @@ class ImportJob:
                 self.state = "完成"
         except HandoffError as e:
             self.state, self.error = "失敗", str(e)
+            self.unexpected = isinstance(e, HandoffProblem)
         except OSError as e:
             import errno
 
+            self.unexpected = True
             print(f"⚠️ [匯入交接包] {type(e).__name__}：{e}")
             self.state, self.error = "失敗", ("空間不夠了：清出空間再匯入一次（這台的紀錄沒有被換掉）。" if e.errno == errno.ENOSPC
                                             else "匯入的時候出了問題（這台的紀錄沒有被換掉）；請將錯誤訊息通知開發者。")
         except Exception as e:  # noqa: BLE001
+            self.unexpected = True
             print(f"⚠️ [匯入交接包] {type(e).__name__}：{e}")
             self.state, self.error = "失敗", "匯入的時候出了問題；請將錯誤訊息通知開發者。"
 
@@ -1124,10 +1139,10 @@ class ImportJob:
             if not m.get("工作區ID") or rid != m.get("工作區ID"):
                 raise HandoffError("這不是同一集的工作區：選的位置不是當初交出這個交接包的那一份，沒有匯入。")
         if target.is_symlink():
-            raise HandoffError("這一集的工作資料夾是捷徑，不能匯入；先不要動。請將錯誤訊息通知開發者。")
+            raise HandoffProblem("這一集的工作資料夾是捷徑，不能匯入；先不要動。請將錯誤訊息通知開發者。")
         existing = is_existing(target)
         if existing and closing.closed(target):
-            raise HandoffError("這支影片在這台已經結案了，不能匯入。請將錯誤訊息通知開發者。")
+            raise HandoffProblem("這支影片在這台已經結案了，不能匯入。請將錯誤訊息通知開發者。")
         if existing and any(e.get("交接編號") == m.get("交接編號") for e in read_record(target).get("交出") or []):
             raise HandoffError("這個交接包是這台交出去的，不用在這台匯入。")
         space_check(target, m)   # 審查 S4：開始搬之前先看空間
@@ -1159,7 +1174,7 @@ def _extract(zip_path: Path, m: dict, staging: Path) -> None:
                 fo.flush()
                 os.fsync(fo.fileno())
             if h.hexdigest() != f["sha256"]:
-                raise HandoffError(NOT_READY)
+                raise HandoffProblem(NOT_READY)
 
 
 def _move_in(src: Path, dst: Path, root: Path) -> None:
@@ -1168,7 +1183,7 @@ def _move_in(src: Path, dst: Path, root: Path) -> None:
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     if not closing._inside_real(dst, root):
-        raise HandoffError(f"工作資料夾裡的「{dst.parent.relative_to(root)}」是捷徑，指到工作資料夾外面，不能匯入；先不要動。請將錯誤訊息通知開發者。")
+        raise HandoffProblem(f"工作資料夾裡的「{dst.parent.relative_to(root)}」是捷徑，指到工作資料夾外面，不能匯入；先不要動。請將錯誤訊息通知開發者。")
     if dst.is_symlink():
         dst.unlink()   # 要換的是捷徑：拿掉捷徑本身，不寫到它指的地方
     os.replace(src, dst)
@@ -1183,7 +1198,7 @@ def space_check(target: Path, m: dict, usage=None) -> None:
     why = fileio.space_problem(need, where, fileio.IMPORT_MARGIN_BYTES, "這台電腦", usage=usage,
                                also=fileio.wsl_host_disks())
     if why:
-        raise HandoffError(f"空間不夠，沒有匯入：{why}")
+        raise HandoffProblem(f"空間不夠，沒有匯入：{why}")
 
 
 def backup_dir_name(now: datetime | None = None) -> str:
@@ -1224,12 +1239,12 @@ def import_into(target: Path, zip_path: Path, m: dict, video: Path, *, existing:
     `web快取/` 直接丟掉）再換成包裡的；出錯時把備份搬回去。回 {工作區, 去哪一步, 備份, 新建, 聲線不同, 提醒}。"""
     target = Path(target)
     if target.is_symlink():
-        raise HandoffError("這一集的工作資料夾是捷徑，不能匯入；先不要動。請將錯誤訊息通知開發者。")
+        raise HandoffProblem("這一集的工作資料夾是捷徑，不能匯入；先不要動。請將錯誤訊息通知開發者。")
     created = not target.exists()
     target.mkdir(parents=True, exist_ok=True)
     staging = target / STAGING_DIR
     if staging.is_symlink():
-        raise HandoffError("這一集的工作資料夾裡有一個奇怪的捷徑（.交接匯入中），先不要動。請將錯誤訊息通知開發者。")
+        raise HandoffProblem("這一集的工作資料夾裡有一個奇怪的捷徑（.交接匯入中），先不要動。請將錯誤訊息通知開發者。")
     if staging.exists():
         shutil.rmtree(staging)   # 上次匯入到一半留下的（自己的暫存資料夾）
     staging.mkdir()
@@ -1443,7 +1458,7 @@ def episode_clean_check(workdir: str | Path, *, kind: str | None = None, data: P
     from bookclub.workdir import WORKSPACE_SUFFIX
 
     if w.is_symlink() or not w.is_dir() or not w.name.endswith(WORKSPACE_SUFFIX) or not wd.analysis_result_path(w).is_file():
-        raise HandoffError("這個資料夾看起來不是這個工具建的工作資料夾，不清。請將錯誤訊息通知開發者。")
+        raise HandoffProblem("這個資料夾看起來不是這個工具建的工作資料夾，不清。請將錯誤訊息通知開發者。")
     if closing.closed(w):
         raise HandoffError("這支影片已結案。")
     return closing._video_copy_row(w, kind, data)

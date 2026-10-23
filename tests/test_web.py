@@ -439,7 +439,7 @@ def test_success_toasts():
     block = rv[i:i + 700]
     assert 'r["還剩"].length) uiAlert(' in block and "else uiToast(msg)" in block
     # 錯誤一律還是視窗
-    assert 'uiAlert({ title: "沒有配成"' in rv and 'uiAlert({ title: "沒有換成"' in rv
+    assert 'uiErrorAlert({ title: "沒有配成"' in rv and 'uiErrorAlert({ title: "沒有換成"' in rv   # 10-23 起錯誤視窗多複製錯誤資訊
 
 
 
@@ -681,9 +681,8 @@ def test_error_copy_button_1023():
     node = shutil.which("node")
     if not node:
         return
-    i, j = ho.index("function hoScrub("), ho.index("async function hoErrAlert(")
-    helpers = ho[i:j]
-    script = _UI_FAKE_DOM + ui + helpers + """
+    helpers = ""   # 10-23 起 uiScrub、uiErrorText 在 ui.js（共用）
+    script = _UI_FAKE_DOM + ui + """
 (async () => {
   const btn = () => made.filter((e) => e.tagName === "BUTTON" && e.textContent === "複製錯誤資訊").slice(-1)[0];
   let copied = null;
@@ -703,7 +702,7 @@ def test_error_copy_button_1023():
   const ta = made.filter((e) => e.tagName === "TEXTAREA").slice(-1)[0];
   made.filter((e) => e.tagName === "DIALOG" && e.open).forEach((d) => d.close());
   await p2;
-  const text = hoErrText({ "系統": "wsl", "工具版本": "9.9.9" }, "匯入交接包",
+  const text = uiErrorText({ "系統": "wsl", "工具版本": "9.9.9" }, "匯入交接包",
     "請選從雲端空間下載的「第一集.mp4」 /home/someone/讀書會/第一集_剪輯工作區 D:\\\\下載\\\\x.zip", new Date(2026, 9, 23, 9, 5));
   console.log(JSON.stringify({ copied, after1, ta: ta && ta.value, ro: ta && ta.readOnly, text }));
 })();
@@ -724,10 +723,95 @@ def test_error_copy_button_1023():
              "~/讀書會剪輯資料/影片/x y.mp4": "（路徑略）",
              "請選「第一集 (2).mp4」。": "請選「（路徑略）」。",
              "Mac/Windows 都可以": "Mac/Windows 都可以"}
-    script = helpers + "console.log(JSON.stringify(" + json.dumps(list(cases)) + ".map(hoScrub)));"
+    script = _UI_FAKE_DOM + ui + "console.log(JSON.stringify(" + json.dumps(list(cases)) + ".map(uiScrub)));"
     out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout.strip()) == list(cases.values()), out.stdout
+
+
+def test_error_alert_everywhere_1023():
+    """10-23（第七輪）：其他錯誤視窗也有「複製錯誤資訊」——伺服器回的錯誤一律用 uiErrorAlert（ui.js），
+    「在哪裡」沒給就寫現在這一頁；結案打包、清空間、第 4 步開始執行、輸出成品寫對應的功能名稱。"""
+    import json
+    import re
+    import shutil
+    import subprocess
+
+    ui = (WEB / "ui.js").read_text(encoding="utf-8")
+    web = {f: (WEB / f).read_text(encoding="utf-8") for f in ("app.js", "cards.js", "review.js", "finalcheck.js", "fileio.js", "handoff.js")}
+    for f, src in web.items():   # 伺服器回的錯誤訊息不再用沒有複製按鈕的 uiAlert（交接「清掉這集」可以改正的那種例外：一般提醒）
+        src = src.replace('uiAlert({ title: "還不能清掉這集", message: e.message })', "")
+        assert not re.search(r"uiAlert\(\{ title: \"[^\"]+\", message: (?:e|err|e2)\.message", src), f
+    for f, where in (("fileio.js", "第 5 步・結案打包"), ("fileio.js", "第 5 步・結案清空間"), ("app.js", "第 4 步・開始執行"),
+                     ("finalcheck.js", "第 5 步・輸出成品")):
+        assert f'where: "{where}"' in web[f], (f, where)
+    harness = (WEB.parent.parent / "tests" / "web_harness.js").read_text(encoding="utf-8")
+    assert "uiErrorAlert:" in harness
+    server = (WEB.parent / "server.py").read_text(encoding="utf-8")
+    assert '"/api/tool-info"' in server
+    node = shutil.which("node")
+    if not node:
+        return
+    script = _UI_FAKE_DOM + ui + """
+global.location = { hash: "#step4" };
+global.fetch = async () => ({ json: async () => ({ "工具版本": "1.2.3", "系統": "mac" }) });
+(async () => {
+  const p = uiErrorAlert({ title: "無法開始", message: "壞了" });
+  await new Promise((r) => setTimeout(r, 10));
+  const btn = made.filter((e) => e.tagName === "BUTTON" && e.textContent === "複製錯誤資訊").slice(-1)[0];
+  let copied = null;
+  Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: async (t) => { copied = t; } } }, configurable: true });
+  btn.fire("click");
+  await new Promise((r) => setTimeout(r, 10));
+  made.filter((e) => e.tagName === "DIALOG" && e.open).forEach((d) => d.close());
+  await p;
+  console.log(JSON.stringify({ copied }));
+})();
+"""
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    copied = json.loads(out.stdout.strip().splitlines()[-1])["copied"]
+    assert "工具版本：1.2.3" in copied and "系統：Mac" in copied and "在哪裡：第 4 步" in copied and "錯誤訊息：壞了" in copied, copied
+
+
+def test_import_errors_popup_only_when_unexpected_1023():
+    """10-23（宇軒）：匯入交接包失敗——使用者自己可以改正的（選錯原片）留在匯入視窗底部紅字、不跳視窗；
+    意外的（zip 壞掉、空間不夠⋯，伺服器標 `意外`）跳有「複製錯誤資訊」的錯誤視窗，同一個匯入工作只跳一次；
+    失敗後「開始匯入」照樣可以再按。用 web_harness 的假瀏覽器跑 handoff.js。"""
+    import json
+    import shutil
+    import subprocess
+    import tempfile
+
+    node = shutil.which("node")
+    if not node:
+        return
+    state = lambda err, unexpected: {"系統": "mac", "工具版本": "x", "匯入": {
+        "交接包": {"路徑": "/假/包.zip", "檔名": "包.zip", "摘要": {"哪一段": "第3步", "原片檔名": "第三集.mp4"}},
+        "原片": {"檔名": "第三集_別支影片.mp4", "路徑": "/假/第三集_別支影片.mp4"}, "複製": None,
+        "工作": {"編號": "J1", "狀態": "失敗", "錯誤": err, "意外": unexpected}}}
+    pre = ("function dlg() { const d = H.makeEl('dialog', {id: 'ho-import'}, ''); d.open = true; return d; }\n"
+           "function alerts() { return H.log.filter((x) => x[0] === 'alert'); }\n")
+    spec = {"前置": pre, "情境": [
+        {"名稱": "原片不符", "程式": f"H.apiGetData['/api/handoff/state'] = {json.dumps(state('選的原片跟交接包記的不是同一支（大小不一樣）。', False), ensure_ascii=False)};"
+                               "hoImpStarted = 'J1'; const d = dlg(); await hoRenderImport(d); await hoRenderImport(d);"
+                               "return {alerts: alerts().length, red: d.innerHTML.includes('不是同一支'), "
+                               "startOk: !/id=\"ho-start\" disabled/.test(d.innerHTML)};"},
+        {"名稱": "zip 壞掉", "程式": f"H.apiGetData['/api/handoff/state'] = {json.dumps(state('交接包還沒下載完（或檔案壞了），請等雲端空間同步好再試。', True), ensure_ascii=False)};"
+                               "hoImpStarted = 'J1'; const d = dlg(); await hoRenderImport(d); await hoRenderImport(d);"
+                               "return {alerts: alerts().length, text: (alerts()[0] || [])[1] || ''};"},
+        {"名稱": "別頁開的工作", "程式": f"H.apiGetData['/api/handoff/state'] = {json.dumps(state('寫檔失敗', True), ensure_ascii=False)};"
+                                "hoImpStarted = null; const d = dlg(); await hoRenderImport(d); return {alerts: alerts().length};"},
+    ]}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
+        json.dump(spec, f, ensure_ascii=False)
+    harness = WEB.parent.parent / "tests" / "web_harness.js"
+    out = subprocess.run([node, str(harness), str(WEB / "handoff.js"), f.name], capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    assert got["原片不符"] == {"alerts": 0, "red": True, "startOk": True}, got
+    assert got["zip 壞掉"]["alerts"] == 1 and "沒有匯入" in got["zip 壞掉"]["text"], got
+    assert got["別頁開的工作"] == {"alerts": 0}, got
 
 
 if __name__ == "__main__":

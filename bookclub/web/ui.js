@@ -202,6 +202,50 @@ function uiCopyText(text, btn, box) {
   } catch (e) { fallback(); }
 }
 
+// 10-23（#258）：錯誤視窗的「複製錯誤資訊」（原本在 handoff.js，10-23 搬來共用）——工具版本、系統、在哪裡、錯誤訊息、時間；路徑與檔名一律換成「（路徑略）」，
+// 不放逐字稿、名字（錯誤訊息本來就不帶這些）
+// 路徑可以有空格、中文、半形括號（「/Users/x/a b/第一集 (2).mp4」「C:\\Users\\…」）：從開頭的「/」「~/」「X:\\」一路遮到
+// 引號、全形標點、換行或字串結尾為止，不留尾巴。路徑前面要是開頭、空白或引號（「Mac/Windows」這種字中間的斜線不算）
+function uiScrub(text) {
+  return String(text == null ? "" : text)
+    .replace(/(^|[\s「『（("'：:])(?:[A-Za-z]:\\|~\/|\/)[^「」『』，。、；：（）"'\n]*/g, (m, pre) => `${pre}（路徑略）`)
+    .replace(/「[^「」\n]*\.(?:mp4|mov|m4v|mkv|webm|avi|zip|wav|flac|json|csv)」/gi, "「（路徑略）」")   // 引號裡的檔名（可以有空格）
+    .replace(/[^\s「」『』，。、；：（）()"'／]+\.(?:mp4|mov|m4v|mkv|webm|avi|zip|wav|flac|json|csv)\b/gi, "（路徑略）");
+}
+
+function uiErrorText(st, where, message, now) {
+  const s = st || {};
+  const sys = s["系統"] === "mac" ? "Mac" : s["系統"] === "wsl" ? "Windows" : "其他";
+  const d = now || new Date();
+  const p2 = (n) => String(n).padStart(2, "0");
+  return ["讀書會剪輯工具：錯誤資訊", `工具版本：${s["工具版本"] || "不知道"}`, `系統：${sys}`, `在哪裡：${where}`,
+    `錯誤訊息：${uiScrub(message)}`,
+    `時間：${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`].join("\n");
+}
+
+
+// 工具版本、系統（第一次用時問伺服器，之後記著）
+let uiToolInfoCache = null;
+async function uiToolInfo() {
+  if (uiToolInfoCache) return uiToolInfoCache;
+  try { const r = await fetch("/api/tool-info"); uiToolInfoCache = await r.json(); } catch (e) { uiToolInfoCache = {}; }
+  return uiToolInfoCache || {};
+}
+
+// 現在在哪一頁（錯誤資訊的「在哪裡」沒給時用）
+const UI_PLACES = { step0: "初始化設定", step1: "第 1 步", step2: "第 2 步", step3: "第 3 步", step4: "第 4 步", step5: "第 5 步" };
+function uiWhereNow() {
+  const h = (typeof location !== "undefined" && location.hash || "").replace(/^#/, "").split(/[?/]/)[0];
+  return UI_PLACES[h] || "總覽";
+}
+
+// 錯誤視窗：跟 uiAlert 一樣，多一顆「複製錯誤資訊」。where＝哪個功能（例如「第 5 步・輸出成品」），沒給就寫現在這一頁
+async function uiErrorAlert(opts) {
+  const o = typeof opts === "string" ? { message: opts } : (opts || {});
+  const info = await uiToolInfo();
+  return uiAlert({ ...o, copy: uiErrorText(info, o.where || uiWhereNow(), o.message) });
+}
+
 function uiConfirm(opts) { return uiEnqueue((finish) => uiOpen("confirm", opts, finish)); }
 function uiPrompt(opts) { return uiEnqueue((finish) => uiOpen("prompt", opts, finish)); }
 function uiAlert(opts) { return uiEnqueue((finish) => uiOpen("alert", opts, finish)); }

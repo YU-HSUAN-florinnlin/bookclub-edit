@@ -248,7 +248,7 @@ def test_4_closed_start_message_plain():
     try:
         code, r = _call(base, "/api/projects/start", {"影片": str(video)})
         assert code == 409 and r.get("已結案"), (code, r)
-        assert r["error"] == "這支影片已結案，要重做請找宇軒", r
+        assert r["error"] == "這支影片已結案，要重做的話，請將錯誤訊息通知開發者。", r
         assert "bookclub" not in r["error"]
     finally:
         srv.home_path = orig_home

@@ -174,7 +174,7 @@ async function pkPick(purpose, target, btn) {
   } catch (e) {
     clearTimeout(later);
     btn.disabled = false; btn.textContent = old;
-    uiAlert({ title: "沒有選到", message: e.message });
+    uiErrorAlert({ title: "沒有選到", message: e.message });
     return;
   }
   clearTimeout(later);
@@ -189,7 +189,7 @@ async function pkPick(purpose, target, btn) {
 async function pickBrowsed(path) {
   try {
     await apiPost("/api/pick/browsed", { ...pkFallbackFor, "路徑": path }, { quiet: true });
-  } catch (e) { uiAlert({ title: "沒有選到", message: e.message }); return; }
+  } catch (e) { uiErrorAlert({ title: "沒有選到", message: e.message }); return; }
   const fb = document.getElementById("pkFallback");
   if (fb) fb.hidden = true;   // 選好了就收起來（要再選就再按一次按鈕）
   await pkRefresh();
@@ -337,7 +337,7 @@ function clView(d) {
     else if (d["可以繼續"]) status += "上次存到一半（再存一份紀錄），按「繼續」接著存。";
     else { status += `成品存在：${cl["成品存在"] || ""}`; statusKind = "done"; }
   } else if (st === "清理中") {
-    status = d["可以繼續清"] === false ? "這支影片的清理被開發者暫停了，先不要清。"   // 開發者 --restore 暫停中
+    status = d["可以繼續清"] === false ? "這支影片的清理暫停了，先不要清。請將錯誤訊息通知開發者。"   // 開發者 --restore 暫停中
       : js === "失敗" && job["錯誤"] ? `${job["錯誤"]}` : "上次清到一半。";
     if (js === "失敗") { statusKind = "error"; badge = "沒有清完"; }
   } else if (js === "失敗") { status = job["錯誤"] || "沒有存好"; statusKind = "error"; badge = "沒有存好"; }
@@ -399,7 +399,11 @@ async function closeBoxInit(box) {
     try { now = await apiGet("/api/close/state"); } catch (e) { /* 抓不到就用畫面上的 */ }
     if ((now["狀態"] == null || now["狀態"] === "打包中") && now["清單指紋"]) body = { ...body, "清單指紋": now["清單指紋"] };
     try { r = await apiPost("/api/close/pack", body, { quiet: true }); }
-    catch (e) { msg.innerHTML = `<span class="badge error">沒有開始</span> ${esc(e.message)}`; return; }
+    catch (e) {
+      msg.innerHTML = `<span class="badge error">沒有開始</span> ${esc(e.message)}`;
+      uiErrorAlert({ title: "結案打包沒有開始", message: e.message, where: "第 5 步・結案打包" });   // 10-23：錯誤視窗＋複製錯誤資訊
+      return;
+    }
     note = (r && r["提醒"]) || note;
     await closeBoxInit(box);
     if (note) box.querySelector("#cl-msg").insertAdjacentHTML("beforeend", ` <span class="rv-warnline">${esc(note)}</span>`);
@@ -430,7 +434,11 @@ async function closeBoxInit(box) {
   });
   const cleanCall = async (body) => {
     try { await apiPost("/api/close/clean", body, { quiet: true }); }
-    catch (e) { msg.innerHTML = `<span class="badge error">沒有清</span> ${esc(e.message)}`; return; }
+    catch (e) {
+      msg.innerHTML = `<span class="badge error">沒有清</span> ${esc(e.message)}`;
+      uiErrorAlert({ title: "沒有清", message: e.message, where: "第 5 步・結案清空間" });
+      return;
+    }
     closeBoxInit(box);
   };
   const cbtn = box.querySelector("#cl-clean");
@@ -451,6 +459,13 @@ async function closeBoxInit(box) {
   });
   clearTimeout(clPollTimer);
   if (v.running) clPollTimer = setTimeout(() => { if (document.body.contains(box)) closeBoxInit(box); }, 1000);
+  // 10-23：存到一半、清到一半失敗（這一頁看著它從進行中變成失敗）→ 跳錯誤視窗（可以複製錯誤資訊）
+  const failedJob = d["工作"];
+  if (clWasRunning && !v.running && failedJob && failedJob["狀態"] === "失敗") {
+    const cleaning = d["狀態"] === "清理中" || failedJob["用途"] === "結案清理";
+    uiErrorAlert({ title: cleaning ? "沒有清完" : "結案打包沒有存好", message: failedJob["錯誤"] || "沒有完成",
+      where: cleaning ? "第 5 步・結案清空間" : "第 5 步・結案打包" });
+  }
   // 剛清完（這一頁從「正在清…」變成已結案）：整頁重畫成瘦身版（頂端那一句、按鈕灰掉）
   if (!v.running && clWasRunning && d["狀態"] === "已結案" && typeof render === "function") { clWasRunning = false; render(); return; }
   clWasRunning = v.running;

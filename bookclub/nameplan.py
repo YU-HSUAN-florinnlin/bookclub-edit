@@ -71,7 +71,7 @@ def finish_drops(text: str) -> tuple[str, list[int]]:
     return out, at
 
 
-DROP_MARK_LEFT = "程式內部錯誤：名字拿掉的記號沒清掉（要念的字裡還有），請回報開發者"
+DROP_MARK_LEFT = "程式內部錯誤：名字拿掉的記號沒清掉（要念的字裡還有）。請將錯誤訊息通知開發者。"
 
 
 def check_no_drop_mark(text: str) -> None:

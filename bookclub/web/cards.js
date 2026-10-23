@@ -147,7 +147,7 @@ function cvBindTools(it) {
   const tai = document.getElementById("rv-tai");   // 10-01 2-3：改成老師的段落 → 老師 AI 重念
   if (tai) tai.addEventListener("click", async () => {
     if (!(await uiConfirm({ title: `${rvFmt(it.start, 1)}–${rvFmt(it.end, 1)} 這一段改成老師重念？`, message: "用老師的 AI 聲音重念。新增後在那一筆卡片上確認要念的字。", ok: "改成老師重念", cancel: "先不要" }))) return;
-    try { await cvPost("/api/review/manual", { "類型": "學員發言", start: it.start, end: it.end, "說話者": "老師" }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
+    try { await cvPost("/api/review/manual", { "類型": "學員發言", start: it.start, end: it.end, "說話者": "老師" }); } catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); return; }
     await cvReload();
   });
   const del = document.getElementById("rv-del");
@@ -355,7 +355,7 @@ function rvEdgeHtml(it) {
 async function rvShrink(it) {
   const h = it["前後沒聲音"];
   if (!(await uiConfirm({ title: `把重念範圍改成 ${rvFmt(h["建議"][0], 1)}–${rvFmt(h["建議"][1], 1)}？`, message: "這一句之後要重新生成。", ok: "照建議縮小", cancel: "先不要" }))) return;
-  try { await cvPost("/api/review/shrink", { "鍵": h["鍵"] }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
+  try { await cvPost("/api/review/shrink", { "鍵": h["鍵"] }); } catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); return; }
   await cvReload();
 }
 
@@ -418,7 +418,7 @@ async function rvSaveRange(it, a, b) {
     if (redo === null) { await cvReload(); return; }
     if (redo) body["改稿"] = "";
   }
-  try { await cvPost("/api/review/name", body); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
+  try { await cvPost("/api/review/name", body); } catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); return; }
   await cvReload();
 }
 
@@ -458,7 +458,7 @@ function rvOutQHtml(it, q, i) {
 
 async function rvAnswerOutside(it, q, v) {
   try { await cvPost("/api/review/outside", { "鍵": q["鍵"], start: q.start, end: q.end, "答案": v || null }); }
-  catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return false; }
+  catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); return false; }
   await cvReload();
   if (v === "老師重念") cvPrefill("學員發言", q.start, q.end, "老師", "下面的起訖已經填好、說話的人選了老師：聽過沒問題按「新增」，這幾秒就會用老師的聲音重念");
   if (v === "好幾個人") cvPrefill("學員發言", q.start, q.end, it["說話者"], "把起點或終點縮到只有一個人講話的那一段，選是誰說的，再按「新增」；剩下的幾秒會再問一次");
@@ -699,7 +699,7 @@ function rvAlsoHtml(it) {
 
 function rvBindAlso(it) {
   document.querySelectorAll(".rv-alsopick").forEach((b) => b.addEventListener("click", async () => {
-    try { await cvPost("/api/review/name", { id: it.id, "選的人": b.dataset.who || "" }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
+    try { await cvPost("/api/review/name", { id: it.id, "選的人": b.dataset.who || "" }); } catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); return; }
     await cvReload();
   }));
 }
@@ -824,7 +824,7 @@ function rvBindMore(it) {
     q("rv-merge").addEventListener("click", async () => {
       await rvSaveTurnText(it);
       const before = rvOutKeys();
-      try { await cvPost("/api/turns/merge", { id: it.id }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
+      try { await cvPost("/api/turns/merge", { id: it.id }); } catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); return; }
       await cvReload();
       cvAskOutside(before);
     });
@@ -838,7 +838,7 @@ function rvBindMore(it) {
       await rvSaveTurnText(it);
       const before = rvOutKeys();
       let sp;
-      try { sp = await cvPost("/api/turns/split", { id: it.id, at }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
+      try { sp = await cvPost("/api/turns/split", { id: it.id, at }); } catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); return; }
       cvNoteUndo({ kind: "split", ...snap, made: (sp && sp["新段落"]) || [] });
       await cvReload();
       cvAskOutside(before);
@@ -950,7 +950,7 @@ async function rvSaveOverlap(it, fields) {
     const res = await cvPost("/api/review/overlap", { id: it.id, ...fields });
     Object.assign(it, res["決定"]);
     cvRefreshSug();
-  } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); }
+  } catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); }
 }
 
 // 10-01 第三批：人工新增的（剪掉、消音、漏抓的重疊、漏抓的名字、老師這一段 AI 重念）加錯了可以刪；刪掉的留一筆紀錄
@@ -964,7 +964,7 @@ function rvDeleteName(it) {
 async function rvDeleteManual(it) {
   if (!(await uiConfirm({ title: `刪掉這一筆人工新增的「${rvDeleteName(it)}」？`, danger: true, ok: "刪掉這一筆", cancel: "先不要",
     message: "刪掉之後清單裡不會再有它，成品也不會照它處理；會留一筆紀錄（在「設定」→「刪掉的紀錄」看得到），但不能救回，要的話重新新增。" }))) return;
-  try { await cvPost("/api/review/delete", { "類型": it["類型"], id: it.id }); } catch (err) { uiAlert({ title: "沒有成功", message: err.message }); return; }
+  try { await cvPost("/api/review/delete", { "類型": it["類型"], id: it.id }); } catch (err) { uiErrorAlert({ title: "沒有成功", message: err.message }); return; }
   await cvReload();
 }
 

@@ -944,6 +944,29 @@ def test_user_messages_no_personal_name():
     assert sum("請將錯誤訊息通知開發者。" in x for x in strs) >= 6
 
 
+def test_error_kinds_unexpected_vs_fixable():
+    """10-23（宇軒）：使用者自己可以改正的（選錯原片、不是交接包）不算意外；zip 壞掉、空間不夠、捷徑算意外（跳錯誤視窗）。"""
+    w, video = _teacher()
+    z = _pack(w, handoff.STAGE3)
+    other = Path(tempfile.mkdtemp()) / "假影片.mp4"
+    other.write_bytes(b"not the same video")
+    j = _import(z, other)
+    assert j.state == "失敗" and not j.unexpected and j.to_dict()["意外"] is False
+    cut = Path(tempfile.mkdtemp()) / "沒下載完.zip"
+    cut.write_bytes(z.read_bytes()[: z.stat().st_size // 2])
+    j = _import(cut, _download(video))
+    assert j.state == "失敗" and j.unexpected and j.error == handoff.NOT_READY
+    try:
+        handoff.space_check(Path(tempfile.mkdtemp()), handoff.read_manifest(z),
+                            usage=lambda p: __import__("collections").namedtuple("U", "total used free")(10, 10, 100))
+        raise AssertionError("空間不夠要擋")
+    except handoff.HandoffProblem:
+        pass
+    job = handoff.PackJob(w, Path(tempfile.mkdtemp()), handoff.STAGE3, fail_hook=lambda p: p.write_bytes(b"x"))
+    job.run()
+    assert job.state == "失敗" and job.to_dict()["意外"] is True
+
+
 if __name__ == "__main__":
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for name, fn in tests:

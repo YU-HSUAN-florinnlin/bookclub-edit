@@ -274,7 +274,7 @@ def test_drop_mark_left_raises():
         nameplan.compute_plan(w)
         raise AssertionError("記號漏出去卻沒丟錯")
     except RuntimeError as e:
-        assert "名字拿掉的記號沒清掉" in str(e) and "請回報開發者" in str(e), e
+        assert "名字拿掉的記號沒清掉" in str(e) and "請將錯誤訊息通知開發者" in str(e), e
     finally:
         nameplan.build_plan = real_build
     undo = _student_setup(w)

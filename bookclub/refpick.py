@@ -1304,7 +1304,7 @@ def _build_html(candidates: list[dict]) -> str:
   <button id="copy" class="primary">複製逐字稿</button>
 </div>
 <div class="hint" id="hint"></div>
-<div id="doneMsg" class="done" style="display:none">5 段都聽過了，請回報宇軒。</div>
+<div id="doneMsg" class="done" style="display:none">5 段都聽過了。</div>
 
 <script>
 const candidates = {payload};

@@ -431,7 +431,7 @@ def test_build_html_contains_all_candidates_and_controls():
     assert "第二段逐字稿測試文字" in html
     assert "換一段" in html
     assert "複製逐字稿" in html
-    assert "請回報宇軒" in html
+    assert "5 段都聽過了。" in html and "宇軒" not in html
     assert "用第 ${c.rank} 段" in html  # 動態說明文字的樣板還在
 
 

@@ -998,7 +998,7 @@ class PackJob:
             self.state, self.error = "失敗", os_message(e)
         except Exception as e:  # noqa: BLE001 — 背景執行緒要把失敗記下來給網頁看
             print(f"⚠️ [結案打包] {type(e).__name__}：{e}")
-            self.state, self.error = "失敗", "存的時候出了問題，換個位置再試；還是不行，把終端機最後幾行給開發者。"
+            self.state, self.error = "失敗", "存的時候出了問題，換個位置再試；還是不行，請將錯誤訊息通知開發者。"
 
     def _entry(self, rec: dict) -> dict | None:
         packs = rec.get("打包") or []
@@ -1289,8 +1289,8 @@ PACK_GONE = "找不到剛才存的地方（D 槽沒插？），插回去才能�
 PLAN_CHANGED = "剛剛這裡的檔案又有變動，按「清掉這裡的暫存」再清一次。"
 NEW_EXPORT = "存好之後又輸出了新的成品。先按「再存一份…」把新的存起來，再按「清掉這裡的暫存」。"
 NO_PRODUCT = "存好的那一份裡沒有成品影片，不能清。先在第 5 步重新輸出成品，再結案打包一次。"
-TMP_THERE = "這裡有一個上次留下的「.結案清理中」資料夾，先請開發者處理（bookclub close --restore 或手動看過），再清一次。"
-CLEAN_FAILED = "清的時候出了問題，按「繼續清」再試一次；還是不行，把終端機最後幾行給開發者。"
+TMP_THERE = "這裡有一個上次留下的「.結案清理中」資料夾，先不要清。請將錯誤訊息通知開發者。"   # 開發者用 bookclub close --restore 或手動看過再清
+CLEAN_FAILED = "清的時候出了問題，按「繼續清」再試一次；還是不行，請將錯誤訊息通知開發者。"
 
 
 class CleanError(Exception):
@@ -1512,7 +1512,7 @@ def clean_check(workdir: str | Path, fingerprint: str, *, busy=None, kind: str |
         raise CleanError(why)
     tmp = w / CLEAN_DIR
     if tmp.exists() or tmp.is_symlink():   # 審查必修 B：不是這一次建的（或是捷徑）——不往裡面搬、也不整個刪
-        print(f"⚠️ [結案清理] {tmp} 已經存在（{'捷徑' if tmp.is_symlink() else '資料夾'}），不清；請開發者看過再處理")
+        print(f"⚠️ [結案清理] {tmp} 已經存在（{'捷徑' if tmp.is_symlink() else '資料夾'}），不清。請將錯誤訊息通知開發者。")
         raise CleanError(TMP_THERE)
     return plan, ok
 
@@ -1543,7 +1543,7 @@ def clean_resume(workdir: str | Path, hook=None) -> dict:
     return _finish(w, hook)
 
 
-PAUSED = "這支影片的清理被開發者暫停了，先不要清。"
+PAUSED = "這支影片的清理暫停了，先不要清。請將錯誤訊息通知開發者。"
 
 
 def paused_check(rec: dict) -> None:
@@ -1605,7 +1605,7 @@ def _finish(w: Path, hook=None) -> dict:
     cl = rec["清理"]
     tmp = w / CLEAN_DIR
     if tmp.is_symlink():   # 審查必修 B：清理資料夾變成捷徑了——不往裡面搬、也不刪它指到的東西
-        print(f"⚠️ [結案清理] {tmp} 是捷徑，停下來；請開發者看過再處理")
+        print(f"⚠️ [結案清理] {tmp} 是捷徑，停下來。請將錯誤訊息通知開發者。")
         raise CleanError(TMP_THERE)
     later: list[dict] = []   # 不在同一顆磁碟、搬不進來的影片副本：到「刪」那一步（再確認一次）直接刪
     if not cl.get("刪除開始"):
@@ -1698,8 +1698,8 @@ def restore(workdir: str | Path) -> int:
         print(f"⚠️ 原位已經有同名的檔，這 {len(left)} 個留在 {CLEAN_DIR}/：" + "、".join(left[:10]))
         cl["搬回一部分"] = _now()
         _write_record(w, rec)
-        raise CleanError(f"搬回 {n} 個；有 {len(left)} 個檔原位已經有同名的檔，留在 {CLEAN_DIR}/。請開發者先手動處理"
-                         f"（比對後移走其中一邊），再跑一次 --restore。")
+        raise CleanError(f"搬回 {n} 個；有 {len(left)} 個檔原位已經有同名的檔，留在 {CLEAN_DIR}/。請手動比對後移走其中一邊，"
+                         f"再跑一次 --restore。請將錯誤訊息通知開發者。")
     cl["搬回"] = _now()
     cl.pop("搬回一部分", None)   # 全部搬回了：暫停解除
     rec["狀態"] = PACKED if _verified_pack(rec) else PACKING

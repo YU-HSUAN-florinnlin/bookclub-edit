@@ -215,6 +215,10 @@ def closed_post_allowed(path: str, body: dict) -> bool:
     return False
 
 
+class Unexpected(ValueError):
+    """意外的錯誤（使用者自己改不了）：回 400 時多帶 `意外: true`，畫面跳有「複製錯誤資訊」的錯誤視窗（10-23）。"""
+
+
 class Busy(Exception):
     """AI 執行（第 4 步）還在跑：第 3 步的東西這時候不能改（09-30）。"""
 
@@ -1597,7 +1601,7 @@ class BookclubServer(ThreadingHTTPServer):
             items = handoff.pack_items(self.workdir, stage)
             locp = handoff.check_location(self.workdir, loc, handoff.items_size(items))
         except handoff.HandoffError as e:
-            raise ValueError(str(e)) from None
+            raise (Unexpected if isinstance(e, handoff.HandoffProblem) else ValueError)(str(e)) from None
         kind = fileio.platform_kind()
         disp = closing.windows_display(locp) if kind == "wsl" else str(locp)
         job = handoff.PackJob(self.workdir, locp, stage, display=disp)
@@ -1637,7 +1641,7 @@ class BookclubServer(ThreadingHTTPServer):
             return {"ok": True, **handoff.clean_copy(self.workdir, str(body.get("清單指紋") or ""),
                                                      busy=self._clean_busy)}
         except handoff.HandoffError as e:
-            raise ValueError(str(e)) from None
+            raise (Unexpected if isinstance(e, handoff.HandoffProblem) else ValueError)(str(e)) from None
 
     def handoff_clean_episode(self, body: dict) -> dict:
         """`POST /api/handoff/clean-episode` {路徑}：總覽「清掉這集」（已交出去的才行）。"""
@@ -1656,7 +1660,7 @@ class BookclubServer(ThreadingHTTPServer):
         try:
             r = handoff.clean_episode(d)
         except handoff.HandoffError as e:
-            raise ValueError(str(e)) from None
+            raise (Unexpected if isinstance(e, handoff.HandoffProblem) else ValueError)(str(e)) from None
         try:
             unregister_project(d)
         except (OSError, ValueError) as e:
@@ -1691,7 +1695,7 @@ class BookclubServer(ThreadingHTTPServer):
         try:
             m = handoff.read_manifest(p)
         except handoff.HandoffError as e:
-            raise ValueError(str(e)) from None
+            raise (Unexpected if isinstance(e, handoff.HandoffProblem) else ValueError)(str(e)) from None
         self.handoff_zip = {"路徑": str(p), "檔名": p.name, "摘要": handoff.summary(m)}
         self.import_job = None
         return {"ok": True, "交接包": self.handoff_zip}
@@ -2082,7 +2086,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as e:
             self._send_json(400, {"error": str(e)})
         except Exception as e:  # noqa: BLE001
-            self._send_json(500, {"error": f"{type(e).__name__}：{e}"})
+            self._send_json(500, {"error": f"{type(e).__name__}：{e}", "意外": True})
 
     def _serve_static(self, path: str) -> None:
         if path == "/":
@@ -2209,6 +2213,10 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub import finalcheck
 
             self._send_json(200, finalcheck.goto_output_time(server.workdir, float(query["src"][0])))
+        elif path == "/api/tool-info":   # 10-23：錯誤視窗「複製錯誤資訊」要的工具版本、系統（沒有專案也能問）
+            from bookclub import __version__, fileio
+
+            self._send_json(200, {"工具版本": __version__, "系統": fileio.platform_kind()})
         elif path == "/api/handoff/state":   # 33 號設計：交接打包、匯入交接包（只讀）
             self._send_json(200, server.handoff_state())
         elif path == "/api/handoff/clean-plan":
@@ -2275,9 +2283,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": arg if "：" in arg else
                                   f"少了「{arg}」這一欄，或找不到這一筆（重新整理網頁再試一次）"})
         except ValueError as e:   # 10-01 走查：畫面上不要出現「ValueError：」
-            self._send_json(400, {"error": str(e)})
+            self._send_json(400, {"error": str(e), **({"意外": True} if isinstance(e, Unexpected) else {})})
         except Exception as e:  # noqa: BLE001
-            self._send_json(500, {"error": f"{type(e).__name__}：{e}"})
+            self._send_json(500, {"error": f"{type(e).__name__}：{e}", "意外": True})
 
     def _route_post_api(self, path: str, body: dict) -> None:
         server = self.server
@@ -2374,7 +2382,7 @@ class Handler(BaseHTTPRequestHandler):
             d = project_dir_for(video)
             if _closed(d):   # 1015-8 第 3 段：同一支影片的工作區已結案（瘦身版），不在裡面重新分析
                 print(f"[結案] {d} 已結案；要重做由開發者取消結案：bookclub close --reopen", file=sys.stderr)   # 開發者指令只印終端機
-                raise Closed("這支影片已結案，要重做請找宇軒")
+                raise Closed("這支影片已結案，要重做的話，請將錯誤訊息通知開發者。")
             existed = d.exists()
             if server.run_status_running():
                 raise ValueError("分析還在跑，等它結束再開始另一支")
