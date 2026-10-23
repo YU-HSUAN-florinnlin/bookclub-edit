@@ -105,10 +105,42 @@ def test_light_values_kept():
     v = _root_vars(root)
     keep = {"--fg": "#222", "--muted": "#666", "--border": "#ddd", "--bg": "#fff", "--bg-soft": "#f5f5f5",
             "--page-bg": "#f5f5f5", "--card-bg": "#fff", "--accent": "#2a6f2a", "--btn-bg": "#333", "--btn-fg": "#fff",
-            "--btn-border": "#999", "--btn2-bg": "#fff", "--btn2-fg": "#333", "--ghost-border": "#e6e6e6",
-            "--rv-line": "#e6e6e6", "--chip-border": "#c9c9c9", "--pop-bg": "#fff", "--dialog-border": "transparent"}
+            "--btn-border": "#999", "--btn2-bg": "#fff", "--btn2-fg": "#333",
+            "--rv-line": "#e6e6e6", "--pop-bg": "#fff", "--dialog-border": "transparent",
+            # 10-22 宇軒 #270：淺色可以按的外框太淡，刻意加深（原 ghost #e6e6e6、chip #c9c9c9、輸入框 #ddd、
+            # btn2 #999、ctl #ccc），統一中灰 #8a8a8a（對白底 3.45、對 #f5f5f5 3.17），滑過 #6e6e6e
+            "--ghost-border": "#8a8a8a", "--ghost-border-hover": "#6e6e6e", "--btn2-border": "#8a8a8a",
+            "--chip-border": "#8a8a8a", "--input-border": "#8a8a8a", "--ctl-border": "#8a8a8a"}
     diff = {k: (v.get(k), want) for k, want in keep.items() if v.get(k) != want}
     assert not diff, f"淺色變數被改了（現在, 原本）：{diff}"
+
+
+def _lum(h: str) -> float:
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    ch = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    ch = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in ch]
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+
+
+def _contrast(a: str, b: str) -> float:
+    x, y = sorted((_lum(a), _lum(b)), reverse=True)
+    return (x + 0.05) / (y + 0.05)
+
+
+def test_light_clickable_borders_contrast():
+    """10-22 宇軒 #270：淺色可以按的外框對白卡片、整頁底色都要 ≥ 3:1（WCAG 1.4.11）。"""
+    root = [b for h, b in _blocks(CSS_NC) if h == ":root"][0]
+    v = _root_vars(root)
+    bad = []
+    for k in ("--ghost-border", "--ghost-border-hover", "--btn2-border", "--btn2-border-hover",
+              "--chip-border", "--chip-border-hover", "--input-border", "--ctl-border"):
+        for bg in (v["--card-bg"], v["--page-bg"]):
+            c = _contrast(v[k], bg)
+            if c < 3:
+                bad.append(f"{k} {v[k]} 對 {bg} 只有 {c:.2f}")
+    assert not bad, "\n".join(bad)
 
 
 if __name__ == "__main__":

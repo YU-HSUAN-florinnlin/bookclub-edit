@@ -34,21 +34,23 @@
   --btn-hover-bg: #111;
   --btn2-bg: #fff;         /* button.secondary */
   --btn2-fg: #333;
-  --btn2-border: #999;
-  --ghost-border: #e6e6e6; /* 第 3、5 步的 ghost 按鈕（工具列、卡片動作、選項） */
-  --ghost-border-hover: #c8c8c8;
-  --ctl-border: #ccc;      /* 小的收合鈕、kbd */
+  --btn2-border: #8a8a8a;  /* 10-22 宇軒 #270：可以按的外框統一中灰，對白底 3.45、對 #f5f5f5 3.17（WCAG 1.4.11 ≥ 3） */
+  --btn2-border-hover: #6e6e6e;   /* 滑過再深一點：對白底 5.10 */
+  --ghost-border: #8a8a8a; /* 第 3、5 步的 ghost 按鈕（工具列、卡片動作、選項）；#270 原 #e6e6e6 只有 1.25 */
+  --ghost-border-hover: #6e6e6e;
+  --ctl-border: #8a8a8a;   /* 小的收合鈕、kbd；#270 原 #ccc */
   --btn-disabled-border: #ddd;
   --focus-ring: #1d4f91;
 
   /* 輸入框（input、select、textarea） */
   --input-bg: #fff;
-  --input-border: #ddd;
+  --input-border: #8a8a8a; /* #270 原 #ddd */
 
   /* 選項 chip（第 2 步參考音） */
   --chip-bg: #fff;
   --chip-fg: #333;
-  --chip-border: #c9c9c9;
+  --chip-border: #8a8a8a;  /* #270 原 #c9c9c9 */
+  --chip-border-hover: #6e6e6e;
   --chip-on-bg: #ebf4ff;
   --chip-on-fg: #1a4f8a;
   --chip-on-border: #2b6cb0;
@@ -116,6 +118,7 @@
     --btn2-bg: transparent;
     --btn2-fg: #eee;
     --btn2-border: #8c8c8c;
+    --btn2-border-hover: #8c8c8c;   /* #270 新變數；深色維持原樣（滑過不換外框） */
     --ghost-border: #8c8c8c;
     --ghost-border-hover: #c4c4c4;
     --ctl-border: #8c8c8c;
@@ -128,6 +131,7 @@
     --chip-bg: transparent;
     --chip-fg: #eee;
     --chip-border: #8c8c8c;
+    --chip-border-hover: #8c8c8c;   /* #270 新變數；深色維持原樣 */
     --chip-on-bg: #15263b;
     --chip-on-fg: #cfe2fb;
     --chip-on-border: #7fb0ee;
@@ -345,7 +349,7 @@ button {
 }
 button:hover { background: var(--btn-hover-bg); }
 button.secondary { background: var(--btn2-bg); color: var(--btn2-fg); border-color: var(--btn2-border); }
-button.secondary:hover { background: var(--hover-bg); }
+button.secondary:hover { background: var(--hover-bg); border-color: var(--btn2-border-hover); }
 button:disabled { opacity: 0.5; cursor: default; }
 
 textarea, input[type="text"] {
@@ -665,8 +669,15 @@ dialog.rv-confirm button.ghost { background: transparent; color: var(--fg); bord
 /* 開始前 3 件事 */
 .rv-prepside p { margin: 0 0 12px; }
 .rv-prepsteps { list-style: none; padding: 0; margin: 0 0 16px; }
-.rv-prepsteps li { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--rv-line); font-size: 16px; }
+/* 1022-4 #271：一列＝第一行「標題（左）＋狀態（右、不換行）」，有說明時放第二行、縮排在標題下方。
+ * 原本 flex 三段並排，窄的時候標題、狀態、說明各自換行，像三欄交錯。 */
+.rv-prepsteps li { display: grid; grid-template-columns: minmax(6em, 1fr) auto; column-gap: 12px; row-gap: 2px; align-items: baseline;
+  padding: 10px 0; border-bottom: 1px solid var(--rv-line); font-size: 16px; }
+.rv-prepsteps li > button { justify-self: start; text-align: left; }
+.rv2 .rv-prepsteps li > button.linkish { padding-left: 19px; text-indent: -19px; }   /* 標題換行時第二行對齊在圈號後面（「① 」約 19px，跟說明的縮排一致） */
 .rv-prepsteps li span { color: var(--muted); font-size: 14px; }
+.rv-prepsteps li > span:not(.rv-meta) { white-space: nowrap; text-align: right; }   /* 狀態不換行：狀態字要保持短（目前最長「還沒做（照預設，不擋）」），太長會擠到標題 */
+.rv-prepsteps li > .rv-meta { grid-column: 1 / -1; margin: 0; padding-left: 19px; font-size: 13px; line-height: 1.5; }
 .rv-prepsteps li.ok span { color: var(--rv-stu); }
 .rv-prepsteps li.on button { font-weight: 700; text-decoration: none; }
 .rv-prep { background: var(--rv-card); border-radius: 14px; padding: 18px 22px; box-shadow: var(--card-ring); }
@@ -782,7 +793,7 @@ table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg)
 /* 第 2 步：參考音候選切換（09-30） */
 .ref-chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 12px; }
 .ref-chip { background: var(--chip-bg); color: var(--chip-fg); border: 1px solid var(--chip-border); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 14px; }
-.ref-chip:hover { background: var(--hover-bg); }
+.ref-chip:hover { background: var(--hover-bg); border-color: var(--chip-border-hover); }
 .ref-chip.on { border-color: var(--chip-on-border); background: var(--chip-on-bg); color: var(--chip-on-fg); font-weight: 600; }
 .ref-chip.chosen { border-color: var(--chip-chosen-border); }
 .ref-chip.chosen.on { background: var(--chip-chosen-on-bg); color: var(--chip-chosen-on-fg); }
