@@ -11,11 +11,11 @@ let hoPollTimer = null;
 let hoWatch = null;          // 這一頁按了哪一段的交接打包（做完要不要問清理）
 let hoInfo = null;           // 最近一次 /api/handoff/state（錯誤資訊要用的工具版本、系統）
 
-// 錯誤視窗（含「複製錯誤資訊」）改用 ui.js 共用的 uiErrorAlert
+// 錯誤視窗改用 ui.js 共用的 uiErrorAlert
 function hoErrAlert(title, message, where) { return uiErrorAlert({ title, message, where }); }
 
 // 宇軒 10-23：使用者自己可以改正的錯誤（選錯原片、選錯檔、打錯位置⋯）留在原處紅字；意外的錯誤（伺服器回 `意外`：
-// zip 壞掉、寫檔失敗、空間不夠、程式出錯⋯）才跳有「複製錯誤資訊」的錯誤視窗。e 是 apiPost 丟出來的錯誤
+// zip 壞掉、寫檔失敗、空間不夠、程式出錯⋯）才跳錯誤視窗。e 是 apiPost 丟出來的錯誤
 function hoUnexpected(e) { return !!(e && e.data && e.data["意外"]); }
 
 function hoSize(n) { return typeof clGB === "function" ? clGB(n) : `${Math.round(Number(n || 0) / 1e6)} MB`; }

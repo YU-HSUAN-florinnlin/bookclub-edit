@@ -5,8 +5,7 @@
  *   await uiConfirm({title, message, ok, cancel, danger})  → true（按了主要按鈕）／false（取消、✕、Esc）
  *     兩顆按鈕都是「要做的事」時加 dismiss: null → ✕、Esc 回 null（＝這次的修改不算），跟按取消鈕分開
  *   await uiPrompt({title, message, placeholder, ok, value}) → 打的字（去頭尾空白前的原樣）／null（取消）
- *   await uiAlert({title, message, ok, copy})               → 關掉時 resolve
- *     錯誤視窗加 copy（純文字）→ 多一顆「複製錯誤資訊」，按了複製到剪貼簿（10-23，#258）
+ *   await uiAlert({title, message, ok})                     → 關掉時 resolve
  *
  * - 用原生 <dialog> + showModal()，樣式沿用第 3 步的 .rv-modal（style.css），深色模式跟著走。
  * - 訊息裡的換行（\n）變成一段一段；所有文字都用 textContent 放，不用 innerHTML 拼字串。
@@ -121,11 +120,6 @@ function uiOpen(kind, opts, finish) {
     cancelBtn = uiButton(o.cancel || "取消", "ghost");
     foot.appendChild(cancelBtn);
   }
-  if (kind === "alert" && o.copy) {   // 10-23（#258）：錯誤視窗「複製錯誤資訊」（文字由呼叫端組好、已去掉路徑）
-    const cp = uiButton("複製錯誤資訊", "ghost");
-    foot.appendChild(cp);
-    cp.addEventListener("click", () => uiCopyText(String(o.copy), cp, body));
-  }
   foot.appendChild(okBtn);
   dlg.append(head, body, foot);
 
@@ -175,75 +169,12 @@ function uiOpen(kind, opts, finish) {
   first.focus();
 }
 
-// 複製純文字：剪貼簿可以用就複製、按鈕暫時變「已複製」；不行就把文字放進可全選的框，讓人自己複製
-function uiCopyText(text, btn, box) {
-  const label = "複製錯誤資訊";
-  const ok = () => {
-    btn.textContent = "已複製";
-    setTimeout(() => { btn.textContent = label; }, 2000);
-  };
-  const fallback = () => {
-    let ta = box.querySelector ? box.querySelector("textarea.ui-copy-box") : null;
-    if (!ta) {
-      ta = document.createElement("textarea");
-      ta.className = "ui-copy-box";
-      ta.readOnly = true;
-      ta.rows = 7;
-      ta.setAttribute("aria-label", "錯誤資訊（全選後複製）");
-      box.appendChild(ta);
-    }
-    ta.value = text;
-    try { ta.focus(); ta.select(); } catch (e) { /* 選不起來也沒關係，字在框裡 */ }
-    btn.textContent = "請全選框裡的字複製";
-  };
-  try {
-    const cb = typeof navigator !== "undefined" && navigator.clipboard;
-    if (cb && cb.writeText) cb.writeText(text).then(ok, fallback); else fallback();
-  } catch (e) { fallback(); }
-}
-
-// 10-23（#258）：錯誤視窗的「複製錯誤資訊」（原本在 handoff.js，10-23 搬來共用）——工具版本、系統、在哪裡、錯誤訊息、時間；路徑與檔名一律換成「（路徑略）」，
-// 不放逐字稿、名字（錯誤訊息本來就不帶這些）
-// 路徑可以有空格、中文、半形括號（「/Users/x/a b/第一集 (2).mp4」「C:\\Users\\…」）：從開頭的「/」「~/」「X:\\」一路遮到
-// 引號、全形標點、換行或字串結尾為止，不留尾巴。路徑前面要是開頭、空白或引號（「Mac/Windows」這種字中間的斜線不算）
-function uiScrub(text) {
-  return String(text == null ? "" : text)
-    .replace(/(^|[\s「『（("'：:])(?:[A-Za-z]:\\|~\/|\/)[^「」『』，。、；：（）"'\n]*/g, (m, pre) => `${pre}（路徑略）`)
-    .replace(/「[^「」\n]*\.(?:mp4|mov|m4v|mkv|webm|avi|zip|wav|flac|json|csv)」/gi, "「（路徑略）」")   // 引號裡的檔名（可以有空格）
-    .replace(/[^\s「」『』，。、；：（）()"'／]+\.(?:mp4|mov|m4v|mkv|webm|avi|zip|wav|flac|json|csv)\b/gi, "（路徑略）");
-}
-
-function uiErrorText(st, where, message, now) {
-  const s = st || {};
-  const sys = s["系統"] === "mac" ? "Mac" : s["系統"] === "wsl" ? "Windows" : "其他";
-  const d = now || new Date();
-  const p2 = (n) => String(n).padStart(2, "0");
-  return ["讀書會剪輯工具：錯誤資訊", `工具版本：${s["工具版本"] || "不知道"}`, `系統：${sys}`, `在哪裡：${where}`,
-    `錯誤訊息：${uiScrub(message)}`,
-    `時間：${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`].join("\n");
-}
-
-
-// 工具版本、系統（第一次用時問伺服器，之後記著）
-let uiToolInfoCache = null;
-async function uiToolInfo() {
-  if (uiToolInfoCache) return uiToolInfoCache;
-  try { const r = await fetch("/api/tool-info"); uiToolInfoCache = await r.json(); } catch (e) { uiToolInfoCache = {}; }
-  return uiToolInfoCache || {};
-}
-
-// 現在在哪一頁（錯誤資訊的「在哪裡」沒給時用）
-const UI_PLACES = { step0: "初始化設定", step1: "第 1 步", step2: "第 2 步", step3: "第 3 步", step4: "第 4 步", step5: "第 5 步" };
-function uiWhereNow() {
-  const h = (typeof location !== "undefined" && location.hash || "").replace(/^#/, "").split(/[?/]/)[0];
-  return UI_PLACES[h] || "總覽";
-}
-
-// 錯誤視窗：跟 uiAlert 一樣，多一顆「複製錯誤資訊」。where＝哪個功能（例如「第 5 步・輸出成品」），沒給就寫現在這一頁
-async function uiErrorAlert(opts) {
-  const o = typeof opts === "string" ? { message: opts } : (opts || {});
-  const info = await uiToolInfo();
-  return uiAlert({ ...o, copy: uiErrorText(info, o.where || uiWhereNow(), o.message) });
+// 錯誤視窗（伺服器回的錯誤、意外的錯誤）：跟 uiAlert 一樣，只有一顆「知道了」。
+// where＝哪個功能（呼叫端寫給人看程式用的，畫面不顯示）。10-23 宇軒定：遇到錯誤截圖給開發者，視窗不另外放按鈕
+function uiErrorAlert(opts) {
+  const o = typeof opts === "string" ? { message: opts } : { ...(opts || {}) };
+  delete o.where;
+  return uiAlert(o);
 }
 
 function uiConfirm(opts) { return uiEnqueue((finish) => uiOpen("confirm", opts, finish)); }

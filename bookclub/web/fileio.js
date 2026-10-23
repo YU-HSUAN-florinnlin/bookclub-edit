@@ -378,7 +378,7 @@ async function closeBoxInit(box) {
     <div class="fo-row">
       ${v.running ? (v.stop ? `<button class="secondary" id="cl-stop">停止</button>` : "")
         : v.cleanResume ? `<button class="secondary" id="cl-clean-resume">繼續清</button>`
-        : `${v.cleanBtn ? `<button class="secondary" id="cl-clean" ${d["清單指紋"] && !v.cleanOff ? "" : "disabled"}>清掉這裡的暫存（${esc(clGB(d["暫存大小"]))}）</button>` : ""}
+        : `${v.cleanBtn ? `<button class="secondary" id="cl-clean" ${d["清單指紋"] && !v.cleanOff ? "" : "disabled"}>清掉這一集的暫存檔（${esc(clGB(d["暫存大小"]))}）</button>` : ""}
            <button class="${closedNow || v.cleanBtn ? "ghost" : "secondary"}" id="cl-go" ${d["可以打包"] ? "" : "disabled"}>${esc(v.btn)}</button>
            ${v.resume ? `<button class="secondary" id="cl-resume" ${d["可以打包"] ? "" : "disabled"}>繼續</button>` : ""}
            ${v.reveal ? `<button class="ghost" id="cl-open">打開資料夾</button>` : ""}`}
@@ -401,7 +401,7 @@ async function closeBoxInit(box) {
     try { r = await apiPost("/api/close/pack", body, { quiet: true }); }
     catch (e) {
       msg.innerHTML = `<span class="badge error">沒有開始</span> ${esc(e.message)}`;
-      uiErrorAlert({ title: "結案打包沒有開始", message: e.message, where: "第 5 步・結案打包" });   // 10-23：錯誤視窗＋複製錯誤資訊
+      uiErrorAlert({ title: "結案打包沒有開始", message: e.message, where: "第 5 步・結案打包" });   // 10-23：錯誤視窗
       return;
     }
     note = (r && r["提醒"]) || note;
@@ -459,7 +459,7 @@ async function closeBoxInit(box) {
   });
   clearTimeout(clPollTimer);
   if (v.running) clPollTimer = setTimeout(() => { if (document.body.contains(box)) closeBoxInit(box); }, 1000);
-  // 10-23：存到一半、清到一半失敗（這一頁看著它從進行中變成失敗）→ 跳錯誤視窗（可以複製錯誤資訊）
+  // 10-23：存到一半、清到一半失敗（這一頁看著它從進行中變成失敗）→ 跳錯誤視窗
   const failedJob = d["工作"];
   if (clWasRunning && !v.running && failedJob && failedJob["狀態"] === "失敗") {
     const cleaning = d["狀態"] === "清理中" || failedJob["用途"] === "結案清理";

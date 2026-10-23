@@ -85,7 +85,7 @@ class HandoffError(Exception):
 
 class HandoffProblem(HandoffError):
     """意外的錯誤（zip 壞掉或沒下載完、寫檔失敗、空間不夠、工作資料夾裡有奇怪的捷徑⋯使用者自己改不了的）：
-    畫面跳錯誤視窗，有「複製錯誤資訊」（宇軒 10-23）。"""
+    畫面跳錯誤視窗（宇軒 10-23）。"""
 
 
 def _now() -> str:

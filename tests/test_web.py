@@ -664,114 +664,25 @@ console.log(JSON.stringify(out));
     assert all(got.values()) and len(got) == 8, got
 
 
-def test_error_copy_button_1023():
-    """10-23（#258）：錯誤視窗「複製錯誤資訊」——剪貼簿可用就複製、按鈕變「已複製」；不行就把文字放進可全選的框。
-    交接的錯誤資訊不帶路徑、檔名（換成「（路徑略）」）；README 第 9 節寫先按這顆再截圖。"""
-    import json
-    import shutil
-    import subprocess
-
-    ui = (WEB / "ui.js").read_text(encoding="utf-8")
-    ho = (WEB / "handoff.js").read_text(encoding="utf-8")
-    readme = (WEB.parent.parent / "README.md").read_text(encoding="utf-8")
-    assert "複製錯誤資訊" in readme[readme.index("## 9. 回報與聯絡"):]
-    for where in ('"第 3 步・清掉暫存"', '"總覽・清掉這集"', '"匯入交接包"', '・交接打包`'):
-        assert where in ho, where
-    assert "uiToast(" not in ho, "交接的成功訊息一律彈出視窗"
-    node = shutil.which("node")
-    if not node:
-        return
-    helpers = ""   # 10-23 起 uiScrub、uiErrorText 在 ui.js（共用）
-    script = _UI_FAKE_DOM + ui + """
-(async () => {
-  const btn = () => made.filter((e) => e.tagName === "BUTTON" && e.textContent === "複製錯誤資訊").slice(-1)[0];
-  let copied = null;
-  Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: async (t) => { copied = t; } } }, configurable: true });
-  const p1 = uiAlert({ title: "沒有匯入", message: "壞了", copy: "資訊一" });
-  await Promise.resolve();
-  const b1 = btn();
-  b1.fire("click");
-  await new Promise((r) => setTimeout(r, 10));
-  const after1 = b1.textContent;
-  made.filter((e) => e.tagName === "DIALOG" && e.open).forEach((d) => d.close());
-  await p1;
-  Object.defineProperty(globalThis, "navigator", { value: {}, configurable: true });
-  const p2 = uiAlert({ title: "沒有匯入", message: "壞了", copy: "資訊二" });
-  await Promise.resolve();
-  btn().fire("click");
-  const ta = made.filter((e) => e.tagName === "TEXTAREA").slice(-1)[0];
-  made.filter((e) => e.tagName === "DIALOG" && e.open).forEach((d) => d.close());
-  await p2;
-  const text = uiErrorText({ "系統": "wsl", "工具版本": "9.9.9" }, "匯入交接包",
-    "請選從雲端空間下載的「第一集.mp4」 /home/someone/讀書會/第一集_剪輯工作區 D:\\\\下載\\\\x.zip", new Date(2026, 9, 23, 9, 5));
-  console.log(JSON.stringify({ copied, after1, ta: ta && ta.value, ro: ta && ta.readOnly, text }));
-})();
-"""
-    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
-    assert out.returncode == 0, out.stderr
-    got = json.loads(out.stdout.strip().splitlines()[-1])
-    assert got["copied"] == "資訊一" and got["after1"] == "已複製", got
-    assert got["ta"] == "資訊二" and got["ro"] is True, got
-    t = got["text"]
-    assert t.splitlines()[1:5] == ["工具版本：9.9.9", "系統：Windows", "在哪裡：匯入交接包", t.splitlines()[4]], t
-    assert "時間：2026-10-23 09:05" in t and "第一集" not in t and "/home" not in t and "下載" not in t.split("錯誤訊息：")[1].split("\n")[0].replace("雲端空間下載", ""), t
-    assert t.count("（路徑略）") >= 2, t   # 連在一起的兩段路徑會遮成一段
-    # 第六輪：含空格、中文、括號的路徑整段遮掉，不留尾巴；「Mac/Windows」這種字中間的斜線不算路徑
-    cases = {"找不到 /Users/x/a b/第一集 (2).mp4": "找不到 （路徑略）",
-             "存的地方：/mnt/c/Users/x/OneDrive/讀書會/交接包": "存的地方：（路徑略）",
-             "「C:\\Users\\x\\下載\\第一集_交接第3步.zip」讀不到": "「（路徑略）」讀不到",
-             "~/讀書會剪輯資料/影片/x y.mp4": "（路徑略）",
-             "請選「第一集 (2).mp4」。": "請選「（路徑略）」。",
-             "Mac/Windows 都可以": "Mac/Windows 都可以"}
-    script = _UI_FAKE_DOM + ui + "console.log(JSON.stringify(" + json.dumps(list(cases)) + ".map(uiScrub)));"
-    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
-    assert out.returncode == 0, out.stderr
-    assert json.loads(out.stdout.strip()) == list(cases.values()), out.stdout
-
-
 def test_error_alert_everywhere_1023():
-    """10-23（第七輪）：其他錯誤視窗也有「複製錯誤資訊」——伺服器回的錯誤一律用 uiErrorAlert（ui.js），
-    「在哪裡」沒給就寫現在這一頁；結案打包、清空間、第 4 步開始執行、輸出成品寫對應的功能名稱。"""
-    import json
+    """10-23：伺服器回的錯誤一律用 uiErrorAlert（ui.js，只有「知道了」；第八輪宇軒定拿掉「複製錯誤資訊」，遇到錯誤截圖給開發者）；
+    結案打包、清空間、第 4 步開始執行、輸出成品都跳錯誤視窗。"""
     import re
-    import shutil
-    import subprocess
 
     ui = (WEB / "ui.js").read_text(encoding="utf-8")
     web = {f: (WEB / f).read_text(encoding="utf-8") for f in ("app.js", "cards.js", "review.js", "finalcheck.js", "fileio.js", "handoff.js")}
-    for f, src in web.items():   # 伺服器回的錯誤訊息不再用沒有複製按鈕的 uiAlert（交接「清掉這集」可以改正的那種例外：一般提醒）
+    for f, src in web.items():   # 伺服器回的錯誤訊息不直接用 uiAlert（交接「清掉這集」可以改正的那種例外：一般提醒）
         src = src.replace('uiAlert({ title: "還不能清掉這集", message: e.message })', "")
         assert not re.search(r"uiAlert\(\{ title: \"[^\"]+\", message: (?:e|err|e2)\.message", src), f
     for f, where in (("fileio.js", "第 5 步・結案打包"), ("fileio.js", "第 5 步・結案清空間"), ("app.js", "第 4 步・開始執行"),
                      ("finalcheck.js", "第 5 步・輸出成品")):
         assert f'where: "{where}"' in web[f], (f, where)
+    assert "function uiErrorAlert(" in ui and "複製錯誤資訊" not in ui and "copy" not in ui.split("function uiErrorAlert(")[1][:300]
     harness = (WEB.parent.parent / "tests" / "web_harness.js").read_text(encoding="utf-8")
     assert "uiErrorAlert:" in harness
-    server = (WEB.parent / "server.py").read_text(encoding="utf-8")
-    assert '"/api/tool-info"' in server
-    node = shutil.which("node")
-    if not node:
-        return
-    script = _UI_FAKE_DOM + ui + """
-global.location = { hash: "#step4" };
-global.fetch = async () => ({ json: async () => ({ "工具版本": "1.2.3", "系統": "mac" }) });
-(async () => {
-  const p = uiErrorAlert({ title: "無法開始", message: "壞了" });
-  await new Promise((r) => setTimeout(r, 10));
-  const btn = made.filter((e) => e.tagName === "BUTTON" && e.textContent === "複製錯誤資訊").slice(-1)[0];
-  let copied = null;
-  Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: async (t) => { copied = t; } } }, configurable: true });
-  btn.fire("click");
-  await new Promise((r) => setTimeout(r, 10));
-  made.filter((e) => e.tagName === "DIALOG" && e.open).forEach((d) => d.close());
-  await p;
-  console.log(JSON.stringify({ copied }));
-})();
-"""
-    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
-    assert out.returncode == 0, out.stderr
-    copied = json.loads(out.stdout.strip().splitlines()[-1])["copied"]
-    assert "工具版本：1.2.3" in copied and "系統：Mac" in copied and "在哪裡：第 4 步" in copied and "錯誤訊息：壞了" in copied, copied
+    readme = (WEB.parent.parent / "README.md").read_text(encoding="utf-8")
+    sec = readme[readme.index("## 9. 回報與聯絡"):]
+    assert "截圖傳給開發者" in sec and "複製錯誤資訊" not in sec
 
 
 def test_import_errors_popup_only_when_unexpected_1023():

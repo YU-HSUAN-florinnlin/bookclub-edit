@@ -216,7 +216,7 @@ def closed_post_allowed(path: str, body: dict) -> bool:
 
 
 class Unexpected(ValueError):
-    """意外的錯誤（使用者自己改不了）：回 400 時多帶 `意外: true`，畫面跳有「複製錯誤資訊」的錯誤視窗（10-23）。"""
+    """意外的錯誤（使用者自己改不了）：回 400 時多帶 `意外: true`，畫面跳錯誤視窗（10-23）。"""
 
 
 class Busy(Exception):
@@ -2213,10 +2213,6 @@ class Handler(BaseHTTPRequestHandler):
             from bookclub import finalcheck
 
             self._send_json(200, finalcheck.goto_output_time(server.workdir, float(query["src"][0])))
-        elif path == "/api/tool-info":   # 10-23：錯誤視窗「複製錯誤資訊」要的工具版本、系統（沒有專案也能問）
-            from bookclub import __version__, fileio
-
-            self._send_json(200, {"工具版本": __version__, "系統": fileio.platform_kind()})
         elif path == "/api/handoff/state":   # 33 號設計：交接打包、匯入交接包（只讀）
             self._send_json(200, server.handoff_state())
         elif path == "/api/handoff/clean-plan":

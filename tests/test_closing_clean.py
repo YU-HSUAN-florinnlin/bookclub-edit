@@ -1068,7 +1068,7 @@ def test_fixC_other_change_new_message():
         _pack(w, root / "D槽")
         fp = _plan(w)["清單指紋"]
         _mk(w / "生成/老師/S099.wav", b"new")
-        _refused(w, fp, want="剛剛這裡的檔案又有變動，按「清掉這裡的暫存」再清一次。")
+        _refused(w, fp, want="剛剛這裡的檔案又有變動，按「清掉這一集的暫存檔」再清一次。")
 
 
 def test_fixC_api_one_button_with_listening_during_pack():
