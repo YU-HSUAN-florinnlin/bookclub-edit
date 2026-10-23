@@ -1429,7 +1429,7 @@ class BookclubServer(ThreadingHTTPServer):
                 need = closing.pack_size(items)
             locp = closing.check_location(self.workdir, loc, need)
         except closing.PackError as e:
-            raise ValueError(str(e)) from None
+            raise (Unexpected if closing.unexpected(str(e)) else ValueError)(str(e)) from None
         # 第 3 段（§1a 第 3 點）：還沒打包好過（第一次、或存到一半繼續）而且帶了畫面上的清單指紋 → 存好核對全對就接著清
         fp = body.get("清單指紋")
         then_clean = fp if isinstance(fp, str) and fp and not records_only and \
@@ -1495,7 +1495,7 @@ class BookclubServer(ThreadingHTTPServer):
             try:   # 第二輪專審：開發者 --restore 暫停中不能繼續清
                 closing.paused_check(closing.read_record(self.workdir))
             except closing.CleanError as e:
-                raise ValueError(str(e)) from None
+                raise (Unexpected if closing.unexpected(str(e)) else ValueError)(str(e)) from None
             job = closing.CleanJob(self.workdir, resume=True)
         else:
             fp = str(body["清單指紋"])
@@ -1505,7 +1505,7 @@ class BookclubServer(ThreadingHTTPServer):
             try:   # 先在這裡確認一次（不行馬上回一句）；背景工作開始時會再確認一次
                 closing.clean_check(self.workdir, fp, busy=self._clean_busy)
             except closing.CleanError as e:
-                raise ValueError(str(e)) from None
+                raise (Unexpected if closing.unexpected(str(e)) else ValueError)(str(e)) from None
             job = closing.CleanJob(self.workdir, fp, busy=self._clean_busy)
         with self.pick_lock:
             if self.close_job is not None and self.close_job.running:
@@ -1547,9 +1547,7 @@ class BookclubServer(ThreadingHTTPServer):
         """`GET /api/handoff/state`：交接打包（目前這一集）、匯入交接包（選了哪個包、哪支原片、做到哪）的狀態。只讀。"""
         from bookclub import fileio, handoff
 
-        from bookclub import __version__
-
-        out: dict = {"系統": fileio.platform_kind(), "系統視窗": fileio.folder_picker_enabled(), "工具版本": __version__}
+        out: dict = {"系統": fileio.platform_kind(), "系統視窗": fileio.folder_picker_enabled()}
         job = self.handoff_job
         cur = self._workdir
         out["打包"] = job.to_dict() if job is not None and cur is not None and job.workdir == cur else None

@@ -289,6 +289,12 @@ async function fileOutInit(el) {
 // ---------------------------------------------------------------------------
 
 let clPollTimer = null;
+
+// 宇軒 10-23：跟交接框同一套分流——意外的錯誤（伺服器標 `意外`，或句尾是「請將錯誤訊息通知開發者。」）跳錯誤視窗；
+// 可以自己改正的（找不到位置、檔案又有變動再清一次⋯）只留紅字
+function clUnexpected(e) {
+  return !!(e && ((e.data && e.data["意外"]) || /請將錯誤訊息通知開發者。\s*$/.test(String(e.message || ""))));
+}
 let clWasRunning = false;
 
 // 10-17 畫面測試：小於 0.1 GB 改用 MB（以前寫「共 0.0 GB」）
@@ -401,7 +407,7 @@ async function closeBoxInit(box) {
     try { r = await apiPost("/api/close/pack", body, { quiet: true }); }
     catch (e) {
       msg.innerHTML = `<span class="badge error">沒有開始</span> ${esc(e.message)}`;
-      uiErrorAlert({ title: "結案打包沒有開始", message: e.message, where: "第 5 步・結案打包" });   // 10-23：錯誤視窗
+      if (clUnexpected(e)) uiErrorAlert({ title: "結案打包沒有開始", message: e.message, where: "第 5 步・結案打包" });
       return;
     }
     note = (r && r["提醒"]) || note;
@@ -436,7 +442,7 @@ async function closeBoxInit(box) {
     try { await apiPost("/api/close/clean", body, { quiet: true }); }
     catch (e) {
       msg.innerHTML = `<span class="badge error">沒有清</span> ${esc(e.message)}`;
-      uiErrorAlert({ title: "沒有清", message: e.message, where: "第 5 步・結案清空間" });
+      if (clUnexpected(e)) uiErrorAlert({ title: "沒有清", message: e.message, where: "第 5 步・結案清空間" });
       return;
     }
     closeBoxInit(box);
@@ -459,9 +465,9 @@ async function closeBoxInit(box) {
   });
   clearTimeout(clPollTimer);
   if (v.running) clPollTimer = setTimeout(() => { if (document.body.contains(box)) closeBoxInit(box); }, 1000);
-  // 10-23：存到一半、清到一半失敗（這一頁看著它從進行中變成失敗）→ 跳錯誤視窗
+  // 10-23：存到一半、清到一半意外失敗（這一頁看著它從進行中變成失敗）→ 跳錯誤視窗；可以改正的（換個位置再試⋯）只留紅字
   const failedJob = d["工作"];
-  if (clWasRunning && !v.running && failedJob && failedJob["狀態"] === "失敗") {
+  if (clWasRunning && !v.running && failedJob && failedJob["狀態"] === "失敗" && clUnexpected({ message: failedJob["錯誤"] })) {
     const cleaning = d["狀態"] === "清理中" || failedJob["用途"] === "結案清理";
     uiErrorAlert({ title: cleaning ? "沒有清完" : "結案打包沒有存好", message: failedJob["錯誤"] || "沒有完成",
       where: cleaning ? "第 5 步・結案清空間" : "第 5 步・結案打包" });

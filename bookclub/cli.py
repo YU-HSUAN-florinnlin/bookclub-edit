@@ -191,7 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr_prep.add_argument("--minutes", type=float, help="處理幾分鐘（不給就到影片結尾）")
 
 
-    prof_parser = sub.add_parser("profile", help="初始化設定（網頁左下角「工具設定」）：設定包匯出／匯入（給協作夥伴）")
+    prof_parser = sub.add_parser("profile", help="初始化設定（工具左下角「工具設定」）：設定包匯出／匯入（給協作夥伴）")
     prof_sub = prof_parser.add_subparsers(dest="profile_command")
     pexp = prof_sub.add_parser("export", help="把名冊、敏感詞、名字排除清單、發音對照表、settings.toml 打包成一個 zip")
     pexp.add_argument("--out", help="zip 存到哪裡（預設 ~/讀書會剪輯資料/設定包/設定包_時間.zip）")

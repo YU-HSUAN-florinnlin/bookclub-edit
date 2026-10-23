@@ -787,13 +787,13 @@ def _num(i) -> str:
     return f"{i:03d}" if isinstance(i, int) else str(i)
 
 
-IMPORTED_PATH = Path("覆核") / "覆核結果.json"   # `bookclub review import` 放進來的覆核結果
+IMPORTED_PATH = Path("覆核") / "覆核結果.json"   # 舊版「匯入覆核結果」（10-23 已刪）放進來的覆核結果；舊工作區照讀
 
 
 def make_plan(workdir: str | Path, only: list[int] | None = None) -> dict:
     """`bookclub gen names` 的第一步：排出計畫、寫出句子清單。only 給了就只處理那幾筆候選（測試用）。
 
-    匯入的工作區（夥伴的電腦，`bookclub review import` 建的）沒有名字候選與逐字稿，改用覆核結果裡
+    舊版「匯入覆核結果」建的工作區（10-23 起這個功能已刪除，舊工作區照讀）沒有名字候選與逐字稿，改用覆核結果裡
     匯出時排好的計畫（只含代號，不含本名）。"""
     workdir = Path(workdir).expanduser()
     names = wd.read_json(wd.names_path(workdir))
@@ -857,7 +857,7 @@ def plan_key(plan: dict | None) -> str:
 
 
 def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | None = None) -> dict:
-    """排出處理計畫（不寫檔）：`make_plan` 與匯出覆核結果共用，兩邊排出來的計畫一定一樣。"""
+    """排出處理計畫（不寫檔）：`make_plan` 用（以前的匯出覆核結果也用同一支，10-23 已刪）。"""
     workdir = Path(workdir).expanduser()
     names = names if names is not None else (wd.read_json(wd.names_path(workdir)) or {})
     speakers = wd.read_json(wd.speakers_path(workdir)) or {}

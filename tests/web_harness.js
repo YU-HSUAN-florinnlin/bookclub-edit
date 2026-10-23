@@ -132,7 +132,7 @@ function makeEnv(files, setup) {
     uiConfirm: async (o) => { H.log.push(["confirm", uiText(o)]); return H.confirm; },
     uiPrompt: async (o) => { H.log.push(["prompt", uiText(o)]); return "測試原因"; },
     uiAlert: async (o) => { H.log.push(["alert", uiText(o)]); },
-    uiErrorAlert: async (o) => { H.log.push(["alert", uiText(o)]); },   // 10-23：錯誤視窗（多一顆複製錯誤資訊），記法跟 uiAlert 一樣
+    uiErrorAlert: async (o) => { H.log.push(["alert", uiText(o)]); },   // 10-23：錯誤視窗，記法跟 uiAlert 一樣
     // 1022-2（#264）：右下角浮動通知，記成 toast（跟要按「知道了」的 alert 分開）
     uiToast: (m) => { H.log.push(["toast", String(m)]); },
     apiGet: async (url) => { H.log.push(["GET", url]); const k = Object.keys(H.apiGetData).find((p) => url.startsWith(p)); return clone(k ? H.apiGetData[k] : {}); },

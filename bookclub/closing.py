@@ -417,6 +417,14 @@ VOICE_LINE = "生成好的聲音已經存在紀錄裡，之後匯入只要重做
 GEN_LOGS = ("生成/老師紀錄.json", "生成/學員紀錄.json", "生成/保留原聲學員紀錄.json")
 
 
+REPORT_TAIL = "請將錯誤訊息通知開發者。"   # 意外的錯誤（使用者自己改不了）一律用這句結尾
+
+
+def unexpected(msg: str) -> bool:
+    """（純函式）這句錯誤是不是意外的錯誤（畫面跳錯誤視窗）；其他（換個位置、等它做完再按一次⋯）是可以自己改正的，留紅字。"""
+    return str(msg or "").rstrip().endswith(REPORT_TAIL)
+
+
 class PackError(Exception):
     """打包不能開始、或做到一半停下來（訊息是給老師看的一句）。"""
 

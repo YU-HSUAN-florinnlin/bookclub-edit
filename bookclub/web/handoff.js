@@ -9,7 +9,6 @@ const HO_HINT = {
 };
 let hoPollTimer = null;
 let hoWatch = null;          // 這一頁按了哪一段的交接打包（做完要不要問清理）
-let hoInfo = null;           // 最近一次 /api/handoff/state（錯誤資訊要用的工具版本、系統）
 
 // 錯誤視窗改用 ui.js 共用的 uiErrorAlert
 function hoErrAlert(title, message, where) { return uiErrorAlert({ title, message, where }); }
@@ -35,7 +34,6 @@ async function hoBoxInit(el, stage) {
   if (!el) return;
   let d;
   try { d = await apiGet("/api/handoff/state"); } catch (e) { return; }
-  hoInfo = d;
   if (!document.body.contains(el)) return;
   const job = d["打包"] && d["打包"]["哪一段"] === stage ? d["打包"] : null;
   const line = hoPackLine(job);
@@ -185,7 +183,6 @@ async function hoRenderImport(dlg) {
     return;
   }
   if (!dlg.open) return;
-  hoInfo = st;
   const v = hoImportView(st);
   const jid = v.job && v.job["編號"];
   if (v.js === "失敗" && v.job["意外"] && jid && jid === hoImpStarted && !hoImpAlerted.has(jid)) {
@@ -368,7 +365,7 @@ function hoBindOverview(root, list) {
     catch (e) {
       btn.disabled = false;
       if (hoUnexpected(e)) await hoErrAlert("沒有清掉", e.message, "總覽・清掉這集");
-      else await uiAlert({ title: "還不能清掉這集", message: e.message });   // 總覽這一列沒地方放紅字：一般提醒視窗（沒有複製鈕）
+      else await uiAlert({ title: "還不能清掉這集", message: e.message });   // 總覽這一列沒地方放紅字：一般提醒視窗
       return;
     }
     await uiAlert({ title: "清掉了", message: `已清掉這集，空出 ${hoSize(r["省下位元組"])}。`, ok: "好" });

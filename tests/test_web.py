@@ -439,7 +439,7 @@ def test_success_toasts():
     block = rv[i:i + 700]
     assert 'r["還剩"].length) uiAlert(' in block and "else uiToast(msg)" in block
     # 錯誤一律還是視窗
-    assert 'uiErrorAlert({ title: "沒有配成"' in rv and 'uiErrorAlert({ title: "沒有換成"' in rv   # 10-23 起錯誤視窗多複製錯誤資訊
+    assert 'uiErrorAlert({ title: "沒有配成"' in rv and 'uiErrorAlert({ title: "沒有換成"' in rv   # 10-23 起錯誤用 uiErrorAlert
 
 
 
@@ -687,7 +687,7 @@ def test_error_alert_everywhere_1023():
 
 def test_import_errors_popup_only_when_unexpected_1023():
     """10-23（宇軒）：匯入交接包失敗——使用者自己可以改正的（選錯原片）留在匯入視窗底部紅字、不跳視窗；
-    意外的（zip 壞掉、空間不夠⋯，伺服器標 `意外`）跳有「複製錯誤資訊」的錯誤視窗，同一個匯入工作只跳一次；
+    意外的（zip 壞掉、空間不夠⋯，伺服器標 `意外`）跳錯誤視窗，同一個匯入工作只跳一次；
     失敗後「開始匯入」照樣可以再按。用 web_harness 的假瀏覽器跑 handoff.js。"""
     import json
     import shutil
@@ -723,6 +723,34 @@ def test_import_errors_popup_only_when_unexpected_1023():
     assert got["原片不符"] == {"alerts": 0, "red": True, "startOk": True}, got
     assert got["zip 壞掉"]["alerts"] == 1 and "沒有匯入" in got["zip 壞掉"]["text"], got
     assert got["別頁開的工作"] == {"alerts": 0}, got
+
+
+def test_close_box_errors_split_1023():
+    """終審 M1：結案打包／清理跟交接框同一套分流——可以改正的（找不到位置、檔案又有變動再清一次）只留紅字，
+    意外的（伺服器標 `意外`、或句尾「請將錯誤訊息通知開發者。」）才跳錯誤視窗。"""
+    import json
+    import shutil
+    import subprocess
+
+    from bookclub import closing
+
+    fio = (WEB / "fileio.js").read_text(encoding="utf-8")
+    assert fio.count("if (clUnexpected(e)) uiErrorAlert(") == 2 and "clUnexpected({ message: failedJob" in fio
+    assert closing.unexpected(closing.TMP_THERE) and closing.unexpected(closing.CLEAN_FAILED) and closing.unexpected(closing.PAUSED)
+    assert not closing.unexpected(closing.PLAN_CHANGED) and not closing.unexpected("找不到這個資料夾：/x（D 槽沒插？），換個位置再試。")
+    server = (WEB.parent / "server.py").read_text(encoding="utf-8")
+    assert server.count("raise (Unexpected if closing.unexpected(str(e)) else ValueError)") == 3
+    node = shutil.which("node")
+    if not node:
+        return
+    i = fio.index("function clUnexpected(")
+    fn = fio[i:fio.index("\n}\n", i) + 3]
+    cases = [{"message": closing.PLAN_CHANGED}, {"message": "找不到這個資料夾，換個位置再試。"},
+             {"message": closing.TMP_THERE}, {"message": "存的地方滿了", "data": {"意外": True}}]
+    out = subprocess.run([node, "-e", fn + f"console.log(JSON.stringify({json.dumps(cases, ensure_ascii=False)}.map(clUnexpected)));"],
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == [False, False, True, True], out.stdout
 
 
 if __name__ == "__main__":
