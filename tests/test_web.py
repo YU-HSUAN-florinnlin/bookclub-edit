@@ -716,7 +716,18 @@ def test_error_copy_button_1023():
     t = got["text"]
     assert t.splitlines()[1:5] == ["工具版本：9.9.9", "系統：Windows", "在哪裡：匯入交接包", t.splitlines()[4]], t
     assert "時間：2026-10-23 09:05" in t and "第一集" not in t and "/home" not in t and "下載" not in t.split("錯誤訊息：")[1].split("\n")[0].replace("雲端空間下載", ""), t
-    assert t.count("（路徑略）") >= 3, t
+    assert t.count("（路徑略）") >= 2, t   # 連在一起的兩段路徑會遮成一段
+    # 第六輪：含空格、中文、括號的路徑整段遮掉，不留尾巴；「Mac/Windows」這種字中間的斜線不算路徑
+    cases = {"找不到 /Users/x/a b/第一集 (2).mp4": "找不到 （路徑略）",
+             "存的地方：/mnt/c/Users/x/OneDrive/讀書會/交接包": "存的地方：（路徑略）",
+             "「C:\\Users\\x\\下載\\第一集_交接第3步.zip」讀不到": "「（路徑略）」讀不到",
+             "~/讀書會剪輯資料/影片/x y.mp4": "（路徑略）",
+             "請選「第一集 (2).mp4」。": "請選「（路徑略）」。",
+             "Mac/Windows 都可以": "Mac/Windows 都可以"}
+    script = helpers + "console.log(JSON.stringify(" + json.dumps(list(cases)) + ".map(hoScrub)));"
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout.strip()) == list(cases.values()), out.stdout
 
 
 if __name__ == "__main__":
