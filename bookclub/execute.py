@@ -138,7 +138,7 @@ def tag_for(a: float, b: float) -> str:
 # ---------- 前置檢查（不載入模型） ----------
 
 def precheck(workdir: str | Path) -> dict:
-    """開始之前先看缺什麼，免得跑到一半才失敗。回傳 {可以開始, 缺[], 提醒[], 缺代號, 硬碟}。
+    """開始之前先看缺什麼，免得跑到一半才失敗。回傳 {可以開始, 缺[], 缺明細[{說明, 步驟}], 提醒[], 缺代號, 硬碟}。
 
     10-08 宇軒（流程簡化）：會擋的只剩「沒有就跑不出來」的資料（逐字稿、段落分析、老師參考音、學員替代聲音、影片）、
     第 3 步「開始前 4 件事」② 學員是誰（沒配代號的學員 AI 重念會念出本名），和硬碟空間（以前要到第一支子程式才擋）。
@@ -149,29 +149,42 @@ def precheck(workdir: str | Path) -> dict:
 
     workdir = Path(workdir)
     missing, notes = [], []
+    # 1024-1（#274）：每一條「缺」另外記給畫面用的白話說明與要回哪一步（步驟 None＝沒有對應的步驟），
+    # 第 4 步「開始執行」上面逐條列、附「到第 N 步」。`缺` 照舊是給命令列與錯誤訊息的原文
+    detail: list[dict] = []
+
+    def lack(text: str, plain: str | None = None, step: int | None = None) -> None:
+        missing.append(text)
+        detail.append({"說明": plain or text, "步驟": step})
+
     if not wd.merged_transcript_path(workdir).exists():
-        missing.append("還沒有逐字稿：第 1 步轉文字要先跑（學員的話要照逐字稿重念）")
+        lack("還沒有逐字稿：第 1 步轉文字要先跑（學員的話要照逐字稿重念）",
+             "還沒有逐字稿：第 1 步「影片分析」要先跑完（學員的話要照逐字稿重念）", 1)
     if not (workdir / "校對" / "段落.json").exists():
-        missing.append("還沒有段落分析（校對/段落.json）：第 1 步影片分析要跑完")
+        lack("還沒有段落分析（校對/段落.json）：第 1 步影片分析要跑完",
+             "還沒有段落分析：第 1 步「影片分析」要跑完", 1)
     ref = wd.ref_dir(workdir)
     if not ((ref / "ref.wav").is_file() and (ref / "ref.txt").is_file()):
-        missing.append("還沒選定老師參考音（參考音/ref.wav、ref.txt）：第 2 步，或 bookclub ref use")
+        lack("還沒選定老師參考音（參考音/ref.wav、ref.txt）：第 2 步，或 bookclub ref use",
+             "還沒選定老師參考聲音：到第 2 步聽一聽候選，挑一段按「改用這一個」", 2)
     pool = students.voice_pool()   # 09-30：每位學員各自的聲線（候選_0928），沒有候選才用暫定的
-    lack = [g for g in ("男", "女") if not pool.get(g)]
-    if lack:
-        missing.append(f"找不到學員的替代聲音（{'、'.join(lack)}聲）：{students.voice_dir() / students.CANDIDATE_DIR}"
-                       f" 或 {'、'.join(str(students.default_refs()[g]) for g in lack)}")
+    lack_g = [g for g in ("男", "女") if not pool.get(g)]
+    if lack_g:
+        lack(f"找不到學員的替代聲音（{'、'.join(lack_g)}聲）：{students.voice_dir() / students.CANDIDATE_DIR}"
+             f" 或 {'、'.join(str(students.default_refs()[g]) for g in lack_g)}",
+             f"找不到學員的替代聲音（{'、'.join(lack_g)}聲）：到左下角「工具設定」→「初始化設定」看「替代聲音」那一列，或重新安裝工具", 0)
     from bookclub import review
 
     if not review.video_path(workdir):
-        missing.append(wd.video_missing_message(workdir))   # 10-02 第五批：寫清楚記的是哪裡、怎麼處理
+        lack(wd.video_missing_message(workdir),   # 10-02 第五批：寫清楚記的是哪裡、怎麼處理
+             "找不到原片影片（搬過或改過檔名）：把影片放回原本的位置，或到「總覽」重新選這支影片")
     try:   # 10-08：② 學員是誰（每位出現的學員都選了本名或「本名未知」，選了本名的有代號）
         who = review.students_pending(workdir)
     except Exception:  # noqa: BLE001 — 讀不到段落（上面已經列「還沒有段落分析」）
         who = []
     if who:
-        missing.append(f"第 3 步「開始前 4 件事」② 學員是誰還沒做好（{'；'.join(who)}）：每位學員都要選本名或「本名未知」、"
-                       "選了本名的要有代號（不然 AI 重念會念出本名）。不是學員的段落改成老師")
+        lack(f"第 3 步「開始前 4 件事」② 學員是誰還沒做好（{'；'.join(who)}）：每位學員都要選本名或「本名未知」、"
+             "選了本名的要有代號（不然 AI 重念會念出本名）。不是學員的段落改成老師", step=3)
     disk = None
     try:   # 10-08：硬碟不夠，開始前就擋（以前要到第一支子程式才擋）
         disk = shutil.disk_usage(str(workdir)).free / GB
@@ -179,8 +192,8 @@ def precheck(workdir: str | Path) -> dict:
     except Exception:  # noqa: BLE001 — 讀不到就不擋（跑的過程中照樣會看）
         need = None
     if disk is not None and need is not None and disk < need:
-        missing.append(f"硬碟可用空間剩 {disk:.1f} GB，開始前至少要 {need:g} GB：清掉用不到的檔案（例如舊的測試工作區、"
-                       "輸出資料夾裡用不到的中間檔），或重開機讓系統收回暫存空間")
+        lack(f"硬碟可用空間剩 {disk:.1f} GB，開始前至少要 {need:g} GB：清掉用不到的檔案（例如舊的測試工作區、"
+             "輸出資料夾裡用不到的中間檔），或重開機讓系統收回暫存空間")
     from bookclub import epcodes
 
     lack_codes = epcodes.missing(workdir)
@@ -214,7 +227,7 @@ def precheck(workdir: str | Path) -> dict:
     dec = review.load_decisions(workdir)
     if not any(dec["開始前確認"].values()):
         notes.append("第 3 步還沒覆核：照第 1 步的建議做（名字整句換掉、學員全部重念、建議刪除的段落不刪）")
-    return {"可以開始": not missing, "缺": missing, "提醒": notes, "缺代號": len(lack_codes),
+    return {"可以開始": not missing, "缺": missing, "缺明細": detail, "提醒": notes, "缺代號": len(lack_codes),
             "硬碟": {"可用GB": round(disk, 1) if disk is not None else None, "需要GB": need}}
 
 

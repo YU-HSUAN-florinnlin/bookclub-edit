@@ -175,6 +175,26 @@ def test_precheck_lists_what_is_missing():
         (voices / f"{sex}聲_暫定.wav").unlink()
 
 
+def test_precheck_detail_points_to_step():
+    # 1024-1（#274）：每一條「缺」都有給畫面用的白話說明與要回哪一步；沒選定老師參考音 → 第 2 步
+    from bookclub import workdir as wdm
+
+    w = _fresh()
+    ref = wdm.ref_dir(w)
+    for f in ("ref.wav", "ref.txt"):
+        if (ref / f).exists():
+            (ref / f).unlink()
+    pre = execute.precheck(w)
+    det = pre["缺明細"]
+    assert not pre["可以開始"] and len(det) == len(pre["缺"])
+    steps = {d["步驟"] for d in det}
+    assert 2 in steps and 0 in steps and 3 in steps, det   # 參考音、替代聲音（初始化設定）、② 學員是誰
+    refline = next(d for d in det if d["步驟"] == 2)
+    assert "老師參考聲音" in refline["說明"] and "ref.wav" not in refline["說明"]   # 畫面上不寫檔名
+    assert any("ref.wav" in x for x in pre["缺"])   # 命令列的原文照舊
+    assert all(isinstance(d["說明"], str) and d["說明"] for d in det)
+
+
 def test_done_checks_on_fake_workdir():
     w = _fresh()
     done, why = execute.names_done(w)

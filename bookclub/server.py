@@ -1774,7 +1774,12 @@ class BookclubServer(ThreadingHTTPServer):
         with self.run_lock:
             state = {k: v for k, v in self.run_state.items() if k != "messages"}
             state["messages"] = list(self.run_state["messages"][-50:])
-        state.update(build_state(self.workdir, video=self.video))
+        if self.has_workdir:
+            state.update(build_state(self.workdir, video=self.video))
+        else:
+            # 1024-1（#277）：沒有專案時也回 200、帶「第4步執行中」，跟 /api/state 的「沒有專案」同一種回法。
+            # 以前丟 NoProject → 409、沒有這一欄，更新指令只好改問人；網頁端兩處呼叫本來就容得下（只看 running／messages）
+            state.update({"沒有專案": True, "workdir": None, "video": {}, "substeps": {}, "proofread": {}})
         # 1015-8（#236：更新指令判斷能不能自己關網頁）：第 4 步有沒有在跑。只讀記憶體裡的 exec_state，不升級、不寫檔
         state["第4步執行中"] = self.exec_running()
         return state

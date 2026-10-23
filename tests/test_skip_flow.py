@@ -338,7 +338,7 @@ def test_web_step3_buttons():
 def test_web_step4_folded_default_skip():
     app = (WEB / "app.js").read_text(encoding="utf-8")
     body = _fn(app, "renderExecuteBody")
-    assert 'const execBlocked = running || !pre["可以開始"];' in body and '<button id="btnExec" ${execBlocked ? "disabled" : ""}>' in body
+    assert 'const execBlocked = running || !pre["可以開始"];' in body and '<button id="btnExec" ${execBlocked ? "disabled" : ""}${' in body   # 1024-1（#274）：後面多一個停用原因 title
     fn = _fn(app, "finalCheckHtml")
     assert fn.count('<details class="fc-fold"') == 2 and "展開查看" in fn
     assert "fc-back3" in _fn(app, "fcKeepHtml") and "rv-warnline fc-keepwhy" in _fn(app, "fcKeepHtml")

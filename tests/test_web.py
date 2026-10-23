@@ -753,6 +753,36 @@ def test_close_box_errors_split_1023():
     assert json.loads(out.stdout) == [False, False, True, True], out.stdout
 
 
+def test_step4_block_lists_each_reason_with_step_link():
+    """1024-1（#274）：「開始執行」按不下去時，按鈕上方逐條列出缺什麼，有對應步驟的附「到第 N 步」；最上面有一顆捲到那裡的按鈕。"""
+    import json
+    import shutil
+    import subprocess
+
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    body = re.search(r"^async function renderExecuteBody\(.*?^\}\n", app, re.S | re.M).group(0)
+    assert "execBlockList(pre)" in body and 'id="execBlockJump"' in body
+    assert body.index('id="execBlockJump"') < body.index('id="execBlockNear"') < body.index('<button id="btnExec"')
+    assert 'location.hash = `#step${b.dataset.gostep}`' in body
+    assert "網頁" not in re.search(r"^function execBlockList\(.*?^\}\n", app, re.S | re.M).group(0)
+    node = shutil.which("node")
+    if not node:
+        return
+    pick = lambda name: re.search(rf"^function {name}\(.*?^\}}\n", app, re.S | re.M).group(0)
+    esc = 'function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }\n'
+    pre = {"缺": ["a", "b", "c", "d"], "缺明細": [{"說明": "還沒選定老師參考聲音", "步驟": 2}, {"說明": "聲線", "步驟": 0},
+                                                 {"說明": "硬碟<滿>", "步驟": None}, {"說明": "學員是誰", "步驟": 3}]}
+    old = {"缺": ["舊伺服器的原文"]}   # 沒有「缺明細」：照原文列、沒有連結
+    script = esc + pick("execBlockList") + f"console.log(JSON.stringify([execBlockList({json.dumps(pre, ensure_ascii=False)}), execBlockList({json.dumps(old, ensure_ascii=False)})]));"
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    html, html_old = json.loads(r.stdout)
+    assert html.count("<li>") == 4 and html.count("data-gostep=") == 3
+    assert 'data-gostep="2">到第 2 步</button>' in html and 'data-gostep="0">到初始化設定</button>' in html
+    assert 'data-gostep="3">到第 3 步</button>' in html and "硬碟&lt;滿&gt;" in html
+    assert html_old.count("<li>") == 1 and "舊伺服器的原文" in html_old and "data-gostep" not in html_old
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
