@@ -1285,7 +1285,9 @@ async function renderPicker(path, projectList) {
     return;
   }
   try { localStorage.setItem("pick-dir", d["路徑"]); } catch (e) { /* 同上 */ }
-  const rel = d["路徑"] === d["家目錄"] ? "家目錄" : d["路徑"].replace(d["家目錄"] + "/", "");
+  // 10-25 宇軒：夥伴用 Windows（WSL），最上層叫「Ubuntu 檔案目錄」；Mac 上叫「Mac 檔案目錄」
+  const homeName = typeof pkState !== "undefined" && pkState && pkState["系統"] === "mac" ? "Mac 檔案目錄" : "Ubuntu 檔案目錄";
+  const rel = d["路徑"] === d["家目錄"] ? homeName : d["路徑"].replace(d["家目錄"] + "/", "");
   box.innerHTML = `
     <div class="pk-path"><b>${esc(rel)}</b>${d["上一層"] ? ` <button class="secondary pk-up">回上一層</button>` : ""}</div>
     <ul class="pk-list">
