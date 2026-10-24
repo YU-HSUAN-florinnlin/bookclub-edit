@@ -967,6 +967,97 @@ def test_error_kinds_unexpected_vs_fixable():
     assert job.state == "失敗" and job.to_dict()["意外"] is True
 
 
+def _open3(w: Path) -> None:
+    """不開伺服器，照第 3 步網頁會叫的 API 打開第 3 步（會寫代號表紀錄、名字候選、學員名字候選⋯）。"""
+    from bookclub import proofread, review
+    from bookclub.server import build_names
+
+    turns_mod.page_data(w)
+    review.page_data(w)
+    build_names(w)
+    proofread.page_data(w)
+
+
+def _zip_texts(z: Path) -> dict[str, str]:
+    """包裡每個檔的內容（文字；JSON 的 \\u 轉義也展開），掃名字用。"""
+    out = {}
+    with zipfile.ZipFile(z) as zf:
+        for n in zf.namelist():
+            t = zf.read(n).decode("utf-8", errors="ignore")
+            try:
+                t += "\n" + json.dumps(json.loads(t), ensure_ascii=False)
+            except ValueError:
+                pass
+            out[n] = t
+    return out
+
+
+def test_272_codes_record_does_not_carry_whole_roster():
+    """#272：名冊有英文代號欄、6 個人只有 2 個出現在這一集。先打開第 3 步（寫出記了整份名冊代號的代號表紀錄）再交接打包：
+    快照名冊只有這一集的人、整個包（含代號表紀錄、第 5 步的包）都不含其他人的名字與代號；匯入後第 4 步前置檢查通過、
+    打開第 3 步不當成「代號改了」。"""
+    others = ("王小花", "花花", "陳大同", "林志遠", "張雅婷", "Lily", "Ben", "Max", "Ivy", "大雄", "胖虎", "Ken")
+    saved = (_DATA / "名冊.csv").read_bytes()
+    try:
+        (_DATA / "名冊.csv").write_text(ROSTER + "王小花,花花,Lily,,女,\n陳大同,,Ben,,男,\n林志遠,,Max,,男,\n張雅婷,,Ivy,,女,\n",
+                                       encoding="utf-8")
+        w, video = _teacher()
+        _open3(w)
+        full = json.loads(epcodes.snapshot_path(w).read_text(encoding="utf-8"))
+        assert {"王小花", "張雅婷", "大雄"} <= set(full), "前提：打開第 3 步後代號表紀錄記了整份名冊"
+        corpus = handoff._corpus(w)
+        assert not any(x in corpus for x in ("王小花", "陳大同", "張雅婷")), "判斷用到誰不看代號表紀錄"
+        mt = epcodes.snapshot_path(w).stat().st_mtime_ns
+        z = _pack(w, handoff.STAGE3)
+        assert epcodes.snapshot_path(w).read_text(encoding="utf-8") and \
+            json.loads(epcodes.snapshot_path(w).read_text(encoding="utf-8")) == full, "老師這台的檔不動"
+        texts = _zip_texts(z)
+        roster = texts["工作區/交接/設定快照/名冊.csv"]
+        assert "小美" in roster and "阿明" in roster
+        leaks = {n: [x for x in others if x in t] for n, t in texts.items() if any(x in t for x in others)}
+        assert not leaks, leaks
+        rec = json.loads(texts["工作區/校對/代號表紀錄.json"].split("\n{")[0])
+        assert rec == {"小美": "Amy", "阿明": "Tom"}, rec
+        m = handoff.read_manifest(z)
+        assert next(f for f in m["檔案"] if f["路徑"] == "校對/代號表紀錄.json")["修改時間"] == mt, "修改時間照原檔"
+
+        v2 = _download(video)
+        job = _import(z, v2)
+        assert job.state == "完成", (job.state, job.error, job.ask)
+        w2 = Path(job.result["工作區"])
+        assert epcodes.snapshot_path(w2).stat().st_mtime_ns == mt
+        pre = execute.precheck(w2)
+        assert pre["可以開始"], pre["缺"]
+        assert epcodes.episode_codes(w2) == {"小美": "Amy", "阿明": "Tom"}
+        assert epcodes.propagate(w2) == {"換": {}, "要再看": []}
+        before = epcodes.snapshot_path(w2).read_bytes()
+        _open3(w2)
+        assert epcodes.snapshot_path(w2).read_bytes() == before, "匯入後打開第 3 步不當成代號改了"
+
+        _partner_stage5(w2)
+        z5 = _pack(w2, handoff.STAGE5)
+        leaks = {n: [x for x in others if x in t] for n, t in _zip_texts(z5).items() if any(x in t for x in others)}
+        assert not leaks, leaks
+
+        # 審查 B：代號表紀錄讀好之後、寫進包之前原檔被改了（例如第 3 步正在對齊代號）→ 停，不存
+        real = handoff._codes_record
+
+        def racing(wk, roster_csv, corpus=None):
+            out = real(wk, roster_csv, corpus)
+            time.sleep(0.01)
+            wd.write_json(epcodes.snapshot_path(wk), {**full, "小美": "Anna"})
+            return out
+        handoff._codes_record = racing
+        try:
+            job = handoff.PackJob(w, Path(tempfile.mkdtemp()), handoff.STAGE3)
+            job.run()
+        finally:
+            handoff._codes_record = real
+        assert job.state == "失敗" and "檔案變了" in (job.error or ""), (job.state, job.error)
+    finally:
+        (_DATA / "名冊.csv").write_bytes(saved)
+
+
 if __name__ == "__main__":
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for name, fn in tests:

@@ -221,13 +221,19 @@ def _strings(x, out: list[str]) -> None:
             _strings(v, out)
 
 
+# #272：工具自己寫、內容來自整份名冊的檔（名冊有「英文代號」欄時，代號表紀錄記了名冊每一位有代號的人）。
+# 不拿來判斷「這一集用到誰」（不然整份名冊都算用到）；交接包裡也只留這一集的人（`_codes_record`）。
+ROSTER_DERIVED = ("校對/代號表紀錄.json",)
+
+
 def _corpus(workdir: Path) -> str:
     """這一集的文字（逐字稿、段落、名字候選、決定、代號⋯）接在一起：設定檔的某一列「用不用得到」看它的字有沒有出現在這裡。
-    JSON 檔把裡面的字串（含鍵）拿出來（不管存檔時中文有沒有轉義），其他文字檔照原文。"""
+    JSON 檔把裡面的字串（含鍵）拿出來（不管存檔時中文有沒有轉義），其他文字檔照原文。
+    不看設定快照、本機交接紀錄、`ROSTER_DERIVED`（內容來自整份名冊，不是這一集真的出現的字）。"""
     parts: list[str] = []
     for rel, fp in record_files(workdir):
         suf = PurePosixPath(rel).suffix.lower()
-        if rel.startswith(f"{DIR_NAME}/") or suf not in (".json", ".jsonl", ".txt", ".csv", ".md"):
+        if rel.startswith(f"{DIR_NAME}/") or rel in ROSTER_DERIVED or suf not in (".json", ".jsonl", ".txt", ".csv", ".md"):
             continue
         try:
             text = fp.read_text(encoding="utf-8", errors="ignore")
@@ -263,7 +269,7 @@ def _csv_bytes(header: list[str], rows: list[dict]) -> bytes:
     return ("﻿" + buf.getvalue()).encode("utf-8")   # UTF-8 加 BOM：Excel 打得開，`csvfile` 讀得懂
 
 
-def build_snapshot(workdir: str | Path) -> dict[str, bytes]:
+def build_snapshot(workdir: str | Path, corpus: str | None = None) -> dict[str, bytes]:
     """這一集的設定快照（三份 CSV 的內容）：名冊只留這一集出現的人（本名或其他寫法出現在這一集的文字裡）、
     敏感詞只留這一集碰到的、發音對照表只留這一集用得到的（原字出現在這一集的文字、代號或敏感詞的替代詞裡）。
     工作區已經有快照（匯入過）就照用那一份（不從這台的設定重算）。讀不到的設定檔當作空的。"""
@@ -273,7 +279,8 @@ def build_snapshot(workdir: str | Path) -> dict[str, bytes]:
     w = Path(workdir)
     if has_snapshot(w):
         return {n: (snapshot_dir(w) / n).read_bytes() for n in SETTING_FILES}
-    corpus = _corpus(w)
+    if corpus is None:
+        corpus = _corpus(w)
     out: dict[str, bytes] = {}
     extra: list[str] = []
     for name in SETTING_FILES:
@@ -304,6 +311,25 @@ def build_snapshot(workdir: str | Path) -> dict[str, bytes]:
                 keep.append(r)
         out[name] = _csv_bytes(header, keep)
     return out
+
+
+def _codes_record(workdir: Path, roster_csv: bytes, corpus: str | None = None) -> bytes | None:
+    """#272：交接包裡的 `校對/代號表紀錄.json` 只留這一集的人——本名在這一集的名冊快照裡，或名字出現在這一集的文字裡
+    （③ 自己決定換成代號、名冊上沒有的名字）。名冊上其他人（只因為名冊有英文代號欄才記進來的）拿掉。
+    匯入那台用快照名冊算出來的代號表跟這份一樣，打開第 3 步不會當成「代號改了」。讀不懂＝None（照原檔帶）。"""
+    import csv
+    import io
+
+    try:
+        data = wd.read_json(workdir / ROSTER_DERIVED[0], default=None)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    keep = {(r.get("中文名") or "").strip() for r in csv.DictReader(io.StringIO(roster_csv.decode("utf-8-sig")))}
+    text = _corpus(workdir) if corpus is None else corpus
+    out = {k: v for k, v in data.items() if k and (k in keep or k in text)}
+    return (json.dumps(out, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
 
 
 def snapshot_counts(snap: dict[str, bytes]) -> dict[str, int]:
@@ -392,12 +418,25 @@ def pack_items(workdir: str | Path, stage: str) -> list[dict]:
         raise HandoffError("第 1 步影片分析還沒做完，還不能交接打包。")
     items = [{"相對路徑": rel, "來源": fp} for rel, fp in record_files(w)]
     have = {it["相對路徑"] for it in items}
+    corpus = _corpus(w)   # 審查 C：快照與代號表紀錄共用，只算一次
+    snap = build_snapshot(w, corpus)
     if not has_snapshot(w):
-        for name, data in build_snapshot(w).items():
+        for name, data in snap.items():
             rel = f"{DIR_NAME}/{SNAP_DIR}/{name}"
             if rel not in have:
                 items.append({"相對路徑": rel, "內容": data})
                 have.add(rel)
+    # #272：內容來自整份名冊的檔只帶這一集的人（修改時間照原檔，匯入後不會被當成比成品新）
+    for it in items:
+        if it["相對路徑"] in ROSTER_DERIVED and it.get("來源") is not None:
+            src: Path = it["來源"]
+            st = src.stat()
+            data = _codes_record(w, snap["名冊.csv"], corpus)
+            if data is not None:
+                it["修改時間"] = st.st_mtime_ns
+                it["內容"] = data
+                it["原檔"] = (src, (st.st_size, st.st_mtime_ns, st.st_ino))   # 審查 B：寫進包時再核對一次
+                del it["來源"]
     if stage == STAGE5:
         prods = current_products(w)
         if not prods:
@@ -739,9 +778,18 @@ class PackJob:
         rel = it["相對路徑"]
         arc = f"{ZIP_ROOT}/{rel}"
         data = it.get("內容")
+        if it.get("原檔"):   # 審查 B：先讀好、換過內容的檔（代號表紀錄）：讀完到寫進包之間原檔變了就停，跟其他檔同一套
+            src0, before0 = it["原檔"]
+            try:
+                st0 = src0.stat()
+                now0 = (st0.st_size, st0.st_mtime_ns, st0.st_ino)
+            except OSError:
+                now0 = None
+            if now0 != before0:
+                raise HandoffError(f"存的時候工作區裡的檔案變了（{rel}），等它做完再按一次。")
         if data is not None:
-            mtime_ns = time.time_ns()
-            zi = zipfile.ZipInfo(arc, date_time=time.localtime()[:6])
+            mtime_ns = it.get("修改時間") or time.time_ns()
+            zi = zipfile.ZipInfo(arc, date_time=time.localtime(mtime_ns / 1e9)[:6])
             zi.compress_type = zipfile.ZIP_DEFLATED
             zf.writestr(zi, data)
             return {"路徑": rel, "大小": len(data), "sha256": hashlib.sha256(data).hexdigest(), "修改時間": mtime_ns}
