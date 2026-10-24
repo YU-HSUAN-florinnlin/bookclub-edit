@@ -1028,6 +1028,29 @@ def test_step2_name_not_on_roster_student_script_replaced():
     assert "阿強" not in (_DATA / "名冊.csv").read_text(encoding="utf-8")
 
 
+
+def test_step2_name_after_three_decision_student_script():
+    """1024-2 二審必修 A：名冊外的名字 ③ 先選「不用處理」、② 再把學員選成他 → 這一集有英文名，學員重念稿照換（#250 選 B，
+    跟名冊上的人同一套）；③ 先選「不是名字」再 ② 選他 → 兩邊都不換（老師那邊進排除清單、不會有卡）。"""
+    from bookclub import review
+    from bookclub import turns as turns_mod
+
+    w = _make()
+    personnames.decide(w, "阿強", "不用處理")
+    code = turns_mod.set_real_name(w, "學員1", "阿強")["代號"]
+    personnames.wait_rescan(w, 120)
+    assert code
+    out, _ = review.replace_real_names("我覺得阿強說得很好", review.replace_table(w))
+    assert "阿強" not in out and code in out, out
+    (_DATA / "名字排除清單.csv").unlink(missing_ok=True)
+    w2 = _make()
+    personnames.decide(w2, "阿強", "不是名字")
+    turns_mod.set_real_name(w2, "學員1", "阿強")
+    personnames.wait_rescan(w2, 120)
+    out, _ = review.replace_real_names("我覺得阿強說得很好", review.replace_table(w2))
+    assert out == "我覺得阿強說得很好", out
+    (_DATA / "名字排除清單.csv").unlink(missing_ok=True)
+
 def test_roster_added_after_step1_still_rescans():
     """1024-2 審查必修 2：名冊上有這個名字、但是第 1 步之後才加進名冊（例如別支影片在 ③ 加的）：② 選他、右欄手動選代號，
     都要補找老師點名這個名字的地方（第 1 步沒掃過）。"""

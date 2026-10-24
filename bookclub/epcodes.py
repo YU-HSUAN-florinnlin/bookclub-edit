@@ -376,9 +376,15 @@ def replace_table(workdir: str | Path | None = None) -> list[dict]:
         from bookclub import personnames
 
         have = {r["寫法"] for r in out}
+        dec = wd.read_json(personnames.decisions_path(Path(workdir)), default={}) or {}
+        not_name = {n for n, d in dec.items() if isinstance(d, dict) and d.get("做法") == "不是名字"}
         for x in personnames.episode_names(workdir, on_roster={r["寫法"] for r in rows}):
-            if x["寫法"] not in have and x["寫法"] not in keep:
-                out.append({**x, "代號": codes.get(x["canonical"]) or ""})
+            code = codes.get(x["canonical"]) or ""
+            # 跟上面照名冊那段同一套（#250 選 B）：這一集有英文名就換，③ 選過不用處理也一樣；沒英文名才照 keep 留原聲。
+            # ③ 選「不是名字」的（老師那邊進排除清單、不會有卡）兩邊都不換
+            if x["寫法"] in have or x["寫法"] in not_name or (not code and x["寫法"] in keep):
+                continue
+            out.append({**x, "代號": code})
         rows = out
     # 10-20 總審查：敏感詞替代詞留空＝人決定刪（不是程式把名字變成空的）→ 標 `拿掉`，學員重念稿跟老師句子一樣拿掉
     # （以前 replace_real_names 只換有代號的列，學員重念照字念；no_code_rows 還把它列成沒英文名照原聲）。
