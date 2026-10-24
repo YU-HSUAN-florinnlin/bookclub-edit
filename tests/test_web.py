@@ -816,18 +816,28 @@ def test_step4_status_card_1024_3():
     d = {"統計": rows, "進度": {}, "現在狀態": {"組裝": {"做好了": False, "說明": "要重新組裝"}}}
     run = {**d, "running": True, "進度": {"步驟": {"老師名字": {"狀態": "跳過"}, "學員重念": {"狀態": "進行中"}, "保留原聲學員名字": {"狀態": "還沒跑"}, "組裝": {"狀態": "還沒跑"}}}}
     redo = [{"name": "#27"}, {"name": "#69"}]
-    script = (esc + consts + pick("execTaskItems") + pick("execTasksHtml") + pick("execNowText")
+    script = (esc + consts + pick("execTaskItems") + pick("execPlain") + pick("execTasksHtml") + pick("execNowText")
               + f"const d = {json.dumps(d, ensure_ascii=False)}, run = {json.dumps(run, ensure_ascii=False)}, redo = {json.dumps(redo)};"
-              + """const a = execTaskItems(d, redo, true), b = execTaskItems({...d, 統計: [rows0 = d.統計[0]], 現在狀態: {組裝: {做好了: true}}}, [], true), c = execTaskItems(run, [], true);
+              + """const wait = {...run, 進度: {步驟: {老師名字: {狀態: "等待"}, 學員重念: {狀態: "等待"}, 保留原聲學員名字: {狀態: "等待"}, 組裝: {狀態: "等待"}}}};
+              const reasm = {...run, 進度: {步驟: {老師名字: {狀態: "略過"}, 學員重念: {狀態: "略過"}, 保留原聲學員名字: {狀態: "略過"}, 組裝: {狀態: "進行中"}}}};
+              const cut = {...d, 統計: [{類型: "學員段落", 做法: "x", 階段: "生成", 總數: 4, 完成: 1, 已生成: 4}], 現在狀態: {組裝: {做好了: true}}};
+              const a = execTaskItems(d, redo, true), b = execTaskItems({...d, 統計: [rows0 = d.統計[0]], 現在狀態: {組裝: {做好了: true}}}, [], true), c = execTaskItems(run, [], true);
               console.log(JSON.stringify({ a: a.map((x) => x.title), now: execNowText("todo", d, a, redo, true), none: b, c: c.map((x) => [x.title, x.state, x.sub]),
-                run: execNowText("running", run, c, [], true), done: execNowText("done", d, [], [], true), html: execTasksHtml(c, true) }));""")
+                run: execNowText("running", run, c, [], true), wait: execTaskItems(wait, [], true).map((x) => x.title), reasm: execTaskItems(reasm, [], true).map((x) => [x.title, x.state]),
+                cut: execTaskItems(cut, [], true).map((x) => x.title), plain: [execPlain("成品沒有通過驗證（sw），要重新組裝"), execPlain("x（sw、hw）y"), execPlain("保留（3 筆）")], done: execNowText("done", d, [], [], true), html: execTasksHtml(c, true) }));""")
     r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     got = json.loads(r.stdout)
-    assert got["a"] == ["第 5 步退回的 2 張：#27、#69", "學員聲音還差 2 段", "重新組裝成品"]   # 0／0、做好了的不列
-    assert got["now"] == "第 5 步退回了 2 張要重做、有 2 段學員聲音還沒做好、成品要重新組裝。" and got["none"] == []
+    assert got["a"] == ["第 5 步退回的 2 張：#27、#69", "學員聲音還差 1 段", "重新組裝成品"]   # 0／0、做好了的不列
+    assert got["now"] == "第 5 步退回了 2 張要重做、有 1 段學員聲音還沒做好、成品要重新組裝。" and got["none"] == []
     assert got["c"] == [["學員重念", "doing", "3／4 句"], ["組裝成品", "todo", ""]]     # 跑的時候：跳過的不列
     assert got["run"] == "AI 執行中：現在在「學員重念」（第 1 項／共 2 項）" and got["done"] == "成品好了。"
+    assert got["wait"] == ["學員重念", "組裝成品"]                                 # 開跑時每步先標「等待」：沒事做的前三步不列
+    assert got["reasm"] == [["組裝成品", "doing"]]                                 # 只重新組裝：前三步「略過」不列
+    assert got["cut"] == []                                                        # 中斷後快取裡已生成的不算缺
+    assert got["plain"] == ["成品沒有通過驗證，要重新組裝", "xy", "保留（3 筆）"]   # 程式代號不出現在畫面上
+    assert "上次沒跑完，按「繼續執行」接著做。" in body and 'id="execLastState"' in body
+    assert '!pre["缺"].length ? "done" : "todo"' in body and "${dev && (redo.length" in body and "!items.length ? \"\" :" in body
     assert "進行中" in got["html"] and "等前面做完才開始" in got["html"]
 
 

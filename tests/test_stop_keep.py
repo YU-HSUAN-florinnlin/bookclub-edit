@@ -207,7 +207,7 @@ def test_web_pure_functions():
     assert got["running"]["label"] == "執行中…" and "第 5 步看的還是上一支成品" in got["running"]["status"]
     assert got["stopped"]["label"] == "繼續執行" and "第 5 步看的是上一支完整的成品" in got["stopped"]["status"]
     assert got["failed"]["label"] == "繼續執行" and "第 5 步還沒有成品" in got["failed"]["status"]
-    assert got["cut"]["label"] == "繼續執行" and "跑到一半網頁伺服器被關掉" in got["cut"]["status"]
+    assert got["cut"]["label"] == "繼續執行" and "跑到一半伺服器被關掉" in got["cut"]["status"]
     assert got["done"]["label"] == "更新成品" and got["done"]["note"] == "只補做第 3 步改過的部分，做過的不重做"
     assert "已完成（10-09 01:02）" in got["done"]["status"]
     body = _fn(app, "renderExecuteBody")   # 「只重新組裝」收在「進階設定」裡（平常不顯示）

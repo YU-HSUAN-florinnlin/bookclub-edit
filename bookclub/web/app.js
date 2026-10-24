@@ -776,9 +776,11 @@ async function renderExecuteBody() {
   const items = execTaskItems(d, redo, !!d["有成品"]);   // 1024-3（#285）：「這次會做的事」一張清單
   const hasProduct = !!d["有成品"];
   const interrupted = !running && (prog["停止"] || prog["中斷"] || prog["錯誤"] || d.error);
-  const mode = running ? "running" : (!items.length && hasProduct && !interrupted ? "done" : "todo");   // 狀態卡三種長相
+  const mode = running ? "running" : (!items.length && hasProduct && !interrupted && !pre["缺"].length ? "done" : "todo");   // 狀態卡三種長相
   const memWarn = !running && fc && ((fc["摘要"] || {})["記憶體"] || {})["偏滿"] ? fc["摘要"]["記憶體"] : null;
-  const nowTxt = execNowText(mode, d, items, redo, hasProduct);
+  const memHtml = memWarn ? `<div class="hint fc-mem-warn" id="execMemWarn"><b>記憶體偏滿，先關掉其他程式再按。</b> <details class="exec-memhow"><summary>怎麼辦？</summary>${esc(memWarn["怎麼處理"] || "")}
+        <br>同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</details></div>` : "";
+  const nowTxt = !running && !items.length && interrupted ? "上次沒跑完，按「繼續執行」接著做。" : execNowText(mode, d, items, redo, hasProduct);
   const doneCard = `<div class="card exec-state exec-state-done">
       <p class="exec-now" id="execNow"><b>${esc(nowTxt)}</b></p>
       <p class="muted">到第 5 步檢查成品。之後改了第 3 步，再回到這裡按「更新成品」。</p>
@@ -792,9 +794,9 @@ async function renderExecuteBody() {
   const todoCard = `<div class="card exec-state">
       <p class="exec-now" id="execNow"><b>${esc(nowTxt)}</b>${pre["缺"].length ? ` <button type="button" class="secondary" id="execBlockJump">還缺 ${pre["缺"].length} 件事才能開始，看是哪些</button>` : ""}</p>
       ${pre["缺"].length ? `<div class="exec-block" id="execBlockNear" role="alert"><b>還不能開始，要先處理這 ${pre["缺"].length} 件事：</b>${execBlockList(pre)}</div>` : ""}
-      ${memWarn ? `<div class="hint fc-mem-warn" id="execMemWarn"><b>記憶體偏滿，先關掉其他程式再按。</b> <details class="exec-memhow"><summary>怎麼辦？</summary>${esc(memWarn["怎麼處理"] || "")}
-        <br>同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</details></div>` : ""}
+      ${memHtml}
       <p><button id="btnExec" ${execBlocked ? "disabled" : ""}${!running && !pre["可以開始"] ? ` title="要先處理上面列的事"` : ""}>${esc(btn.label)}</button></p>
+      ${interrupted ? `<p class="muted small" id="execLastState">${esc(btn.status.replace(/^現在：/, ""))}</p>` : ""}
       <p class="muted small" id="execDoneNote">${esc(btn.note || "已經做好的不會重做。")}${SHOW_EXEC_ETA && fc ? `　${esc(execEtaWhole(fc))}` : ""}</p>
       ${prog["停止"] ? `<p><span class="badge">已停止</span> ${prog["停止原因"] && !prog["停止原因"].startsWith("按了停止")
         ? esc(prog["停止原因"].replace("（swap）", "")) : "上次按了停止；按「繼續執行」會接著做（做好的不重做）。"}</p>` : ""}
@@ -813,7 +815,7 @@ async function renderExecuteBody() {
     ${mode === "running" ? runCard : mode === "done" ? doneCard : todoCard}
     ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
     ${autoBtn ? `<p><button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">從代號名單配（外國人名的中文寫法），之後在第 3 步 ②③ 可以改</span></p>` : ""}
-    ${mode === "done" ? "" : `<h2>這次會做的事</h2>
+    ${mode === "done" || !items.length ? "" : `<h2>這次會做的事</h2>
     <div class="card"><ul class="exec-tasks" id="execTasks">${execTasksHtml(items, running)}</ul>${redoMore}</div>`}
     ${fc ? finalCheckHtml(fc) : ""}
     <details class="exec-detail" id="execDetail" ${execOpen["詳細資料"] ? "open" : ""}><summary><b>詳細資料</b>（統計、執行時間、輸出方式、進階設定、訊息紀錄）</summary>
@@ -840,10 +842,10 @@ async function renderExecuteBody() {
             ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
             <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音${SHOW_EXEC_ETA ? `，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘` : ""}。</span></p>` : ""}
         </details>
-        ${redo.length || d["重做中"] ? `<div class="exec-reasm2">${dev ? `<button id="btnReassemble" class="secondary" ${execBlocked ? "disabled" : ""}>只重新組裝（不重新生成）</button>
+        ${dev && (redo.length || d["重做中"]) ? `<div class="exec-reasm2">${dev ? `<button id="btnReassemble" class="secondary" ${execBlocked ? "disabled" : ""}>只重新組裝（不重新生成）</button>
           <p class="muted small">生成的聲音不動（不重新生成、不換念法），只照現在的做法重新放回去、輸出新的成品；
           會多一個版本，舊的成品檔不動。只換了接起來的地方、聲音本身沒問題時用這顆；要重做的卡沒有真的重新生成，第 5 步照樣是「要重做」。</p>` : ""}</div>` : ""}
-        ${mode === "done" ? `<p><button id="btnExec" ${execBlocked ? "disabled" : ""}${!running && !pre["可以開始"] ? ` title="要先處理上面列的事"` : ""}>${esc(btn.label)}</button> <span class="muted small" id="execDoneNote">${esc(btn.note || "")}</span></p>` : ""}
+        ${mode === "done" ? `${memHtml}<p><button id="btnExec" ${execBlocked ? "disabled" : ""}${!running && !pre["可以開始"] ? ` title="要先處理上面列的事"` : ""}>${esc(btn.label)}</button> <span class="muted small" id="execDoneNote">${esc(btn.note || "")}</span></p>` : ""}
         ${!running ? `<p class="muted small">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}
       </div>
       <h2>訊息紀錄</h2>
@@ -978,11 +980,11 @@ function execTaskItems(d, redo, hasProduct) {
   if (d.running) {
     EXEC_STEP_NAMES.forEach(([k]) => {
       const st = (steps[k] || {})["狀態"] || "";
-      if (st === "跳過") return;
+      if (st === "跳過" || st === "略過") return;   // 只重新組裝時前三步是「略過」；開跑時每步先標「等待」
       const mine = rows.filter((r) => r["總數"] != null && (k === "組裝" ? r["階段"] === "組裝" : (r["類型"] === EXEC_STEP_STATS[k] && r["階段"] === "生成")));
       const total = mine.reduce((n, r) => n + r["總數"], 0);
       const made = mine.reduce((n, r) => n + Math.max(r["已生成"] != null ? r["已生成"] : 0, r["完成"]), 0);
-      if ((!st || st === "還沒跑") && k !== "組裝" && !(total > made)) return;   // 沒有事要做的步驟，不列
+      if ((!st || st === "還沒跑" || st === "等待") && k !== "組裝" && !(total > made)) return;   // 沒有事要做的步驟，不列
       items.push({ title: EXEC_STEP_TITLE[k], state: st === "進行中" ? "doing" : st === "做完" ? "done" : "todo", kind: k,
         sub: k !== "組裝" && total ? `${Math.min(made, total)}／${total} 句` : "" });
     });
@@ -995,17 +997,22 @@ function execTaskItems(d, redo, hasProduct) {
   } else if (d["重做中"]) {
     items.push({ title: "接著做上次沒做完的重做", sub: "", state: "todo", kind: "redo", n: 0 });
   }
-  rows.filter((r) => r["階段"] === "生成" && r["總數"] != null && r["總數"] > r["完成"]).forEach((r) => {
-    items.push({ title: `${EXEC_GEN_LABEL[r["類型"]] || r["類型"]}還差 ${r["總數"] - r["完成"]} 段`, sub: r["做法"] || "", state: "todo", kind: "gen",
-      n: r["總數"] - r["完成"], label: EXEC_GEN_LABEL[r["類型"]] || r["類型"] });
+  rows.filter((r) => r["階段"] === "生成" && r["總數"] != null).forEach((r) => {
+    // 中斷後快取裡已經生成好的不算缺：用「總數 − 已生成」（後端 execcounts 的 已生成 ＝ 快取算出來的，至少等於 完成）
+    const left = r["總數"] - Math.max(r["已生成"] != null ? r["已生成"] : 0, r["完成"]);
+    if (left > 0) items.push({ title: `${EXEC_GEN_LABEL[r["類型"]] || r["類型"]}還差 ${left} 段`, sub: r["做法"] || "", state: "todo", kind: "gen",
+      n: left, label: EXEC_GEN_LABEL[r["類型"]] || r["類型"] });
   });
   const now = d["現在狀態"] && d["現在狀態"]["組裝"];
   const asmPending = now ? now["做好了"] === false : rows.some((r) => r["階段"] === "組裝" && r["總數"] != null && r["總數"] > r["完成"]);
   if (asmPending || redo.length || d["重做中"] || !hasProduct) {
-    items.push({ title: hasProduct ? "重新組裝成品" : "組裝成品", sub: (now && now["做好了"] === false && now["說明"]) || "", state: "todo", kind: "asm" });
+    items.push({ title: hasProduct ? "重新組裝成品" : "組裝成品", sub: execPlain((now && now["做好了"] === false && now["說明"]) || ""), state: "todo", kind: "asm" });
   }
   return items;
 }
+
+// 畫面上不出現程式代號：「（sw）」「（sw、hw）」這類括號整個拿掉
+function execPlain(t) { return String(t == null ? "" : t).replace(/（[A-Za-z0-9_、, ]+）/g, ""); }
 
 function execTasksHtml(items, running) {
   return items.map((it, i) => `<li class="exec-task ${it.state}"><span class="exec-task-ic" aria-hidden="true">${it.state === "done" ? "✓" : it.state === "doing" ? "" : i + 1}</span>
@@ -1054,7 +1061,7 @@ function execBtnState(running, prog, hasProduct) {
   const assembled = ((prog["步驟"] || {})["組裝"] || {})["狀態"] === "做完";
   const old = hasProduct ? "第 5 步看的是上一支完整的成品（沒有被動到）" : "第 5 步還沒有成品";
   if (running) return { label: "執行中…", note: "", status: `現在：第 4 步執行中（${when} 開始）。${hasProduct ? "做完之前，第 5 步看的還是上一支成品" : "做完才會有成品"}` };
-  if (prog["中斷"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半網頁伺服器被關掉。${old}` };
+  if (prog["中斷"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半伺服器被關掉。${old}` };
   if (prog["停止"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半被停止。${old}` };
   if (prog["錯誤"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）沒有跑完（失敗）。${old}` };
   if (prog["開始時間"] && prog["結束時間"] && (assembled || hasProduct))
@@ -1078,13 +1085,13 @@ function execStepRows(d) {
     const last = (steps[k] || {})["狀態"];
     return `<tr><td><b>${esc(k)}</b><div class="muted">${esc(desc)}</div></td>
       <td><span class="badge ${x["做好了"] ? "done" : ""}">${esc(st)}</span>${last ? `<div class="muted small">上次執行：${esc(last)}</div>` : ""}</td>
-      <td class="muted">${esc(x["說明"] || "")}</td></tr>`;
+      <td class="muted">${esc(execPlain(x["說明"] || ""))}</td></tr>`;
   }).join("");
   const badge = (st) => ({ "做完": "done", "跳過": "done", "進行中": "running", "失敗": "error", "中斷": "error" }[st] || "");
   return EXEC_STEP_NAMES.map(([k, desc]) => {
     const st = (steps[k] || {})["狀態"] || "還沒跑";
     return `<tr><td><b>${esc(k)}</b><div class="muted">${esc(desc)}</div></td>
-      <td><span class="badge ${badge(st)}">${esc(st)}</span></td><td class="muted">${esc((steps[k] || {})["訊息"] || "")}</td></tr>`;
+      <td><span class="badge ${badge(st)}">${esc(st)}</span></td><td class="muted">${esc(execPlain((steps[k] || {})["訊息"] || ""))}</td></tr>`;
   }).join("");
 }
 
