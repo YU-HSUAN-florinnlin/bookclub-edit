@@ -679,15 +679,18 @@ def topic_needs(w: Path, f: Filter, out: list[str], limit: int = 300) -> None:
         stale = execcounts.stale_ids(w, rng[0], rng[1], cache=False)
         lost = sorted(f"{r}:{i}" for r, i in stale if (i, r) not in st.gen)
         # 1024-2 #275：生成句表只在升級與第 4 步開始執行時記（`needs.record_gen_plan`）。之後第 3 步才補找到的名字、
-        # 新加的卡還沒記是正常的：照現在的計畫（跟第 4 步開始時同一套 `_gen_keys`→`_resolve`）對得到卡的另外列
+        # 新加的卡還沒記是正常的：照現在的計畫（跟第 4 步開始時同一套 `_gen_keys`→`_resolve`）對得到卡、而且卡是在
+        # 最後一次記生成句之後才建的，另外列「還沒記」。審查建議 4：卡在那之前就有（記的時候該記上卻沒記上）照舊算對不到
         pending: dict[str, list[str]] = {}
         if lost:
             ctx = needs.plan_ctx(w)
             index, by_key = needs._index(w), st.alive_by_key()
             keys = {f"{role}:{x.get('id')}": needs._gen_keys(role, x) for role in needs.ROLE_KEYS for x in ctx.get(role) or []}
+            born = {h.get("卡號"): str(h.get("時間") or "") for h in needs.read_history(w) if h.get("動作") == "建立"}
+            last = max((str(g.get("更新時間") or "") for g in st.gen.values()), default="")
             for x in lost:
                 got = needs._resolve(keys.get(x) or [], index, by_key)
-                if got:
+                if got and all(born.get(c, "") > last for c in got):
                     pending[x] = got
             lost = [x for x in lost if x not in pending]
         by_role = Counter(r for r, _i in stale)
@@ -697,7 +700,10 @@ def topic_needs(w: Path, f: Filter, out: list[str], limit: int = 300) -> None:
         if lost:
             out.append("  對不到卡：" + "、".join(safe(x) for x in lost[:50]))
         if pending:
-            out.append(f"  生成句表還沒記、照現在的計畫對得到卡 {len(pending)} 句（第 3 步之後才加的卡，第 4 步按開始執行時會記上，正常）："
+            sync_bad = int(er.get("次數") or 0) > 0
+            why = ("同步出過錯，第 4 步開始時不一定記得上，先看上面的同步錯誤" if sync_bad
+                   else "最後一次記生成句之後才加的卡，第 4 步按開始執行時會記上，正常")
+            out.append(f"  生成句表還沒記、照現在的計畫對得到卡 {len(pending)} 句（{why}）："
                        + "、".join(f"{safe(x)}→{'+'.join(c)}" for x, c in list(pending.items())[:50]))
         rows = needs.redo_list(w, st, stale=stale)
         out.append(f"要重做的卡（第 4、5 步看的是同一份）{len(rows)} 張：{cnt(rows, '起因')}")

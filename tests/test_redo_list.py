@@ -362,10 +362,16 @@ def test_inspect_gen_not_recorded_yet_is_not_lost():
     from bookclub import safeview
 
     w = _upgraded(shift={"S002": 0.1})
-    with needs._locked(w):   # 模擬：這一句的卡是升級之後才加的，生成句表還沒記
-        st = needs.load(w)
-        assert st.gen.pop(("S002", "老師"), None) is not None
-        needs.save(w, st)
+    def gen_time(t: str, pop: bool = False) -> None:
+        with needs._locked(w):
+            st = needs.load(w)
+            if pop:
+                assert st.gen.pop(("S002", "老師"), None) is not None
+            for g in st.gen.values():
+                g["更新時間"] = t
+            needs.save(w, st)
+
+    gen_time("2000-01-01T00:00:00", pop=True)   # 模擬：這一句的卡是最後一次記生成句之後才加的，生成句表還沒記
     card = _key(w, "名字:2")
 
     def show() -> str:
@@ -376,7 +382,10 @@ def test_inspect_gen_not_recorded_yet_is_not_lost():
 
     out = show()
     assert "要重新生成、但對不到卡的句子：0 句" in out and "生成句表要補" not in out, out
-    assert f"照現在的計畫對得到卡 1 句" in out and f"老師:S002→{card}" in out, out
+    assert "照現在的計畫對得到卡 1 句" in out and f"老師:S002→{card}" in out and "正常" in out, out
+    gen_time("2999-01-01T00:00:00")   # 審查建議 4：卡在最後一次記生成句之前就有、卻沒記上 → 照舊算對不到
+    out = show()
+    assert "對不到卡的句子：1 句（不是 0＝生成句表要補）" in out and "照現在的計畫對得到卡" not in out, out
     tn._quiet(needs.record_gen_plan, w)   # 第 4 步按開始執行時做的事
     out = show()
     assert "要重新生成、但對不到卡的句子：0 句" in out and "照現在的計畫對得到卡" not in out, out
