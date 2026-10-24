@@ -296,6 +296,29 @@ def rescan_names(workdir: Path) -> int:
     return n
 
 
+def episode_names(workdir: str | Path, on_roster: set[str] | None = None) -> list[dict]:
+    """1024-2 #276：② 選成學員本名、但名冊上沒有的名字（第 1 步人名清單抓到的寫法）→ [{寫法, canonical, 代號}]
+    （其他寫法照人名清單；代號留空，用的地方照 `epcodes.episode_codes` 給）。② 自動配代號只記這一集、不動名冊（10-07），
+    所以補找名字（`names.scan_candidates`）與學員重念稿替換表（`epcodes.replace_table`）另外帶進去。
+    on_roster：算「名冊上有」的寫法；不給＝交接帶來的設定快照＋本機名冊（`epcodes._union`，跟替換表同一份）。"""
+    from bookclub import epcodes, names
+    from bookclub import turns as turns_mod
+
+    workdir = Path(workdir)
+    if on_roster is None:
+        on_roster = {r["寫法"] for r in epcodes._union(names.load_roster, workdir, "名冊.csv")}
+    tdata = wd.read_json(turns_mod.turns_path(workdir), default=None) or {}
+    alts = {p["名字"]: p.get("其他寫法") or [] for p in (wd.read_json(people_path(workdir), default=None) or {}).get("人名", [])}
+    out: list[dict] = []
+    for real in sorted({p.get("本名") for p in (tdata.get("學員") or {}).values() if p.get("本名")}):
+        if real in on_roster:
+            continue
+        for w in dict.fromkeys([real, *alts.get(real, [])]):
+            if w and w not in on_roster:
+                out.append({"寫法": w, "canonical": real, "代號": ""})
+    return out
+
+
 def mentioned(workdir: str | Path, chosen: set[str] | None = None,
               cuts: list[tuple[float, float]] | None = None) -> list[dict]:
     """開始前 ③「辨識其他名稱如何替換」：這一集被提到的每個人名（名冊上有沒有都列）＋這一集的代號＋人的決定。

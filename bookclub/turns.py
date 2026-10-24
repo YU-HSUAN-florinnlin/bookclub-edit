@@ -934,7 +934,14 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
         epcodes.release_auto(workdir, old)   # 原本那個本名自動配、人沒改過的代號收回來
     auto = epcodes.auto_for_student(workdir, real) if real else None
     code = epcodes.episode_codes(workdir).get(real) if real else None
-    return {"ok": True, "學員": person, "本名": real or None, "代號": code or p.get("代號"), "自動配代號": auto}
+    # 1024-2 #276：選了本名（換了人）就背景補找老師點名這個名字的地方。名冊上沒有的（人名清單抓到的）名冊照舊不動
+    # （10-07），補找時由 `personnames.episode_names` 帶進比對；名冊上有、但第 1 步之後才加進名冊的（審查必修 2）
+    # 第 1 步也沒掃過。不然老師叫他名字的那幾句不會有卡、成品裡照原聲。已經有的候選不會重複加
+    rescan = bool(real) and real != old
+    if rescan:
+        personnames.request_rescan(workdir)
+    return {"ok": True, "學員": person, "本名": real or None, "代號": code or p.get("代號"), "自動配代號": auto,
+            "補找中": rescan}
 
 
 def set_name_code(workdir: str | Path, real: str, code: str | None, *, add_roster: bool = True) -> dict:
@@ -957,8 +964,9 @@ def _set_name_code(workdir: Path, real: str, code: str | None, add_roster: bool 
     if add_roster and code and not any(r["canonical"] == real for r in names.load_roster(data_dir() / "名冊.csv")):
         alts = next((p["其他寫法"] for p in (wd.read_json(personnames.people_path(workdir), default=None) or {}).get("人名", [])
                      if p["名字"] == real), [])
-        if personnames.add_to_roster(real, alts):   # 10-07：名字加進名冊，代號只記這一集
-            rescan = True
+        personnames.add_to_roster(real, alts)   # 10-07：名字加進名冊，代號只記這一集
+    if add_roster and code:   # 1024-2 審查必修 2：名冊上本來就有、但第 1 步之後才加的，也要補找（已有的候選不重複加）
+        rescan = True
     with _lock:
         data = wd.read_json(turns_path(workdir))
         data.setdefault("本名代號", {})[real] = code or None

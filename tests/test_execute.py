@@ -175,6 +175,49 @@ def test_precheck_lists_what_is_missing():
         (voices / f"{sex}聲_暫定.wav").unlink()
 
 
+def test_precheck_detail_points_to_step():
+    # 1024-1（#274）：每一條「缺」都有給畫面用的白話說明與要回哪一步；沒選定老師參考音 → 第 2 步
+    from bookclub import workdir as wdm
+
+    w = _fresh()
+    ref = wdm.ref_dir(w)
+    for f in ("ref.wav", "ref.txt"):
+        if (ref / f).exists():
+            (ref / f).unlink()
+    pre = execute.precheck(w)
+    det = pre["缺明細"]
+    assert not pre["可以開始"] and len(det) == len(pre["缺"])
+    steps = {d["步驟"] for d in det}
+    assert 2 in steps and 0 in steps and 3 in steps, det   # 參考音、替代聲音（初始化設定）、② 學員是誰
+    refline = next(d for d in det if d["步驟"] == 2)
+    assert "老師參考聲音" in refline["說明"] and "ref.wav" not in refline["說明"]   # 畫面上不寫檔名
+    assert any("ref.wav" in x for x in pre["缺"])   # 命令列的原文照舊
+    assert all(isinstance(d["說明"], str) and d["說明"] for d in det)
+    # 審查必修 1：替代聲音教的是匯入設定包（初始化設定那一列只顯示狀態、重新安裝也不帶聲線）
+    voice = next(d for d in det if d["步驟"] == 0)
+    assert voice["說明"].startswith("找不到學員的替代聲音") and "匯入含替代聲音的設定包（向開發者拿）" in voice["說明"], voice
+    assert "重新安裝" not in voice["說明"]
+    # 審查建議 3：② 學員是誰 → 直接打開第 3 步「開始前 4 件事」
+    assert next(d for d in det if d["步驟"] == 3).get("子步驟") == "prep"
+
+
+def test_precheck_detail_video_missing_keeps_location():
+    # 1024-1 審查必修 2：找不到原片 → 只教放回原位、用原本的檔名，附原本的位置（小字），不附按鈕、不教到總覽重選
+    from bookclub import review
+
+    w = _fresh()
+    orig = review.video_path
+    review.video_path = lambda wk, override=None: None
+    try:
+        det = execute.precheck(w)["缺明細"]
+    finally:
+        review.video_path = orig
+    v = next(d for d in det if d["說明"].startswith("找不到原片影片"))
+    assert v["說明"] == "找不到原片影片：放回原本的位置、用原本的檔名" and v["步驟"] is None, v
+    assert "總覽" not in v["說明"]
+    assert v["細節"].startswith("原本在：") and ".mp4" in v["細節"], v
+
+
 def test_done_checks_on_fake_workdir():
     w = _fresh()
     done, why = execute.names_done(w)
