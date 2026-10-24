@@ -279,7 +279,11 @@ def test_js_wiring():
     assert "filter((m) => !m.wslOnly || wsl)" in app
     assert ho.count('cleanedAlert("清掉了"') == 2                  # 第 3 步交接後清掉、總覽清掉這集
     assert 'uiAlert({ title: "清掉了"' not in ho
-    assert "cleanedAlert(\"清好了\"" in fio and 'info && info["顯示"]' in fio   # 第 5 步：只有 WSL 跳
+    # 第 5 步清完：Mac、Windows 都跳成功視窗（宇軒 10-25），提醒段落只有 WSL 才加（cleanedAlertOpts 管）
+    i5 = fio.index("#290（宇軒 10-25）")
+    seg = fio[i5:i5 + 500]
+    assert 'cleanedAlert("清好了", okMsg)' in seg and 'uiAlert({ title: "清好了", message: okMsg, ok: "好" })' in seg
+    assert "shrinkStatus(true).then" not in seg and 'info["顯示"]' not in seg
 
 
 if __name__ == "__main__":

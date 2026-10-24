@@ -5,7 +5,7 @@
 ## 未發布
 
 - Windows 一鍵「縮小虛擬硬碟」：在 Ubuntu 裡清掉東西後，C 槽空間要縮小虛擬硬碟才拿得回來。左下角「工具設定」多一項「把『縮小虛擬硬碟』放到桌面」（只在 Windows 出現），桌面會多一個「讀書會剪輯工具」資料夾；在裡面的「縮小虛擬硬碟」上按右鍵選「以系統管理員身分執行」，它會自己確認第 4 步沒在跑、找到 Ubuntu 的虛擬硬碟、整理空間、關掉 Ubuntu、用 diskpart 縮小，最後寫空出多少、C 槽還剩多少。做法見 README 附錄「縮小虛擬硬碟（Windows）」（待辦 #290）
-- Windows 上第 3 步交接後「清掉（建議）」、總覽「清掉這集」、第 5 步結案清完暫存，彈出的視窗多一段提醒怎麼把空間還給 C 槽；桌面還沒有那個檔時，同一個視窗有「放到桌面」。第 5 步清完以前只重畫畫面，Windows 上現在會跳這個視窗；Mac 照舊（待辦 #290）
+- Windows 上第 3 步交接後「清掉（建議）」、總覽「清掉這集」、第 5 步結案清完暫存，彈出的視窗多一段提醒怎麼把空間還給 C 槽；桌面還沒有那個檔時，同一個視窗有「放到桌面」。第 5 步清完以前只重畫畫面，現在 Mac、Windows 都會跳「清好了」的視窗（Mac 沒有還給 C 槽那一段）（待辦 #290）
 - `bookclub disk` 找得到新版 WSL 的虛擬硬碟（`%LOCALAPPDATA%\wsl\{…}\ext4.vhdx`，以前只找 Microsoft Store 裝的位置）；虛擬硬碟那一行加註「這是整個 Ubuntu（含系統）」，縮小改指向桌面的一鍵檔（待辦 #289）
 - 技術：新增 `windows/縮小虛擬硬碟.cmd`（只有 ASCII，用 `-ExecutionPolicy Bypass` 叫同名 `.ps1`）與 `.ps1`（UTF-8 BOM、CRLF；`.gitattributes` 設 `-text` 不轉換行）；`bookclub/shrinktool.py`（找 Windows 桌面、複製、`GET /api/shrink-tool`、`POST /api/shrink-tool/install`，已結案也能用）；`closing._vhdx` 多找 `Users/*/AppData/Local/wsl/*/ext4.vhdx`；`tests/test_shrinktool.py`（待辦 #289、#290）
 - README 附錄「縮小虛擬硬碟」從草稿改成正式說明：一鍵檔怎麼拿、怎麼執行，手動 diskpart 做法留在後面當備用；sparse 不建議（實測不還空間、官方標示有資料損毀風險）（待辦 #290）
