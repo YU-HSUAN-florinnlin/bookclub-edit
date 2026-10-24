@@ -813,10 +813,10 @@ DOWNLOADS_PS = "\n".join([
 ])
 
 
-def windows_downloads(run=None, which=None) -> Path:
-    """Windows 的「下載」資料夾在 Ubuntu 這邊的路徑。
-    先問 PowerShell（輸出 UTF-8，使用者名稱是中文也不會亂碼；下載資料夾搬過位置也找得到）；
-    不行再用 `cmd.exe /c echo %USERPROFILE%`＋`\\Downloads`（cmd 的輸出是 Windows 的舊編碼，中文名稱可能讀錯）。"""
+def windows_folder(ps_script: str, fallback_sub: str, label: str, run=None, which=None) -> Path:
+    """Windows 的某個使用者資料夾（下載、桌面⋯）在 Ubuntu 這邊的路徑。找不到丟 RuntimeError（訊息給人看）。
+    先問 PowerShell（`ps_script` 最後一行印 Windows 路徑；輸出 UTF-8，使用者名稱是中文也不會亂碼；資料夾搬過位置也找得到）；
+    不行再用 `cmd.exe /c echo %USERPROFILE%`＋`\\<fallback_sub>`（cmd 的輸出是 Windows 的舊編碼，中文名稱可能讀錯）。"""
     which = which or shutil.which
     run = run or subprocess.run
     kw = {"cwd": "/mnt/c"} if Path("/mnt/c").is_dir() else {}
@@ -824,7 +824,7 @@ def windows_downloads(run=None, which=None) -> Path:
     ps = _find_exe("powershell.exe", PS_CANDIDATES, which)
     if ps:
         try:
-            r = run([ps, "-NoProfile", "-NonInteractive", "-EncodedCommand", encode_ps(DOWNLOADS_PS)],
+            r = run([ps, "-NoProfile", "-NonInteractive", "-EncodedCommand", encode_ps(ps_script)],
                     capture_output=True, stdin=subprocess.DEVNULL, timeout=QUICK_TIMEOUT_S, **kw)
             out = _decode(r.stdout).replace("\ufeff", "").strip().splitlines()
             if r.returncode == 0 and out and ":" in out[-1]:
@@ -843,14 +843,19 @@ def windows_downloads(run=None, which=None) -> Path:
         prof = _decode(r.stdout).strip().splitlines()
         if r.returncode != 0 or not prof or "%USERPROFILE%" in prof[-1]:
             raise RuntimeError("問不到 Windows 的使用者資料夾")
-        win = prof[-1].strip().rstrip("\\") + "\\Downloads"
+        win = prof[-1].strip().rstrip("\\") + "\\" + fallback_sub
     try:
         p = Path(wsl_to_linux(win, run=run))
     except PickUnavailable as e:
         raise RuntimeError(str(e)) from None
     if not p.is_dir():
-        raise RuntimeError(f"找不到 Windows 的下載資料夾：{win}")
+        raise RuntimeError(f"找不到 Windows 的{label}：{win}")
     return p
+
+
+def windows_downloads(run=None, which=None) -> Path:
+    """Windows 的「下載」資料夾在 Ubuntu 這邊的路徑（shell:Downloads；問不到用 %USERPROFILE%\\Downloads）。"""
+    return windows_folder(DOWNLOADS_PS, "Downloads", "下載資料夾", run=run, which=which)
 
 
 def reveal(path: Path, kind: str | None = None, run=None, popen=None, which=None) -> str:

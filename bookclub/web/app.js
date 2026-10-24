@@ -380,7 +380,9 @@ async function shrinkPutDesktop() {
   let r;
   try { r = await apiPost("/api/shrink-tool/install", {}, { quiet: true }); }
   catch (e) {
-    await uiErrorAlert({ title: "沒有放到桌面", message: e.message, where: "工具設定・放到桌面" });
+    // 意外（找不到桌面、寫不進去）跳錯誤視窗；舊檔被占用（縮小的視窗還開著）是自己能改正的，一般提醒視窗（選單沒地方放紅字）
+    if (e && e.data && e.data["意外"]) await uiErrorAlert({ title: "沒有放到桌面", message: e.message, where: "工具設定・放到桌面" });
+    else await uiAlert({ title: "還不能放到桌面", message: e.message });
     return false;
   }
   if (shrinkInfo) shrinkInfo["已放到桌面"] = true;
@@ -396,9 +398,10 @@ function cleanedAlertOpts(title, message, info) {
   return { kind: "confirm", title, message: `${text}\n桌面還沒有這個檔，可以先按「放到桌面」放一份。`, ok: "放到桌面", cancel: "好" };
 }
 
-// 清掉（交接後、總覽清掉這集、第 5 步結案）成功時用這個取代 uiAlert
+// 清掉（交接後、總覽清掉這集、第 5 步結案）成功時用這個取代 uiAlert。
+// 審查 #13：用頁面載入時查到的結果（問 Windows 桌面要叫 powershell.exe，冷啟動要幾秒），沒查過才現在問
 async function cleanedAlert(title, message) {
-  const o = cleanedAlertOpts(title, message, await shrinkStatus(true));
+  const o = cleanedAlertOpts(title, message, await shrinkStatus());
   if (o.kind === "alert") return uiAlert({ title: o.title, message: o.message, ok: o.ok });
   if (await uiConfirm({ title: o.title, message: o.message, ok: o.ok, cancel: o.cancel })) await shrinkPutDesktop();
 }

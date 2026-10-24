@@ -979,10 +979,14 @@ def _open3(w: Path) -> None:
 
 
 def _zip_texts(z: Path) -> dict[str, str]:
-    """包裡每個檔的內容（文字；JSON 的 \\u 轉義也展開），掃名字用。"""
+    """包裡每個文字檔的內容（JSON 的 \\u 轉義也展開），掃名字用。
+    影音、圖片這類二進位檔不掃（1025-1：成品 mp4 的位元組碰巧解出「Ben」，測試偶爾失敗）。"""
+    binary = (".mp4", ".mov", ".m4a", ".wav", ".mp3", ".aac", ".flac", ".png", ".jpg", ".jpeg", ".zip", ".npy", ".pt")
     out = {}
     with zipfile.ZipFile(z) as zf:
         for n in zf.namelist():
+            if n.lower().endswith(binary):
+                continue
             t = zf.read(n).decode("utf-8", errors="ignore")
             try:
                 t += "\n" + json.dumps(json.loads(t), ensure_ascii=False)

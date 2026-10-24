@@ -146,6 +146,34 @@ def test_install_copies_and_overwrites():
         (dest / "縮小虛擬硬碟.ps1").write_text("舊版", encoding="utf-8")   # 已經有 → 蓋成這一版
         shrinktool.install(desk)
         assert (dest / "縮小虛擬硬碟.ps1").read_bytes() == (shrinktool.WIN_DIR / "縮小虛擬硬碟.ps1").read_bytes()
+        # 失敗：暫存檔不留在桌面資料夾；被占用（舊視窗還開著）是可以改正的
+        import errno as _errno
+        from unittest import mock
+        real_replace = Path.replace
+
+        def busy_replace(self, target):
+            if str(target).endswith(".ps1"):
+                raise PermissionError(_errno.EACCES, "Permission denied")
+            return real_replace(self, target)
+        with mock.patch.object(Path, "replace", busy_replace):
+            try:
+                shrinktool.install(desk)
+            except shrinktool.ShrinkToolBusy as e:
+                assert "先關掉縮小虛擬硬碟的視窗" in str(e) and isinstance(e, ValueError)
+            else:
+                raise AssertionError
+        assert not any(".複製中" in p.name for p in dest.iterdir()), list(dest.iterdir())
+
+        def full_replace(self, target):
+            raise OSError(_errno.ENOSPC, "No space left on device")
+        with mock.patch.object(Path, "replace", full_replace):
+            try:
+                shrinktool.install(desk)
+            except shrinktool.ShrinkToolError as e:
+                assert str(e).endswith(TAIL)
+            else:
+                raise AssertionError
+        assert not any(".複製中" in p.name for p in dest.iterdir())
         # 工具資料夾少檔
         try:
             shrinktool.install(desk, src=Path(t) / "空的")
@@ -207,11 +235,38 @@ def test_server_routes_wired():
 # ---------------------------------------------------------------------------
 
 def test_cmd_file_ascii_crlf_and_calls_ps1():
+    import base64
     raw = (shrinktool.WIN_DIR / "縮小虛擬硬碟.cmd").read_bytes()
     raw.decode("ascii")                                   # 全部 ASCII：cmd 用哪種編碼讀都不會壞
     assert b"\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
     text = raw.decode()
     assert "-ExecutionPolicy Bypass" in text and '"%~dpn0.ps1"' in text and "chcp 65001" in text
+    assert 'if not "%errorlevel%"=="0" pause' in text      # 審查 #8：結束碼是負數時也停住
+    # 找不到 .ps1：先說原因（中文用 -EncodedCommand 帶）再停住
+    assert 'if not exist "%~dpn0.ps1" (' in text and text.index("if not exist") < text.index("-File")
+    enc = re.search(r"-EncodedCommand (\S+)", text).group(1)
+    msg = base64.b64decode(enc).decode("utf-16-le")
+    assert "找不到「縮小虛擬硬碟.ps1」" in msg and msg.rstrip("' -ForegroundColor Yellow").endswith(TAIL)
+    block = text[text.index("if not exist"):text.index('powershell.exe -NoProfile -ExecutionPolicy')]
+    assert "pause" in block and "exit /b 1" in block
+
+
+def test_ps1_has_tool_shell_snippet():
+    """審查 #2：Has-Tool 的 sh 片段在 Mac 上用假的 /home、/root 實際跑：只有一般帳號有、只有 root 有、都沒有。"""
+    s = (shrinktool.WIN_DIR / "縮小虛擬硬碟.ps1").read_bytes()[3:].decode("utf-8")
+    sh = re.search(r"^\$HasToolSh = '(.*)'\r$", s, re.M).group(1)
+    assert '"' not in sh                                  # PowerShell 5.1 傳給外部程式會弄丟雙引號
+    assert "-u root -e sh -c $HasToolSh" in s             # -e：不經過預設 shell（不然 $d 會先被展開）
+    with tempfile.TemporaryDirectory() as t:
+        t = Path(t)
+        run = lambda: subprocess.run(["sh", "-c", sh.replace("/home/", f"{t}/home/").replace("/root/", f"{t}/root/")]).returncode
+        (t / "home" / "teacher").mkdir(parents=True)
+        assert run() == 1
+        (t / "home" / "teacher" / ".cache" / "bookclub").mkdir(parents=True)
+        assert run() == 0                                  # 以前：/root 那個不存在就回失敗
+        shutil.rmtree(t / "home")
+        (t / "root" / ".cache" / "bookclub").mkdir(parents=True)
+        assert run() == 0
 
 
 def test_ps1_bom_crlf_and_steps():
@@ -220,9 +275,9 @@ def test_ps1_bom_crlf_and_steps():
     assert b"\n" not in raw.replace(b"\r\n", b"")
     s = raw[3:].decode("utf-8")
     assert "網頁" not in s and "set-sparse true" not in s.lower()
-    assert TAIL in s and "請截圖給開發者" in s
+    assert "請截圖給開發者" not in s and "請截圖這個視窗。$Tail" in s        # 錯誤句尾統一（專案規則）
     assert "請關掉這個視窗，在檔案上按右鍵選「以系統管理員身分執行」。" in s
-    assert "第 4 步正在跑，等它跑完再縮小。" in s and "localhost:8766/api/run/status" in s and "第4步執行中" in s
+    assert "第 4 步正在跑，等它跑完再縮小。" in s and "127.0.0.1:8766/api/run/status" in s and "第4步執行中" in s
     assert "工具已經關掉了，要用的話請重新開（照平常的方式）。" in s
     assert "GetCompressedFileSizeW" in s and "SparseFile" in s and "--set-sparse false" in s
     assert r"Software\Microsoft\Windows\CurrentVersion\Lxss" in s and "LocalState" in s
@@ -236,6 +291,17 @@ def test_ps1_bom_crlf_and_steps():
     assert m and re.findall(r"'([a-z ]+)'", m.group(1)) == ["attach vdisk readonly", "compact vdisk", "detach vdisk"], m
     assert "'detach vdisk noerr'" in s                    # 失敗時也一定卸下
     assert "$ErrorActionPreference = 'Continue'" in s
+    # 審查 #1：只有連線被拒才算沒開；逾時 10 秒；不確定時問人；不會先說「沒有在跑」再說「正在跑」
+    assert "-TimeoutSec 10" in s and "WebExceptionStatus]::ConnectFailure" in s
+    assert "第 4 步現在有沒有在跑？有在跑請直接關掉這個視窗。" in s
+    i_busy = s.index("if ($toolState -eq 'busy') { Stop-Here")
+    assert s.index("工具開著，沒有在跑第 4 步") > i_busy
+    enter = s[s.index("接下來會關掉 Ubuntu"):s.index("按 Enter 開始")]
+    assert "第 4 步正在跑的話，請直接關掉這個視窗" in enter
+    # 審查 #5、#6：VhdFileName、沒有名稱時顯示資料夾、名稱都沒有 Ubuntu 時一律請人選
+    assert "VhdFileName" in s and 'Label = "資料夾 $folder"' in s and "$mustAsk = $true" in s
+    for line in s.splitlines():                           # 錯誤句尾都用 $Tail（「請將錯誤訊息通知開發者。」）
+        assert "開發者" not in line or "$Tail" in line or line.startswith("$Tail =") or line.lstrip().startswith("#"), line
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +343,8 @@ def test_js_wiring():
     menu = app[i:i + 600]
     assert 'action: "shrinkDesktop"' in menu and "wslOnly: true" in menu and "把『縮小虛擬硬碟』放到桌面" in menu
     assert "filter((m) => !m.wslOnly || wsl)" in app
+    assert 'title: "還不能放到桌面"' in app and 'e.data["意外"]) await uiErrorAlert' in app   # 被占用：一般提醒；意外：錯誤視窗
+    assert "cleanedAlertOpts(title, message, await shrinkStatus())" in app            # 審查 #13：沿用載入時查到的
     assert ho.count('cleanedAlert("清掉了"') == 2                  # 第 3 步交接後清掉、總覽清掉這集
     assert 'uiAlert({ title: "清掉了"' not in ho
     # 第 5 步清完：Mac、Windows 都跳成功視窗（宇軒 10-25），提醒段落只有 WSL 才加（cleanedAlertOpts 管）

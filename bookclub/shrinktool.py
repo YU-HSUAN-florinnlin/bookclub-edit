@@ -9,8 +9,8 @@ Ubuntu（WSL2）整個裝在 C 槽的 `ext4.vhdx`，在 Ubuntu 裡刪檔不會�
 
 from __future__ import annotations
 
+import errno
 import shutil
-import subprocess
 from pathlib import Path
 
 from bookclub import fileio
@@ -32,46 +32,23 @@ DESKTOP_PS = "\n".join([
 
 
 class ShrinkToolError(RuntimeError):
-    """放到桌面失敗（訊息給人看）。"""
+    """放到桌面失敗（意外；訊息給人看，句尾「請將錯誤訊息通知開發者。」）。"""
+
+
+class ShrinkToolBusy(ValueError):
+    """桌面上的舊檔被占用（「縮小虛擬硬碟」的視窗還開著）：使用者關掉再按一次就好，不算意外。"""
+
+
+BUSY_MSG = "桌面上的「縮小虛擬硬碟」正在使用中。先關掉縮小虛擬硬碟的視窗，再按一次「放到桌面」。"
 
 
 def windows_desktop(run=None, which=None) -> Path:
-    """Windows 桌面在 Ubuntu 這邊的路徑。先問 PowerShell（桌面被雲端空間接管、搬過位置也找得到、中文帳號不亂碼）；
-    不行再用 `cmd.exe /c echo %USERPROFILE%`＋`\\Desktop`。找不到就丟 ShrinkToolError。"""
-    which = which or shutil.which
-    run = run or subprocess.run
-    kw = {"cwd": "/mnt/c"} if Path("/mnt/c").is_dir() else {}
-    win = None
-    ps = fileio._find_exe("powershell.exe", fileio.PS_CANDIDATES, which)
-    if ps:
-        try:
-            r = run([ps, "-NoProfile", "-NonInteractive", "-EncodedCommand", fileio.encode_ps(DESKTOP_PS)],
-                    capture_output=True, stdin=subprocess.DEVNULL, timeout=fileio.QUICK_TIMEOUT_S, **kw)
-            out = fileio._decode(r.stdout).replace("﻿", "").strip().splitlines()
-            if r.returncode == 0 and out and ":" in out[-1]:
-                win = out[-1].strip()
-        except (OSError, subprocess.TimeoutExpired):
-            win = None
-    if not win:
-        cmd = fileio._find_exe("cmd.exe", fileio.CMD_CANDIDATES, which)
-        if not cmd:
-            raise ShrinkToolError("找不到 Windows 的 cmd.exe（Ubuntu 呼叫 Windows 程式的功能可能被關掉了）")
-        try:
-            r = run([cmd, "/c", "echo %USERPROFILE%"], capture_output=True, stdin=subprocess.DEVNULL,
-                    timeout=fileio.QUICK_TIMEOUT_S, **kw)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise ShrinkToolError(f"問不到 Windows 的使用者資料夾：{e}") from None
-        prof = fileio._decode(r.stdout).strip().splitlines()
-        if r.returncode != 0 or not prof or "%USERPROFILE%" in prof[-1]:
-            raise ShrinkToolError("問不到 Windows 的使用者資料夾")
-        win = prof[-1].strip().rstrip("\\") + "\\Desktop"
+    """Windows 桌面在 Ubuntu 這邊的路徑（桌面被雲端空間接管、搬過位置也找得到；問不到用 %USERPROFILE%\\Desktop）。
+    找不到就丟 ShrinkToolError。"""
     try:
-        p = Path(fileio.wsl_to_linux(win, run=run))
-    except fileio.PickUnavailable as e:
+        return fileio.windows_folder(DESKTOP_PS, "Desktop", "桌面", run=run, which=which)
+    except RuntimeError as e:
         raise ShrinkToolError(str(e)) from None
-    if not p.is_dir():
-        raise ShrinkToolError(f"找不到 Windows 的桌面：{win}")
-    return p
 
 
 def installed(desktop: Path) -> bool:
@@ -87,13 +64,23 @@ def install(desktop: Path, src: Path | None = None) -> Path:
     if missing:
         raise ShrinkToolError(f"工具資料夾裡少了 {'、'.join(missing)}，請將錯誤訊息通知開發者。")
     dest = Path(desktop) / DESKTOP_FOLDER
+    tmp = None
     try:
         dest.mkdir(parents=True, exist_ok=True)
         for n in TOOL_FILES:
             tmp = dest / f".{n}.複製中"
             shutil.copyfile(src / n, tmp)
             tmp.replace(dest / n)
+            tmp = None
     except OSError as e:
+        if tmp is not None:
+            try:
+                tmp.unlink()   # 審查 #11：Windows 不藏點開頭的檔，失敗時別把暫存留在桌面資料夾
+            except OSError:
+                pass
+        if isinstance(e, PermissionError) or e.errno in (errno.EACCES, errno.EBUSY, errno.ETXTBSY, errno.EPERM):
+            # 舊的「縮小虛擬硬碟」視窗還開著（檔案被占用）：使用者自己能改正
+            raise ShrinkToolBusy(BUSY_MSG) from None
         raise ShrinkToolError(f"沒辦法放到桌面（{e.strerror or e}）。請將錯誤訊息通知開發者。") from None
     return dest
 
