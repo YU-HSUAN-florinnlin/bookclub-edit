@@ -628,6 +628,7 @@ def find_names(
     clip_dir: Path | None = None,
     use_cache: bool = True,
     annotate=None,
+    extra_terms: list[dict] | None = None,
 ) -> dict:
     """在老師的句子裡找名冊上的名字與敏感詞。回傳 dict：
         candidates: 每筆 {start, end, sentence, name, canonical, code, position,
@@ -697,6 +698,8 @@ def find_names(
 
     t0 = time.time()
     terms = _load_terms(roster_path, sensitive_path)
+    # 1024-2 #276：名冊上沒有、這一集 ② 選成學員本名的名字（`personnames.episode_names`）也比對，不寫進名冊
+    terms += [{**t, "_sensitive": False} for t in extra_terms or []]
 
     if exclusion_path is None:
         exclusion_path = roster_path.parent / "名字排除清單.csv"
@@ -820,7 +823,13 @@ def scan_candidates(workdir: str | Path, sentence_ids: list[str]) -> dict | None
     workdir = Path(workdir)
     cur = read_json(names_path(workdir), default=None)
     roster = data_dir() / "名冊.csv"
-    if cur is None or not roster.is_file() or not audio_path(workdir).is_file():
+    if cur is None or not audio_path(workdir).is_file():
+        return None
+    from bookclub import personnames
+
+    # 1024-2 #276：② 選的本名不在名冊上，老師點名也要找得到（審查建議 3：本機沒有名冊、但有這種名字也照樣掃）
+    extra = personnames.episode_names(workdir, on_roster={r["寫法"] for r in load_roster(roster)})
+    if not roster.is_file() and not extra:
         return None
     ids = set(sentence_ids)
     sents = (read_json(speakers_path(workdir), default={}) or {}).get("sentences", [])
@@ -829,7 +838,8 @@ def scan_candidates(workdir: str | Path, sentence_ids: list[str]) -> dict | None
     sensitive = data_dir() / "敏感詞.csv"
     with tempfile.TemporaryDirectory() as tmp:
         res = find_names(audio_path(workdir), workdir, sents, words, roster, sensitive if sensitive.is_file() else None,
-                         select=lambda s: s.get("id") in ids, cache_path=Path(tmp) / "補找.json", use_cache=False)
+                         select=lambda s: s.get("id") in ids, cache_path=Path(tmp) / "補找.json", use_cache=False,
+                         extra_terms=extra)
     return {"candidates": res["candidates"], "指紋": fp, "句子": sorted(ids)}
 
 

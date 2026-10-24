@@ -983,6 +983,111 @@ def test_step4_autocode_hint_matches_button():
     assert "或按第 4 步的「幫還沒代號的自動配」" in ex and "選，或按「幫還沒代號的自動配」" not in ex
 
 
+
+def test_step2_name_not_on_roster_rescans_teacher_mentions():
+    """1024-2 #276：② 把學員 N 選成名冊上沒有的名字（人名清單抓到的）→ 自動配代號只記這一集、名冊不動（10-07），
+    但要在背景補找老師點名這個名字的地方，加進名字候選、用這一集的代號；選名冊上的人不用補找。"""
+    from bookclub import turns as turns_mod
+
+    w = _make()
+    roster_before = (_DATA / "名冊.csv").read_text(encoding="utf-8")
+    n0 = len(wd.read_json(wd.names_path(w))["candidates"])
+    res = turns_mod.set_real_name(w, "學員1", "阿強")
+    assert res["補找中"] and res["代號"], res
+    st = personnames.wait_rescan(w, 120)
+    assert not st["補找中"] and not st["錯誤"], st
+    cands = wd.read_json(wd.names_path(w))["candidates"]
+    hit = [c for c in cands[n0:] if c["canonical"] == "阿強"]
+    assert len(hit) == 1 and hit[0]["代號"] == res["代號"], cands[n0:]
+    assert (_DATA / "名冊.csv").read_text(encoding="utf-8") == roster_before   # 名冊不動
+    assert [x["寫法"] for x in personnames.episode_names(w)] == ["阿強"]
+    res2 = turns_mod.set_real_name(w, "學員1", "阿強")   # 同一個人再選一次：不用再補找
+    assert not res2["補找中"], res2
+
+
+def test_step2_name_not_on_roster_student_script_replaced():
+    """1024-2 審查必修 1：② 選的名冊外名字，學員重念稿的替換表也要換成這一集的代號；工作區有交接帶來的設定快照
+    （第 4 步改讀快照，#259、#272）時一樣。名冊照舊不動。"""
+    from bookclub import handoff, review
+    from bookclub import turns as turns_mod
+
+    w = _make()
+    code = turns_mod.set_real_name(w, "學員1", "阿強")["代號"]
+    personnames.wait_rescan(w, 120)
+    assert code
+    out, _ = review.replace_real_names("我覺得阿強說得很好", review.replace_table(w))
+    assert "阿強" not in out and code in out, out
+    snap = handoff.snapshot_dir(w)   # 交接包帶來的設定快照：只有別人
+    snap.mkdir(parents=True, exist_ok=True)
+    (snap / "名冊.csv").write_text("中文名,其他寫法,性別\n阿明,,男\n", encoding="utf-8")
+    try:
+        out, _ = review.replace_real_names("我覺得阿強說得很好", review.replace_table(w))
+        assert "阿強" not in out and code in out, out
+    finally:
+        shutil.rmtree(snap)
+    assert "阿強" not in (_DATA / "名冊.csv").read_text(encoding="utf-8")
+
+
+
+def test_step2_name_after_three_decision_student_script():
+    """1024-2 二審必修 A：名冊外的名字 ③ 先選「不用處理」、② 再把學員選成他 → 這一集有英文名，學員重念稿照換（#250 選 B，
+    跟名冊上的人同一套）；③ 先選「不是名字」再 ② 選他 → 兩邊都不換（老師那邊進排除清單、不會有卡）。"""
+    from bookclub import review
+    from bookclub import turns as turns_mod
+
+    w = _make()
+    personnames.decide(w, "阿強", "不用處理")
+    code = turns_mod.set_real_name(w, "學員1", "阿強")["代號"]
+    personnames.wait_rescan(w, 120)
+    assert code
+    out, _ = review.replace_real_names("我覺得阿強說得很好", review.replace_table(w))
+    assert "阿強" not in out and code in out, out
+    (_DATA / "名字排除清單.csv").unlink(missing_ok=True)
+    w2 = _make()
+    personnames.decide(w2, "阿強", "不是名字")
+    turns_mod.set_real_name(w2, "學員1", "阿強")
+    personnames.wait_rescan(w2, 120)
+    out, _ = review.replace_real_names("我覺得阿強說得很好", review.replace_table(w2))
+    assert out == "我覺得阿強說得很好", out
+    (_DATA / "名字排除清單.csv").unlink(missing_ok=True)
+
+def test_roster_added_after_step1_still_rescans():
+    """1024-2 審查必修 2：名冊上有這個名字、但是第 1 步之後才加進名冊（例如別支影片在 ③ 加的）：② 選他、右欄手動選代號，
+    都要補找老師點名這個名字的地方（第 1 步沒掃過）。"""
+    from bookclub import turns as turns_mod
+
+    (_DATA / "名字排除清單.csv").unlink(missing_ok=True)   # 前面的測試把阿德選過「不是名字」
+    w = _make()
+    n0 = len(wd.read_json(wd.names_path(w))["candidates"])
+    assert personnames.add_to_roster("阿德", [])
+    res = turns_mod.set_real_name(w, "學員1", "阿德")
+    assert res["補找中"], res
+    st = personnames.wait_rescan(w, 120)
+    assert not st["補找中"] and not st["錯誤"], st
+    hit = [c for c in wd.read_json(wd.names_path(w))["candidates"][n0:] if c["canonical"] == "阿德"]
+    assert len(hit) == 1, hit
+    w2 = _make()   # 右欄手動選代號：名冊上已經有（後來才加的）也補找
+    assert personnames.add_to_roster("阿德", [])   # 第 1 步之後才加進名冊
+    assert turns_mod.set_name_code(w2, "阿德", "湯姆")["補找中"]
+    personnames.wait_rescan(w2, 120)
+    assert any(c["canonical"] == "阿德" for c in wd.read_json(wd.names_path(w2))["candidates"])
+
+
+def test_scan_without_local_roster_still_finds_step2_name():
+    """1024-2 審查建議 3：本機沒有名冊.csv（例如接手的電腦），② 選的名冊外名字照樣補找。"""
+    from bookclub import turns as turns_mod
+
+    w = _make()
+    (_DATA / "名冊.csv").unlink()
+    try:
+        turns_mod.set_real_name(w, "學員1", "阿強")
+        st = personnames.wait_rescan(w, 120)
+        assert not st["錯誤"], st
+        assert any(c["canonical"] == "阿強" for c in wd.read_json(wd.names_path(w))["candidates"])
+    finally:
+        (_DATA / "名冊.csv").write_text(_ROSTER, encoding="utf-8")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
