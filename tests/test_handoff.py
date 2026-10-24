@@ -1038,6 +1038,22 @@ def test_272_codes_record_does_not_carry_whole_roster():
         z5 = _pack(w2, handoff.STAGE5)
         leaks = {n: [x for x in others if x in t] for n, t in _zip_texts(z5).items() if any(x in t for x in others)}
         assert not leaks, leaks
+
+        # 審查 B：代號表紀錄讀好之後、寫進包之前原檔被改了（例如第 3 步正在對齊代號）→ 停，不存
+        real = handoff._codes_record
+
+        def racing(wk, roster_csv, corpus=None):
+            out = real(wk, roster_csv, corpus)
+            time.sleep(0.01)
+            wd.write_json(epcodes.snapshot_path(wk), {**full, "小美": "Anna"})
+            return out
+        handoff._codes_record = racing
+        try:
+            job = handoff.PackJob(w, Path(tempfile.mkdtemp()), handoff.STAGE3)
+            job.run()
+        finally:
+            handoff._codes_record = real
+        assert job.state == "失敗" and "檔案變了" in (job.error or ""), (job.state, job.error)
     finally:
         (_DATA / "名冊.csv").write_bytes(saved)
 

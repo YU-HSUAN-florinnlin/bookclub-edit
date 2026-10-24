@@ -269,7 +269,7 @@ def _csv_bytes(header: list[str], rows: list[dict]) -> bytes:
     return ("﻿" + buf.getvalue()).encode("utf-8")   # UTF-8 加 BOM：Excel 打得開，`csvfile` 讀得懂
 
 
-def build_snapshot(workdir: str | Path) -> dict[str, bytes]:
+def build_snapshot(workdir: str | Path, corpus: str | None = None) -> dict[str, bytes]:
     """這一集的設定快照（三份 CSV 的內容）：名冊只留這一集出現的人（本名或其他寫法出現在這一集的文字裡）、
     敏感詞只留這一集碰到的、發音對照表只留這一集用得到的（原字出現在這一集的文字、代號或敏感詞的替代詞裡）。
     工作區已經有快照（匯入過）就照用那一份（不從這台的設定重算）。讀不到的設定檔當作空的。"""
@@ -279,7 +279,8 @@ def build_snapshot(workdir: str | Path) -> dict[str, bytes]:
     w = Path(workdir)
     if has_snapshot(w):
         return {n: (snapshot_dir(w) / n).read_bytes() for n in SETTING_FILES}
-    corpus = _corpus(w)
+    if corpus is None:
+        corpus = _corpus(w)
     out: dict[str, bytes] = {}
     extra: list[str] = []
     for name in SETTING_FILES:
@@ -417,7 +418,8 @@ def pack_items(workdir: str | Path, stage: str) -> list[dict]:
         raise HandoffError("第 1 步影片分析還沒做完，還不能交接打包。")
     items = [{"相對路徑": rel, "來源": fp} for rel, fp in record_files(w)]
     have = {it["相對路徑"] for it in items}
-    snap = build_snapshot(w)
+    corpus = _corpus(w)   # 審查 C：快照與代號表紀錄共用，只算一次
+    snap = build_snapshot(w, corpus)
     if not has_snapshot(w):
         for name, data in snap.items():
             rel = f"{DIR_NAME}/{SNAP_DIR}/{name}"
@@ -427,10 +429,13 @@ def pack_items(workdir: str | Path, stage: str) -> list[dict]:
     # #272：內容來自整份名冊的檔只帶這一集的人（修改時間照原檔，匯入後不會被當成比成品新）
     for it in items:
         if it["相對路徑"] in ROSTER_DERIVED and it.get("來源") is not None:
-            data = _codes_record(w, snap["名冊.csv"])
+            src: Path = it["來源"]
+            st = src.stat()
+            data = _codes_record(w, snap["名冊.csv"], corpus)
             if data is not None:
-                it["修改時間"] = it["來源"].stat().st_mtime_ns
+                it["修改時間"] = st.st_mtime_ns
                 it["內容"] = data
+                it["原檔"] = (src, (st.st_size, st.st_mtime_ns, st.st_ino))   # 審查 B：寫進包時再核對一次
                 del it["來源"]
     if stage == STAGE5:
         prods = current_products(w)
@@ -773,6 +778,15 @@ class PackJob:
         rel = it["相對路徑"]
         arc = f"{ZIP_ROOT}/{rel}"
         data = it.get("內容")
+        if it.get("原檔"):   # 審查 B：先讀好、換過內容的檔（代號表紀錄）：讀完到寫進包之間原檔變了就停，跟其他檔同一套
+            src0, before0 = it["原檔"]
+            try:
+                st0 = src0.stat()
+                now0 = (st0.st_size, st0.st_mtime_ns, st0.st_ino)
+            except OSError:
+                now0 = None
+            if now0 != before0:
+                raise HandoffError(f"存的時候工作區裡的檔案變了（{rel}），等它做完再按一次。")
         if data is not None:
             mtime_ns = it.get("修改時間") or time.time_ns()
             zi = zipfile.ZipInfo(arc, date_time=time.localtime(mtime_ns / 1e9)[:6])
