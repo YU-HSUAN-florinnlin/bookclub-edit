@@ -138,7 +138,7 @@ def tag_for(a: float, b: float) -> str:
 # ---------- 前置檢查（不載入模型） ----------
 
 def precheck(workdir: str | Path) -> dict:
-    """開始之前先看缺什麼，免得跑到一半才失敗。回傳 {可以開始, 缺[], 缺明細[{說明, 步驟}], 提醒[], 缺代號, 硬碟}。
+    """開始之前先看缺什麼，免得跑到一半才失敗。回傳 {可以開始, 缺[], 缺明細[{說明, 步驟, 子步驟?, 細節?}], 提醒[], 缺代號, 硬碟}。
 
     10-08 宇軒（流程簡化）：會擋的只剩「沒有就跑不出來」的資料（逐字稿、段落分析、老師參考音、學員替代聲音、影片）、
     第 3 步「開始前 4 件事」② 學員是誰（沒配代號的學員 AI 重念會念出本名），和硬碟空間（以前要到第一支子程式才擋）。
@@ -153,9 +153,15 @@ def precheck(workdir: str | Path) -> dict:
     # 第 4 步「開始執行」上面逐條列、附「到第 N 步」。`缺` 照舊是給命令列與錯誤訊息的原文
     detail: list[dict] = []
 
-    def lack(text: str, plain: str | None = None, step: int | None = None) -> None:
+    def lack(text: str, plain: str | None = None, step: int | None = None, sub: str | None = None,
+             more: str | None = None) -> None:
         missing.append(text)
-        detail.append({"說明": plain or text, "步驟": step})
+        item = {"說明": plain or text, "步驟": step}
+        if sub:     # 第 3 步的子步驟（prep＝開始前 4 件事），按「到第 3 步」直接打開那一頁
+            item["子步驟"] = sub
+        if more:    # 另起一行的小字（例如原片原本的位置）
+            item["細節"] = more
+        detail.append(item)
 
     if not wd.merged_transcript_path(workdir).exists():
         lack("還沒有逐字稿：第 1 步轉文字要先跑（學員的話要照逐字稿重念）",
@@ -172,19 +178,23 @@ def precheck(workdir: str | Path) -> dict:
     if lack_g:
         lack(f"找不到學員的替代聲音（{'、'.join(lack_g)}聲）：{students.voice_dir() / students.CANDIDATE_DIR}"
              f" 或 {'、'.join(str(students.default_refs()[g]) for g in lack_g)}",
-             f"找不到學員的替代聲音（{'、'.join(lack_g)}聲）：到左下角「工具設定」→「初始化設定」看「替代聲音」那一列，或重新安裝工具", 0)
+             # 1024-1 審查必修 1：初始化設定的「替代聲音」那一列只顯示狀態，重新安裝也不帶聲線；能補的是同一頁「匯入設定包」
+             f"找不到學員的替代聲音（{'、'.join(lack_g)}聲）：到初始化設定匯入含替代聲音的設定包（向開發者拿）", 0)
     from bookclub import review
 
     if not review.video_path(workdir):
+        # 1024-1 審查必修 2：這裡只看工作區記的位置，到總覽重選影片會在新位置開新專案，沒用 → 只教放回原位，不附按鈕
+        cands = wd.video_candidates(workdir)
+        where = "、".join(str(wd.localize(c, workdir) or c) for c in cands)
         lack(wd.video_missing_message(workdir),   # 10-02 第五批：寫清楚記的是哪裡、怎麼處理
-             "找不到原片影片（搬過或改過檔名）：把影片放回原本的位置，或到「總覽」重新選這支影片")
+             "找不到原片影片：放回原本的位置、用原本的檔名", more=f"原本在：{where}" if where else None)
     try:   # 10-08：② 學員是誰（每位出現的學員都選了本名或「本名未知」，選了本名的有代號）
         who = review.students_pending(workdir)
     except Exception:  # noqa: BLE001 — 讀不到段落（上面已經列「還沒有段落分析」）
         who = []
     if who:
         lack(f"第 3 步「開始前 4 件事」② 學員是誰還沒做好（{'；'.join(who)}）：每位學員都要選本名或「本名未知」、"
-             "選了本名的要有代號（不然 AI 重念會念出本名）。不是學員的段落改成老師", step=3)
+             "選了本名的要有代號（不然 AI 重念會念出本名）。不是學員的段落改成老師", step=3, sub="prep")
     disk = None
     try:   # 10-08：硬碟不夠，開始前就擋（以前要到第一支子程式才擋）
         disk = shutil.disk_usage(str(workdir)).free / GB

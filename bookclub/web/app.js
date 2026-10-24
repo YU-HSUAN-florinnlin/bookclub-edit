@@ -834,7 +834,10 @@ async function renderExecuteBody() {
           ${it.how ? `<div class="muted">按下去會：${esc(it.how)}</div>` : ""}</td></tr>`).join("")}</table></div>` : ""}`;
   bindFinalCheck(renderExecuteBody);
   // 1024-1（#274）：「到第 N 步」、最上面「還缺幾件事」
-  document.querySelectorAll("[data-gostep]").forEach((b) => b.addEventListener("click", () => { location.hash = `#step${b.dataset.gostep}`; }));
+  document.querySelectorAll("[data-gostep]").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.gosub) navSubWant = b.dataset.gosub;   // 審查建議 3：② 學員是誰 → 直接打開第 3 步「開始前 4 件事」（review.js 讀 navSubWant）
+    location.hash = `#step${b.dataset.gostep}`;
+  }));
   const blockJump = document.getElementById("execBlockJump");
   if (blockJump) blockJump.addEventListener("click", () => {
     const el = document.getElementById("execBlockNear");
@@ -950,7 +953,8 @@ function execBlockList(pre) {
   const items = (pre["缺明細"] && pre["缺明細"].length) ? pre["缺明細"] : (pre["缺"] || []).map((t) => ({ "說明": t, "步驟": null }));
   const go = (n) => (n === 0 ? "到初始化設定" : `到第 ${n} 步`);
   return `<ul class="exec-block-list">${items.map((it) => `<li><span>${esc(it["說明"])}</span>${Number.isInteger(it["步驟"])
-    ? ` <button type="button" class="secondary exec-go" data-gostep="${it["步驟"]}">${go(it["步驟"])}</button>` : ""}</li>`).join("")}</ul>`;
+    ? ` <button type="button" class="secondary exec-go" data-gostep="${it["步驟"]}"${it["子步驟"] ? ` data-gosub="${esc(it["子步驟"])}"` : ""}>${go(it["步驟"])}</button>` : ""}${it["細節"]
+    ? `<div class="muted small exec-block-more">${esc(it["細節"])}</div>` : ""}</li>`).join("")}</ul>`;
 }
 
 function execBtnState(running, prog, hasProduct) {
