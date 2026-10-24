@@ -934,7 +934,13 @@ def set_real_name(workdir: str | Path, person: str, real: str | None) -> dict:
         epcodes.release_auto(workdir, old)   # 原本那個本名自動配、人沒改過的代號收回來
     auto = epcodes.auto_for_student(workdir, real) if real else None
     code = epcodes.episode_codes(workdir).get(real) if real else None
-    return {"ok": True, "學員": person, "本名": real or None, "代號": code or p.get("代號"), "自動配代號": auto}
+    # 1024-2 #276：本名不在名冊上（人名清單抓到的）：名冊照舊不動（10-07），但背景補找老師點名這個名字的地方
+    # （`personnames.episode_names` 帶進比對），不然老師叫他名字的那幾句不會有卡、成品裡照原聲
+    rescan = bool(real) and real not in {r["寫法"] for r in names.load_roster(data_dir() / "名冊.csv")}
+    if rescan:
+        personnames.request_rescan(workdir)
+    return {"ok": True, "學員": person, "本名": real or None, "代號": code or p.get("代號"), "自動配代號": auto,
+            "補找中": rescan}
 
 
 def set_name_code(workdir: str | Path, real: str, code: str | None, *, add_roster: bool = True) -> dict:

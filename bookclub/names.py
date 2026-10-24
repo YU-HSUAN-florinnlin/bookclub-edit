@@ -628,6 +628,7 @@ def find_names(
     clip_dir: Path | None = None,
     use_cache: bool = True,
     annotate=None,
+    extra_terms: list[dict] | None = None,
 ) -> dict:
     """在老師的句子裡找名冊上的名字與敏感詞。回傳 dict：
         candidates: 每筆 {start, end, sentence, name, canonical, code, position,
@@ -697,6 +698,8 @@ def find_names(
 
     t0 = time.time()
     terms = _load_terms(roster_path, sensitive_path)
+    # 1024-2 #276：名冊上沒有、這一集 ② 選成學員本名的名字（`personnames.episode_names`）也比對，不寫進名冊
+    terms += [{**t, "_sensitive": False} for t in extra_terms or []]
 
     if exclusion_path is None:
         exclusion_path = roster_path.parent / "名字排除清單.csv"
@@ -827,9 +830,13 @@ def scan_candidates(workdir: str | Path, sentence_ids: list[str]) -> dict | None
     words = (read_json(merged_transcript_path(workdir), default={}) or {}).get("words", [])
     fp = _scan_fingerprint(cur, sents, ids)   # 掃之前記下，接上時比對
     sensitive = data_dir() / "敏感詞.csv"
+    from bookclub import personnames
+
+    extra = personnames.episode_names(workdir)   # 1024-2 #276：② 選的本名不在名冊上，老師點名也要找得到
     with tempfile.TemporaryDirectory() as tmp:
         res = find_names(audio_path(workdir), workdir, sents, words, roster, sensitive if sensitive.is_file() else None,
-                         select=lambda s: s.get("id") in ids, cache_path=Path(tmp) / "補找.json", use_cache=False)
+                         select=lambda s: s.get("id") in ids, cache_path=Path(tmp) / "補找.json", use_cache=False,
+                         extra_terms=extra)
     return {"candidates": res["candidates"], "指紋": fp, "句子": sorted(ids)}
 
 

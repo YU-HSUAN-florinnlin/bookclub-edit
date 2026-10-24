@@ -678,11 +678,27 @@ def topic_needs(w: Path, f: Filter, out: list[str], limit: int = 300) -> None:
         rng = (st.latest_version() or {}).get("範圍") or [None, None]
         stale = execcounts.stale_ids(w, rng[0], rng[1], cache=False)
         lost = sorted(f"{r}:{i}" for r, i in stale if (i, r) not in st.gen)
+        # 1024-2 #275：生成句表只在升級與第 4 步開始執行時記（`needs.record_gen_plan`）。之後第 3 步才補找到的名字、
+        # 新加的卡還沒記是正常的：照現在的計畫（跟第 4 步開始時同一套 `_gen_keys`→`_resolve`）對得到卡的另外列
+        pending: dict[str, list[str]] = {}
+        if lost:
+            ctx = needs.plan_ctx(w)
+            index, by_key = needs._index(w), st.alive_by_key()
+            keys = {f"{role}:{x.get('id')}": needs._gen_keys(role, x) for role in needs.ROLE_KEYS for x in ctx.get(role) or []}
+            for x in lost:
+                got = needs._resolve(keys.get(x) or [], index, by_key)
+                if got:
+                    pending[x] = got
+            lost = [x for x in lost if x not in pending]
         by_role = Counter(r for r, _i in stale)
+        safe = lambda x: x if re.match(r"^[\w:.\-]+$", x) else mask(x)  # noqa: E731
         out.append(f"生成程式會重新生成 {len(stale)} 句（{'、'.join(f'{r} {n}' for r, n in by_role.items()) or '沒有'}）；"
                    f"要重新生成、但對不到卡的句子：{len(lost)} 句" + ("（不是 0＝生成句表要補）" if lost else ""))
         if lost:
-            out.append("  對不到卡：" + "、".join(x if re.match(r"^[\w:.\-]+$", x) else mask(x) for x in lost[:50]))
+            out.append("  對不到卡：" + "、".join(safe(x) for x in lost[:50]))
+        if pending:
+            out.append(f"  生成句表還沒記、照現在的計畫對得到卡 {len(pending)} 句（第 3 步之後才加的卡，第 4 步按開始執行時會記上，正常）："
+                       + "、".join(f"{safe(x)}→{'+'.join(c)}" for x, c in list(pending.items())[:50]))
         rows = needs.redo_list(w, st, stale=stale)
         out.append(f"要重做的卡（第 4、5 步看的是同一份）{len(rows)} 張：{cnt(rows, '起因')}")
     except Exception as e:  # noqa: BLE001 — 算不出來不擋其他內容

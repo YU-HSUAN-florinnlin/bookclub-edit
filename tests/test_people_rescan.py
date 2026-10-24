@@ -983,6 +983,28 @@ def test_step4_autocode_hint_matches_button():
     assert "或按第 4 步的「幫還沒代號的自動配」" in ex and "選，或按「幫還沒代號的自動配」" not in ex
 
 
+
+def test_step2_name_not_on_roster_rescans_teacher_mentions():
+    """1024-2 #276：② 把學員 N 選成名冊上沒有的名字（人名清單抓到的）→ 自動配代號只記這一集、名冊不動（10-07），
+    但要在背景補找老師點名這個名字的地方，加進名字候選、用這一集的代號；選名冊上的人不用補找。"""
+    from bookclub import turns as turns_mod
+
+    w = _make()
+    roster_before = (_DATA / "名冊.csv").read_text(encoding="utf-8")
+    n0 = len(wd.read_json(wd.names_path(w))["candidates"])
+    res = turns_mod.set_real_name(w, "學員1", "阿強")
+    assert res["補找中"] and res["代號"], res
+    st = personnames.wait_rescan(w, 120)
+    assert not st["補找中"] and not st["錯誤"], st
+    cands = wd.read_json(wd.names_path(w))["candidates"]
+    hit = [c for c in cands[n0:] if c["canonical"] == "阿強"]
+    assert len(hit) == 1 and hit[0]["代號"] == res["代號"], cands[n0:]
+    assert (_DATA / "名冊.csv").read_text(encoding="utf-8") == roster_before   # 名冊不動
+    assert [x["寫法"] for x in personnames.episode_names(w)] == ["阿強"]
+    res2 = turns_mod.set_real_name(w, "學員2", "小美")   # 名冊上的人：第 1 步就掃過了
+    assert not res2["補找中"], res2
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
