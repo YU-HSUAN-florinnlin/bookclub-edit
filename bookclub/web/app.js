@@ -207,6 +207,15 @@ function pjNowHtml(lab) {
   return `<div class="pj-now"><b>現在在：${esc(lab["顯示名稱"])}</b> <span class="badge ${lab["標示"] === "測試" ? "" : "done"}">${esc(lab["標示"])}</span></div>`;
 }
 
+// 1024-4 #286：側欄頂端只留專案短名＋正式／測試標籤（影片檔名去掉副檔名），完整路徑與長度放 title（滑過才看到）
+function pjShortHtml(state) {
+  const v = (state && state.video) || {};
+  const lab = (state && state["專案標示"]) || {};
+  const short = (v.name || "").replace(/\.[^.]+$/, "") || lab["顯示名稱"] || "（還不知道影片）";
+  const tip = [v.name, v.duration_hms ? `長度 ${v.duration_hms}` : "", state && state.workdir].filter(Boolean).join("\n");
+  return `<div class="pj-short" title="${esc(tip)}"><b>${esc(short)}</b>${lab["標示"] ? ` <span class="badge ${lab["標示"] === "測試" ? "" : "done"}">${esc(lab["標示"])}</span>` : ""}</div>`;
+}
+
 // 1015-8 第 3 段（32 號設計 §5.2）：已結案的瘦身版——每一步頂端一句（給老師看）；第 1–4 步所有按鈕灰掉、第 5 步只灰掉
 // 聽／改／重做／輸出／拿檔（style.css 的 body.ws-closed、body.ws-closed-all）。伺服器那邊另外一層擋（409）。
 function wsClosed() { return !!(lastState && lastState["已結案"]); }
@@ -246,7 +255,7 @@ async function renderSidebar() {
     const v = state.video || {};
     const name = v.name || "（還不知道影片路徑）";
     const dur = v.duration_hms ? `　長度 ${v.duration_hms}` : "";
-    videoInfoEl.innerHTML = `${pjNowHtml(state["專案標示"])}${esc(name)}${esc(dur)}<br>${esc(state.workdir || "")}`;
+    videoInfoEl.innerHTML = pjShortHtml(state);
   }
 
   const active = currentRouteId();
@@ -1181,52 +1190,77 @@ async function renderProfile() {
 // 10-07 宇軒：選影片改用系統內建的選檔視窗（fileio.js），頁面上只留檔案路徑。網頁上的資料夾瀏覽（renderPicker）
 // 只在叫不起系統視窗（WSL 的 interop 關掉、沒有桌面）或按了取消時才出現。
 
+// 1024-4 #286：「繼續上次的工作」大卡用的資料（純函式）。進度只用 /api/state 真有的數字；第 2 步的完成狀態就是分析裡的「挑參考音」（跟側欄一致），
+// 第 4、5 步沒有完成狀態可查，
+// 所以第 3 步做完就導到第 4 步。回傳 {步驟, 句, 進度: null|{已, 共}}
+function ovProgress(state) {
+  const sub = (state && state.substeps) || {};
+  const order = ["轉文字", "認老師", "找重疊", "挑參考音", "找名字", "段落分析"];
+  const done = order.filter((k) => (sub[k] || {}).done).length;
+  const pr = (state && state.proofread) || {};
+  if (done < order.length) {
+    return { "步驟": 1, "句": done ? `影片分析做到一半（${done}／${order.length}）` : "還沒開始分析", "進度": done ? { "已": done, "共": order.length } : null };
+  }
+  if (!pr.done) {
+    const total = pr["學員段落數"] || 0, ok = pr["已確認"] || 0;
+    return { "步驟": 3, "句": ok && total ? `分析完成，第 3 步覆核到一半（${ok}／${total} 段）` : "分析完成，第 3 步還沒開始覆核", "進度": total ? { "已": ok, "共": total } : null };
+  }
+  return { "步驟": 4, "句": "覆核完成，接著第 4 步讓 AI 執行", "進度": null };
+}
+
+function ovContinueHtml(state, cur, keyMissing) {
+  const v = state.video || {};
+  const p = ovProgress(state);
+  const warns = [
+    ...(state["找得到claude"] === false ? ["找不到 claude 指令：段落分析、建議刪除段落、人名清單會沒跑成功。"] : []),
+    ...((state["Claude沒跑成功"] || []).length ? [`上次分析有 ${(state["Claude沒跑成功"] || []).length} 個用 Claude 的步驟沒跑成功（到第 1 步看）。`] : []),
+    ...(!v.name ? ["找不到影片檔（搬走或刪掉了？）。"] : []),
+  ];
+  const bar = p["進度"] ? `<div class="ov-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${p["進度"]["共"]}" aria-valuenow="${p["進度"]["已"]}"><i style="width:${Math.round(100 * p["進度"]["已"] / p["進度"]["共"])}%"></i></div>` : "";
+  return `<div class="card ov-continue" id="ovContinue">
+    <div class="muted">繼續上次的工作</div>
+    <div class="ov-title" title="${esc(state.workdir || "")}">${esc(v.name || "（還不知道影片）")}${state["專案標示"] ? ` <span class="badge ${state["專案標示"]["標示"] === "測試" ? "" : "done"}">${esc(state["專案標示"]["標示"])}</span>` : ""}</div>
+    <div class="muted">長度 ${esc(v.duration_hms || "—")}${cur && cur["修改時間"] ? `　·　上次做到 ${esc(cur["修改時間"])}` : ""}</div>
+    <p class="ov-line">${esc(p["句"])}</p>
+    ${bar}
+    ${warns.map((w) => `<p class="rv-warnline ov-warn">${esc(w)}</p>`).join("")}
+    <button id="ovGo" data-step="${p["步驟"]}">繼續第 ${p["步驟"]} 步 →</button>
+  </div>`;
+}
+
 async function renderOverview() {
   contentEl.innerHTML = "<p>載入中…</p>";
   const [state, projects] = await Promise.all([apiGet("/api/state"), apiGet("/api/projects")]);
   const hasProject = !state["沒有專案"];
-  let current = "";
-  if (hasProject) {
-    const sub = state.substeps || {};
-    const order = ["轉文字", "認老師", "找重疊", "挑參考音", "找名字", "段落分析"];
-    const done = order.filter((k) => (sub[k] || {}).done).length;
-    current = `
-      <h2>目前的專案</h2>
-      <div class="card">
-        <table class="kv">
-          <tr><td>影片</td><td>${esc(state.video.name || "（不知道）")}</td></tr>
-          <tr><td>影片長度</td><td>${esc(state.video.duration_hms || "—")}</td></tr>
-          <tr><td>工作區</td><td>${pjNowHtml(state["專案標示"])}${esc(state.workdir)}</td></tr>
-          <tr><td>影片分析</td><td>${done}／${order.length} 個子步驟完成${state["總耗時_s"] ? `，花了 ${esc(fmtElapsed(state["總耗時_s"]))}` : ""}（<a href="#step1">看進度</a>）</td></tr>
-        </table>
-      </div>`;
-  }
   const list = projects["專案"] || [];
-  // 10-04 #129：每一列小字印完整路徑（以前只印上一層），資料夾名稱一樣的專案分得出來
-  // 1015-8 第 3 段（§5.3）：已結案的放到最下面一個收合的「已結案（N 支）」，名稱旁徽章、底下灰字「10-16 存到 D:\…」
+  const curRow = hasProject ? list.find((p) => p["路徑"] === projects["目前"]) || list.find((p) => p["路徑"] === state.workdir) : null;
+  // 其他專案：目前這個以外的（含已結案），預設收合；路徑放 title（滑過才看到）。切換專案功能照舊
+  const others = list.filter((p) => !(hasProject && p === curRow));
   const rowHtml = (p) => {
     const c = p["已結案"];
-    return `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
-      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${c ? ` <span class="badge">已結案</span>` : ""}${p["路徑"] === projects["目前"] ? "　（目前）" : ""}${!c && typeof hoRowHtml === "function" ? hoRowHtml(p) : ""}
-        ${c ? `<div class="muted">${esc([c["日期"], c["位置顯示"] ? `存到 ${c["位置顯示"]}` : ""].filter(Boolean).join(" "))}</div>` : ""}
-        <div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）：" : ""}${esc(p["路徑"])}</div></td>
-      <td>${esc(p["長度"] || "—")}</td>
+    return `<tr title="${esc(p["路徑"])}">
+      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${c ? ` <span class="badge">已結案</span>` : ""}${!c && typeof hoRowHtml === "function" ? hoRowHtml(p) : ""}
+        ${c ? `<div class="muted">${esc([c["日期"], c["位置顯示"] ? `存到 ${c["位置顯示"]}` : ""].filter(Boolean).join(" "))}</div>` : ""}</td>
       <td>${c ? "已結案，只能看紀錄" : `${p["分析完成"] ? "分析完成" : "還沒分析完"}${p["有覆核"] ? "、覆核中" : ""}`}</td>
       <td>${esc(p["修改時間"])}</td>
-      <td>${p["路徑"] === projects["目前"] ? "" : `<button class="secondary pj-switch" data-path="${esc(p["路徑"])}">切換</button>`}</td></tr>`;
+      <td><button class="secondary pj-switch" data-path="${esc(p["路徑"])}">切換</button></td></tr>`;
   };
-  const groups = pjGroups(list);
-  const rows = groups["進行中"].map(rowHtml).join("");
-  const closedRows = groups["已結案"].map(rowHtml).join("");
+  const og = pjGroups(others);   // 進行中的在上面，已結案的收在最下面一組
+  const othersHtml = others.length ? `<details class="ov-others"><summary>${hasProject ? "其他專案" : "已有的專案"}（${others.length}）</summary>
+      <div class="card">${og["進行中"].length ? `<table class="kv pj-list"><tbody>${og["進行中"].map(rowHtml).join("")}</tbody></table>` : ""}
+        ${og["已結案"].length ? `<details class="pj-closed"><summary>已結案（${og["已結案"].length} 支）</summary><table class="kv pj-list"><tbody>${og["已結案"].map(rowHtml).join("")}</tbody></table></details>` : ""}</div></details>` : "";
   contentEl.innerHTML = `
     <h1>總覽</h1>
     ${projects["轉文字金鑰"] === false ? `<div class="hint">${esc(projects["轉文字金鑰說明"] || "這個網頁伺服器讀不到 Groq 金鑰，新影片沒辦法轉文字。關掉這個伺服器，改用雙擊「啟動.command」重開。")}（已經轉好文字的專案不受影響）</div>` : ""}
-    ${pickCardHtml()}
-    ${typeof hoOverviewCardHtml === "function" ? hoOverviewCardHtml() : ""}
-    ${current}
-    <h2>已有的專案（${list.length}）</h2>
-    <div class="card">${groups["進行中"].length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">${list.length ? "沒有進行中的專案。" : "還沒有專案。"}</p>`}
-      ${closedRows ? `<details class="pj-closed"><summary>已結案（${groups["已結案"].length} 支）</summary><table class="kv pj-list"><tbody>${closedRows}</tbody></table></details>` : ""}</div>`;
+    ${hasProject ? ovContinueHtml(state, curRow, projects["轉文字金鑰"] === false) : ""}
+    <h2>開始新的一集</h2>
+    <div class="ov-new">
+      ${pickCardHtml()}
+      ${typeof hoOverviewCardHtml === "function" ? hoOverviewCardHtml() : ""}
+    </div>
+    ${othersHtml}`;
+  const go = document.getElementById("ovGo");
+  if (go) go.addEventListener("click", () => { location.hash = `#step${go.dataset.step}`; });
   contentEl.querySelectorAll(".pj-switch").forEach((b) => b.addEventListener("click", async () => {
     const p = list.find((x) => x["路徑"] === b.dataset.path) || {};
     // 10-08：切換前說清楚要切去哪一個（名稱一樣的專案分得出來）
@@ -1286,6 +1320,9 @@ async function startPicked() {
 // 第 1 步：影片分析
 // ---------------------------------------------------------------------------
 
+// 1024-4 #287：第 1 步六個子步驟的白話名稱
+const S1_PLAIN = { "轉文字": "把說話變文字", "認老師": "找出老師在說話的地方", "找重疊": "找出兩人同時說話", "挑參考音": "挑老師聲音的候選", "找名字": "找出提到的人名", "段落分析": "分出學員分享段落" };
+
 async function renderStep1() {
   contentEl.innerHTML = "<p>載入中…</p>";
   await renderStep1Body();
@@ -1300,15 +1337,6 @@ async function renderStep1Body() {
   const order = [
     ["轉文字", "1"], ["認老師", "2"], ["找重疊", "3"], ["挑參考音", "4"], ["找名字", "5"], ["段落分析", "6"],
   ];
-  const rows = order.map(([k]) => {
-    const s = sub[k] || {};
-    return `<tr>
-      <td>${esc(k)}</td>
-      <td><span class="badge ${s.done ? "done" : ""}">${s.done ? "已完成" : "未完成"}</span></td>
-      <td>${esc(fmtElapsed(s.elapsed_s))}</td>
-    </tr>`;
-  }).join("");
-
   const running = status && status.running;
   const allDone = order.every(([k]) => (sub[k] || {}).done);   // 10-01 第三批 10：分析做完了，按鈕改「重新分析（做完的會跳過）」
   const errorMsg = status && status.error;
@@ -1325,26 +1353,62 @@ async function renderStep1Body() {
       ${otherNotes.length ? `<p>要注意：</p><ul>${otherNotes.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
     </div>` : "";
 
+  const doneN = order.filter(([k]) => (sub[k] || {}).done).length;
+  const nowK = (order.find(([k]) => !(sub[k] || {}).done) || [])[0];
+  const stage = running ? "running" : allDone ? "done" : "idle";
+  const dots = order.map(([k]) => `<span class="s1-dot${(sub[k] || {}).done ? " on" : ""}${k === nowK && running ? " now" : ""}" title="${esc(S1_PLAIN[k])}">${(sub[k] || {}).done ? "✓" : ""}</span>`).join("");
+  const stu = (state.proofread || {})["學員段落數"];
+  const detail = `<details class="s1-detail"><summary>詳細資料</summary>
+      <table class="kv"><thead><tr><th style="text-align:left">子步驟</th><th style="text-align:left">狀態</th><th style="text-align:left">耗時</th></tr></thead>
+        <tbody>${order.map(([k]) => { const s = sub[k] || {}; return `<tr><td>${esc(k)}</td><td><span class="badge ${s.done ? "done" : ""}">${s.done ? "已完成" : "未完成"}</span></td><td>${esc(fmtElapsed(s.elapsed_s))}</td></tr>`; }).join("")}</tbody></table>
+      <p class="muted">已經分析過的影片，跳過的步驟耗時都算 0 秒；第一次分析才有數字。</p>
+      <div class="log" id="runLog">${messages.map(esc).join("\n") || "（還沒有訊息）"}</div>
+    </details>`;
+  const awake = `<div id="runAwake">${awakeLine(status)}</div>`;
+  const err = errorMsg ? `<p><span class="badge error">失敗</span> ${esc(errorMsg)}</p>` : "";
+  let body;
+  if (stage === "running") {
+    body = `<div class="card s1-card">
+      <div class="s1-big">分析中　已完成 ${doneN}／${order.length} 項</div>
+      <p class="s1-now">現在在：${esc(nowK ? S1_PLAIN[nowK] : "收尾")}</p>
+      <div class="s1-dots">${dots}</div>
+      <button id="btnAnalyze" disabled>分析執行中…</button>
+      ${awake}${err}
+      <p class="muted">跑的時候可以離開這一頁，回來會看到最新進度。</p>
+    </div>${detail}`;
+  } else if (stage === "done") {
+    body = `<div class="card s1-card s1-done">
+      <div class="s1-head"><span class="s1-check" aria-hidden="true">✓</span>
+        <div><div class="s1-big">分析完成</div>
+          <div class="muted">AI 已經聽完整支影片${stu ? `，找到 ${stu} 段學員分享` : ""}。</div></div></div>
+      <a class="btn-link" id="s1Next" href="#step2">下一步：挑老師的聲音 →</a>
+      <ul class="s1-list">${order.map(([k]) => `<li><span class="s1-tick">✓</span>${esc(S1_PLAIN[k])}</li>`).join("")}</ul>
+      ${err}
+    </div>
+    <div class="s1-foot"><button id="btnAnalyze" class="linkish">重新分析</button><span class="muted">（做完的步驟會直接沿用，只補做沒做完的）</span>${awake}</div>
+    ${detail}`;
+  } else {
+    body = `<div class="card s1-card">
+      <p>AI 會先聽完整支影片：轉成文字、認出老師、找出學員段落與名字。跑的時候可以離開。</p>
+      ${doneN ? `<p class="muted">已經做完 ${doneN}／${order.length} 項，再按一次會接著做，做完的直接沿用。</p>` : ""}
+      <button id="btnAnalyze" class="s1-start">${doneN ? "繼續分析" : "開始分析"}</button>
+      ${err}${awake}
+    </div>${detail}`;
+  }
+
   contentEl.innerHTML = `
     <h1>1　影片分析</h1>
-    <div class="card">
-      <table class="kv">
-        <thead><tr><th style="text-align:left">子步驟</th><th style="text-align:left">狀態</th>
-          <th style="text-align:left">耗時</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
     ${claudeCard}
-    <div class="card">
-      <button id="btnAnalyze" ${running ? "disabled" : ""}>${running ? "分析執行中…" : allDone ? "重新分析（做完的會跳過）" : "開始分析"}</button>
-      ${!running && allDone ? `<span class="muted">每一步都做完了；再按一次只會補做沒做完的，做完的直接沿用</span>` : ""}
-      ${errorMsg ? `<p><span class="badge error">失敗</span> ${esc(errorMsg)}</p>` : ""}
-      <div id="runAwake">${awakeLine(status)}</div>
-      <div class="log" id="runLog">${messages.map(esc).join("\n") || "（還沒有訊息）"}</div>
-    </div>
+    ${body}
   `;
 
-  document.getElementById("btnAnalyze").addEventListener("click", startAnalyze);
+  const ba = document.getElementById("btnAnalyze");
+  if (ba && stage === "done") {
+    ba.addEventListener("click", async () => {
+      if (!(await uiConfirm({ title: "要重新分析嗎？", message: "做完的步驟會直接沿用，只補做沒做完的。", ok: "重新分析", cancel: "先不要" }))) return;
+      startAnalyze();
+    });
+  } else if (ba) ba.addEventListener("click", startAnalyze);
 
   if (running) startStatusPoll();
 }
@@ -1408,6 +1472,7 @@ async function renderStep2() {
   contentEl.innerHTML = "<p>載入中…</p>";
   refsCache = await apiGet("/api/refs");
   refsDrafts = {};
+  roomInfo = null;
   const list = (refsCache && refsCache.candidates) || [];
   const chosen = list.findIndex((c) => c.rank === refsCache["已選定名次"]);
   refsPointer = chosen >= 0 ? chosen : 0;
@@ -1438,36 +1503,37 @@ function renderStep2Body(play = false) {
   const chosenAt = list.findIndex((x) => x.rank === chosenRank);
   const isChosen = c.rank === chosenRank;
   const text = refsDrafts[c.rank] !== undefined ? refsDrafts[c.rank] : c.transcript;
+  const dirty = refsDrafts[c.rank] !== undefined && refsDrafts[c.rank] !== c.transcript;
+  const mismatch = isChosen && c["跟現在用的音檔一樣"] === false;
   const chips = list.map((x, k) => `<button class="ref-chip${k === refsPointer ? " on" : ""}${x.rank === chosenRank ? " chosen" : ""}" data-k="${k}"
-      title="${esc(x["原片時間"])}">${x.rank === chosenRank ? "✓ " : ""}第 ${k + 1} 個</button>`).join("");
+      title="${esc(x["原片時間"])}（鍵盤 ← → 也可以切換）">${x.rank === chosenRank ? "✓ " : ""}第 ${k + 1} 個${x.rank === chosenRank ? "（已選定）" : k === refsPointer ? "（試聽中）" : ""}</button>`).join("");
 
   contentEl.innerHTML = `
     <h1>2　挑選老師參考聲音片段</h1>
-    <div class="hint">參考音裡如果有雜音、笑聲、咳嗽，或別人的回應（例如「嗯」「對」），都不適合。可以來回切換著聽，比較哪一個最像老師；鍵盤 ← → 也可以切換。</div>
+    <div class="card s2-top" id="s2Top"></div>
     <div class="card">
-      <p><b>目前選定：${chosenAt >= 0 ? `第 ${chosenAt + 1} 個` : "還沒選"}</b></p>
+      <h2 style="margin-top:0">① 選老師的聲音</h2>
+      <p class="s2-how"><b>怎麼挑</b></p>
+      <ul class="s2-pts"><li>只有老師一個人的聲音</li><li>沒有笑聲、咳嗽、別人應聲</li><li>聽起來最像老師平常說話</li></ul>
       <div class="ref-chips">${chips}</div>
-      <p>正在聽：第 ${refsPointer + 1} 個／共 ${list.length} 個${isChosen ? `　<span class="badge done">目前選定的</span>` : ""}　｜　原片時間：${esc(c["原片時間"])}　｜　長度：${esc(c["長度秒"])} 秒</p>
       ${c["音檔網址"] ? `<audio id="refAudio" controls preload="auto" src="${esc(c["音檔網址"])}"></audio>` : `<div class="namecard missing">（音檔缺失）</div>`}
-      <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
-        <button id="btnPrev" class="secondary" ${refsPointer <= 0 ? "disabled" : ""}>◀ 聽上一個</button>
-        <button id="btnNext" class="secondary" ${refsPointer >= list.length - 1 ? "disabled" : ""}>聽下一個 ▶</button>
-      </div>
-      <p style="margin-top:12px;">逐字稿（可以直接修改；要跟聲音一字不差）：</p>
-      <textarea id="refText" rows="4">${esc(text)}</textarea>
+      <div class="muted small">原片 ${esc(c["原片時間"])}　長度 ${esc(c["長度秒"])} 秒</div>
+      ${!isChosen ? `<div class="s2-use"><button id="btnUse">改用這一個（第 ${refsPointer + 1} 個）</button></div>` : ""}
+      ${mismatch ? `<div class="s2-use"><button id="btnSwapAudio" class="secondary">換成這個候選的新音檔</button></div>` : ""}
       ${refAudioNote(c, isChosen)}
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <button id="btnUse">${isChosen ? "存逐字稿（音檔不換）" : "改用這一個"}</button>
-        ${isChosen && c["跟現在用的音檔一樣"] === false ? `<button id="btnSwapAudio" class="secondary">換成這個候選的新音檔</button>` : ""}
-      </div>
+      <details class="s2-text"${dirty || mismatch ? " open" : ""}><summary>逐字稿有錯字嗎？展開修改</summary>
+        <p class="muted">要跟聲音一字不差，可以直接修改。</p>
+        <textarea id="refText" rows="4">${esc(text)}</textarea>
+        ${isChosen ? `<div class="s2-use"><button id="btnUse">存逐字稿（音檔不換）</button></div>` : ""}
+      </details>
       <p id="refMsg"></p>
     </div>
     <div class="card" id="roomCard"><p class="muted">全片底噪載入中…</p></div>
+    <div id="s2Next"></div>
   `;
+  s2TopSync();
   renderRoomCard();
 
-  document.getElementById("btnPrev").addEventListener("click", () => refsGo(refsPointer - 1, true));
-  document.getElementById("btnNext").addEventListener("click", () => refsGo(refsPointer + 1, true));
   contentEl.querySelectorAll(".ref-chip").forEach((el) => el.addEventListener("click", () => refsGo(Number(el.dataset.k), true)));
   const audio = document.getElementById("refAudio");
   if (play && audio) audio.play().catch(() => {});   // 切換過來的直接播，方便比對
@@ -1497,6 +1563,31 @@ function renderStep2Body(play = false) {
   if (swapBtn) swapBtn.addEventListener("click", () => save(true));
 }
 
+// 1024-4 #288：頁頂「這一步要做 2 件事」小清單；兩件都好了才出現「下一步：到第 3 步 →」。
+// 底噪沒確認仍可往下（側欄隨時能點第 3 步），清單只顯示「還沒確認」
+let roomInfo = null;   // 最近一次讀到的 /api/roomtone（{已確認, 沒有, ...}）；還沒讀到是 null
+function s2Items() {
+  const picked = !!refsCache && refsCache["已選定名次"] != null && (refsCache.candidates || []).some((x) => x.rank === refsCache["已選定名次"]);
+  const roomDone = !!roomInfo && (!!roomInfo["已確認"] || !!roomInfo["沒有"] || roomInfo.start == null);
+  return { picked, roomDone, roomKnown: roomInfo !== null };
+}
+function s2TopHtml() {
+  const it = s2Items();
+  const mark = (ok, on) => ok ? `<span class="s2-ok">✓</span>` : on ? `<span class="s2-todo">還沒確認</span>` : "";
+  return `<b>這一步要做 2 件事</b>
+    <div class="s2-todos"><span class="${it.picked ? "s2-done" : ""}">① 選老師的聲音 ${it.picked ? mark(true) : `<span class="s2-todo">還沒選</span>`}</span>
+      <span class="${it.roomDone ? "s2-done" : ""}">② 確認底噪 ${it.roomKnown ? mark(it.roomDone, true) : ""}</span></div>`;
+}
+function s2TopSync() {
+  const top = document.getElementById("s2Top");
+  if (top) top.innerHTML = s2TopHtml();
+  const nx = document.getElementById("s2Next");
+  const it = s2Items();
+  if (nx) nx.innerHTML = it.picked && it.roomDone ? `<a class="btn-link" id="s2ToStep3" href="#step3">下一步：到第 3 步 →</a>` : "";
+}
+
+function hmsInt(t) { t = Math.round(t); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60; return `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}`; }
+
 // 10-02 第六批第五件：全片底噪（消音、補空白的地方附近找不到夠安靜的聲音時，墊這一段）。宇軒的說法照原話寫
 async function renderRoomCard() {
   const box = document.getElementById("roomCard");
@@ -1504,29 +1595,44 @@ async function renderRoomCard() {
   let r;
   try { r = await apiGet("/api/roomtone"); } catch (e) { box.innerHTML = `<p class="muted">全片底噪讀不到：${esc(e.message)}</p>`; return; }
   if (!document.getElementById("roomCard")) return;
+  roomInfo = r || {};
+  s2TopSync();
   const n = (r["候選"] || []).length;
   if (r["沒有"] || r.start == null) {
-    box.innerHTML = `<h2>全片底噪</h2><p class="muted">${r["沒有"] ? "還沒有整支影片的聲音（第 1 步分析跑完才挑得出來）。" : "這支影片找不到夠安靜的片段：消音的地方附近找不到安靜的聲音時，會墊全靜音。"}</p>`;
+    box.innerHTML = `<h2 style="margin-top:0">② 確認底噪</h2><p class="muted">${r["沒有"] ? "還沒有整支影片的聲音（第 1 步分析跑完才挑得出來）。" : "這支影片找不到夠安靜的片段：消音的地方附近找不到安靜的聲音時，會墊全靜音。"}</p>`;
     return;
   }
   const a = Math.max(0, r.start), b = r.end;
-  box.innerHTML = `<h2>全片底噪</h2>
-    <p>消音、補空白的地方，附近找不到夠安靜的聲音時，會墊這一段（從整支影片自動挑最安靜的地方）。</p>
-    <p class="hint"><b>播放、聆聽，如果聽到任何聲音，它就不能當作底噪。</b></p>
-    <p>原片時間：${esc(fcTime(a))}–${esc(fcTime(b))}（${(b - a).toFixed(1)} 秒）｜第 ${(r["選第幾個"] || 0) + 1} 段／共 ${n} 段　
-      ${r["已確認"] ? `<span class="badge done">已確認</span>` : `<span class="badge">還沒確認</span>`}</p>
-    <audio id="roomAudio" controls preload="none" src="/api/audio?start=${a.toFixed(2)}&end=${b.toFixed(2)}"></audio>
-    <p class="muted">很小聲是正常的（本來就該幾乎聽不到），可以把音量開大一點聽。</p>
-    <div style="display:flex; gap:10px; flex-wrap:wrap;">
-      <button id="roomOk" ${r["已確認"] ? "disabled" : ""}>這段可以</button>
-      <button id="roomNext" class="secondary" ${n < 2 ? "disabled" : ""}>換一段</button>
-    </div>
-    <p class="muted">還沒確認也可以先往下做：照樣用這一段（它本來就夠安靜），第 4 步開始前的總檢查會提醒你回來聽。</p>`;
+  const player = `<audio id="roomAudio" controls preload="none" src="/api/audio?start=${a.toFixed(2)}&end=${b.toFixed(2)}"></audio>`;
   const act = async (v) => {
     try { await apiPost("/api/roomtone", { "動作": v }); } catch (e) { uiErrorAlert({ title: "沒有成功", message: e.message }); return; }
     await renderRoomCard();
     if (v === "換一段") { const au = document.getElementById("roomAudio"); if (au) au.play().catch(() => {}); }
   };
+  if (r["已確認"]) {
+    box.innerHTML = `<div class="room-line"><span><b class="s2-ok">✓ 底噪已確認</b>（${esc(hmsInt(a))}，${Math.round(b - a)} 秒）</span>
+        <button id="roomReplay" class="secondary" aria-expanded="false">重聽</button></div>
+      <div id="roomFull" hidden>
+        <p class="muted">原片時間：${esc(fcTime(a))}–${esc(fcTime(b))}（${(b - a).toFixed(1)} 秒）｜第 ${(r["選第幾個"] || 0) + 1} 段／共 ${n} 段</p>
+        ${player}
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button id="roomOk" disabled>這段可以</button>
+          <button id="roomNext" class="secondary" ${n < 2 ? "disabled" : ""}>換一段</button>
+        </div>
+      </div>`;
+    const full = document.getElementById("roomFull"), rp = document.getElementById("roomReplay");
+    rp.addEventListener("click", () => { full.hidden = !full.hidden; rp.setAttribute("aria-expanded", String(!full.hidden)); });
+  } else {
+    box.innerHTML = `<h2 style="margin-top:0">② 確認底噪</h2>
+      <p>聽聽看這段是不是完全安靜（很小聲是正常的，可以開大音量）。</p>
+      <p class="muted">原片時間：${esc(fcTime(a))}–${esc(fcTime(b))}（${(b - a).toFixed(1)} 秒）｜第 ${(r["選第幾個"] || 0) + 1} 段／共 ${n} 段　<span class="badge">還沒確認</span></p>
+      ${player}
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button id="roomOk">這段可以</button>
+        <button id="roomNext" class="secondary" ${n < 2 ? "disabled" : ""}>換一段</button>
+      </div>
+      <p class="muted small">還沒確認也可以先往下做，第 4 步開始前會提醒你回來聽。</p>`;
+  }
   document.getElementById("roomOk").addEventListener("click", () => act("確認"));
   document.getElementById("roomNext").addEventListener("click", () => act("換一段"));
 }
@@ -1540,7 +1646,7 @@ function refAudioNote(c, isChosen) {
   // 10-01：看得出「現在用的音檔」跟「這個候選的音檔」是不是同一份（候選重切過、選定的還是舊的）
   if (!isChosen) return "";
   const same = c["跟現在用的音檔一樣"];
-  if (same === true) return `<p class="hint">現在用的音檔就是這個候選的音檔${c["取樣率"] ? `，是${esc(refRateName(c["取樣率"]))}` : ""}。</p>`;
+  // 1024-4 #288：same === true 的「就是這個候選的音檔」那句拿掉（沒事就不用說）；兩份不一樣的提醒保留
   if (same === false) {
     return `<div class="notyet-card" style="margin-top:10px;">現在用的音檔是${esc(refRateName(refsCache["現在用的音檔取樣率"]) || "舊的")}，這個候選的音檔是${esc(refRateName(c["取樣率"]) || "重切過的")}，兩個不是同一份。
       按「存逐字稿（音檔不換）」只存逐字稿；要改用這個候選的音檔，按「換成這個候選的新音檔」，換了之後老師的句子都要重新生成。</div>`;
