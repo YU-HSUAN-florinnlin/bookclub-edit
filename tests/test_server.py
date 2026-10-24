@@ -575,6 +575,35 @@ def test_run_status_reports_step4_running_read_only():
             httpd.server_close()
 
 
+def test_run_status_without_project_still_200_with_step4_flag():
+    # 1024-1（#277）：沒有專案時 /api/run/status 以前回 409、沒有「第4步執行中」，更新指令只好改問人。
+    # 現在照樣回 200，帶「沒有專案: true」「第4步執行中」，第 1 步要的 running／messages 也在
+    import threading
+    import urllib.request
+
+    httpd = srv.BookclubServer(("127.0.0.1", 0), srv.Handler, workdir=None, video=None)
+    th = threading.Thread(target=httpd.serve_forever, daemon=True)
+    th.start()
+    port = httpd.server_address[1]
+
+    def get():
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/run/status") as r:
+            assert r.status == 200
+            return json.loads(r.read())
+
+    try:
+        body = get()
+        assert body["沒有專案"] is True and body["workdir"] is None
+        assert body["第4步執行中"] is False
+        assert body["running"] is False and body["messages"] == []
+        httpd.exec_state["running"] = True   # 照實回記憶體裡的狀態，不寫死 false
+        assert get()["第4步執行中"] is True
+        httpd.exec_state["running"] = False
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

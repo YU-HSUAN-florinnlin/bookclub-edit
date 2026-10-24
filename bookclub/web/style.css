@@ -825,6 +825,21 @@ table.kv.exec td:first-child { width: 42%; white-space: normal; color: var(--fg)
 .fc-check tr.fc-new td { background: var(--warn-bg); }
 .fc-newtag { margin-top: 4px; background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border); }
 .fc-mem-warn { border-color: var(--warn); }
+/* 1024-1（#274）：第 4 步「開始執行」按不下去的原因，逐條列、附「到第 N 步」 */
+.exec-block {
+  background: var(--danger-bg);
+  border: 2px solid var(--danger);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 15px;
+}
+.exec-block > b { color: var(--danger); }
+.exec-block-list { margin: 8px 0 0; padding-left: 20px; }
+.exec-block-list li { margin: 6px 0; line-height: 1.6; }
+.exec-block-list .exec-go { margin-left: 6px; padding: 2px 10px; font-size: 14px; white-space: nowrap; }
+.exec-block-flash { outline: 3px solid var(--focus-ring); }
+#execBlockJump { margin-left: 8px; font-size: 14px; }
 .fc-paths summary { cursor: pointer; color: var(--warn); font-size: 14px; }
 .fc-paths ul { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
 .rv-gonote { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--rv-sug-bg); color: var(--rv-sug-fg); font-size: 14px; }

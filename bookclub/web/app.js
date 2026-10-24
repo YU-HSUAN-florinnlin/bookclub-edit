@@ -773,7 +773,7 @@ async function renderExecuteBody() {
   const btn = execBtnState(running, prog, !!d["有成品"]);   // 10-08：按鈕文字照狀態   // 10-05 #97：沒有退回時也能只重新組裝（伺服器算好能不能按）
   contentEl.innerHTML = `
     <h1>4　AI 執行</h1>
-    <p class="exec-now" id="execNow"><b>${esc(btn.status)}</b></p>
+    <p class="exec-now" id="execNow"><b>${esc(btn.status)}</b>${!running && pre["缺"].length ? ` <button type="button" class="secondary" id="execBlockJump">還缺 ${pre["缺"].length} 件事才能開始，看是哪些</button>` : ""}</p>
     <p class="muted">依序跑四步：老師提到名字 → 學員重念 → 保留原聲學員講到名字 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
     <div class="hint">從第 4 步直接開始（例如老師已經自己看完全片、挑好參考聲音）：<b>第 1 步轉文字還是要跑</b>（學員的話要照逐字稿重念，電腦自動）；
       <b>第 2 步的老師參考音也要選好</b>，會出現的名字要有英文名，沒有的照原聲留著（${autoBtn ? "要換的按下面「幫還沒代號的自動配」" : "要換的到第 3 步 ③ 按「幫還沒英文名的自動配」"}）。
@@ -804,8 +804,8 @@ async function renderExecuteBody() {
           ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
           <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音${SHOW_EXEC_ETA ? `，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘` : ""}。</span></p>` : ""}
       </details>
-      ${!running && pre["缺"].length ? `<div class="hint" id="execBlockNear"><b>還不能開始：</b>${esc(pre["缺"].join("；"))}</div>` : ""}
-      <button id="btnExec" ${execBlocked ? "disabled" : ""}>${esc(btn.label)}</button>${btn.note ? ` <span class="muted small" id="execDoneNote">${esc(btn.note)}</span>` : ""}
+      ${!running && pre["缺"].length ? `<div class="exec-block" id="execBlockNear" role="alert"><b>還不能開始，要先處理這 ${pre["缺"].length} 件事：</b>${execBlockList(pre)}</div>` : ""}
+      <button id="btnExec" ${execBlocked ? "disabled" : ""}${!running && !pre["可以開始"] ? ` title="要先處理上面列的事"` : ""}>${esc(btn.label)}</button>${btn.note ? ` <span class="muted small" id="execDoneNote">${esc(btn.note)}</span>` : ""}
       ${fc && !running && pre["可以開始"] ? `<span class="muted" id="execSkipNote">${esc(execSkipNote(fc))}</span>` : ""}
       ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
       <span class="muted" id="execEta">${execEtaText(d)}</span>
@@ -833,6 +833,16 @@ async function renderExecuteBody() {
         <td>${esc(it.why)}${it.range ? `<div class="muted">${esc(it.range)}</div>` : ""}
           ${it.how ? `<div class="muted">按下去會：${esc(it.how)}</div>` : ""}</td></tr>`).join("")}</table></div>` : ""}`;
   bindFinalCheck(renderExecuteBody);
+  // 1024-1（#274）：「到第 N 步」、最上面「還缺幾件事」
+  document.querySelectorAll("[data-gostep]").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.gosub) navSubWant = b.dataset.gosub;   // 審查建議 3：② 學員是誰 → 直接打開第 3 步「開始前 4 件事」（review.js 讀 navSubWant）
+    location.hash = `#step${b.dataset.gostep}`;
+  }));
+  const blockJump = document.getElementById("execBlockJump");
+  if (blockJump) blockJump.addEventListener("click", () => {
+    const el = document.getElementById("execBlockNear");
+    if (el) { el.scrollIntoView({ block: "center" }); el.classList.add("exec-block-flash"); setTimeout(() => el.classList.remove("exec-block-flash"), 1500); }
+  });
   if (execGoCheck || execBackRow) {
     const key = execBackRow;
     execGoCheck = null;
@@ -937,6 +947,16 @@ function execTimeHtml(t) {
 
 // 10-09 宇軒定：開始執行 →（中斷／停止／失敗後）繼續執行 →（跑完有成品）更新成品
 const EXEC_UPDATE_NOTE = "只補做第 3 步改過的部分，做過的不重做";
+// 1024-1（#274）：「開始執行」按不下去時，逐條列出缺什麼；有對應步驟的附「到第 N 步」（第 0 步叫「初始化設定」）。
+// 舊伺服器沒有「缺明細」時，照「缺」的原文列（沒有連結）
+function execBlockList(pre) {
+  const items = (pre["缺明細"] && pre["缺明細"].length) ? pre["缺明細"] : (pre["缺"] || []).map((t) => ({ "說明": t, "步驟": null }));
+  const go = (n) => (n === 0 ? "到初始化設定" : `到第 ${n} 步`);
+  return `<ul class="exec-block-list">${items.map((it) => `<li><span>${esc(it["說明"])}</span>${Number.isInteger(it["步驟"])
+    ? ` <button type="button" class="secondary exec-go" data-gostep="${it["步驟"]}"${it["子步驟"] ? ` data-gosub="${esc(it["子步驟"])}"` : ""}>${go(it["步驟"])}</button>` : ""}${it["細節"]
+    ? `<div class="muted small exec-block-more">${esc(it["細節"])}</div>` : ""}</li>`).join("")}</ul>`;
+}
+
 function execBtnState(running, prog, hasProduct) {
   prog = prog || {};
   const when = prog["開始時間"] ? fmtStamp(prog["開始時間"]) : "";
