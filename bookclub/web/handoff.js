@@ -125,7 +125,7 @@ async function hoAskClean(msg, saved) {
   if (!ok) return;
   try {
     const r = await apiPost("/api/handoff/clean-copy", { "清單指紋": plan["清單指紋"] }, { quiet: true });
-    await uiAlert({ title: "清掉了", message: `已清掉，空出 ${hoSize(r["省下位元組"])}。`, ok: "好" });
+    await cleanedAlert("清掉了", `已清掉，空出 ${hoSize(r["省下位元組"])}。`);   // #290：Windows 上多提醒還給 C 槽
   } catch (e) {
     if (hoUnexpected(e)) await hoErrAlert("沒有清掉", e.message, "第 3 步・清掉暫存");
     else if (msg) msg.insertAdjacentHTML("beforeend", ` <span class="badge error">沒有清</span> ${esc(e.message)}`);
@@ -368,7 +368,7 @@ function hoBindOverview(root, list) {
       else await uiAlert({ title: "還不能清掉這集", message: e.message });   // 總覽這一列沒地方放紅字：一般提醒視窗
       return;
     }
-    await uiAlert({ title: "清掉了", message: `已清掉這集，空出 ${hoSize(r["省下位元組"])}。`, ok: "好" });
+    await cleanedAlert("清掉了", `已清掉這集，空出 ${hoSize(r["省下位元組"])}。`);   // #290
     if (typeof render === "function") render();
   }));
 }

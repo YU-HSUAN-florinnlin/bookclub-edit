@@ -473,6 +473,16 @@ async function closeBoxInit(box) {
       where: cleaning ? "第 5 步・結案清空間" : "第 5 步・結案打包" });
   }
   // 剛清完（這一頁從「正在清…」變成已結案）：整頁重畫成瘦身版（頂端那一句、按鈕灰掉）
-  if (!v.running && clWasRunning && d["狀態"] === "已結案" && typeof render === "function") { clWasRunning = false; render(); return; }
+  if (!v.running && clWasRunning && d["狀態"] === "已結案" && typeof render === "function") {
+    clWasRunning = false;
+    render();
+    // #290：Windows 上清完彈出視窗，提醒到桌面「縮小虛擬硬碟」把空間還給 C 槽（Mac 照舊只重畫，不跳視窗）
+    if (typeof shrinkStatus === "function") {
+      shrinkStatus(true).then((info) => {
+        if (info && info["顯示"]) cleanedAlert("清好了", `已結案，空出 ${clGB((d["清理"] || {})["省下位元組"])}。`);
+      });
+    }
+    return;
+  }
   clWasRunning = v.running;
 }

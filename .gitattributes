@@ -1,0 +1,3 @@
+# #290：Windows 一鍵檔保持原樣（.cmd 要 CRLF、.ps1 要 UTF-8 BOM＋CRLF），git 不要轉換換行
+windows/*.cmd -text
+windows/*.ps1 -text
