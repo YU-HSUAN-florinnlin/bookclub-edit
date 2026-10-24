@@ -975,7 +975,7 @@ def test_step4_autocode_hint_matches_button():
     hint = re.search(r"會出現的名字要有英文名，沒有的照原聲留著（\$\{autoBtn \? \"(.+?)\" : \"(.+?)\"\}）", body)
     assert hint, "說明要跟著按鈕有沒有出現換"
     assert "會出現的名字都要有代號" not in body
-    assert hint.group(1) == f"要換的按下面「{btn}」"
+    assert hint.group(1) == f"要換的按上面「{btn}」"
     review = (WEB / "review.js").read_text(encoding="utf-8")   # ③ 的按鈕：幫還沒${rvWord()}的自動配，③ 裡 rvWord() 是「英文名」
     assert "幫還沒${w}的自動配" in review and 'rv.prepTab === "名字" ? "英文名" : "代號"' in review
     assert hint.group(2) == "要換的到第 3 步 ③ 按「幫還沒英文名的自動配」"

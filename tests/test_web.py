@@ -141,7 +141,7 @@ def test_no_promises_of_unbuilt_redo():
     fc = (WEB / "finalcheck.js").read_text(encoding="utf-8")
     app = (WEB / "app.js").read_text(encoding="utf-8")
     # 10-01 第三批：一鍵只重做做好了；畫面上不再叫人照指令手動重做、也不出現指令
-    assert "手動重做" not in fc and "只重做這幾張" in app   # 10-15 總檢查修正（1015-7）：「只重做退回的這幾筆」→「只重做這幾張」
+    assert "手動重做" not in fc and "只重做這幾張" not in app   # 1024-3（#285）：「只重做這幾張」那顆跟主要按鈕送同一個請求，拿掉；10-15 總檢查修正（1015-7）：「只重做退回的這幾筆」→「只重做這幾張」
     # 10-15 第5步2.0 第2段：第 5 步只有一顆「重做這幾張」（「送回 AI 重做」拿掉）
     assert "重做這幾張" in fc and "送回 AI 重做" not in fc and "/api/final/sendback" not in fc
     assert "bookclub gen" not in app and "<code>${esc(it[\"建議指令\"])}" not in app
@@ -369,9 +369,9 @@ def test_step4_whole_check_folded_by_default():
               + ' fcWholeHead({"一定要處理": [], "請看一眼": []}), fcCheckOpen()]));')
     r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
-    assert json.loads(r.stdout) == ["開始前總檢查：一定要處理 8 列、請看一眼 24 處（預設先略過）",
-                                    "開始前總檢查：一定要處理 0 列、請看一眼 0 處（都處理好了）",
-                                    "開始前總檢查：沒有要處理、要看的", False]   # 沒有 localStorage（讀不到）＝收合
+    assert json.loads(r.stdout) == ["建議先聽一下的地方（32 處，可以略過，第 5 步「需留意」還會列出）",
+                                    "建議先聽一下的地方：都處理好了",
+                                    "建議先聽一下的地方：沒有", False]   # 沒有 localStorage（讀不到）＝收合
 
 
 def test_step0_moved_to_tool_menu():
@@ -784,6 +784,61 @@ def test_step4_block_lists_each_reason_with_step_link():
     assert 'data-gostep="3" data-gosub="prep">到第 3 步</button>' in html and "硬碟&lt;滿&gt;" in html
     assert '<div class="muted small exec-block-more">原本在：~/影片/假.mp4</div>' in html
     assert html_old.count("<li>") == 1 and "舊伺服器的原文" in html_old and "data-gostep" not in html_old
+
+def test_step4_status_card_1024_3():
+    """1024-3（#285）：第 4 步狀態卡——一句現況＋唯一一顆主要按鈕；「這次會做的事」只列真的還有事的；總檢查改名；「只重做這幾張」拿掉。"""
+    import json
+    import shutil
+    import subprocess
+
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    body = re.search(r"^async function renderExecuteBody\(.*?^\}\n", app, re.S | re.M).group(0)
+    assert "btnRedo" not in app and "只重做這幾張" not in app                     # 跟主要按鈕送出同一個請求，拿掉
+    assert 'id="btnGoStep5"' in body and 'data-gostep="5"' in body              # 做完：到第 5 步
+    assert 'id="btnStop"' in body and "停下來" in body                           # 跑的時候：停下來
+    assert 'class="exec-detail"' in body and body.index('class="exec-detail"') < body.index('id="execLog"') < body.index('id="execStats"') + 4000
+    assert body.index('<tbody id="execSteps">') > body.index('class="exec-detail"')   # 完整統計、步驟表、訊息紀錄都收進「詳細資料」
+    assert "沒做第 2、3 步也能直接跑嗎？" in body and 'class="hint">從第 4 步直接開始' not in body   # 頁首長黃框改成頁尾連結
+    assert 'id="execMemWarn"' in body and "怎麼辦？" in body
+    assert "網頁" not in body
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    assert "/* 1024-3 第4步 */" in css
+    node = shutil.which("node")
+    if not node:
+        return
+    pick = lambda name: re.search(rf"^function {name}\(.*?^\}}\n", app, re.S | re.M).group(0)
+    consts = "".join(re.search(rf"^const {n} = .*?;\n", app, re.S | re.M).group(0) for n in ("EXEC_STEP_STATS", "EXEC_STEP_TITLE", "EXEC_GEN_LABEL"))
+    consts += re.search(r"^const EXEC_STEP_NAMES = .*?\]\];\n", app, re.S | re.M).group(0)
+    esc = 'const esc = (s) => String(s == null ? "" : s);\n'
+    rows = [{"類型": "老師提到名字", "做法": "x", "階段": "生成", "總數": 2, "完成": 2},
+            {"類型": "學員段落", "做法": "學員重念", "階段": "生成", "總數": 4, "完成": 2, "已生成": 3},
+            {"類型": "剪掉", "做法": "y", "階段": "組裝", "總數": 0, "完成": 0}]
+    d = {"統計": rows, "進度": {}, "現在狀態": {"組裝": {"做好了": False, "說明": "要重新組裝"}}}
+    run = {**d, "running": True, "進度": {"步驟": {"老師名字": {"狀態": "跳過"}, "學員重念": {"狀態": "進行中"}, "保留原聲學員名字": {"狀態": "還沒跑"}, "組裝": {"狀態": "還沒跑"}}}}
+    redo = [{"name": "#27"}, {"name": "#69"}]
+    script = (esc + consts + pick("execTaskItems") + pick("execPlain") + pick("execTasksHtml") + pick("execNowText")
+              + f"const d = {json.dumps(d, ensure_ascii=False)}, run = {json.dumps(run, ensure_ascii=False)}, redo = {json.dumps(redo)};"
+              + """const wait = {...run, 進度: {步驟: {老師名字: {狀態: "等待"}, 學員重念: {狀態: "等待"}, 保留原聲學員名字: {狀態: "等待"}, 組裝: {狀態: "等待"}}}};
+              const reasm = {...run, 進度: {步驟: {老師名字: {狀態: "略過"}, 學員重念: {狀態: "略過"}, 保留原聲學員名字: {狀態: "略過"}, 組裝: {狀態: "進行中"}}}};
+              const cut = {...d, 統計: [{類型: "學員段落", 做法: "x", 階段: "生成", 總數: 4, 完成: 1, 已生成: 4}], 現在狀態: {組裝: {做好了: true}}};
+              const a = execTaskItems(d, redo, true), b = execTaskItems({...d, 統計: [rows0 = d.統計[0]], 現在狀態: {組裝: {做好了: true}}}, [], true), c = execTaskItems(run, [], true);
+              console.log(JSON.stringify({ a: a.map((x) => x.title), now: execNowText("todo", d, a, redo, true), none: b, c: c.map((x) => [x.title, x.state, x.sub]),
+                run: execNowText("running", run, c, [], true), wait: execTaskItems(wait, [], true).map((x) => x.title), reasm: execTaskItems(reasm, [], true).map((x) => [x.title, x.state]),
+                cut: execTaskItems(cut, [], true).map((x) => x.title), plain: [execPlain("成品沒有通過驗證（sw），要重新組裝"), execPlain("x（sw、hw）y"), execPlain("保留（3 筆）")], done: execNowText("done", d, [], [], true), html: execTasksHtml(c, true) }));""")
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    got = json.loads(r.stdout)
+    assert got["a"] == ["第 5 步退回的 2 張：#27、#69", "學員聲音還差 1 段", "重新組裝成品"]   # 0／0、做好了的不列
+    assert got["now"] == "第 5 步退回了 2 張要重做、有 1 段學員聲音還沒做好、成品要重新組裝。" and got["none"] == []
+    assert got["c"] == [["學員重念", "doing", "3／4 句"], ["組裝成品", "todo", ""]]     # 跑的時候：跳過的不列
+    assert got["run"] == "AI 執行中：現在在「學員重念」（第 1 項／共 2 項）" and got["done"] == "成品好了。"
+    assert got["wait"] == ["學員重念", "組裝成品"]                                 # 開跑時每步先標「等待」：沒事做的前三步不列
+    assert got["reasm"] == [["組裝成品", "doing"]]                                 # 只重新組裝：前三步「略過」不列
+    assert got["cut"] == []                                                        # 中斷後快取裡已生成的不算缺
+    assert got["plain"] == ["成品沒有通過驗證，要重新組裝", "xy", "保留（3 筆）"]   # 程式代號不出現在畫面上
+    assert "上次沒跑完，按「繼續執行」接著做。" in body and 'id="execLastState"' in body
+    assert '!pre["缺"].length ? "done" : "todo"' in body and "${dev && (redo.length" in body and "!items.length ? \"\" :" in body
+    assert "進行中" in got["html"] and "等前面做完才開始" in got["html"]
 
 
 if __name__ == "__main__":

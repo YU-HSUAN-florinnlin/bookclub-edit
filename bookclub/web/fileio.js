@@ -42,8 +42,8 @@ function pkFileHtml(v) {
 function pickCardHtml() {
   return `
     <div class="card pick">
-      <h2 style="margin-top:0">選影片</h2>
-      <p class="muted">按「選影片」會跳出電腦內建的選檔視窗，選好按「開啟」，這裡只留下檔案的位置。按「開始分析」才會在影片旁邊建這支影片的工作資料夾（<code>影片檔名_剪輯工作區</code>）；同一支影片已經做到一半的，會接著做（做完的步驟自動跳過）。</p>
+      <h3 style="margin-top:0">選影片</h3>
+      <p class="muted">從電腦選一支讀書會錄影。</p>
       <div id="pkState"><p class="muted">載入中…</p></div>
       <div id="pkFallback" hidden>
         <p class="hint" id="pkFallbackWhy"></p>

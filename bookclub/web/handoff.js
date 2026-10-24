@@ -338,8 +338,8 @@ async function hoRenderImport(dlg) {
 // ---------------------------------------------------------------------------
 
 function hoOverviewCardHtml() {
-  return `<div class="card ho-card"><h2 style="margin-top:0">匯入交接包</h2>
-    <p class="muted">收到別人交接的 zip（從雲端空間下載）時按這裡；不用自己解壓縮，原片也在同一個視窗選。</p>
+  return `<div class="card ho-card"><h3 style="margin-top:0">匯入交接包</h3>
+    <p class="muted">收到別人傳來的 zip 時用這個。</p>
     <button class="secondary" id="hoImportBtn">匯入交接包…</button></div>`;
 }
 

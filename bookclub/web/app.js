@@ -207,6 +207,15 @@ function pjNowHtml(lab) {
   return `<div class="pj-now"><b>現在在：${esc(lab["顯示名稱"])}</b> <span class="badge ${lab["標示"] === "測試" ? "" : "done"}">${esc(lab["標示"])}</span></div>`;
 }
 
+// 1024-4 #286：側欄頂端只留專案短名＋正式／測試標籤（影片檔名去掉副檔名），完整路徑與長度放 title（滑過才看到）
+function pjShortHtml(state) {
+  const v = (state && state.video) || {};
+  const lab = (state && state["專案標示"]) || {};
+  const short = (v.name || "").replace(/\.[^.]+$/, "") || lab["顯示名稱"] || "（還不知道影片）";
+  const tip = [v.name, v.duration_hms ? `長度 ${v.duration_hms}` : "", state && state.workdir].filter(Boolean).join("\n");
+  return `<div class="pj-short" title="${esc(tip)}"><b>${esc(short)}</b>${lab["標示"] ? ` <span class="badge ${lab["標示"] === "測試" ? "" : "done"}">${esc(lab["標示"])}</span>` : ""}</div>`;
+}
+
 // 1015-8 第 3 段（32 號設計 §5.2）：已結案的瘦身版——每一步頂端一句（給老師看）；第 1–4 步所有按鈕灰掉、第 5 步只灰掉
 // 聽／改／重做／輸出／拿檔（style.css 的 body.ws-closed、body.ws-closed-all）。伺服器那邊另外一層擋（409）。
 function wsClosed() { return !!(lastState && lastState["已結案"]); }
@@ -244,9 +253,7 @@ async function renderSidebar() {
     videoInfoEl.textContent = "還沒選影片（到總覽選）";
   } else if (state) {
     const v = state.video || {};
-    const name = v.name || "（還不知道影片路徑）";
-    const dur = v.duration_hms ? `　長度 ${v.duration_hms}` : "";
-    videoInfoEl.innerHTML = `${pjNowHtml(state["專案標示"])}${esc(name)}${esc(dur)}<br>${esc(state.workdir || "")}`;
+    videoInfoEl.innerHTML = pjShortHtml(state);
   }
 
   const active = currentRouteId();
@@ -615,8 +622,10 @@ function fcFoldHeads(fc) {
 function fcWholeHead(fc) {
   const h = fcFoldHeads(fc);
   const n = (fc["一定要處理"] || []).length, k = (fc["請看一眼"] || []).length;
-  if (!n && !k) return "開始前總檢查：沒有要處理、要看的";
-  return `開始前總檢查：一定要處理 ${h.mustLeft} 列、請看一眼 ${h.lookLeft} 處${h.mustLeft || h.lookLeft ? "（預設先略過）" : "（都處理好了）"}`;
+  if (!n && !k) return "建議先聽一下的地方：沒有";
+  const left = h.mustLeft + h.lookLeft;   // 1024-3（#285）：改成白話名稱；數字還是「一定要處理」＋「請看一眼」還沒處理的合計
+  if (!left) return "建議先聽一下的地方：都處理好了";
+  return `建議先聽一下的地方（${left} 處，可以略過，第 5 步「需留意」還會列出）`;
 }
 const FC_CHECK_OPEN_KEY = "fc-check-open";
 function fcCheckOpen() { try { return localStorage.getItem(FC_CHECK_OPEN_KEY) === "1"; } catch (e) { return false; } }
@@ -684,7 +693,7 @@ function finalCheckHtml(fc) {
       <p class="muted">自動算處理好的（被別筆涵蓋）：${(m["自動算處理好"] || []).length} 筆
         ${(m["自動算處理好"] || []).length ? `<details><summary>展開</summary>${m["自動算處理好"].map((x) => `${esc(x["名稱"] || fcTime(x.start))} 由〈${esc(x["涵蓋"])}〉涵蓋`).join("<br>")}</details>` : ""}</p>
       <p class="muted">要生成約 ${Math.round((m["要生成秒數"] || 0) / 60)} 分鐘的聲音${SHOW_EXEC_ETA ? `，預估 ${((m["預估秒數"] || 0) / 3600).toFixed(1)} 小時（含組裝約 21 分鐘）` : ""}；硬碟可用 ${m["硬碟可用GB"]} GB。${esc(m["提醒"] || "")}</p>
-      ${mem ? `<p class="${mem["偏滿"] ? "hint fc-mem-warn" : "muted"}" id="fcMem">${mem["偏滿"] ? "<b>記憶體偏滿：</b>" : ""}${esc(mem["說明"])}。${mem["偏滿"] ? esc(mem["怎麼處理"]) : ""}</p>` : ""}
+      ${mem ? `<p class="muted" id="fcMem">${mem["偏滿"] ? "<b>記憶體偏滿：</b>" : ""}${esc(mem["說明"])}。${mem["偏滿"] ? esc(mem["怎麼處理"]) : ""}</p>` : ""}
       <audio id="fcAudio" preload="none"></audio>
     </div></details>`;
 }
@@ -771,67 +780,91 @@ async function renderExecuteBody() {
   const autoBtn = pre["缺代號"] && !running;   // 1016-3：「按下面『幫還沒代號的自動配』」只在下面真的有這顆時才這樣寫
   // 10-20 總審查：說明改說「英文名」（跟 ③ 一致），沒有英文名的照原聲留著（#246），不再寫「都要有代號」
   const btn = execBtnState(running, prog, !!d["有成品"]);   // 10-08：按鈕文字照狀態   // 10-05 #97：沒有退回時也能只重新組裝（伺服器算好能不能按）
-  contentEl.innerHTML = `
-    <h1>4　AI 執行</h1>
-    <p class="exec-now" id="execNow"><b>${esc(btn.status)}</b>${!running && pre["缺"].length ? ` <button type="button" class="secondary" id="execBlockJump">還缺 ${pre["缺"].length} 件事才能開始，看是哪些</button>` : ""}</p>
-    <p class="muted">依序跑四步：老師提到名字 → 學員重念 → 保留原聲學員講到名字 → 組裝成品。每一步都可以中斷續跑，已經做過的跳過；做完到第 5 步「成品檢查」。</p>
-    <div class="hint">從第 4 步直接開始（例如老師已經自己看完全片、挑好參考聲音）：<b>第 1 步轉文字還是要跑</b>（學員的話要照逐字稿重念，電腦自動）；
-      <b>第 2 步的老師參考音也要選好</b>，會出現的名字要有英文名，沒有的照原聲留著（${autoBtn ? "要換的按下面「幫還沒代號的自動配」" : "要換的到第 3 步 ③ 按「幫還沒英文名的自動配」"}）。
-      能省掉的是第 3 步逐筆覆核的人工：沒覆核的話，照第 1 步的建議做（名字的那一句老師重念、學員段落全部學員重念、建議剪掉的段落不剪）。
-      第 3 步「開始前 4 件事」只有 ② 學員是誰一定要做（沒配代號的學員，AI 重念會念出本名）。</div>
-    ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
-    ${autoBtn ? `<p><button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">從代號名單配（外國人名的中文寫法），之後在第 3 步 ②③ 可以改</span></p>` : ""}
-    <h2>要修改的項目</h2>
-    <div class="card" id="execStats">${execStatsHtml(d)}</div>
-    ${fc ? finalCheckHtml(fc) : ""}
-    <h2>執行步驟${running ? "" : "（現在的狀態）"}</h2>
-    <div class="card"><table class="kv exec">
-      <thead><tr><th style="text-align:left">步驟</th><th style="text-align:left">狀態</th><th style="text-align:left">說明</th></tr></thead>
-      <tbody id="execSteps">${rows}</tbody></table>
-      ${prog["開始時間"] ? `<p class="muted small">上次執行：${esc(fmtStamp(prog["開始時間"]))} 開始${prog["結束時間"] ? `，${esc(fmtStamp(prog["結束時間"]))} 結束` : ""}；範圍 ${esc(fmtRange(prog["範圍"]))}</p>` : ""}
-    </div>
-    <div id="execTimeBox">${execTimeHtml(d["執行時間"])}</div>
-    <div class="card">
-      ${dev ? `<div class="exec-opts">
-        <label>從 <input type="text" id="exStart" class="short" placeholder="0:00"></label>
-        <label>到 <input type="text" id="exEnd" class="short" placeholder="${esc(d["影片長度"] ? fmtRange([0, d["影片長度"]]).split("–")[1] : "結尾")}"></label>
-      </div>` : ""}
-      <p class="muted">輸出方式：<span id="exMethodName">${esc(execMethodName(d, (d["預設輸出做法"] || ["sw"])[0]))}</span><span id="exMethodNote">${(d["預設輸出做法"] || ["sw"])[0] === "sw" ? "（Mac、Windows 都一樣）" : ""}</span></p>
-      <details class="adv"><summary>進階設定</summary>
-        <label>輸出方式 <select id="exMethod">${(d["輸出做法選項"] || [["sw", "標準輸出"]]).map(([m, label]) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
-        <p class="muted">一般用標準輸出就好。其他方式只有這台電腦支援時才會列出來。</p>
-        ${ra && !redo.length && !running ? `<p class="exec-reasm"><button id="btnReassembleAll" class="secondary" ${execBlocked || !ra["可以"] ? "disabled" : ""}>只重新組裝（不重新生成）</button>
-          ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
-          <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音${SHOW_EXEC_ETA ? `，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘` : ""}。</span></p>` : ""}
-      </details>
-      ${!running && pre["缺"].length ? `<div class="exec-block" id="execBlockNear" role="alert"><b>還不能開始，要先處理這 ${pre["缺"].length} 件事：</b>${execBlockList(pre)}</div>` : ""}
-      <button id="btnExec" ${execBlocked ? "disabled" : ""}${!running && !pre["可以開始"] ? ` title="要先處理上面列的事"` : ""}>${esc(btn.label)}</button>${btn.note ? ` <span class="muted small" id="execDoneNote">${esc(btn.note)}</span>` : ""}
-      ${fc && !running && pre["可以開始"] ? `<span class="muted" id="execSkipNote">${esc(execSkipNote(fc))}</span>` : ""}
-      ${running ? `<button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停止"}</button>` : ""}
-      <span class="muted" id="execEta">${execEtaText(d)}</span>
-      ${!running && fc && ((fc["摘要"] || {})["記憶體"] || {})["偏滿"] ? `<p class="hint fc-mem-warn" id="execMemWarn"><b>記憶體偏滿，按下去可能跑到一半就被停下來。</b>${esc(fc["摘要"]["記憶體"]["怎麼處理"])}</p>` : ""}
-      ${!running ? `<p class="muted">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}
-      ${running ? `<p class="muted">按「停止」會等目前這一句生成完才停，做好的都留著，下次按「繼續執行」接著做；組裝中按的話，要等組裝做完才停。</p>` : ""}
-      ${!running && prog["停止"] ? `<p><span class="badge">已停止</span> ${prog["停止原因"] && !prog["停止原因"].startsWith("按了停止")
+  const items = execTaskItems(d, redo, !!d["有成品"]);   // 1024-3（#285）：「這次會做的事」一張清單
+  const hasProduct = !!d["有成品"];
+  const interrupted = !running && (prog["停止"] || prog["中斷"] || prog["錯誤"] || d.error);
+  const mode = running ? "running" : (!items.length && hasProduct && !interrupted && !pre["缺"].length ? "done" : "todo");   // 狀態卡三種長相
+  const memWarn = !running && fc && ((fc["摘要"] || {})["記憶體"] || {})["偏滿"] ? fc["摘要"]["記憶體"] : null;
+  const memHtml = memWarn ? `<div class="hint fc-mem-warn" id="execMemWarn"><b>記憶體偏滿，先關掉其他程式再按。</b> <details class="exec-memhow"><summary>怎麼辦？</summary>${esc(memWarn["怎麼處理"] || "")}
+        <br>同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</details></div>` : "";
+  const nowTxt = !running && !items.length && interrupted ? "上次沒跑完，按「繼續執行」接著做。" : execNowText(mode, d, items, redo, hasProduct);
+  const doneCard = `<div class="card exec-state exec-state-done">
+      <p class="exec-now" id="execNow"><b>${esc(nowTxt)}</b></p>
+      <p class="muted">到第 5 步檢查成品。之後改了第 3 步，再回到這裡按「更新成品」。</p>
+      <p><button type="button" id="btnGoStep5" data-gostep="5">到第 5 步檢查成品 →</button></p></div>`;
+  const runCard = `<div class="card exec-state exec-state-run">
+      <p class="exec-now" id="execNow"><b>${esc(nowTxt)}</b></p>
+      <p><button id="btnStop" class="secondary" ${d["停止中"] ? "disabled" : ""}>${d["停止中"] ? "停止中…（等目前這一句生成完）" : "停下來"}</button>
+        <span class="muted" id="execEta">${execEtaText(d)}</span></p>
+      <p class="muted small">按「停下來」會等目前這一句生成完才停，做好的都留著，下次按「繼續執行」接著做；組裝中按的話，要等組裝做完才停。</p>
+      <div id="execAwake">${awakeLine(d)}</div></div>`;
+  const todoCard = `<div class="card exec-state">
+      <p class="exec-now" id="execNow"><b>${esc(nowTxt)}</b>${pre["缺"].length ? ` <button type="button" class="secondary" id="execBlockJump">還缺 ${pre["缺"].length} 件事才能開始，看是哪些</button>` : ""}</p>
+      ${pre["缺"].length ? `<div class="exec-block" id="execBlockNear" role="alert"><b>還不能開始，要先處理這 ${pre["缺"].length} 件事：</b>${execBlockList(pre)}</div>` : ""}
+      ${memHtml}
+      <p><button id="btnExec" ${execBlocked ? "disabled" : ""}${!running && !pre["可以開始"] ? ` title="要先處理上面列的事"` : ""}>${esc(btn.label)}</button></p>
+      ${interrupted ? `<p class="muted small" id="execLastState">${esc(btn.status.replace(/^現在：/, ""))}</p>` : ""}
+      <p class="muted small" id="execDoneNote">${esc(btn.note || "已經做好的不會重做。")}${SHOW_EXEC_ETA && fc ? `　${esc(execEtaWhole(fc))}` : ""}</p>
+      ${prog["停止"] ? `<p><span class="badge">已停止</span> ${prog["停止原因"] && !prog["停止原因"].startsWith("按了停止")
         ? esc(prog["停止原因"].replace("（swap）", "")) : "上次按了停止；按「繼續執行」會接著做（做好的不重做）。"}</p>` : ""}
-      ${!running && prog["中斷"] ? `<p><span class="badge error">中斷</span> 上次跑到一半網頁伺服器被關掉了；按「繼續執行」會接著做（做好的不重做）。</p>` : ""}
+      ${prog["中斷"] ? `<p><span class="badge error">中斷</span> 上次跑到一半伺服器被關掉了；按「繼續執行」會接著做（做好的不重做）。</p>` : ""}
       ${d.error ? `<p><span class="badge error">失敗</span> ${esc(d.error)}</p>` : ""}
-      <div id="execAwake">${awakeLine(d)}</div>
-      <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
-    </div>
-    ${redo.length || d["重做中"] ? `<h2>第 5 步要重做的（${redo.length} 張）</h2>
-      <div class="card"><p class="muted">按「開始執行」或下面這顆，會只重做這幾張：要重新生成的那幾句先清掉、重新生成（其他做好的不重做），最後重新組裝。
-        要念的字和範圍都沒改的，會換一種念法重新生成，每按一次「要修改」換一次，不會回到用過的念法；上一版的聲音留著備份。
+      <div id="execAwake">${awakeLine(d)}</div></div>`;
+  const redoMore = redo.length ? `<details class="exec-redo-more"><summary>看退回的每一張</summary>
+      <p class="muted small">要重新生成的那幾句先清掉（上一版的聲音留著備份），其他做好的不重做，最後重新組裝。要念的字和範圍都沒改的，會換一種念法重新生成，每按一次「要修改」換一次，不會回到用過的念法。
         做完到第 5 步，這幾張會回到「還沒看」、標「重做過」。${d["重做中"] ? "<b>上次重做還沒做完</b>，再按一次會接著做。" : ""}</p>
-      <p><button id="btnRedo" ${execBlocked ? "disabled" : ""}>${redo.length ? `只重做這幾張（${redo.length} 張）` : "接著做上次沒做完的重做"}</button>
-        ${dev ? `<button id="btnReassemble" class="secondary" ${execBlocked ? "disabled" : ""}>只重新組裝（不重新生成）</button>` : ""}
-        ${execBlocked && !running ? `<span class="muted">要先能按「開始執行」（見上面）</span>` : ""}</p>
-      ${dev ? `<p class="muted small">「只重新組裝」：生成的聲音不動（不重新生成、不換念法），只照現在的做法重新放回去、輸出新的成品；
-        會多一個版本，舊的成品檔不動。只換了接起來的地方、聲音本身沒問題時用這顆；要重做的卡沒有真的重新生成，第 5 步照樣是「要重做」。</p>` : ""}
       <table class="kv">${redo.map((it) => `<tr><td>${esc(it.kind)}${it.name ? `　${esc(it.name)}` : ""}
         ${it.when ? `<div class="muted">${esc(it.when)}</div>` : ""}</td>
         <td>${esc(it.why)}${it.range ? `<div class="muted">${esc(it.range)}</div>` : ""}
-          ${it.how ? `<div class="muted">按下去會：${esc(it.how)}</div>` : ""}</td></tr>`).join("")}</table></div>` : ""}`;
+          ${it.how ? `<div class="muted">按下去會：${esc(it.how)}</div>` : ""}</td></tr>`).join("")}</table></details>` : "";
+  contentEl.innerHTML = `
+    <h1>4　AI 執行</h1>
+    ${mode === "running" ? runCard : mode === "done" ? doneCard : todoCard}
+    ${pre["提醒"].length ? `<p class="muted">提醒：${esc(pre["提醒"].join("；"))}</p>` : ""}
+    ${autoBtn ? `<p><button class="secondary" id="btnAutoCode">幫還沒代號的自動配</button> <span class="muted">從代號名單配（外國人名的中文寫法），之後在第 3 步 ②③ 可以改</span></p>` : ""}
+    ${mode === "done" || !items.length ? "" : `<h2>這次會做的事</h2>
+    <div class="card"><ul class="exec-tasks" id="execTasks">${execTasksHtml(items, running)}</ul>${redoMore}</div>`}
+    ${fc ? finalCheckHtml(fc) : ""}
+    <details class="exec-detail" id="execDetail" ${execOpen["詳細資料"] ? "open" : ""}><summary><b>詳細資料</b>（統計、執行時間、輸出方式、進階設定、訊息紀錄）</summary>
+      <h2>要修改的項目</h2>
+      <div class="card" id="execStats">${execStatsHtml(d)}</div>
+      <h2>執行步驟${running ? "" : "（現在的狀態）"}</h2>
+      <div class="card"><table class="kv exec">
+        <thead><tr><th style="text-align:left">步驟</th><th style="text-align:left">狀態</th><th style="text-align:left">說明</th></tr></thead>
+        <tbody id="execSteps">${rows}</tbody></table>
+        ${prog["開始時間"] ? `<p class="muted small">上次執行：${esc(fmtStamp(prog["開始時間"]))} 開始${prog["結束時間"] ? `，${esc(fmtStamp(prog["結束時間"]))} 結束` : ""}；範圍 ${esc(fmtRange(prog["範圍"]))}</p>` : ""}
+      </div>
+      <div id="execTimeBox">${execTimeHtml(d["執行時間"])}</div>
+      <h2>輸出方式與其他設定</h2>
+      <div class="card">
+        ${dev ? `<div class="exec-opts">
+          <label>從 <input type="text" id="exStart" class="short" placeholder="0:00"></label>
+          <label>到 <input type="text" id="exEnd" class="short" placeholder="${esc(d["影片長度"] ? fmtRange([0, d["影片長度"]]).split("–")[1] : "結尾")}"></label>
+        </div>` : ""}
+        <p class="muted">輸出方式：<span id="exMethodName">${esc(execMethodName(d, (d["預設輸出做法"] || ["sw"])[0]))}</span><span id="exMethodNote">${(d["預設輸出做法"] || ["sw"])[0] === "sw" ? "（Mac、Windows 都一樣）" : ""}</span></p>
+        <details class="adv"><summary>進階設定</summary>
+          <label>輸出方式 <select id="exMethod">${(d["輸出做法選項"] || [["sw", "標準輸出"]]).map(([m, label]) => `<option value="${m}" ${d["預設輸出做法"].includes(m) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
+          <p class="muted">一般用標準輸出就好。其他方式只有這台電腦支援時才會列出來。</p>
+          ${ra && !redo.length && !running ? `<p class="exec-reasm"><button id="btnReassembleAll" class="secondary" ${execBlocked || !ra["可以"] ? "disabled" : ""}>只重新組裝（不重新生成）</button>
+            ${!execBlocked && !ra["可以"] ? `<span class="muted" id="reasmWhy">${esc(ra["原因"] || "")}</span>` : ""}
+            <span class="muted small" style="display:block">聲音都生成好了，只想用現在的程式把成品重新組裝一次（例如工具更新之後）。不會重新生成聲音${SHOW_EXEC_ETA ? `，整支約 ${Math.round((ra["預估秒數"] || 0) / 60)} 分鐘` : ""}。</span></p>` : ""}
+        </details>
+        ${dev && (redo.length || d["重做中"]) ? `<div class="exec-reasm2">${dev ? `<button id="btnReassemble" class="secondary" ${execBlocked ? "disabled" : ""}>只重新組裝（不重新生成）</button>
+          <p class="muted small">生成的聲音不動（不重新生成、不換念法），只照現在的做法重新放回去、輸出新的成品；
+          會多一個版本，舊的成品檔不動。只換了接起來的地方、聲音本身沒問題時用這顆；要重做的卡沒有真的重新生成，第 5 步照樣是「要重做」。</p>` : ""}</div>` : ""}
+        ${mode === "done" ? `${memHtml}<p><button id="btnExec" ${execBlocked ? "disabled" : ""}${!running && !pre["可以開始"] ? ` title="要先處理上面列的事"` : ""}>${esc(btn.label)}</button> <span class="muted small" id="execDoneNote">${esc(btn.note || "")}</span></p>` : ""}
+        ${!running ? `<p class="muted small">跑之前先關掉瀏覽器其他分頁與用不到的程式：同時開著別的事，生成會慢三倍以上，記憶體不夠還可能中途停下來。</p>` : ""}
+      </div>
+      <h2>訊息紀錄</h2>
+      <div class="log" id="execLog">${(d.messages || []).map(esc).join("\n") || "（還沒有訊息）"}</div>
+    </details>
+    <details class="exec-direct"><summary>沒做第 2、3 步也能直接跑嗎？</summary>
+      <div class="exec-direct-body muted">可以，從第 4 步直接開始（例如老師已經自己看完全片、挑好參考聲音）：<b>第 1 步轉文字還是要跑</b>（學員的話要照逐字稿重念，電腦自動）；
+        <b>第 2 步的老師參考音也要選好</b>，會出現的名字要有英文名，沒有的照原聲留著（${autoBtn ? "要換的按上面「幫還沒代號的自動配」" : "要換的到第 3 步 ③ 按「幫還沒英文名的自動配」"}）。
+        能省掉的是第 3 步逐筆覆核的人工：沒覆核的話，照第 1 步的建議做（名字的那一句老師重念、學員段落全部學員重念、建議剪掉的段落不剪）。
+        第 3 步「開始前 4 件事」只有 ② 學員是誰一定要做（沒配代號的學員，AI 重念會念出本名）。</div></details>`;
+  const execDetail = document.getElementById("execDetail");
+  if (execDetail) execDetail.addEventListener("toggle", () => { execOpen["詳細資料"] = execDetail.open; });
   bindFinalCheck(renderExecuteBody);
   // 1024-1（#274）：「到第 N 步」、最上面「還缺幾件事」
   document.querySelectorAll("[data-gostep]").forEach((b) => b.addEventListener("click", () => {
@@ -859,14 +892,6 @@ async function renderExecuteBody() {
     const note = document.getElementById("exMethodNote");
     if (note) note.textContent = exMethod.value === "sw" ? "（Mac、Windows 都一樣）" : "（進階設定改的）";
   });
-  const redoBtn = document.getElementById("btnRedo");   // 10-01 第三批：只重做第 5 步要重做的（整支影片的範圍）
-  if (redoBtn) redoBtn.addEventListener("click", async () => {
-    if (!(await uiConfirm({ title: `只重做第 5 步要重做的 ${redo.length} 張，再重新組裝？`, ok: `重做這 ${redo.length} 張`, cancel: "先不要",
-      message: "要重新生成的那幾句會先清掉（舊的聲音檔留著備份），其他做好的不重做。" }))) return;
-    try { await apiPost("/api/execute/start", { start: null, end: null, methods: [document.getElementById("exMethod").value] }, { quiet: true }); }
-    catch (e) { uiErrorAlert({ title: "無法開始", message: e.message, where: "第 4 步・開始執行" }); return; }
-    await renderExecuteBody();
-  });
   const reBtn = document.getElementById("btnReassemble");   // 10-03 第八批 #23：只重新組裝（整支影片的範圍）
   if (reBtn) reBtn.addEventListener("click", async () => {
     // 10-15 總檢查修正（1015-7）：只重新組裝不會重新生成，等重做的卡留著（後端 build_version 只清真的重做的）——不再說「回到還沒看」
@@ -888,7 +913,8 @@ async function renderExecuteBody() {
     catch (e) { uiErrorAlert({ title: "無法開始", message: e.message, where: "第 4 步・開始執行" }); return; }
     await renderExecuteBody();
   });
-  document.getElementById("btnExec").addEventListener("click", async () => {
+  const execBtn = document.getElementById("btnExec");   // 跑的時候狀態卡沒有這顆（換成「停下來」）
+  if (execBtn) execBtn.addEventListener("click", async () => {
     const st = document.getElementById("exStart"), en = document.getElementById("exEnd");   // 開發者設定才有這兩格
     const body = { start: (st && st.value.trim()) || null, end: (en && en.value.trim()) || null,
       methods: [document.getElementById("exMethod").value] };
@@ -945,6 +971,84 @@ function execTimeHtml(t) {
   </div>`;
 }
 
+
+// ---------------------------------------------------------------------------
+// 1024-3（#285）第 4 步狀態卡：一句現況＋唯一一顆主要按鈕；「這次會做的事」一張清單（純函式）
+// ---------------------------------------------------------------------------
+const EXEC_STEP_STATS = { "老師名字": "老師提到名字", "學員重念": "學員段落", "保留原聲學員名字": "保留原聲學員提到名字" };
+const EXEC_STEP_TITLE = { "老師名字": "老師重念名字", "學員重念": "學員重念", "保留原聲學員名字": "學員名字句重念", "組裝": "組裝成品" };
+const EXEC_GEN_LABEL = { "老師提到名字": "老師的名字句", "學員段落": "學員聲音", "保留原聲學員提到名字": "學員的名字句" };
+
+// 回傳 [{title, sub, state: "todo"|"doing"|"done", kind, n}]。沒在跑：只列真的還有事要做的；在跑：照執行步驟列，做完的打勾
+function execTaskItems(d, redo, hasProduct) {
+  const items = [];
+  const rows = d["統計"] || [];
+  const prog = d["進度"] || {}, steps = prog["步驟"] || {};
+  if (d.running) {
+    EXEC_STEP_NAMES.forEach(([k]) => {
+      const st = (steps[k] || {})["狀態"] || "";
+      if (st === "跳過" || st === "略過") return;   // 只重新組裝時前三步是「略過」；開跑時每步先標「等待」
+      const mine = rows.filter((r) => r["總數"] != null && (k === "組裝" ? r["階段"] === "組裝" : (r["類型"] === EXEC_STEP_STATS[k] && r["階段"] === "生成")));
+      const total = mine.reduce((n, r) => n + r["總數"], 0);
+      const made = mine.reduce((n, r) => n + Math.max(r["已生成"] != null ? r["已生成"] : 0, r["完成"]), 0);
+      if ((!st || st === "還沒跑" || st === "等待") && k !== "組裝" && !(total > made)) return;   // 沒有事要做的步驟，不列
+      items.push({ title: EXEC_STEP_TITLE[k], state: st === "進行中" ? "doing" : st === "做完" ? "done" : "todo", kind: k,
+        sub: k !== "組裝" && total ? `${Math.min(made, total)}／${total} 句` : "" });
+    });
+    return items;
+  }
+  if (redo.length) {
+    const names = redo.map((x) => x.name).filter(Boolean);
+    items.push({ title: `第 5 步退回的 ${redo.length} 張${names.length ? `：${names.slice(0, 6).join("、")}${names.length > 6 ? "⋯" : ""}` : ""}`,
+      sub: "重新生成這幾張", state: "todo", kind: "redo", n: redo.length });
+  } else if (d["重做中"]) {
+    items.push({ title: "接著做上次沒做完的重做", sub: "", state: "todo", kind: "redo", n: 0 });
+  }
+  rows.filter((r) => r["階段"] === "生成" && r["總數"] != null).forEach((r) => {
+    // 中斷後快取裡已經生成好的不算缺：用「總數 − 已生成」（後端 execcounts 的 已生成 ＝ 快取算出來的，至少等於 完成）
+    const left = r["總數"] - Math.max(r["已生成"] != null ? r["已生成"] : 0, r["完成"]);
+    if (left > 0) items.push({ title: `${EXEC_GEN_LABEL[r["類型"]] || r["類型"]}還差 ${left} 段`, sub: r["做法"] || "", state: "todo", kind: "gen",
+      n: left, label: EXEC_GEN_LABEL[r["類型"]] || r["類型"] });
+  });
+  const now = d["現在狀態"] && d["現在狀態"]["組裝"];
+  const asmPending = now ? now["做好了"] === false : rows.some((r) => r["階段"] === "組裝" && r["總數"] != null && r["總數"] > r["完成"]);
+  if (asmPending || redo.length || d["重做中"] || !hasProduct) {
+    items.push({ title: hasProduct ? "重新組裝成品" : "組裝成品", sub: execPlain((now && now["做好了"] === false && now["說明"]) || ""), state: "todo", kind: "asm" });
+  }
+  return items;
+}
+
+// 畫面上不出現程式代號：「（sw）」「（sw、hw）」這類括號整個拿掉
+function execPlain(t) { return String(t == null ? "" : t).replace(/（[A-Za-z0-9_、, ]+）/g, ""); }
+
+function execTasksHtml(items, running) {
+  return items.map((it, i) => `<li class="exec-task ${it.state}"><span class="exec-task-ic" aria-hidden="true">${it.state === "done" ? "✓" : it.state === "doing" ? "" : i + 1}</span>
+    <div><div>${esc(it.title)}${it.state === "doing" ? ` <span class="badge running">進行中</span>` : it.state === "done" ? ` <span class="badge done">做完了</span>` : ""}</div>
+    ${it.sub ? `<div class="muted small">${esc(it.sub)}</div>` : ""}${running && it.state === "todo" ? `<div class="muted small">等前面做完才開始</div>` : ""}</div></li>`).join("");
+}
+
+// 狀態卡上那一句（粗體）
+function execNowText(mode, d, items, redo, hasProduct) {
+  if (mode === "running") {
+    const i = items.findIndex((x) => x.state === "doing");
+    return i >= 0 ? `AI 執行中：現在在「${items[i].title}」（第 ${i + 1} 項／共 ${items.length} 項）` : `AI 執行中：準備下一項（共 ${items.length} 項）`;
+  }
+  if (mode === "done") return "成品好了。";
+  const parts = [];
+  items.forEach((it) => {
+    if (it.kind === "redo") parts.push(it.n ? `第 5 步退回了 ${it.n} 張要重做` : "上次重做還沒做完");
+    else if (it.kind === "gen") parts.push(`有 ${it.n} 段${it.label}還沒做好`);
+    else if (it.kind === "asm") parts.push(hasProduct ? "成品要重新組裝" : "還沒有成品，要組裝一次");
+  });
+  return parts.length ? `${parts.join("、")}。` : "沒有要做的事。";
+}
+
+// 預估時間（SHOW_EXEC_ETA 開著、後端算得出才有）
+function execEtaWhole(fc) {
+  const m = ((fc && fc["摘要"]) || {})["預估秒數"];
+  return m ? `大約 ${Math.max(1, Math.round(m / 60))} 分鐘。` : "";
+}
+
 // 10-09 宇軒定：開始執行 →（中斷／停止／失敗後）繼續執行 →（跑完有成品）更新成品
 const EXEC_UPDATE_NOTE = "只補做第 3 步改過的部分，做過的不重做";
 // 1024-1（#274）：「開始執行」按不下去時，逐條列出缺什麼；有對應步驟的附「到第 N 步」（第 0 步叫「初始化設定」）。
@@ -964,7 +1068,7 @@ function execBtnState(running, prog, hasProduct) {
   const assembled = ((prog["步驟"] || {})["組裝"] || {})["狀態"] === "做完";
   const old = hasProduct ? "第 5 步看的是上一支完整的成品（沒有被動到）" : "第 5 步還沒有成品";
   if (running) return { label: "執行中…", note: "", status: `現在：第 4 步執行中（${when} 開始）。${hasProduct ? "做完之前，第 5 步看的還是上一支成品" : "做完才會有成品"}` };
-  if (prog["中斷"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半網頁伺服器被關掉。${old}` };
+  if (prog["中斷"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半伺服器被關掉。${old}` };
   if (prog["停止"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）跑到一半被停止。${old}` };
   if (prog["錯誤"]) return { label: "繼續執行", note: "", status: `現在：上次執行（${when} 開始）沒有跑完（失敗）。${old}` };
   if (prog["開始時間"] && prog["結束時間"] && (assembled || hasProduct))
@@ -988,13 +1092,13 @@ function execStepRows(d) {
     const last = (steps[k] || {})["狀態"];
     return `<tr><td><b>${esc(k)}</b><div class="muted">${esc(desc)}</div></td>
       <td><span class="badge ${x["做好了"] ? "done" : ""}">${esc(st)}</span>${last ? `<div class="muted small">上次執行：${esc(last)}</div>` : ""}</td>
-      <td class="muted">${esc(x["說明"] || "")}</td></tr>`;
+      <td class="muted">${esc(execPlain(x["說明"] || ""))}</td></tr>`;
   }).join("");
   const badge = (st) => ({ "做完": "done", "跳過": "done", "進行中": "running", "失敗": "error", "中斷": "error" }[st] || "");
   return EXEC_STEP_NAMES.map(([k, desc]) => {
     const st = (steps[k] || {})["狀態"] || "還沒跑";
     return `<tr><td><b>${esc(k)}</b><div class="muted">${esc(desc)}</div></td>
-      <td><span class="badge ${badge(st)}">${esc(st)}</span></td><td class="muted">${esc((steps[k] || {})["訊息"] || "")}</td></tr>`;
+      <td><span class="badge ${badge(st)}">${esc(st)}</span></td><td class="muted">${esc(execPlain((steps[k] || {})["訊息"] || ""))}</td></tr>`;
   }).join("");
 }
 
@@ -1102,6 +1206,13 @@ function startExecPoll() {
       if (st) st.innerHTML = execStatsHtml(d);
       const sp = document.getElementById("execSteps");
       if (sp) sp.innerHTML = execStepRows(d);
+      const nowEl = document.getElementById("execNow");   // 1024-3：狀態卡的進度跟著更新
+      const tasksEl = document.getElementById("execTasks");
+      if (nowEl || tasksEl) {
+        const its = execTaskItems(d, execRedoRows(d), !!d["有成品"]);
+        if (nowEl && d.running) nowEl.innerHTML = `<b>${esc(execNowText("running", d, its, [], !!d["有成品"]))}</b>`;
+        if (tasksEl) tasksEl.innerHTML = execTasksHtml(its, d.running);
+      }
       const eta = document.getElementById("execEta");
       if (eta) eta.textContent = execEtaText(d);
       const aw = document.getElementById("execAwake");
@@ -1181,52 +1292,80 @@ async function renderProfile() {
 // 10-07 宇軒：選影片改用系統內建的選檔視窗（fileio.js），頁面上只留檔案路徑。網頁上的資料夾瀏覽（renderPicker）
 // 只在叫不起系統視窗（WSL 的 interop 關掉、沒有桌面）或按了取消時才出現。
 
+// 1024-4 #286：「繼續上次的工作」大卡用的資料（純函式）。進度只用 /api/state 真有的數字；第 2 步的完成狀態就是分析裡的「挑參考音」（跟側欄一致），
+// 第 4、5 步沒有完成狀態可查，
+// 所以第 3 步做完就導到第 4 步。回傳 {步驟, 句, 進度: null|{已, 共}}
+function ovProgress(state) {
+  const sub = (state && state.substeps) || {};
+  const order = ["轉文字", "認老師", "找重疊", "挑參考音", "找名字", "段落分析"];
+  const done = order.filter((k) => (sub[k] || {}).done).length;
+  const pr = (state && state.proofread) || {};
+  if (done < order.length) {
+    return { "步驟": 1, "句": done ? `影片分析做到一半（${done}／${order.length}）` : "還沒開始分析", "進度": done ? { "已": done, "共": order.length } : null };
+  }
+  if (!pr.done) {
+    const total = pr["學員段落數"] || 0, ok = pr["已確認"] || 0;
+    return { "步驟": 3, "句": ok && total ? `分析完成，第 3 步覆核到一半（${ok}／${total} 段）` : "分析完成，第 3 步還沒開始覆核", "進度": total ? { "已": ok, "共": total } : null };
+  }
+  return { "步驟": 4, "句": "覆核完成，接著第 4 步讓 AI 執行", "進度": null };
+}
+
+function ovContinueHtml(state, cur, keyMissing) {
+  const v = state.video || {};
+  const p = ovProgress(state);
+  const closed = !!state["已結案"];
+  const closedLine = closed ? wsClosedBarHtml(state).replace(/<[^>]*>/g, "").replace(/&amp;/g, "&") : "";
+  const warns = [
+    ...(state["找得到claude"] === false ? ["找不到 claude 指令：段落分析、建議刪除段落、人名清單會沒跑成功。"] : []),
+    ...((state["Claude沒跑成功"] || []).length ? [`上次分析有 ${(state["Claude沒跑成功"] || []).length} 個用 Claude 的步驟沒跑成功（到第 1 步看）。`] : []),
+    ...(!v.name ? ["這個專案還沒有影片檔（匯入交接包時要一起選原片）。"] : []),
+  ];
+  const bar = p["進度"] ? `<div class="ov-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${p["進度"]["共"]}" aria-valuenow="${p["進度"]["已"]}"><i style="width:${Math.round(100 * p["進度"]["已"] / p["進度"]["共"])}%"></i></div>` : "";
+  return `<div class="card ov-continue" id="ovContinue">
+    <div class="muted">繼續上次的工作</div>
+    <div class="ov-title" title="${esc(state.workdir || "")}">${esc(v.name || "（還不知道影片）")}${state["專案標示"] ? ` <span class="badge ${state["專案標示"]["標示"] === "測試" ? "" : "done"}">${esc(state["專案標示"]["標示"])}</span>` : ""}</div>
+    <div class="muted">長度 ${esc(v.duration_hms || "—")}${cur && cur["修改時間"] ? `　·　上次做到 ${esc(cur["修改時間"])}` : ""}</div>
+    <p class="ov-line">${esc(p["句"])}</p>
+    ${bar}
+    ${warns.map((w) => `<p class="rv-warnline ov-warn">${esc(w)}</p>`).join("")}
+    ${closed ? `<p class="muted" id="ovClosed">${esc(closedLine)}</p>` : `<button id="ovGo" data-step="${p["步驟"]}">繼續第 ${p["步驟"]} 步 →</button>`}
+    ${!closed && cur && typeof hoRowHtml === "function" ? `<div class="ov-ho">${hoRowHtml(cur)}</div>` : ""}
+  </div>`;
+}
+
 async function renderOverview() {
   contentEl.innerHTML = "<p>載入中…</p>";
   const [state, projects] = await Promise.all([apiGet("/api/state"), apiGet("/api/projects")]);
   const hasProject = !state["沒有專案"];
-  let current = "";
-  if (hasProject) {
-    const sub = state.substeps || {};
-    const order = ["轉文字", "認老師", "找重疊", "挑參考音", "找名字", "段落分析"];
-    const done = order.filter((k) => (sub[k] || {}).done).length;
-    current = `
-      <h2>目前的專案</h2>
-      <div class="card">
-        <table class="kv">
-          <tr><td>影片</td><td>${esc(state.video.name || "（不知道）")}</td></tr>
-          <tr><td>影片長度</td><td>${esc(state.video.duration_hms || "—")}</td></tr>
-          <tr><td>工作區</td><td>${pjNowHtml(state["專案標示"])}${esc(state.workdir)}</td></tr>
-          <tr><td>影片分析</td><td>${done}／${order.length} 個子步驟完成${state["總耗時_s"] ? `，花了 ${esc(fmtElapsed(state["總耗時_s"]))}` : ""}（<a href="#step1">看進度</a>）</td></tr>
-        </table>
-      </div>`;
-  }
   const list = projects["專案"] || [];
-  // 10-04 #129：每一列小字印完整路徑（以前只印上一層），資料夾名稱一樣的專案分得出來
-  // 1015-8 第 3 段（§5.3）：已結案的放到最下面一個收合的「已結案（N 支）」，名稱旁徽章、底下灰字「10-16 存到 D:\…」
+  const curRow = hasProject ? list.find((p) => p["路徑"] === projects["目前"]) || list.find((p) => p["路徑"] === state.workdir) : null;
+  // 其他專案：目前這個以外的（含已結案），預設收合；路徑放 title（滑過才看到）。切換專案功能照舊
+  const others = list.filter((p) => !(hasProject && p === curRow));
   const rowHtml = (p) => {
     const c = p["已結案"];
-    return `<tr class="${p["路徑"] === projects["目前"] ? "cur" : ""}">
-      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${c ? ` <span class="badge">已結案</span>` : ""}${p["路徑"] === projects["目前"] ? "　（目前）" : ""}${!c && typeof hoRowHtml === "function" ? hoRowHtml(p) : ""}
-        ${c ? `<div class="muted">${esc([c["日期"], c["位置顯示"] ? `存到 ${c["位置顯示"]}` : ""].filter(Boolean).join(" "))}</div>` : ""}
-        <div class="muted">${p["舊位置"] ? "舊位置（讀書會剪輯資料／工作區）：" : ""}${esc(p["路徑"])}</div></td>
-      <td>${esc(p["長度"] || "—")}</td>
+    return `<tr title="${esc(p["路徑"])}">
+      <td><b>${esc(p["顯示名稱"] || p["名稱"])}</b> <span class="badge ${p["標示"] === "測試" ? "" : "done"}">${esc(p["標示"] || "")}</span>${c ? ` <span class="badge">已結案</span>` : ""}${!c && typeof hoRowHtml === "function" ? hoRowHtml(p) : ""}
+        ${c ? `<div class="muted">${esc([c["日期"], c["位置顯示"] ? `存到 ${c["位置顯示"]}` : ""].filter(Boolean).join(" "))}</div>` : ""}</td>
       <td>${c ? "已結案，只能看紀錄" : `${p["分析完成"] ? "分析完成" : "還沒分析完"}${p["有覆核"] ? "、覆核中" : ""}`}</td>
       <td>${esc(p["修改時間"])}</td>
-      <td>${p["路徑"] === projects["目前"] ? "" : `<button class="secondary pj-switch" data-path="${esc(p["路徑"])}">切換</button>`}</td></tr>`;
+      <td><button class="secondary pj-switch" data-path="${esc(p["路徑"])}">切換</button></td></tr>`;
   };
-  const groups = pjGroups(list);
-  const rows = groups["進行中"].map(rowHtml).join("");
-  const closedRows = groups["已結案"].map(rowHtml).join("");
+  const og = pjGroups(others);   // 進行中的在上面，已結案的收在最下面一組
+  const othersHtml = others.length ? `<details class="ov-others"><summary>${hasProject ? "其他專案" : "已有的專案"}（${others.length}）</summary>
+      <div class="card">${og["進行中"].length ? `<table class="kv pj-list"><tbody>${og["進行中"].map(rowHtml).join("")}</tbody></table>` : ""}
+        ${og["已結案"].length ? `<details class="pj-closed"><summary>已結案（${og["已結案"].length} 支）</summary><table class="kv pj-list"><tbody>${og["已結案"].map(rowHtml).join("")}</tbody></table></details>` : ""}</div></details>` : "";
   contentEl.innerHTML = `
     <h1>總覽</h1>
     ${projects["轉文字金鑰"] === false ? `<div class="hint">${esc(projects["轉文字金鑰說明"] || "這個網頁伺服器讀不到 Groq 金鑰，新影片沒辦法轉文字。關掉這個伺服器，改用雙擊「啟動.command」重開。")}（已經轉好文字的專案不受影響）</div>` : ""}
-    ${pickCardHtml()}
-    ${typeof hoOverviewCardHtml === "function" ? hoOverviewCardHtml() : ""}
-    ${current}
-    <h2>已有的專案（${list.length}）</h2>
-    <div class="card">${groups["進行中"].length ? `<table class="kv pj-list"><tbody>${rows}</tbody></table>` : `<p class="muted">${list.length ? "沒有進行中的專案。" : "還沒有專案。"}</p>`}
-      ${closedRows ? `<details class="pj-closed"><summary>已結案（${groups["已結案"].length} 支）</summary><table class="kv pj-list"><tbody>${closedRows}</tbody></table></details>` : ""}</div>`;
+    ${hasProject ? ovContinueHtml(state, curRow, projects["轉文字金鑰"] === false) : ""}
+    <h2>開始新的一集</h2>
+    <div class="ov-new">
+      ${pickCardHtml()}
+      ${typeof hoOverviewCardHtml === "function" ? hoOverviewCardHtml() : ""}
+    </div>
+    ${othersHtml}`;
+  const go = document.getElementById("ovGo");
+  if (go) go.addEventListener("click", () => { location.hash = `#step${go.dataset.step}`; });
   contentEl.querySelectorAll(".pj-switch").forEach((b) => b.addEventListener("click", async () => {
     const p = list.find((x) => x["路徑"] === b.dataset.path) || {};
     // 10-08：切換前說清楚要切去哪一個（名稱一樣的專案分得出來）
@@ -1250,7 +1389,9 @@ async function renderPicker(path, projectList) {
     return;
   }
   try { localStorage.setItem("pick-dir", d["路徑"]); } catch (e) { /* 同上 */ }
-  const rel = d["路徑"] === d["家目錄"] ? "家目錄" : d["路徑"].replace(d["家目錄"] + "/", "");
+  // 10-25 宇軒：夥伴用 Windows（WSL），最上層叫「Ubuntu 檔案目錄」；Mac 上叫「Mac 檔案目錄」
+  const homeName = typeof pkState !== "undefined" && pkState && pkState["系統"] === "mac" ? "Mac 檔案目錄" : "Ubuntu 檔案目錄";
+  const rel = d["路徑"] === d["家目錄"] ? homeName : d["路徑"].replace(d["家目錄"] + "/", "");
   box.innerHTML = `
     <div class="pk-path"><b>${esc(rel)}</b>${d["上一層"] ? ` <button class="secondary pk-up">回上一層</button>` : ""}</div>
     <ul class="pk-list">
@@ -1286,6 +1427,9 @@ async function startPicked() {
 // 第 1 步：影片分析
 // ---------------------------------------------------------------------------
 
+// 1024-4 #287：第 1 步六個子步驟的白話名稱
+const S1_PLAIN = { "轉文字": "把說話變文字", "認老師": "找出老師在說話的地方", "找重疊": "找出兩人同時說話", "挑參考音": "挑老師聲音的候選", "找名字": "找出提到的人名", "段落分析": "分出學員分享段落" };
+
 async function renderStep1() {
   contentEl.innerHTML = "<p>載入中…</p>";
   await renderStep1Body();
@@ -1300,15 +1444,6 @@ async function renderStep1Body() {
   const order = [
     ["轉文字", "1"], ["認老師", "2"], ["找重疊", "3"], ["挑參考音", "4"], ["找名字", "5"], ["段落分析", "6"],
   ];
-  const rows = order.map(([k]) => {
-    const s = sub[k] || {};
-    return `<tr>
-      <td>${esc(k)}</td>
-      <td><span class="badge ${s.done ? "done" : ""}">${s.done ? "已完成" : "未完成"}</span></td>
-      <td>${esc(fmtElapsed(s.elapsed_s))}</td>
-    </tr>`;
-  }).join("");
-
   const running = status && status.running;
   const allDone = order.every(([k]) => (sub[k] || {}).done);   // 10-01 第三批 10：分析做完了，按鈕改「重新分析（做完的會跳過）」
   const errorMsg = status && status.error;
@@ -1325,26 +1460,62 @@ async function renderStep1Body() {
       ${otherNotes.length ? `<p>要注意：</p><ul>${otherNotes.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
     </div>` : "";
 
+  const doneN = order.filter(([k]) => (sub[k] || {}).done).length;
+  const nowK = (order.find(([k]) => !(sub[k] || {}).done) || [])[0];
+  const stage = running ? "running" : allDone ? "done" : "idle";
+  const dots = order.map(([k]) => `<span class="s1-dot${(sub[k] || {}).done ? " on" : ""}${k === nowK && running ? " now" : ""}" title="${esc(S1_PLAIN[k])}">${(sub[k] || {}).done ? "✓" : ""}</span>`).join("");
+  const stu = (state.proofread || {})["學員段落數"];
+  const detail = `<details class="s1-detail"><summary>詳細資料</summary>
+      <table class="kv"><thead><tr><th style="text-align:left">子步驟</th><th style="text-align:left">狀態</th><th style="text-align:left">耗時</th></tr></thead>
+        <tbody>${order.map(([k]) => { const s = sub[k] || {}; return `<tr><td>${esc(k)}</td><td><span class="badge ${s.done ? "done" : ""}">${s.done ? "已完成" : "未完成"}</span></td><td>${esc(fmtElapsed(s.elapsed_s))}</td></tr>`; }).join("")}</tbody></table>
+      <p class="muted">已經分析過的影片，跳過的步驟耗時都算 0 秒；第一次分析才有數字。</p>
+      <div class="log" id="runLog">${messages.map(esc).join("\n") || "（還沒有訊息）"}</div>
+    </details>`;
+  const awake = `<div id="runAwake">${awakeLine(status)}</div>`;
+  const err = errorMsg ? `<p><span class="badge error">失敗</span> ${esc(errorMsg)}</p>` : "";
+  let body;
+  if (stage === "running") {
+    body = `<div class="card s1-card">
+      <div class="s1-big">分析中　已完成 ${doneN}／${order.length} 項</div>
+      <p class="s1-now">現在在：${esc(nowK ? S1_PLAIN[nowK] : "收尾")}</p>
+      <div class="s1-dots">${dots}</div>
+      <button id="btnAnalyze" disabled>分析執行中…</button>
+      ${awake}${err}
+      <p class="muted">跑的時候可以離開這一頁，回來會看到最新進度。</p>
+    </div>${detail}`;
+  } else if (stage === "done") {
+    body = `<div class="card s1-card s1-done">
+      <div class="s1-head"><span class="s1-check" aria-hidden="true">✓</span>
+        <div><div class="s1-big">分析完成</div>
+          <div class="muted">AI 已經聽完整支影片${stu ? `，找到 ${stu} 段學員分享` : ""}。</div></div></div>
+      <a class="btn-link" id="s1Next" href="#step2">下一步：挑老師的聲音 →</a>
+      <ul class="s1-list">${order.map(([k]) => `<li><span class="s1-tick">✓</span>${esc(S1_PLAIN[k])}</li>`).join("")}</ul>
+      ${err}
+    </div>
+    <div class="s1-foot"><button id="btnAnalyze" class="linkish">重新分析</button><span class="muted">（做完的步驟會直接沿用，只補做沒做完的）</span>${awake}</div>
+    ${detail}`;
+  } else {
+    body = `<div class="card s1-card">
+      <p>AI 會先聽完整支影片：轉成文字、認出老師、找出學員段落與名字。跑的時候可以離開。</p>
+      ${doneN ? `<p class="muted">已經做完 ${doneN}／${order.length} 項，再按一次會接著做，做完的直接沿用。</p>` : ""}
+      <button id="btnAnalyze" class="s1-start">${doneN ? "繼續分析" : "開始分析"}</button>
+      ${err}${awake}
+    </div>${detail}`;
+  }
+
   contentEl.innerHTML = `
     <h1>1　影片分析</h1>
-    <div class="card">
-      <table class="kv">
-        <thead><tr><th style="text-align:left">子步驟</th><th style="text-align:left">狀態</th>
-          <th style="text-align:left">耗時</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
     ${claudeCard}
-    <div class="card">
-      <button id="btnAnalyze" ${running ? "disabled" : ""}>${running ? "分析執行中…" : allDone ? "重新分析（做完的會跳過）" : "開始分析"}</button>
-      ${!running && allDone ? `<span class="muted">每一步都做完了；再按一次只會補做沒做完的，做完的直接沿用</span>` : ""}
-      ${errorMsg ? `<p><span class="badge error">失敗</span> ${esc(errorMsg)}</p>` : ""}
-      <div id="runAwake">${awakeLine(status)}</div>
-      <div class="log" id="runLog">${messages.map(esc).join("\n") || "（還沒有訊息）"}</div>
-    </div>
+    ${body}
   `;
 
-  document.getElementById("btnAnalyze").addEventListener("click", startAnalyze);
+  const ba = document.getElementById("btnAnalyze");
+  if (ba && stage === "done") {
+    ba.addEventListener("click", async () => {
+      if (!(await uiConfirm({ title: "要重新分析嗎？", message: "做完的步驟會直接沿用，只補做沒做完的。", ok: "重新分析", cancel: "先不要" }))) return;
+      startAnalyze();
+    });
+  } else if (ba) ba.addEventListener("click", startAnalyze);
 
   if (running) startStatusPoll();
 }
@@ -1369,7 +1540,20 @@ async function startAnalyze() {
   await renderStep1Body();
 }
 
+// 1024-4：第 1 步跑的時候，用 /api/state 的 substeps 更新「已完成 N／6」「現在在」六個小點（只動這三處）
+let statusPollN = 0;
+function s1LiveUpdate(sub) {
+  const order = Object.keys(S1_PLAIN);
+  const doneN = order.filter((k) => (sub[k] || {}).done).length;
+  const nowK = order.find((k) => !(sub[k] || {}).done);
+  const big = document.querySelector(".s1-big"), now = document.querySelector(".s1-now"), dots = document.querySelector(".s1-dots");
+  if (big) big.textContent = `分析中　已完成 ${doneN}／${order.length} 項`;
+  if (now) now.textContent = `現在在：${nowK ? S1_PLAIN[nowK] : "收尾"}`;
+  if (dots) dots.innerHTML = order.map((k) => `<span class="s1-dot${(sub[k] || {}).done ? " on" : ""}${k === nowK ? " now" : ""}" title="${esc(S1_PLAIN[k])}">${(sub[k] || {}).done ? "✓" : ""}</span>`).join("");
+}
+
 function startStatusPoll() {
+  statusPollN = 0;
   stopStatusPoll();
   statusPollTimer = setInterval(async () => {
     if (currentRouteId() !== "step1") {
@@ -1383,6 +1567,10 @@ function startStatusPoll() {
       if (logEl) logEl.textContent = (status.messages || []).join("\n") || "（還沒有訊息）";
       const aw = document.getElementById("runAwake");
       if (aw) aw.innerHTML = awakeLine(status);
+      statusPollN += 1;
+      if (status.running && statusPollN % 2 === 0) {   // 總進度每 4 秒更新一次；只換三個小地方，「詳細資料」不重畫
+        try { s1LiveUpdate((await apiGet("/api/state")).substeps || {}); } catch (e) { /* 這次沒讀到，下次再試 */ }
+      }
       if (!status.running) {
         stopStatusPoll();
         await renderStep1Body();
@@ -1408,6 +1596,7 @@ async function renderStep2() {
   contentEl.innerHTML = "<p>載入中…</p>";
   refsCache = await apiGet("/api/refs");
   refsDrafts = {};
+  roomInfo = null;
   const list = (refsCache && refsCache.candidates) || [];
   const chosen = list.findIndex((c) => c.rank === refsCache["已選定名次"]);
   refsPointer = chosen >= 0 ? chosen : 0;
@@ -1438,36 +1627,37 @@ function renderStep2Body(play = false) {
   const chosenAt = list.findIndex((x) => x.rank === chosenRank);
   const isChosen = c.rank === chosenRank;
   const text = refsDrafts[c.rank] !== undefined ? refsDrafts[c.rank] : c.transcript;
+  const dirty = refsDrafts[c.rank] !== undefined && refsDrafts[c.rank] !== c.transcript;
+  const mismatch = isChosen && c["跟現在用的音檔一樣"] === false;
   const chips = list.map((x, k) => `<button class="ref-chip${k === refsPointer ? " on" : ""}${x.rank === chosenRank ? " chosen" : ""}" data-k="${k}"
-      title="${esc(x["原片時間"])}">${x.rank === chosenRank ? "✓ " : ""}第 ${k + 1} 個</button>`).join("");
+      title="${esc(x["原片時間"])}（鍵盤 ← → 也可以切換）">${x.rank === chosenRank ? "✓ " : ""}第 ${k + 1} 個${x.rank === chosenRank ? "（已選定）" : k === refsPointer ? "（試聽中）" : ""}</button>`).join("");
 
   contentEl.innerHTML = `
     <h1>2　挑選老師參考聲音片段</h1>
-    <div class="hint">參考音裡如果有雜音、笑聲、咳嗽，或別人的回應（例如「嗯」「對」），都不適合。可以來回切換著聽，比較哪一個最像老師；鍵盤 ← → 也可以切換。</div>
+    <div class="card s2-top" id="s2Top"></div>
     <div class="card">
-      <p><b>目前選定：${chosenAt >= 0 ? `第 ${chosenAt + 1} 個` : "還沒選"}</b></p>
+      <h2 style="margin-top:0">① 選老師的聲音</h2>
+      <p class="s2-how"><b>怎麼挑</b></p>
+      <ul class="s2-pts"><li>只有老師一個人的聲音</li><li>沒有笑聲、咳嗽、別人應聲</li><li>聽起來最像老師平常說話</li></ul>
       <div class="ref-chips">${chips}</div>
-      <p>正在聽：第 ${refsPointer + 1} 個／共 ${list.length} 個${isChosen ? `　<span class="badge done">目前選定的</span>` : ""}　｜　原片時間：${esc(c["原片時間"])}　｜　長度：${esc(c["長度秒"])} 秒</p>
       ${c["音檔網址"] ? `<audio id="refAudio" controls preload="auto" src="${esc(c["音檔網址"])}"></audio>` : `<div class="namecard missing">（音檔缺失）</div>`}
-      <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
-        <button id="btnPrev" class="secondary" ${refsPointer <= 0 ? "disabled" : ""}>◀ 聽上一個</button>
-        <button id="btnNext" class="secondary" ${refsPointer >= list.length - 1 ? "disabled" : ""}>聽下一個 ▶</button>
-      </div>
-      <p style="margin-top:12px;">逐字稿（可以直接修改；要跟聲音一字不差）：</p>
-      <textarea id="refText" rows="4">${esc(text)}</textarea>
+      <div class="muted small">原片 ${esc(c["原片時間"])}　長度 ${esc(c["長度秒"])} 秒</div>
+      ${!isChosen ? `<div class="s2-use"><button id="btnUse">改用這一個（第 ${refsPointer + 1} 個）</button></div>` : ""}
+      ${mismatch ? `<div class="s2-use"><button id="btnSwapAudio" class="secondary">換成這個候選的新音檔</button></div>` : ""}
       ${refAudioNote(c, isChosen)}
-      <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
-        <button id="btnUse">${isChosen ? "存逐字稿（音檔不換）" : "改用這一個"}</button>
-        ${isChosen && c["跟現在用的音檔一樣"] === false ? `<button id="btnSwapAudio" class="secondary">換成這個候選的新音檔</button>` : ""}
-      </div>
+      <details class="s2-text"${dirty || mismatch ? " open" : ""}><summary>逐字稿有錯字嗎？展開修改</summary>
+        <p class="muted">要跟聲音一字不差，可以直接修改。</p>
+        <textarea id="refText" rows="4">${esc(text)}</textarea>
+        ${isChosen ? `<div class="s2-use"><button id="btnUse">存逐字稿（音檔不換）</button></div>` : ""}
+      </details>
       <p id="refMsg"></p>
     </div>
     <div class="card" id="roomCard"><p class="muted">全片底噪載入中…</p></div>
+    <div id="s2Next"></div>
   `;
+  s2TopSync();
   renderRoomCard();
 
-  document.getElementById("btnPrev").addEventListener("click", () => refsGo(refsPointer - 1, true));
-  document.getElementById("btnNext").addEventListener("click", () => refsGo(refsPointer + 1, true));
   contentEl.querySelectorAll(".ref-chip").forEach((el) => el.addEventListener("click", () => refsGo(Number(el.dataset.k), true)));
   const audio = document.getElementById("refAudio");
   if (play && audio) audio.play().catch(() => {});   // 切換過來的直接播，方便比對
@@ -1497,36 +1687,81 @@ function renderStep2Body(play = false) {
   if (swapBtn) swapBtn.addEventListener("click", () => save(true));
 }
 
+// 1024-4 #288：頁頂「這一步要做 2 件事」小清單；兩件都好了才出現「下一步：到第 3 步 →」。
+// 底噪沒確認仍可往下（側欄隨時能點第 3 步），清單只顯示「還沒確認」
+let roomInfo = null;   // 最近一次讀到的 /api/roomtone（{已確認, 沒有, ...}）；還沒讀到是 null
+function s2Items() {
+  const picked = !!refsCache && refsCache["已選定名次"] != null && (refsCache.candidates || []).some((x) => x.rank === refsCache["已選定名次"]);
+  const ri = roomInfo || {};
+  const roomNone = !!ri["沒有"], roomFail = !!ri["讀失敗"];
+  const roomDone = roomInfo !== null && !roomFail && !roomNone && (!!ri["已確認"] || ri.start == null);
+  return { picked, roomDone, roomNone, roomFail, roomKnown: roomInfo !== null };
+}
+function s2TopHtml() {
+  const it = s2Items();
+  const mark = (ok, on) => ok ? `<span class="s2-ok">✓</span>` : on ? `<span class="s2-todo">還沒確認</span>` : "";
+  return `<b>這一步要做 2 件事</b>
+    <div class="s2-todos"><span class="${it.picked ? "s2-done" : ""}">① 選老師的聲音 ${it.picked ? mark(true) : `<span class="s2-todo">還沒選</span>`}</span>
+      <span class="${it.roomDone ? "s2-done" : ""}">② 確認底噪 ${it.roomFail ? `<span class="s2-todo">讀不到</span>` : it.roomNone ? `<span class="s2-todo">第 1 步做完才有</span>` : it.roomKnown ? mark(it.roomDone, true) : ""}</span></div>`;
+}
+function s2TopSync() {
+  const top = document.getElementById("s2Top");
+  if (top) top.innerHTML = s2TopHtml();
+  const nx = document.getElementById("s2Next");
+  const it = s2Items();
+  if (nx) nx.innerHTML = it.picked && it.roomDone ? `<a class="btn-link" id="s2ToStep3" href="#step3">下一步：到第 3 步 →</a>` : "";
+}
+
+function hmsInt(t) { t = Math.round(t); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60; return `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}`; }
+
 // 10-02 第六批第五件：全片底噪（消音、補空白的地方附近找不到夠安靜的聲音時，墊這一段）。宇軒的說法照原話寫
 async function renderRoomCard() {
   const box = document.getElementById("roomCard");
   if (!box) return;
   let r;
-  try { r = await apiGet("/api/roomtone"); } catch (e) { box.innerHTML = `<p class="muted">全片底噪讀不到：${esc(e.message)}</p>`; return; }
+  try { r = await apiGet("/api/roomtone"); } catch (e) {
+    if (document.getElementById("roomCard")) { roomInfo = { "讀失敗": true }; s2TopSync(); box.innerHTML = `<p class="muted">全片底噪讀不到：${esc(e.message)}</p>`; }
+    return;
+  }
   if (!document.getElementById("roomCard")) return;
+  roomInfo = r || {};
+  s2TopSync();
   const n = (r["候選"] || []).length;
   if (r["沒有"] || r.start == null) {
-    box.innerHTML = `<h2>全片底噪</h2><p class="muted">${r["沒有"] ? "還沒有整支影片的聲音（第 1 步分析跑完才挑得出來）。" : "這支影片找不到夠安靜的片段：消音的地方附近找不到安靜的聲音時，會墊全靜音。"}</p>`;
+    box.innerHTML = `<h2 style="margin-top:0">② 確認底噪</h2><p class="muted">${r["沒有"] ? "還沒有整支影片的聲音（第 1 步分析跑完才挑得出來）。" : "這支影片找不到夠安靜的片段：消音的地方附近找不到安靜的聲音時，會墊全靜音。"}</p>`;
     return;
   }
   const a = Math.max(0, r.start), b = r.end;
-  box.innerHTML = `<h2>全片底噪</h2>
-    <p>消音、補空白的地方，附近找不到夠安靜的聲音時，會墊這一段（從整支影片自動挑最安靜的地方）。</p>
-    <p class="hint"><b>播放、聆聽，如果聽到任何聲音，它就不能當作底噪。</b></p>
-    <p>原片時間：${esc(fcTime(a))}–${esc(fcTime(b))}（${(b - a).toFixed(1)} 秒）｜第 ${(r["選第幾個"] || 0) + 1} 段／共 ${n} 段　
-      ${r["已確認"] ? `<span class="badge done">已確認</span>` : `<span class="badge">還沒確認</span>`}</p>
-    <audio id="roomAudio" controls preload="none" src="/api/audio?start=${a.toFixed(2)}&end=${b.toFixed(2)}"></audio>
-    <p class="muted">很小聲是正常的（本來就該幾乎聽不到），可以把音量開大一點聽。</p>
-    <div style="display:flex; gap:10px; flex-wrap:wrap;">
-      <button id="roomOk" ${r["已確認"] ? "disabled" : ""}>這段可以</button>
-      <button id="roomNext" class="secondary" ${n < 2 ? "disabled" : ""}>換一段</button>
-    </div>
-    <p class="muted">還沒確認也可以先往下做：照樣用這一段（它本來就夠安靜），第 4 步開始前的總檢查會提醒你回來聽。</p>`;
+  const player = `<audio id="roomAudio" controls preload="none" src="/api/audio?start=${a.toFixed(2)}&end=${b.toFixed(2)}"></audio>`;
   const act = async (v) => {
     try { await apiPost("/api/roomtone", { "動作": v }); } catch (e) { uiErrorAlert({ title: "沒有成功", message: e.message }); return; }
     await renderRoomCard();
     if (v === "換一段") { const au = document.getElementById("roomAudio"); if (au) au.play().catch(() => {}); }
   };
+  if (r["已確認"]) {
+    box.innerHTML = `<div class="room-line"><span><b class="s2-ok">✓ 底噪已確認</b>（${esc(hmsInt(a))}，${Math.round(b - a)} 秒）</span>
+        <button id="roomReplay" class="secondary" aria-expanded="false">重聽</button></div>
+      <div id="roomFull" hidden>
+        <p class="muted">原片時間：${esc(fcTime(a))}–${esc(fcTime(b))}（${(b - a).toFixed(1)} 秒）｜第 ${(r["選第幾個"] || 0) + 1} 段／共 ${n} 段</p>
+        ${player}
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button id="roomOk" disabled>這段可以</button>
+          <button id="roomNext" class="secondary" ${n < 2 ? "disabled" : ""}>換一段</button>
+        </div>
+      </div>`;
+    const full = document.getElementById("roomFull"), rp = document.getElementById("roomReplay");
+    rp.addEventListener("click", () => { full.hidden = !full.hidden; rp.setAttribute("aria-expanded", String(!full.hidden)); });
+  } else {
+    box.innerHTML = `<h2 style="margin-top:0">② 確認底噪</h2>
+      <p>聽聽看這段是不是完全安靜（很小聲是正常的，可以開大音量）。</p>
+      <p class="muted">原片時間：${esc(fcTime(a))}–${esc(fcTime(b))}（${(b - a).toFixed(1)} 秒）｜第 ${(r["選第幾個"] || 0) + 1} 段／共 ${n} 段　<span class="badge">還沒確認</span></p>
+      ${player}
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button id="roomOk">這段可以</button>
+        <button id="roomNext" class="secondary" ${n < 2 ? "disabled" : ""}>換一段</button>
+      </div>
+      <p class="muted small">還沒確認也可以先往下做，第 4 步開始前會提醒你回來聽。</p>`;
+  }
   document.getElementById("roomOk").addEventListener("click", () => act("確認"));
   document.getElementById("roomNext").addEventListener("click", () => act("換一段"));
 }
@@ -1540,7 +1775,7 @@ function refAudioNote(c, isChosen) {
   // 10-01：看得出「現在用的音檔」跟「這個候選的音檔」是不是同一份（候選重切過、選定的還是舊的）
   if (!isChosen) return "";
   const same = c["跟現在用的音檔一樣"];
-  if (same === true) return `<p class="hint">現在用的音檔就是這個候選的音檔${c["取樣率"] ? `，是${esc(refRateName(c["取樣率"]))}` : ""}。</p>`;
+  // 1024-4 #288：same === true 的「就是這個候選的音檔」那句拿掉（沒事就不用說）；兩份不一樣的提醒保留
   if (same === false) {
     return `<div class="notyet-card" style="margin-top:10px;">現在用的音檔是${esc(refRateName(refsCache["現在用的音檔取樣率"]) || "舊的")}，這個候選的音檔是${esc(refRateName(c["取樣率"]) || "重切過的")}，兩個不是同一份。
       按「存逐字稿（音檔不換）」只存逐字稿；要改用這個候選的音檔，按「換成這個候選的新音檔」，換了之後老師的句子都要重新生成。</div>`;
