@@ -116,6 +116,75 @@ def test_step2_structure():
     assert "聽聽看這段是不是完全安靜（很小聲是正常的，可以開大音量）。" in room and "還沒確認也可以先往下做" in room
 
 
+_HO = (WEB / "handoff.js").read_text(encoding="utf-8")
+
+
+def _src_fn(src: str, name: str) -> str:
+    m = re.search(rf"^(async )?function {name}\(.*?^\}}\n", src, re.S | re.M)
+    assert m, name
+    return m.group(0)
+
+
+_ST = {"workdir": "/w/a_剪輯工作區", "video": {"name": "a.mp4", "duration_hms": "00:10:00"}, "專案標示": {"標示": "正式", "顯示名稱": "a"},
+       "substeps": {k: {"done": True} for k in NAMES}, "proofread": {"done": False, "已確認": 1, "學員段落數": 4}}
+
+
+def _overview_html(state: dict, projects: dict) -> str:
+    code = (PRE + "function hoSize(n){return n+'B';}\nlet lastState = null;\nfunction fmtElapsed(){return '';}\n"
+            + "".join(_fn(n) for n in ("pjGroups", "wsClosedBarHtml", "ovProgress", "ovContinueHtml", "renderOverview"))
+            + _src_fn(_HO, "hoRowHtml") + _src_fn(_HO, "hoOverviewCardHtml") + _src_fn(FIO, "pickCardHtml") +
+            f"""const contentEl = {{innerHTML: "", querySelectorAll: () => []}};
+const document = {{getElementById: () => null}};
+async function apiGet(p) {{ return p === "/api/state" ? {json.dumps(state, ensure_ascii=False)} : {json.dumps(projects, ensure_ascii=False)}; }}
+function bindPickCard() {{}} function hoBindOverview() {{}}
+renderOverview().then(() => console.log(JSON.stringify(contentEl.innerHTML)));""")
+    return _run(code)
+
+
+def test_overview_page_handoff_clean_and_closed():
+    if not NODE:
+        return
+    proj = {"名稱": "a_剪輯工作區", "路徑": "/w/a_剪輯工作區", "顯示名稱": "a", "標示": "正式", "修改時間": "10-24 10:00", "交接": {"大小": 100}}
+    projects = {"目前": "/w/a_剪輯工作區", "專案": [proj]}
+    html = _overview_html(_ST, projects)
+    assert html.count("ho-clean") == 1 and 'id="ovGo"' in html and "ov-others" not in html, html
+    closed = dict(_ST, **{"已結案": True, "結案": {"日期": "10-16", "位置顯示": "D:\\x"}})
+    html = _overview_html(closed, dict(projects, 專案=[dict(proj, 已結案={"日期": "10-16"})]))
+    assert 'id="ovGo"' not in html and "已結案" in html.split('id="ovClosed"')[1][:200], html
+    # 沒有影片檔：溫和說法
+    html = _overview_html(dict(_ST, video={}), projects)
+    assert "這個專案還沒有影片檔" in html
+
+
+def test_step1_live_progress_update():
+    if not NODE:
+        return
+    s1 = APP[APP.index("async function renderStep1Body"):APP.index("async function startAnalyze")]
+    assert "s1-detail" in s1
+    code = _fn("s1LiveUpdate")
+    out = _run(PRE + 'const S1_PLAIN = {"轉文字":"a","認老師":"b","找重疊":"c","挑參考音":"d","找名字":"e","段落分析":"f"};\n'
+               'const els = {".s1-big": {}, ".s1-now": {}, ".s1-dots": {}};\n'
+               'const document = {querySelector: (q) => els[q]};\n' + code +
+               'const sub = {"轉文字":{done:true},"認老師":{done:true}};\ns1LiveUpdate(sub);\n'
+               'console.log(JSON.stringify([els[".s1-big"].textContent, els[".s1-now"].textContent, (els[".s1-dots"].innerHTML.match(/ on/g) || []).length]));')
+    assert out[0] == "分析中　已完成 2／6 項" and out[1] == "現在在：c" and out[2] == 2, out
+    poll = APP[APP.index("function startStatusPoll"):APP.index("// 第 2 步")] if "// 第 2 步" in APP else APP[APP.index("function startStatusPoll"):]
+    assert "s1LiveUpdate(" in poll and "renderStep1Body" in poll and "innerHTML = awakeLine" in poll
+
+
+def test_step2_room_states_and_pick_hint():
+    if not NODE:
+        return
+    pre = PRE + 'let refsCache = {"已選定名次": 1, candidates: [{rank: 1}]}, roomInfo = null;\n' + _fn("s2Items") + _fn("s2TopHtml")
+    got = _run(pre + 'roomInfo = {"沒有": true}; const a = s2TopHtml(); const ai = s2Items(); roomInfo = {"讀失敗": true}; const b = s2TopHtml(); const bi = s2Items();'
+               'console.log(JSON.stringify([a, ai, b, bi]));')
+    assert "第 1 步做完才有" in got[0] and not got[1]["roomDone"] and "✓</span>" not in got[0].split("確認底噪")[1]
+    assert "讀不到" in got[2] and not got[3]["roomDone"]
+    assert "會在影片旁邊建立資料夾：" in FIO and "這個專案還沒有影片檔" in APP and "找不到影片檔" not in APP
+    side = APP[APP.index("async function renderSidebar"):APP.index("function navSubHtml")]
+    assert "const dur" not in side and "const name = v.name" not in side
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -253,8 +253,6 @@ async function renderSidebar() {
     videoInfoEl.textContent = "還沒選影片（到總覽選）";
   } else if (state) {
     const v = state.video || {};
-    const name = v.name || "（還不知道影片路徑）";
-    const dur = v.duration_hms ? `　長度 ${v.duration_hms}` : "";
     videoInfoEl.innerHTML = pjShortHtml(state);
   }
 
@@ -1211,10 +1209,12 @@ function ovProgress(state) {
 function ovContinueHtml(state, cur, keyMissing) {
   const v = state.video || {};
   const p = ovProgress(state);
+  const closed = !!state["已結案"];
+  const closedLine = closed ? wsClosedBarHtml(state).replace(/<[^>]*>/g, "").replace(/&amp;/g, "&") : "";
   const warns = [
     ...(state["找得到claude"] === false ? ["找不到 claude 指令：段落分析、建議刪除段落、人名清單會沒跑成功。"] : []),
     ...((state["Claude沒跑成功"] || []).length ? [`上次分析有 ${(state["Claude沒跑成功"] || []).length} 個用 Claude 的步驟沒跑成功（到第 1 步看）。`] : []),
-    ...(!v.name ? ["找不到影片檔（搬走或刪掉了？）。"] : []),
+    ...(!v.name ? ["這個專案還沒有影片檔（匯入交接包時要一起選原片）。"] : []),
   ];
   const bar = p["進度"] ? `<div class="ov-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${p["進度"]["共"]}" aria-valuenow="${p["進度"]["已"]}"><i style="width:${Math.round(100 * p["進度"]["已"] / p["進度"]["共"])}%"></i></div>` : "";
   return `<div class="card ov-continue" id="ovContinue">
@@ -1224,7 +1224,8 @@ function ovContinueHtml(state, cur, keyMissing) {
     <p class="ov-line">${esc(p["句"])}</p>
     ${bar}
     ${warns.map((w) => `<p class="rv-warnline ov-warn">${esc(w)}</p>`).join("")}
-    <button id="ovGo" data-step="${p["步驟"]}">繼續第 ${p["步驟"]} 步 →</button>
+    ${closed ? `<p class="muted" id="ovClosed">${esc(closedLine)}</p>` : `<button id="ovGo" data-step="${p["步驟"]}">繼續第 ${p["步驟"]} 步 →</button>`}
+    ${!closed && cur && typeof hoRowHtml === "function" ? `<div class="ov-ho">${hoRowHtml(cur)}</div>` : ""}
   </div>`;
 }
 
@@ -1433,7 +1434,20 @@ async function startAnalyze() {
   await renderStep1Body();
 }
 
+// 1024-4：第 1 步跑的時候，用 /api/state 的 substeps 更新「已完成 N／6」「現在在」六個小點（只動這三處）
+let statusPollN = 0;
+function s1LiveUpdate(sub) {
+  const order = Object.keys(S1_PLAIN);
+  const doneN = order.filter((k) => (sub[k] || {}).done).length;
+  const nowK = order.find((k) => !(sub[k] || {}).done);
+  const big = document.querySelector(".s1-big"), now = document.querySelector(".s1-now"), dots = document.querySelector(".s1-dots");
+  if (big) big.textContent = `分析中　已完成 ${doneN}／${order.length} 項`;
+  if (now) now.textContent = `現在在：${nowK ? S1_PLAIN[nowK] : "收尾"}`;
+  if (dots) dots.innerHTML = order.map((k) => `<span class="s1-dot${(sub[k] || {}).done ? " on" : ""}${k === nowK ? " now" : ""}" title="${esc(S1_PLAIN[k])}">${(sub[k] || {}).done ? "✓" : ""}</span>`).join("");
+}
+
 function startStatusPoll() {
+  statusPollN = 0;
   stopStatusPoll();
   statusPollTimer = setInterval(async () => {
     if (currentRouteId() !== "step1") {
@@ -1447,6 +1461,10 @@ function startStatusPoll() {
       if (logEl) logEl.textContent = (status.messages || []).join("\n") || "（還沒有訊息）";
       const aw = document.getElementById("runAwake");
       if (aw) aw.innerHTML = awakeLine(status);
+      statusPollN += 1;
+      if (status.running && statusPollN % 2 === 0) {   // 總進度每 4 秒更新一次；只換三個小地方，「詳細資料」不重畫
+        try { s1LiveUpdate((await apiGet("/api/state")).substeps || {}); } catch (e) { /* 這次沒讀到，下次再試 */ }
+      }
       if (!status.running) {
         stopStatusPoll();
         await renderStep1Body();
@@ -1568,15 +1586,17 @@ function renderStep2Body(play = false) {
 let roomInfo = null;   // 最近一次讀到的 /api/roomtone（{已確認, 沒有, ...}）；還沒讀到是 null
 function s2Items() {
   const picked = !!refsCache && refsCache["已選定名次"] != null && (refsCache.candidates || []).some((x) => x.rank === refsCache["已選定名次"]);
-  const roomDone = !!roomInfo && (!!roomInfo["已確認"] || !!roomInfo["沒有"] || roomInfo.start == null);
-  return { picked, roomDone, roomKnown: roomInfo !== null };
+  const ri = roomInfo || {};
+  const roomNone = !!ri["沒有"], roomFail = !!ri["讀失敗"];
+  const roomDone = roomInfo !== null && !roomFail && !roomNone && (!!ri["已確認"] || ri.start == null);
+  return { picked, roomDone, roomNone, roomFail, roomKnown: roomInfo !== null };
 }
 function s2TopHtml() {
   const it = s2Items();
   const mark = (ok, on) => ok ? `<span class="s2-ok">✓</span>` : on ? `<span class="s2-todo">還沒確認</span>` : "";
   return `<b>這一步要做 2 件事</b>
     <div class="s2-todos"><span class="${it.picked ? "s2-done" : ""}">① 選老師的聲音 ${it.picked ? mark(true) : `<span class="s2-todo">還沒選</span>`}</span>
-      <span class="${it.roomDone ? "s2-done" : ""}">② 確認底噪 ${it.roomKnown ? mark(it.roomDone, true) : ""}</span></div>`;
+      <span class="${it.roomDone ? "s2-done" : ""}">② 確認底噪 ${it.roomFail ? `<span class="s2-todo">讀不到</span>` : it.roomNone ? `<span class="s2-todo">第 1 步做完才有</span>` : it.roomKnown ? mark(it.roomDone, true) : ""}</span></div>`;
 }
 function s2TopSync() {
   const top = document.getElementById("s2Top");
@@ -1593,7 +1613,10 @@ async function renderRoomCard() {
   const box = document.getElementById("roomCard");
   if (!box) return;
   let r;
-  try { r = await apiGet("/api/roomtone"); } catch (e) { box.innerHTML = `<p class="muted">全片底噪讀不到：${esc(e.message)}</p>`; return; }
+  try { r = await apiGet("/api/roomtone"); } catch (e) {
+    if (document.getElementById("roomCard")) { roomInfo = { "讀失敗": true }; s2TopSync(); box.innerHTML = `<p class="muted">全片底噪讀不到：${esc(e.message)}</p>`; }
+    return;
+  }
   if (!document.getElementById("roomCard")) return;
   roomInfo = r || {};
   s2TopSync();

@@ -1185,3 +1185,4 @@ details.s2-text { margin-top: 12px; }
 details.s2-text > summary { cursor: pointer; color: var(--muted); }
 .room-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 #roomFull { margin-top: 10px; }
+.ov-ho { margin-top: 12px; font-size: 14px; }
