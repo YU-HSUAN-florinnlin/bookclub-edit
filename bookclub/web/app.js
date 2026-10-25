@@ -918,7 +918,10 @@ async function renderExecuteBody() {
     const st = document.getElementById("exStart"), en = document.getElementById("exEnd");   // 開發者設定才有這兩格
     const body = { start: (st && st.value.trim()) || null, end: (en && en.value.trim()) || null,
       methods: [document.getElementById("exMethod").value] };
-    try { await apiPost("/api/execute/start", body, { quiet: true }); } catch (e) { uiErrorAlert({ title: "無法開始", message: e.message, where: "第 4 步・開始執行" }); return; }
+    let started;
+    try { started = await apiPost("/api/execute/start", body, { quiet: true }); } catch (e) { uiErrorAlert({ title: "無法開始", message: e.message, where: "第 4 步・開始執行" }); return; }
+    // 從第 5 步狀態卡「到第 4 步 →」過來的：記下這次的開始時間，跑完自動跳回第 5 步（跟以前第 5 步「重做這幾張」一樣）
+    if (typeof fcRedoArmGet === "function" && fcRedoArmGet()) { fcRedoArmSet(false); fcRedoBackSet(started && started["started_at"]); }
     await renderExecuteBody();
   });
   const auto = document.getElementById("btnAutoCode");   // 09-30：前置檢查缺代號時直接配

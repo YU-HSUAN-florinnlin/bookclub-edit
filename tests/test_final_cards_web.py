@@ -136,7 +136,7 @@ def test_review_fixes_pure():
     assert got["lab"] == [["連帶"], ["在第 3 步改過"]]
     assert got["redo"] == [{"show": True, "n": 2}, {"show": True, "n": 0}, {"show": False, "n": 0}, {"show": False, "n": 0}]
     assert got["st"] == ["1 張要重做", "全部看完了"]
-    assert got["grp"] == {"還沒看": ["a", "f"], "要重做": ["b", "d"], "已通過": ["c", "e"]}, got["grp"]
+    assert got["grp"] == {"還沒看": ["a"], "要重做": ["b", "d", "f"], "已通過": ["c", "e"]}, got["grp"]
     assert got["note"] == [True, True, True, False, False, False]
 
 
@@ -454,7 +454,10 @@ def test_page_renders_and_buttons_post_right_things():
           await click("fc-add"); fc.ed.kind = "局部消音"; fc.ed.b = fc.ed.a + 1; fcRenderIO();
           await H.fireAll((l) => l.el.attrs && "data-te-save" in l.el.attrs); return H.log;"""},
         {"名稱": "到第4步", "程式": """
-          await renderFinal(); H.log.length = 0; await click("fc-go4"); return {log: H.log, hash: location.hash, gone: !document.getElementById("fc-redoall")};"""},
+          globalThis.sessionStorage = {s: {}, getItem(k) { return k in this.s ? this.s[k] : null; }, setItem(k, v) { this.s[k] = String(v); }, removeItem(k) { delete this.s[k]; }};
+          await renderFinal(); const before = fcRedoArmGet(); H.log.length = 0; await click("fc-go4");
+          const armed = fcRedoArmGet(); await renderFinal();
+          return {log: H.log, hash: location.hash, gone: !document.getElementById("fc-redoall"), before, armed, afterBack: fcRedoArmGet()};"""},
         {"名稱": "只改問老師不標已改", "程式": """
           await open("學員段落:T005"); await last("fc-fix"); await pick("其他");
           await FC_CARD_CTX.post("/api/turns/save", {id: "T005", "問老師": true}); return H.log;"""},
@@ -596,6 +599,10 @@ def test_page_renders_and_buttons_post_right_things():
     assert m[1][1] == "/api/final/edited" and m[1][2] == {"鍵": "局部消音:M009", "新增": True}   # 新增的卡記「第5步新增」、不是記在目前這張
     rd = got["到第4步"]   # 1025-3 #294：右上的「重做這幾張」拿掉，狀態卡的按鈕只換頁、不送請求
     assert [x for x in rd["log"] if x[0] == "POST"] == [] and rd["hash"] == "#step4" and rd["gone"]
+    # 按「到第 4 步 →」記下「從第 5 步來的」，第 4 步按開始時（app.js）才記 started_at、跑完自動跳回；回到第 5 步就取消
+    assert rd["before"] is False and rd["armed"] is True and rd["afterBack"] is False, rd
+    app = APPJS[APPJS.index('const execBtn = document.getElementById("btnExec")'):]
+    assert "fcRedoArmGet()" in app[:1500] and 'fcRedoBackSet(started && started["started_at"])' in app[:1500]
     # 10-15 第2段審查修正
     q = [x[1] for x in got["只改問老師不標已改"] if x[0] == "POST"]
     assert q == ["/api/turns/save"], q
@@ -1289,6 +1296,21 @@ def test_1025_3_menu_state_card_and_filters():
     r = t["right"]   # 換張搬到卡片頂端，底部只剩通過／要修改
     assert r.index('id="fc-prev"') < r.index('id="fc-pass"') and r.index('id="fc-next"') < r.index('id="fc-pass"') and r.index("第 1／") < r.index('id="fc-pass"')
     assert r.index('id="fc-fix"') < r.index('id="fc-back-undo"') if 'id="fc-back-undo"' in r else True
+
+
+def test_1025_3_menu_handoff_states_pure():
+    """交接兩項：已結案、交接框讀不到、打包中（改成「停止打包」）、不能打包的原因。"""
+    if not NODE:
+        return
+    src = FCJS[FCJS.index("const FC_MENU_HINT = {"):FCJS.index("function fcMenuHtml")] + _fn(FCJS, "fcMenuHandoff")
+    got = _node(src + """
+      const ok = {closed: false, hasBox: true, running: false, packWhy: "", off: false};
+      console.log(JSON.stringify([fcMenuHandoff("pack", {...ok, closed: true}), fcMenuHandoff("imp", {...ok, hasBox: false}),
+        fcMenuHandoff("pack", {...ok, running: true}), fcMenuHandoff("imp", {...ok, running: true}),
+        fcMenuHandoff("pack", {...ok, packWhy: "還沒有成品", packOff: true}), fcMenuHandoff("imp", ok)]));""")
+    assert got[0]["off"] and "已結案" in got[0]["hint"] and got[1]["off"] and "讀不到" in got[1]["hint"]
+    assert got[2] == {"label": "停止打包", "hint": "正在打包；按了會停下來", "off": False} and got[3]["off"]
+    assert got[4]["off"] and got[4]["hint"] == "還沒有成品" and got[5] == {"label": "匯入交接包…", "hint": "收到別人傳來的交接包時用。", "off": False}
 
 
 def test_fill_defaults_pure():

@@ -754,7 +754,7 @@ def decide(workdir: str | Path, card_id: str, result: str | None, options: list[
     # 已改的卡只要還在這一版成品裡（有對到處理紀錄），可以退回（記原因）；通過照舊不行
     in_product = c["狀態"] == EDITED and result == needs.RETURNED and bool(c.get("紀錄鍵"))
     if c["狀態"] in (needs.NOT_MADE, EDITED) and not in_product:
-        raise ValueError("這張卡還沒做進成品（改過或新增的）：按「重做這幾張」做好之後再看")
+        raise ValueError("這張卡還沒做進成品（改過或新增的）：回第 4 步按「更新成品」做好之後再看")
     text = needs.reason_text(options, extra) if result == needs.RETURNED else ""
     old = {needs.PASSED: fc.PASS, needs.RETURNED: fc.REDO, None: None}[result]
     # 10-15 第2段審查修正（必修 1）：每一筆處理紀錄還有哪幾張（別的）卡也對到它

@@ -1223,7 +1223,8 @@ details.exec-direct > summary { cursor: pointer; color: var(--accent); text-deco
 .fc-more-wrap { position: relative; margin-left: auto; }
 .fc-menu { position: absolute; right: 0; top: 100%; margin-top: 6px; left: auto; width: max-content; }
 .fc-menu .tool-menu-item { width: 100%; box-sizing: border-box; background: transparent; border: 0; text-align: left; cursor: pointer; font: inherit; font-size: 14px; }
-.fc-menu .tool-menu-item:disabled { opacity: .5; cursor: not-allowed; }
+.fc-menu .tool-menu-item:hover:not(:disabled), .fc-menu .tool-menu-item:focus-visible { background: var(--hover-bg); }
+.fc-menu .tool-menu-item:disabled { opacity: .45; cursor: not-allowed; }
 .fc-menu .fc-menu-ver { cursor: default; }
 .fc-menu .fc-menu-ver:hover { background: transparent; }
 .fc-menu .fc-ver { display: flex; flex-direction: column; gap: 4px; }
@@ -1246,4 +1247,4 @@ details.exec-direct > summary { cursor: pointer; color: var(--accent); text-deco
 .fc-sf { align-items: center; }
 .fc-typesel { margin-left: auto; font-size: 14px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .fc-typesel select { font-size: 14px; }
-body.ws-closed #fc-menu-export { pointer-events: none; opacity: .45; }
+body.ws-closed #fc-menu-export, body.ws-closed #fc-go4 { pointer-events: none; opacity: .45; }

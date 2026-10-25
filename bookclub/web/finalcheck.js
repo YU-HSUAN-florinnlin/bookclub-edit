@@ -440,8 +440,8 @@ function fcOld() { return !!(fc.data && fc.data["看的是舊版"]); }
 // 10-16 #225 宇軒：「通過」變灰時，旁邊問號寫原因
 function fcPassOffText(c) {
   if (c && c["這一版沒處理到"]) return "這張是上一版通過的，這一版沒改到這裡，不用再判斷。";
-  if (c && c["狀態"] === FC_ST.EDITED) return `這張改過了，要按「重做這幾張」做出新的一版，才能看、才能通過。${fc.undo && fc.undo.card === c.id ? "按錯了：在卡片上方按「復原」。" : ""}`;
-  return "這張還沒做進成品，按「重做這幾張」做出新的一版後才能看。";
+  if (c && c["狀態"] === FC_ST.EDITED) return `這張改過了，要回第 4 步按「更新成品」做出新的一版，才能看、才能通過。${fc.undo && fc.undo.card === c.id ? "按錯了：在卡片上方按「復原」。" : ""}`;
+  return "這張還沒做進成品，回第 4 步按「更新成品」做出新的一版後才能看。";
 }
 function fcCanJudge(c) {
   return !!c && ![FC_ST.NOT_MADE, FC_ST.EDITED].includes(c["狀態"]) && !c["這一版沒處理到"];
@@ -499,6 +499,7 @@ function fcFillDefaults(d) {
 
 async function renderFinal() {
   cvUse(FC_CARD_CTX);
+  fcRedoArmSet(false);
   contentEl.innerHTML = "<p>載入中…</p>";
   try { fc.data = fcFillDefaults(await apiGet(fcUrl())); }
   catch (e) { if (!fc.ver) throw e; fc.ver = null; fc.data = fcFillDefaults(await apiGet(fcUrl())); }   // 那一版不在了：回最新
@@ -516,10 +517,10 @@ async function renderFinal() {
     <div class="rv2 fc">
       <header class="rv-bar fc-bar">
         <h1>5　成品檢查</h1>
-        <div class="fc-prog" id="fc-prog" title="成品影片用 2 倍速以下播過的比例"><span>看過 <b id="fc-pct">0</b>%</span><span class="fc-progbar"><i id="fc-pctbar"></i></span></div>
+        <div class="fc-prog" id="fc-prog" title="成品影片用 2 倍速以下播過的比例"><span>影片看過 <b id="fc-pct">0</b>%</span><span class="fc-progbar"><i id="fc-pctbar"></i></span></div>
         <div class="rv-bar-btns fc-more-wrap">
           <button type="button" class="secondary" id="fc-more" aria-label="更多" aria-haspopup="menu" aria-expanded="false">⋯</button>
-          <div class="tool-menu fc-menu" id="fc-menu" role="menu" aria-label="更多" hidden>${fcMenuHtml(d, closed)}</div>
+          <div class="tool-menu fc-menu" id="fc-menu" role="menu" aria-label="更多" hidden>${fcMenuHtml(d)}</div>
         </div>
       </header>
       ${closed && typeof wsClosedBarHtml === "function" ? wsClosedBarHtml(d) : ""}
@@ -621,7 +622,7 @@ function fcRenderTop() {
   const go = document.getElementById("fc-status-go");
   if (go) go.addEventListener("click", () => { fcSetStatusFilter("需留意"); document.getElementById("fc-lower").scrollIntoView({ block: "start" }); });
   const g4 = document.getElementById("fc-go4");
-  if (g4) g4.addEventListener("click", () => { location.hash = "#step4"; });
+  if (g4) g4.addEventListener("click", () => { fcRedoArmSet(true); location.hash = "#step4"; });
   const ex = document.getElementById("fc-export");
   if (ex) ex.addEventListener("click", fcExport);
   const pct = Math.floor(((fc.data["狀態"] || {})["看過比例"] || 0) * 100);
@@ -639,9 +640,9 @@ function fcRenderTop() {
 const FC_MENU_HINT = {
   export: "還沒全部看完也可以輸出，會先問一次。",
   pack: "要交回老師時用，不用先輸出成品。",
-  imp: "收到對方的交接包時用。",
+  imp: "收到別人傳來的交接包時用。",
 };
-function fcMenuHtml(d, closed) {
+function fcMenuHtml(d) {
   const ver = fcVersionMenuHtml(d);
   const item = (id, label, hint) => `<button type="button" role="menuitem" class="tool-menu-item" id="${id}"><span class="tool-menu-label">${label}</span>${hint ? `<span class="tool-menu-hint">${esc(hint)}</span>` : ""}</button>`;
   return `${ver ? `<div class="tool-menu-item fc-menu-ver">${ver}</div>` : ""}
@@ -653,19 +654,37 @@ function fcMenuHtml(d, closed) {
 }
 function fcMenuEls() { return { btn: document.getElementById("fc-more"), menu: document.getElementById("fc-menu") }; }
 function fcMenuIsOpen() { const { menu } = fcMenuEls(); return !!(menu && !menu.hidden); }
-// 開選單時對一次各項能不能按（那幾顆原本的按鈕現在是什麼狀態，就跟著什麼狀態）
+// （純函式）交接兩項現在的樣子：{label, hint, off}。closed＝已結案；hasBox＝下方交接框讀得到（讀取失敗時沒有那兩顆藏起來的按鈕）；
+// running＝正在打包（打包項目改成「停止打包」，轉按框裡的停止）；packWhy＝現在不能打包的原因
+function fcMenuHandoff(which, o) {
+  const base = which === "pack" ? { label: "交接打包…", hint: FC_MENU_HINT.pack } : { label: "匯入交接包…", hint: FC_MENU_HINT.imp };
+  if (o.closed) return { ...base, hint: "已結案，只能看紀錄", off: true };
+  if (!o.hasBox) return { ...base, hint: "現在讀不到交接的狀態，稍後再試", off: true };
+  if (which === "pack" && o.running) return { label: "停止打包", hint: "正在打包；按了會停下來", off: false };
+  if (which === "imp" && o.running) return { ...base, hint: "正在打包，打包完才能匯入", off: true };
+  if (which === "pack" && o.packWhy) return { ...base, hint: o.packWhy, off: !!o.packOff };
+  return { ...base, off: !!o.off };
+}
+// 開選單時對一次各項能不能按、寫什麼（那幾顆原本的按鈕現在是什麼狀態，就跟著什麼狀態）
 function fcMenuSync() {
   const q = (id) => document.getElementById(id);
-  const src = (menuId, srcId) => {
-    const m = q(menuId), b = q(srcId);
-    if (m) m.disabled = !b || !!b.disabled || (fc.data && fc.data["已結案"] && menuId === "fc-menu-open");
+  const closed = !!(fc.data && fc.data["已結案"]);
+  const set = (id, v) => {
+    const m = q(id);
+    if (!m) return;
+    m.disabled = !!v.off;
+    const lab = m.querySelector(".tool-menu-label");
+    if (lab) lab.textContent = v.label;
+    let h = m.querySelector(".tool-menu-hint");
+    if (!h && v.hint) { h = document.createElement("span"); h.className = "tool-menu-hint"; m.appendChild(h); }
+    if (h) h.textContent = v.hint || "";
   };
-  src("fc-menu-open", "fo-open");
-  src("fc-menu-pack", "ho-pack");
-  src("fc-menu-imp", "ho-imp");
-  const why = q("ho-pack") && q("ho-pack").dataset ? q("ho-pack").dataset.why : "";
-  const hint = q("fc-menu-pack") && q("fc-menu-pack").querySelector(".tool-menu-hint");
-  if (hint) hint.textContent = q("ho-pack") && q("ho-pack").disabled && why ? why : FC_MENU_HINT.pack;
+  const open = q("fo-open");
+  set("fc-menu-open", { label: "打開成品資料夾", hint: closed ? "已結案，只能看紀錄" : "", off: closed || !open || !!open.disabled });
+  const stop = q("ho-stop"), pack = q("ho-pack"), imp = q("ho-imp");
+  const o = { closed, hasBox: !!(pack || stop || imp), running: !!stop, packWhy: pack && pack.dataset ? pack.dataset.why : "", packOff: !!(pack && pack.disabled), off: !imp || !!imp.disabled };
+  set("fc-menu-pack", fcMenuHandoff("pack", { ...o, off: !pack || !!pack.disabled }));
+  set("fc-menu-imp", fcMenuHandoff("imp", o));
 }
 function fcMenuShow(on) {
   const { btn, menu } = fcMenuEls();
@@ -680,10 +699,10 @@ function fcBindMenu() {
   if (!btn || !menu) return;
   btn.addEventListener("click", (e) => { e.stopPropagation(); fcMenuShow(!fcMenuIsOpen()); });
   const run = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", () => { fcMenuShow(false); fn(); }); };
-  const press = (srcId) => () => { const b = document.getElementById(srcId); if (b && !b.disabled) b.click(); };
+  const press = (...srcIds) => () => { const b = srcIds.map((i) => document.getElementById(i)).find((x) => x); if (b && !b.disabled) b.click(); };
   run("fc-menu-open", press("fo-open"));
   run("fc-menu-export", () => fcExport());
-  run("fc-menu-pack", press("ho-pack"));
+  run("fc-menu-pack", press("ho-stop", "ho-pack"));   // 正在打包時這一項是「停止打包」，轉按框裡的停止
   run("fc-menu-imp", press("ho-imp"));
   if (fcMenuDocBound) return;
   fcMenuDocBound = true;
@@ -1403,7 +1422,8 @@ const FC_SF = ["還沒看", "要重做", "已通過", "需留意"];
 // （純函式）一張卡屬於哪一格：已通過的＝已通過；要重做（退回、已改等重做、舊版畫面上最新版要重做）＝要重做；其他＝還沒看
 function fcStatusOf(c) {
   if (fcIsPassed(c)) return "已通過";
-  if ([FC_ST.BACK, FC_ST.EDITED].includes(c["狀態"]) || c["最新版要重做"]) return "要重做";
+  // 跟後端 卡片統計.要重做（needs.redo_cards）一樣：退回、已改等重做、還沒生成都算要重做（第 4 步「更新成品」會做）；範圍外的卡不算
+  if (!c["這一版沒處理到"] && FC_REDO.includes(c["狀態"]) || c["最新版要重做"]) return "要重做";
   return "還沒看";
 }
 // （純函式）各格的卡：{還沒看: [], 要重做: [], 已通過: []}，各自照原片時間排
@@ -1519,6 +1539,10 @@ function fcMarkRow() {
 // 從第 5 步按「重做這幾張」開始的那一次執行（伺服器記的 started_at，秒；第 4 步跑完看這個決定要不要跳回來）。
 // 10-15 第2段審查修正（建議）：以前記瀏覽器的時間、跟伺服器時間比（WSL 時鐘會差），改成記伺服器回傳的開始時間。
 // 網頁重新整理（同一個分頁）還記得；拿不到開始時間就不記（照常停在第 4 步）
+// 1025-3：第 5 步不再自己開始重做，改成「到第 4 步 →」帶過去；先記一筆「是從第 5 步來的」，第 4 步按下開始／更新成品時
+// （app.js）再用伺服器回的 started_at 記成 fcRedoBackSet，跑完照舊自動跳回第 5 步。回到第 5 步（renderFinal）就取消
+function fcRedoArmSet(on) { try { if (on) sessionStorage.setItem("fc-redo-arm", "1"); else sessionStorage.removeItem("fc-redo-arm"); } catch (e) { /* 存不了就不自動跳回 */ } }
+function fcRedoArmGet() { try { return sessionStorage.getItem("fc-redo-arm") === "1"; } catch (e) { return false; } }
 let fcRedoBack = null;
 function fcRedoBackSet(started) {
   fcRedoBack = typeof started === "number" ? started : null;
