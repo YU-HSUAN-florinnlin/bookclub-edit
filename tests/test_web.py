@@ -893,7 +893,7 @@ def test_step3_ux_1025_2():
     filters = re.findall(r'data-f="([^"]+)"[^>]*>[^<]*<span>(\d+)</span>', v["all"])
     assert filters and all(n != "0" or f == "全部" for f, n in filters), filters      # 0 筆的分頁不顯示
     assert 'data-f="還沒確認"' in v["chosen"]                                         # 目前選中的就算變 0 也留著
-    assert v["card"].count("data-cv-pad") == 0 and "第 " in v["card"] and "筆</span>" in v["card"]
+    assert v["card"].count("data-cv-pad") == 1 and "第 " in v["card"] and "筆</span>" in v["card"]
 
 
 if __name__ == "__main__":

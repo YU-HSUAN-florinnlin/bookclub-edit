@@ -20,7 +20,6 @@
  *   refreshSug()           做法改了，更新建議框
  *   moreOpen() / toggleMore()  「改做法」那一塊開著沒有／開關
  *   rerender()             重畫目前這張卡
- *   padInPlayer            （可省略）true＝「前後多聽 2 秒」開關在播放器旁，卡片上不再放（第 3 步，1025-2）
  * 第 3 步的情境在 review.js（RV_CARD_CTX），第 5 步的在 finalcheck.js（FC_CARD_CTX）。
  * 第 3 步畫面與行為跟抽出來之前一模一樣：tests/test_cards_snapshot.py 用抽之前的快照鎖住。
  * 10-15 前後 2 秒開關統一（1015-5）：宇軒授權改第 3 步卡片畫面（播放按鈕改名「聽這一段」＋「前後多 2 秒」開關），快照照新畫面重產。
@@ -341,7 +340,7 @@ function rvPlayOnlyHtml(it) {
   const w = it["整句"];
   if (it["類型"] === "名字" && (!w || it["老師整段"] || (cv.ctx && cv.ctx.mode === "第5步"))) return "";
   const [s0, e0] = it["類型"] === "名字" ? [Number(w.start), Number(w.end)] : [a, b];
-  return ` <button class="ghost small" id="rv-playonly" data-s="${s0}" data-e="${e0}" data-tip="聽 ${esc(rvFmt(s0, 1))}–${esc(rvFmt(e0, 1))}（開了「前後多聽 2 秒」就前後各多 2 秒）">聽這一段</button>${cv.ctx && cv.ctx.padInPlayer ? "" : cvPadHtml("rv-pad")}`;   // 1025-2：第 3 步的開關放在播放器旁，卡片上不放
+  return ` <span class="rv-playwrap"><button class="ghost small" id="rv-playonly" data-s="${s0}" data-e="${e0}" data-tip="聽 ${esc(rvFmt(s0, 1))}–${esc(rvFmt(e0, 1))}（開了「前後多聽 2 秒」就前後各多 2 秒）">聽這一段</button>${cvPadHtml("rv-pad")}</span>`;   // 1025-2：按鈕與開關綁成一組不拆行（跟第 5 步「原本 ▶／現在 ▶」＋開關同一排的樣子一致）
 }
 
 // 10-02 第六批：老師重念範圍開頭或結尾有一段沒有人講話：提醒＋「照建議縮小」（不自動改；改了這一句要重新生成）
@@ -676,7 +675,7 @@ function rvSpotsHtml(it) {
     : `<p class="rv-meta">這張卡的決定套用到每一處：整句換掉是整句念一次、每一處都換成代號；只換名字、直接消音是每一處各自處理。</p>`;
   // 10-15 總檢查修正（1015-7）：名字卡沒有 整句（沒有重念範圍那一列）時這張卡沒有「前後多 2 秒」開關，但「第 N 處」照開關播——
   // 這裡補一顆（第 3 步；第 5 步卡片上已經有一顆）。有 整句 的照舊放在重念範圍那一列，一張卡還是只有一顆
-  const pad = !it["整句"] && !(cv.ctx && (cv.ctx.mode === "第5步" || cv.ctx.padInPlayer)) ? cvPadHtml("rv-pad") : "";
+  const pad = !it["整句"] && !(cv.ctx && cv.ctx.mode === "第5步") ? cvPadHtml("rv-pad") : "";
   return `<p class="rv-meta">這一句裡有 ${spots.length} 處（同一個代號，合成這一張）：</p>
     <div class="rv-field rv-row">${btns}${pad}</div>${note}`;
 }

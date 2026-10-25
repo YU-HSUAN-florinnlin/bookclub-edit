@@ -1241,7 +1241,7 @@ details.exec-direct > summary { cursor: pointer; color: var(--accent); text-deco
 .rv2.rv-prepmode > .rv-bar { grid-area: bar; } .rv2.rv-prepmode > .rv-tabs { grid-area: tabs; } .rv2.rv-prepmode > .rv-msgs { grid-area: msgs; }
 .rv2.rv-prepmode > .rv-upper { grid-area: upper; display: block; } .rv2.rv-prepmode > .rv-lower { grid-area: lower; margin-top: 0; }
 .rv2.rv-prepmode #rv-right:empty, .rv2.rv-prepmode #rv-tl, .rv2.rv-prepmode #rv-legend, .rv2.rv-prepmode #rv-io,
-.rv2.rv-prepmode .rv-goto, .rv2.rv-prepmode .rv-timebar .fc-pad { display: none; }
+.rv2.rv-prepmode .rv-goto { display: none; }
 .rv2.rv-prepmode .rv-left video, .rv2.rv-prepmode .rv-novideo { max-height: 170px; }
 .rv2.rv-prepmode .rv-timebar { font-size: 13px; }
 .rv-prepchips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 16px; }
@@ -1264,7 +1264,6 @@ details.exec-direct > summary { cursor: pointer; color: var(--accent); text-deco
 .rv-others { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 10px; }
 .rv-others .rv-meta { margin: 0; font-size: 13px; }
 .rv2 .rv-others button { font-size: 13px; padding: 3px 10px; }
-.rv-timebar .fc-pad { font-size: 13px; white-space: nowrap; }
 /* 1025-2 第3步：窄螢幕（1280 以下）3-1 改上下一欄，播放器縮成小的放在小步驟內容下方 */
 @media (max-width: 1280px) {
   .rv2.rv-prepmode { display: flex; flex-direction: column; }
@@ -1304,3 +1303,4 @@ details.exec-direct > summary { cursor: pointer; color: var(--accent); text-deco
 .fc-typesel { margin-left: auto; font-size: 14px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
 .fc-typesel select { font-size: 14px; }
 body.ws-closed #fc-menu-export, body.ws-closed #fc-go4 { pointer-events: none; opacity: .45; }
+.rv-playwrap { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
