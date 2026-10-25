@@ -40,14 +40,19 @@ async function hoBoxInit(el, stage) {
   const why = (d["可以打包"] || {})[stage];
   const gone = stage === "第5步" && d["已交出去"] ? `<p class="muted">這一集已經交出去了（${esc(String(d["已交出去"]).slice(5, 10))}）。不用再改的話，可以到總覽按「清掉這集」。</p>` : "";
   el.hidden = false;
-  el.innerHTML = `<h3>交接</h3>
-    <p class="hint">${esc(HO_HINT[stage])}</p>${gone}
+  // 1025-3 #294：第 5 步的交接黃框收進右上「⋯」選單（finalcheck.js）——標題與說明拿掉，「交接打包…」「匯入交接包…」按鈕藏起來由選單轉按
+  // （藏起來的按鈕仍在這裡，狀態、停止、訊息、手打路徑照舊）；說明與「現在不能打包」的原因改在選單項目下
+  const cp = stage === "第5步";
+  const hid = cp ? " hidden" : "";
+  el.classList.toggle("ho-compact", cp);
+  el.innerHTML = `${cp ? "" : `<h3>交接</h3>
+    <p class="hint">${esc(HO_HINT[stage])}</p>`}${gone}
     <div class="fo-row">
       ${line.running ? `<button class="secondary" id="ho-stop">停止</button>`
-        : `<button class="secondary" id="ho-pack" ${why ? "disabled" : ""}>交接打包…</button>`}
-      <button class="ghost" id="ho-imp" ${line.running ? "disabled" : ""}>匯入交接包…</button>
+        : `<button class="secondary" id="ho-pack" ${why ? "disabled" : ""}${hid}${cp && why ? ` data-why="${esc(why)}"` : ""}>交接打包…</button>`}
+      <button class="ghost" id="ho-imp" ${line.running ? "disabled" : ""}${hid}>匯入交接包…</button>
       ${stage === "第3步" && !line.running && d["最近一次"] ? `<button class="ghost" id="ho-clean" hidden>清掉暫存…</button>` : ""}
-      ${why && !line.running ? `<span class="muted">${esc(why)}</span>` : ""}
+      ${why && !line.running && !cp ? `<span class="muted">${esc(why)}</span>` : ""}
       <span id="ho-msg" role="status">${line.text ? (line.kind ? `<span class="badge ${line.kind}">${line.kind === "done" ? "已存好" : "沒有存好"}</span> ` : "") + esc(line.text) : ""}</span>
     </div>
     <div id="ho-typed" hidden><p class="hint" id="ho-typed-why"></p>

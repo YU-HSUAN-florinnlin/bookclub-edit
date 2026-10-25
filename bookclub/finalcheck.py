@@ -1579,7 +1579,7 @@ def decide_many(workdir: str | Path, keys: list[str], result: str | None, reason
             check["整片退回"] = [x for x in check["整片退回"] if x["id"] not in hit]
             n += before - len(check["整片退回"])
         if not n:
-            raise ValueError("這張卡這一版的成品裡沒有對到的地方（還沒生成）：按「重做這幾張」做好之後再看")
+            raise ValueError("這張卡這一版的成品裡沒有對到的地方（還沒生成）：回第 4 步按「更新成品」做好之後再看")
         _save(workdir, check)
         return {"ok": True, "筆數": n, "狀態": status(log, check), "跳過": skipped}
 

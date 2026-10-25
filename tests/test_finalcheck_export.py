@@ -257,7 +257,7 @@ def test_web_export_wiring():
     assert '"確定": true' in ex and '"版本"' in ex and "fcConfirmExport(" in ex and 'r["要確認"]' in ex
     assert "fileOutInit(" in ex                                       # 輸出後按鈕改指向剛輸出的那一支
     top = _fn("fcRenderTop")
-    assert 'ex.disabled = !fc.data["有處理紀錄"] || !fc.data["成品影片"]' in top
+    assert '!fc.data["有處理紀錄"] || !fc.data["成品影片"]' in top   # 1025-3：狀態卡的「輸出成品」與選單裡的「輸出成品」都照這條
     assert "fcStatusLine(" in top and "fcExportedEarly" not in FCJS   # 10-15：頂端只一句；提早輸出的細節收進輸出紀錄
 
 

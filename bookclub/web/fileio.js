@@ -237,7 +237,7 @@ async function fileOutInit(el) {
     return;
   }
   if (!document.body.contains(el)) return;
-  const openName = d["系統"] === "wsl" ? "在檔案總管打開成品資料夾" : d["系統"] === "mac" ? "在 Finder 打開成品資料夾" : "打開成品資料夾";
+  const openName = "打開成品資料夾";   // 1025-3 #294：三種系統統一用字；按鈕藏起來，由第 5 步右上「⋯」選單轉按（finalcheck.js）
   const job = (d["複製"] || [])[0];
   const running = job && (job["狀態"] === "複製中" || job["狀態"] === "等待");
   let jobHtml = "";
@@ -253,7 +253,7 @@ async function fileOutInit(el) {
   // 10-15 第5步2.0 第2段（31 號設計 §6.8）：拿的是哪一支只在「不是最新」時寫一行；Windows 輸出後提醒要再按複製
   const which = foWhichLine(d, job);
   main.innerHTML = `<div class="fo-row">
-      <button class="secondary" id="fo-open" ${d["成品"] ? "" : "disabled"}>${openName}</button>
+      <button class="secondary fo-hidden" id="fo-open" hidden ${d["成品"] ? "" : "disabled"}>${openName}</button>
       ${d["可以複製到Windows"] ? `<button class="secondary" id="fo-win" ${d["成品"] && !running ? "" : "disabled"}>${winLabel}</button>` : ""}
       ${which}
       <span id="fo-msg" role="status">${jobHtml}</span></div>`;

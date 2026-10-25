@@ -52,7 +52,7 @@ def _node(code: str):
 
 
 _PURE = (_ESC + _const(FCJS, "FC_AB_CONTEXT") + _const(FCJS, "FC_ST") + _const(FCJS, "FC_TODO") + _const(FCJS, "FC_REDO")
-         + _const(FCJS, "FC_REDO_LABEL") + _const(FCJS, "FC_NO_REASON_SHOW")
+         + _const(FCJS, "FC_REDO_LABEL") + _const(FCJS, "FC_NO_REASON_SHOW") + _const(FCJS, "FC_GO4")
          + _const(FCJS, "FC_FIX_TEXT") + _const(FCJS, "FC_FIX_OPTS")
          + _fn(FCJS, "fcNoFix") + _fn(FCJS, "fcCanFix") + _fn(FCJS, "fcFixOff") + _fn(FCJS, "fcCanUndo") + _fn(FCJS, "fcLatestRedoLine") + _fn(FCJS, "fcFixVer") + _fn(FCJS, "fcFixOptions") + _fn(FCJS, "fcFixRecords")
          + _const(FCJS, "FC_TAB_ALL") + _const(FCJS, "FC_TYPE_TABS")
@@ -60,7 +60,7 @@ _PURE = (_ESC + _const(FCJS, "FC_AB_CONTEXT") + _const(FCJS, "FC_ST") + _const(F
          + _fn(FCJS, "fcShortStamp") + _fn(FCJS, "fcCardLabel") + _fn(FCJS, "fcReasonText") + _fn(FCJS, "fcStatusLine") + _fn(FCJS, "fcLeftCount") + _fn(FCJS, "fcOldRedoCount")
          + _const(FCJS, "FC_NO_REASON") + _fn(FCJS, "fcWhyLine") + _fn(FCJS, "fcSharedLine") + _fn(FCJS, "fcRedoCount")
          + _const(FCJS, "FC_NOTE_FIELDS") + _fn(FCJS, "fcNoteOnly")
-         + _fn(FCJS, "fcTabList") + _fn(FCJS, "fcIsPassed") + _fn(FCJS, "fcSplitLists") + _fn(FCJS, "fcPickTab") + _fn(FCJS, "fcStepPick") + _fn(FCJS, "fcFixPrefill")
+         + _fn(FCJS, "fcTabList") + _fn(FCJS, "fcIsPassed") + _fn(FCJS, "fcStatusOf") + _fn(FCJS, "fcStatusGroups") + _fn(FCJS, "fcSplitLists") + _fn(FCJS, "fcPickTab") + _fn(FCJS, "fcStepPick") + _fn(FCJS, "fcFixPrefill")
          + _fn(FCJS, "fcSrcTime") + _fn(FCJS, "fcOutTime") + _fn(FCJS, "fcGotoOut") + _fn(FCJS, "fcPadOf") + _fn(FCJS, "fcVclip") + _fn(FCJS, "fcCardAbPlan")
          + _fn(FCJS, "fcOrigText") + _fn(FCJS, "fcCardTextHtml")
          + _fn(FCJS, "fcVersionText") + _fn(FCJS, "fcVersionMenuHtml") + _fn(FCJS, "fcCanJudge"))
@@ -84,11 +84,17 @@ def test_status_line_one_sentence_in_priority():
         fcStatusLine({...base, "卡片統計": {}, "輸出成品": out}),
         fcStatusLine({...base, "卡片統計": {}, "輸出成品": out, "輸出成品過期": {"原因": "x"}}),
         fcStatusLine({...base, "卡片統計": {}}),
-      ].map((x) => [x.text, x.go || null])));""")
-    assert got == [["⚠️ 這 2 處會照原聲念出本名", "需留意"], ["正在重做…", None],
-                   ["上次重做沒做完：按『重做這幾張』繼續", None], ["改過的還沒重做：按右上角『重做這幾張』", None],
-                   ["還有 3 張沒看", None], ["已輸出（10/14 14:20）", None], ["全部看完了，可以輸出", None],
-                   ["全部看完了，可以輸出", None]], got
+      ].map((x) => [x.text, x.sub || "", x.btn ? x.btn.kind : null, x.warn || null])));""")
+    # 1025-3 #294：狀態卡——有要重做＝「N 張要重做」＋回第 4 步＋按鈕到第 4 步；還有沒看＝只有一句；全部看完＝輸出成品；本名警告另放一行
+    W = "⚠️ 這 2 處會照原聲念出本名"
+    assert got == [["正在重做…", "做完會回到這裡", None, W],
+                   ["正在重做…", "做完會回到這裡", None, None],
+                   ["2 張要重做", "上次重做沒做完，回第 4 步按「繼續執行」", "step4", None],
+                   ["2 張要重做", "回第 4 步按「更新成品」", "step4", None],
+                   ["還有 3 張沒看", "", None, None],
+                   ["全部看完了（已輸出 10/14 14:20）", "", "export", None],
+                   ["全部看完了", "", "export", None],
+                   ["全部看完了", "", "export", None]], got
 
 
 def test_card_label_and_reason():
@@ -120,13 +126,17 @@ def test_review_fixes_pure():
         redo: [fcRedoCount({"卡片統計": {"要重做": 2}}), fcRedoCount({"卡片來源": "舊檔", "卡片統計": {}}),
                fcRedoCount({"卡片來源": "舊檔", "卡片統計": {}, "AI執行中": true}), fcRedoCount({"卡片來源": "新紀錄", "卡片統計": {}})],
         st: [fcStatusLine({"卡片統計": {"還沒看": 0}, "舊檔改過": true}).text, fcStatusLine({"卡片統計": {"還沒看": 0}}).text],
+        grp: (() => { const g = fcStatusGroups([{id: "a", "狀態": "還沒看"}, {id: "b", "狀態": "退回"}, {id: "c", "狀態": "通過"}, {id: "d", "狀態": "已改，等重做"},
+            {id: "e", "狀態": "通過", "最新版要重做": {"選項": []}}, {id: "f", "狀態": "還沒生成"}]);
+          return Object.fromEntries(Object.entries(g).map(([k, v]) => [k, v.map((c) => c.id)])); })(),
         note: [fcNoteOnly({id: "T1", "問老師": true}), fcNoteOnly({id: "T1", "問老師備註": "x"}), fcNoteOnly({id: "M1", "備註": "x"}),
                fcNoteOnly({id: "T1", "校對稿": "x"}), fcNoteOnly({id: "T1", "問老師": true, "說話者": "老師"}), fcNoteOnly({})]}));""")
     assert got["why"] == ["要重做（沒寫原因）", "要重做（沒寫原因）", "要重做（沒寫原因）", "原因：念錯字"]
     assert got["shared"] == ["跟 #12 共用，那張還是要重做", "跟 另一張卡 共用，那張還是要重做", ""]   # 10-15 總檢查修正（1015-7）
     assert got["lab"] == [["連帶"], ["在第 3 步改過"]]
     assert got["redo"] == [{"show": True, "n": 2}, {"show": True, "n": 0}, {"show": False, "n": 0}, {"show": False, "n": 0}]
-    assert got["st"] == ["改過的還沒重做：按右上角『重做這幾張』", "全部看完了，可以輸出"]
+    assert got["st"] == ["1 張要重做", "全部看完了"]
+    assert got["grp"] == {"還沒看": ["a"], "要重做": ["b", "d", "f"], "已通過": ["c", "e"]}, got["grp"]
     assert got["note"] == [True, True, True, False, False, False]
 
 
@@ -277,8 +287,8 @@ def test_hint_texts_follow_design():
     """§6.8：留下來的句子在；砍掉的、§8 拿掉的按鈕都不在。"""
     # 10-15 要修改合併（1015-4）：「為什麼退回？」→「哪裡出問題？」；「確定退回」→「確定」；「取消退回」→「取消要重做」
     for want in ("還沒有成品，請先到", "看過 <b", "哪裡出問題？", "補充（可不填）", "這一張重做只會重新放一次，聲音不會變；要改內容請選下面其他項",
-                 "會換一種念法重新生成", "要修改<kbd>E</kbd>", "取消要重做", "還要確認的", "已通過的", "要重做（沒寫原因）", "上一張", "下一張", "＋在這裡新增修改", "重做這幾張（", "我不確定是哪一種，先記下來", "只看要仔細聽的",
-                 "這一頁看完了", "這一版沒有任何修改", "第 ${idx + 1}／${list.length} 張", "請仔細聽", "原本 ▶", "現在 ▶"):
+                 "會換一種念法重新生成", "要修改<kbd>E</kbd>", "取消要重做", "要重做（沒寫原因）", "上一張", "下一張", "＋在這裡新增修改", "打開成品資料夾", "匯入交接包…", "依類型", "我不確定是哪一種，先記下來", "只看要仔細聽的",
+                 "這一頁都看完了", "這一版沒有任何修改", "第 ${idx + 1}／${list.length} 張", "請仔細聽", "原本 ▶", "現在 ▶"):
         assert want in FCJS, want
     for gone in ("沒列在時間軸上的地方＝原片沒動", "送回 AI 重做", "逐筆看", "整片看", "調整時間範圍", "AI 重做時照這個改", "AI 照這個改",
                  "已換成品", "要重新輸出", "處理紀錄產生於", "超過 2 倍速播的不算看過", "念的稿子：", "檢查哪一支", "跳到 38:26",
@@ -343,7 +353,7 @@ def test_page_renders_and_buttons_post_right_things():
           await renderFinal();
           return {status: document.getElementById("fc-status").innerHTML, right: document.getElementById("fc-right").innerHTML,
                   lower: document.getElementById("fc-lower").innerHTML, tl: document.getElementById("fc-tl").innerHTML,
-                  bar: document.getElementById("fc-actbar").innerHTML, top: document.getElementById("fc-redo-slot").innerHTML, left: contentEl.innerHTML,
+                  bar: document.getElementById("fc-actbar").innerHTML, top: "", left: contentEl.innerHTML,
                   n: DATA["卡片"].length, src: DATA["卡片來源"]};"""},
         {"名稱": "通過", "程式": """
           await open("名字:1"); await click("fc-pass"); return H.log;"""},
@@ -443,9 +453,11 @@ def test_page_renders_and_buttons_post_right_things():
           await renderFinal(); fc.video.currentTime = 100; H.log.length = 0; H.api['/api/review/manual'] = {'類型': '局部消音', 'id': 'M009', '對齊結果': {}};
           await click("fc-add"); fc.ed.kind = "局部消音"; fc.ed.b = fc.ed.a + 1; fcRenderIO();
           await H.fireAll((l) => l.el.attrs && "data-te-save" in l.el.attrs); return H.log;"""},
-        {"名稱": "重做這幾張", "程式": """
-          H.api['/api/execute/start'] = {started: true, started_at: 1234.5};
-          await renderFinal(); H.log.length = 0; await click("fc-redoall"); return {log: H.log, hash: location.hash, back: fcRedoBackGet()};"""},
+        {"名稱": "到第4步", "程式": """
+          globalThis.sessionStorage = {s: {}, getItem(k) { return k in this.s ? this.s[k] : null; }, setItem(k, v) { this.s[k] = String(v); }, removeItem(k) { delete this.s[k]; }};
+          await renderFinal(); const before = fcRedoArmGet(); H.log.length = 0; await click("fc-go4");
+          const armed = fcRedoArmGet(); await renderFinal();
+          return {log: H.log, hash: location.hash, gone: !document.getElementById("fc-redoall"), before, armed, afterBack: fcRedoArmGet()};"""},
         {"名稱": "只改問老師不標已改", "程式": """
           await open("學員段落:T005"); await last("fc-fix"); await pick("其他");
           await FC_CARD_CTX.post("/api/turns/save", {id: "T005", "問老師": true}); return H.log;"""},
@@ -462,7 +474,7 @@ def test_page_renders_and_buttons_post_right_things():
           old["卡片統計"] = {"還沒看": 0, "要重做": 0, "已通過的": old["卡片"].length, "還要確認": 0};
           H.apiGetData['/api/final'] = old; H.api['/api/final/edited'] = {'記了': false};
           await renderFinal();
-          const before = {status: document.getElementById("fc-status").innerHTML, lower: document.getElementById("fc-actbar").innerHTML + document.getElementById("fc-redo-slot").innerHTML};   // 10-16：重做這幾張在右上角
+          const before = {status: document.getElementById("fc-status").innerHTML, lower: document.getElementById("fc-actbar").innerHTML};
           await open("學員段落:T005"); await FC_CARD_CTX.post("/api/turns/save", {id: "T005", "校對稿": "x"});
           const after = document.getElementById("fc-status").innerHTML;
           old["開發者"] = true; await renderFinal();
@@ -474,14 +486,17 @@ def test_page_renders_and_buttons_post_right_things():
     v = got["畫面"]
     assert "錯誤" not in v, v
     assert v["src"] == "新紀錄" and v["n"] >= 6
-    assert "改過的還沒重做" in v["status"]                                   # T003 退回了 → 要重做
+    assert "張要重做" in v["status"] and "回第 4 步按「更新成品」" in v["status"]   # T003 退回了 → 要重做
     assert "原本 ▶" in v["right"] and "現在 ▶" in v["right"] and 'id="fc-pass"' in v["right"] and "第 1／" in v["right"]
     assert re.search(r'class="idtag"[^>]*>#\d+<', v["right"])                 # #103：每張卡顯示 #編號
     # 10-15 宇軒驗證回饋：兩顆按鈕搬到時間軸下面、「看過 P%」之下（以前在清單底下 fc-lower）
     # 10-16 宇軒：「重做這幾張」搬到右上角「輸出成品」左邊；時間軸下面只剩「＋在這裡新增修改」
-    assert "重做這幾張（1 張）" in v["top"] and "重做這幾張" not in v["bar"] and "＋在這裡新增修改" in v["bar"] and 'data-tab="還沒看完"' not in v["lower"] and "還要確認的" in v["lower"]
-    assert "重做這幾張" not in v["lower"] and "＋在這裡新增修改" not in v["lower"]
-    assert v["left"].index("fc-seenpct") < v["left"].index('id="fc-actbar"') < v["left"].index('id="fc-io"')
+    # 1025-3 #294：「重做這幾張」拿掉（狀態卡的「到第 4 步 →」帶去第 4 步按「更新成品」）；右上「⋯」選單放看哪一版、打開成品資料夾、輸出成品、交接
+    assert "重做這幾張" not in v["bar"] + v["lower"] + v["left"] and "＋在這裡新增修改" in v["bar"] and "＋在這裡新增修改" not in v["lower"]
+    assert "打開成品資料夾" in v["left"] and "交接打包…" in v["left"] and "匯入交接包…" in v["left"] and "tool-menu-hint" in v["left"] and "輸出成品" in v["left"]
+    assert 'data-sf="還沒看"' in v["lower"] and 'data-sf="需留意"' in v["lower"] and 'id="fc-type"' in v["lower"] and 'data-tab="還沒看完"' not in v["lower"]
+    assert "fc-seenpct" not in v["left"] and 'id="fc-pct"' in v["left"] and 'aria-label="更多"' in v["left"] and 'id="fc-go4"' in v["status"]
+    assert v["left"].index('id="fc-actbar"') < v["left"].index('id="fc-io"')
     assert 'id="fc-pad"' in v["right"] and "前後多聽 2 秒" in v["right"] and 'class="fc-switch"' in v["right"] and 'role="switch"' in v["right"]
     assert not re.search(r'id="fc-pad"[^>]*checked', v["right"])   # 滑動開關預設關
     assert "fc-preview" not in v["right"]   # 舊預覽的霧化樣式不能套到卡片的字
@@ -506,7 +521,7 @@ def test_page_renders_and_buttons_post_right_things():
     assert [x[1] for x in t1["log"]] == ["/api/turns/save", "/api/final/edited", "/api/final/card"], t1["log"]
     assert t1["log"][0][2]["校對稿"] == "改過的字" and t1["log"][1][2]["鍵"] == "學員段落:T005"
     assert t1["log"][2][2]["選項"] == ["念錯字"] and t1["log"][2][2]["結果"] == "退回"
-    assert t1["mid"]["state"] == "已改，等重做" and "改過的還沒重做" in t1["mid"]["status"] and t1["open"] is False
+    assert t1["mid"]["state"] == "已改，等重做" and "張要重做" in t1["mid"]["status"] and t1["open"] is False
     r1 = got["要修改：長度或停頓怪"]
     assert "錯誤" not in r1, r1
     assert 'id="fc-fix-range"' in r1["right"]
@@ -582,8 +597,12 @@ def test_page_renders_and_buttons_post_right_things():
     m = [x for x in got["新增消音"] if x[0] == "POST"]
     assert m[0][1] == "/api/review/manual" and m[0][2]["類型"] == "局部消音" and m[0][2]["start"] == 100
     assert m[1][1] == "/api/final/edited" and m[1][2] == {"鍵": "局部消音:M009", "新增": True}   # 新增的卡記「第5步新增」、不是記在目前這張
-    rd = got["重做這幾張"]
-    assert [x[1] for x in rd["log"] if x[0] == "POST"] == ["/api/execute/start"] and rd["hash"] == "#step4" and rd["back"] == 1234.5
+    rd = got["到第4步"]   # 1025-3 #294：右上的「重做這幾張」拿掉，狀態卡的按鈕只換頁、不送請求
+    assert [x for x in rd["log"] if x[0] == "POST"] == [] and rd["hash"] == "#step4" and rd["gone"]
+    # 按「到第 4 步 →」記下「從第 5 步來的」，第 4 步按開始時（app.js）才記 started_at、跑完自動跳回；回到第 5 步就取消
+    assert rd["before"] is False and rd["armed"] is True and rd["afterBack"] is False, rd
+    app = APPJS[APPJS.index('const execBtn = document.getElementById("btnExec")'):]
+    assert "fcRedoArmGet()" in app[:1500] and 'fcRedoBackSet(started && started["started_at"])' in app[:1500]
     # 10-15 第2段審查修正
     q = [x[1] for x in got["只改問老師不標已改"] if x[0] == "POST"]
     assert q == ["/api/turns/save"], q
@@ -592,8 +611,8 @@ def test_page_renders_and_buttons_post_right_things():
     assert e2["state"] == "已改，等重做"
     o = got["舊檔模式"]
     assert "錯誤" not in o, o
-    assert "重做這幾張" in o["before"]["lower"] and "重做這幾張（" not in o["before"]["lower"]   # 必修 3：舊檔模式一律有按鈕
-    assert "全部看完了" in o["before"]["status"] and "改過的還沒重做" in o["after"]           # 按「改」之後這次畫面記著
+    assert "重做這幾張" not in o["before"]["lower"]
+    assert "全部看完了" in o["before"]["status"] and "1 張要重做" in o["after"]           # 按「改」之後這次畫面記著
     assert "先照舊的紀錄顯示" not in o["before"]["status"] and "先照舊的紀錄顯示" in o["dev"]   # 只在開發者設定顯示
     lk = got["連帶與沒寫原因"]
     assert "right" in lk, lk
@@ -728,13 +747,14 @@ def test_version_page_renders():
         {"名稱": "最新", "程式": """
           await renderFinal();
           const t5 = DATA["跨版本卡片"].find((c) => c["第3步鍵"] === "學員段落:T005");
+          const lowerT = document.getElementById("fc-lower").innerHTML; fcSetStatusFilter("已通過"); const lowerP = document.getElementById("fc-lower").innerHTML; fcSetStatusFilter("還沒看");
           H.listeners.length = 0; H.log.length = 0; fcSelect(t5.id, false);
           const right = document.getElementById("fc-right").innerHTML;
           await last("fc-fix");   // 10-15 宇軒驗證回饋六：跨版本卡「要修改」也能按、打得開
           const opened = fc.fix.open && !!document.getElementById("fc-fixbox");
           fcFixReset(); fcRenderRight(); H.log.length = 0;
           await last("fc-pass");
-          return {top: contentEl.innerHTML, lower: document.getElementById("fc-lower").innerHTML, right, opened, log: H.log};"""},
+          return {top: contentEl.innerHTML, lower: lowerT, lowerP, right, opened, log: H.log};"""},
         {"名稱": "範圍外", "程式": """
           await renderFinal();
           const n1 = DATA["卡片"].find((c) => c["第3步鍵"] === "名字:1");
@@ -755,14 +775,15 @@ def test_version_page_renders():
     assert "錯誤" not in v, v
     assert "看哪一版" in v["top"] and "第 2 版" in v["top"] and "（最新）" in v["top"]
     # 10-15 宇軒驗證回饋六：上面「還要確認的」含跨版本卡（時間格下小字「第 1 版」）、下面「已通過的」；不再有「上一版還沒看的」那一區
-    assert "還要確認的" in v["lower"] and "已通過的" in v["lower"] and "上一版還沒看的" not in v["lower"]
-    top_part, low_part = v["lower"].split('class="rv-list fc-passed"')
+    # 1025-3：同一個清單照「還沒看／要重做／已通過」篩，lower＝還沒看那一格、lowerP＝已通過那一格
+    assert "上一版還沒看的" not in v["lower"]
+    top_part, low_part = v["lower"], v["lowerP"]
     assert 'class="fc-vtag">第 1 版</small>' in top_part and "fc-vtag" not in low_part
-    assert "已通過（沿用上一版）" in low_part and "已通過（沿用上一版）" not in top_part and "這一版沒處理到" not in v["lower"]
+    assert "已通過（沿用上一版）" in low_part and "已通過（沿用上一版）" not in top_part and "這一版沒處理到" not in v["lower"] + v["lowerP"]
     # 10-15 宇軒驗證回饋四／五：「已通過（沿用上一版）」的列 done＋綠色標籤 fc-tag-ok；文字刷淡用 fc-faded-ok（標籤不淡），不是整列 fc-faded
-    row = re.search(r'<li data-id="[^"]*" class="([^"]*)">(?:(?!</li>).)*已通過（沿用上一版）', v["lower"], re.S)
+    row = re.search(r'<li data-id="[^"]*" class="([^"]*)">(?:(?!</li>).)*已通過（沿用上一版）', v["lowerP"], re.S)
     assert row and "done" in row.group(1) and "fc-faded-ok" in row.group(1) and " fc-faded " not in row.group(1) + " "
-    assert re.search(r'fc-tag-ok"[^>]*>已通過（沿用上一版）', v["lower"])
+    assert re.search(r'fc-tag-ok"[^>]*>已通過（沿用上一版）', v["lowerP"])
     # 最新版上「已通過（沿用上一版）」的卡：「要修改」可以按、通過不行；確定 → 記原因（退回＋選項）
     o = got["範圍外"]
     assert "錯誤" not in o, o
@@ -783,12 +804,12 @@ def test_version_page_renders():
           await last("fc-pass");
           const log = H.log.slice(); H.log.length = 0;
           await fcExport();
-          return {right, lower: document.getElementById("fc-lower").innerHTML + document.getElementById("fc-actbar").innerHTML + document.getElementById("fc-redo-slot").innerHTML, video: document.getElementById("fc-video").getAttribute("src"),
+          return {right, lower: document.getElementById("fc-lower").innerHTML + document.getElementById("fc-actbar").innerHTML, status: document.getElementById("fc-status").innerHTML, video: document.getElementById("fc-video").getAttribute("src"),
                   log, exp: H.log};"""}], data=old)
     o = got["舊版"]
     assert "錯誤" not in o, o
     # 10-16 宇軒：重做這幾張一直在右上角，看舊版時變灰按不下去
-    assert "＋在這裡新增修改" not in o["lower"] and 'id="fc-redoall" disabled title="看舊版時不能重做' in o["lower"]
+    assert "＋在這裡新增修改" not in o["lower"] and "fc-redoall" not in o["lower"]
     assert not re.search(r'id="fc-fix"[^>]*disabled', o["right"]) and "回到最新一版" not in o["right"]   # 10-15 宇軒驗證回饋六：舊版也能按
     assert not any(x[0] == "POST" and x[2].get("結果") == "退回" for x in o["log"])
     assert o["video"].startswith("/api/final/video?版本=1&v=")
@@ -888,28 +909,28 @@ def test_every_tab_every_version_renders():
     weird = json.loads(json.dumps(old))
     weird["不修改"], weird["需留意"] = {}, {"有紀錄": True, "列": None}
     tabs = ["全部", "還沒看完", "不修改", "需留意", "名字", "學員段落", "其他", "不存在的分頁"]
+    # 1025-3（#294）：分頁改成「依類型」下拉（記住的是已拿掉的分頁、或「第 3 步選定不修改」「需留意」→ 回到全部），上面一排是還沒看／要重做／已通過／需留意
     sc = """%s LS.store["fc-tab"] = TAB;
           await renderFinal();
           const lower = document.getElementById("fc-lower").innerHTML;
-          return {lower, err: H.log.filter((x) => x[0] === "錯誤")};"""
+          const all = {};
+          for (const k of FC_SF) { fcSetStatusFilter(k); all[k] = document.getElementById("fc-lower").innerHTML; }
+          return {lower, all, err: H.log.filter((x) => x[0] === "錯誤")};"""
     for name, data in (("最新", latest), ("舊版", old), ("第3版樣子", v3), ("缺欄位", bare), ("怪欄位", weird), ("有不修改需留意", base)):
         got = _run_page([{"名稱": t, "程式": f"const TAB = {json.dumps(t, ensure_ascii=False)};" + sc % _LS.replace("\n", " ")}
                          for t in tabs], data=data)
         for t in tabs:
             v = got[t]
             assert isinstance(v, dict) and "錯誤" not in v and not v["err"], (name, t, v)
-            assert 'class="rv-filters fc-tabs"' in v["lower"], (name, t)
-            assert 'data-tab="還沒看完"' not in v["lower"], (name, t)   # 10-15 宇軒驗證回饋六：分頁拿掉；記住的是它 → 顯示全部
-            if t == "還沒看完":
-                assert re.search(r'class="on[^"]*" data-tab="全部"', v["lower"]), (name, v["lower"][:300])
-            has_keep = bool((data.get("不修改") or []) if isinstance(data.get("不修改"), list) else False)
-            if t == "不修改" and not has_keep:
-                assert "這一版沒有「第 3 步選定不修改」這一頁" in v["lower"], (name, v["lower"][:300])
-            if t == "需留意" and not data.get("需留意"):
-                assert "這一版沒有「需留意」這一頁" in v["lower"], (name, v["lower"][:300])
-    keep = _run_page([{"名稱": "k", "程式": "const TAB = '不修改';" + sc % _LS.replace("\n", " ")}], data=base)["k"]
+            assert 'class="rv-filters fc-tabs fc-sf"' in v["lower"], (name, t)
+            assert 'data-tab="還沒看完"' not in v["lower"], (name, t)
+            if t in ("還沒看完", "不修改", "需留意", "不存在的分頁"):
+                assert re.search(r'<option value="全部" selected', v["lower"]), (name, t, v["lower"][:400])
+            for k, html in v["all"].items():
+                assert f'class="on" data-sf="{k}"' in html or k == "需留意" and not data.get("需留意") and not data.get("不修改"), (name, t, k)
+    keep = _run_page([{"名稱": "k", "程式": "const TAB = '全部';" + sc % _LS.replace("\n", " ")}], data=base)["k"]
     if base.get("不修改"):
-        assert 'id="fc-ulist"' in keep["lower"] and "這一版沒有" not in keep["lower"]
+        assert 'id="fc-ulist"' in keep["all"]["需留意"]
 
 
 # ---------- 10-15 宇軒驗證回饋六（1015-6）：所有卡都能按「要修改」、兩個清單互換、上一張／下一張走兩個清單 ----------
@@ -937,10 +958,10 @@ def test_feedback6_fix_lists_and_nav():
     got = _run_page([
         {"名稱": "畫面", "程式": """
           await renderFinal();
-          const lower = document.getElementById("fc-lower").innerHTML;
+          const lower = document.getElementById("fc-lower").innerHTML; fcSetStatusFilter("已通過"); const lowerP = document.getElementById("fc-lower").innerHTML; fcSetStatusFilter("還沒看");
           const rights = [];
           for (const id of ["X00", "X39", "P00", "P09"]) { fcSelect(id, false); rights.push(document.getElementById("fc-right").innerHTML); }
-          return {lower, rights, top: contentEl.innerHTML};"""},
+          return {lower, lowerP, rights, top: contentEl.innerHTML};"""},
         {"名稱": "跨版本要修改", "程式": """
           await renderFinal(); H.listeners.length = 0; H.log.length = 0; fcSelect("X05", false);
           await last("fc-fix"); await pick("聲音不像、不自然");
@@ -970,14 +991,14 @@ def test_feedback6_fix_lists_and_nav():
         assert 'id="fc-fix"' in r and not re.search(r'id="fc-fix"[^>]*disabled', r), r[:400]
     assert "回到最新一版" not in v["top"] and "回到最新一版" not in v["lower"]
     # 2. 上面「還要確認的」含 40 張跨版本（小字「第 2 版」）、下面「已通過的」含那 10 張；分頁沒有「還沒看完」
-    top_part, low_part = v["lower"].split('class="rv-list fc-passed"')
-    assert "還要確認的" in top_part and "已通過的" in top_part   # 「已通過的」標題在下面清單 <ol> 之前
+    top_part, low_part = v["lower"], v["lowerP"]
     top_ids = re.findall(r'<li data-id="([^"]+)"', top_part)
     low_ids = re.findall(r'<li data-id="([^"]+)"', low_part)
     assert top_ids == [f"X{i:02d}" for i in range(40)] and low_ids == [f"P{i:02d}" for i in range(10)]
     assert top_part.count('class="fc-vtag">第 2 版</small>') == 40 and "fc-vtag" not in low_part
-    assert 'data-tab="還沒看完"' not in v["lower"] and "這一頁看完了" not in v["lower"]
-    assert re.search(r'data-tab="全部"[^>]*>全部 <span>10／50</span>', v["lower"])   # 已通過／全部（含跨版本卡）
+    assert 'data-tab="還沒看完"' not in v["lower"] and "這一頁都看完了" not in v["lower"]
+    assert re.search(r'data-sf="還沒看">還沒看 <span>40</span>', v["lower"]) and re.search(r'data-sf="已通過">已通過 <span>10</span>', v["lower"])   # 含跨版本卡
+    assert "全部（50）" in v["lower"]
     # 3. 跨版本卡按「要修改」→ 聲音不像 → 確定：退回＋選項＋版本 2（後端記在卡片的等重做，見 tests/test_versions.py）
     x = got["跨版本要修改"]
     assert "錯誤" not in x, x
@@ -1005,7 +1026,7 @@ def test_feedback6_fix_lists_and_nav():
           await last("fc-fix"); await pick("聲音不像、不自然"); await last("fc-fix-go");
           return {lower, right, id: t5.id, log: posts()};"""}], data=old)["舊版"]
     assert "錯誤" not in o, o
-    assert "還要確認的" in o["lower"] and 'data-tab="還沒看完"' not in o["lower"] and "fc-vtag" not in o["lower"]
+    assert 'data-sf="還沒看"' in o["lower"] and 'data-tab="還沒看完"' not in o["lower"] and "fc-vtag" not in o["lower"]
     assert not re.search(r'id="fc-fix"[^>]*disabled', o["right"]) and "回到最新一版" not in o["right"]
     assert o["log"] == [["POST", "/api/final/card", {"id": o["id"], "結果": "退回", "選項": ["聲音不像、不自然"], "補充": "", "版本": 1}]], o["log"]
 
@@ -1018,14 +1039,15 @@ def test_feedback6_done_line_and_gone_tab():
     d["跨版本卡片"] = d["跨版本卡片"][:3]
     d["跨版本卡片"][1]["要人聽"] = True
     sc = """%s LS.store["fc-tab"] = "還沒看完"; LS.store["fc-only-look"] = ONLY;
-          await renderFinal(); return {lower: document.getElementById("fc-lower").innerHTML, tab: fcTab()};"""
+          await renderFinal(); const lower = document.getElementById("fc-lower").innerHTML; fcSetStatusFilter("已通過"); const lowerP = document.getElementById("fc-lower").innerHTML; fcSetStatusFilter("還沒看");
+          return {lower, lowerP, lower2: document.getElementById("fc-lower").innerHTML, tab: fcTab()};"""
     got = _run_page([{"名稱": "篩", "程式": "const ONLY = '1';" + sc % _LS.replace("\n", " ")}], data=d)["篩"]
     assert got["tab"] == "全部" and "只看要仔細聽的（1 張）" in got["lower"]
-    top_part, low_part = got["lower"].split('class="rv-list fc-passed"')
+    top_part, low_part = got["lower"], got["lowerP"]
     assert re.findall(r'<li data-id="([^"]+)"', top_part) == ["X01"] and len(re.findall(r'<li data-id=', low_part)) == 10
     d["跨版本卡片"] = []
     got = _run_page([{"名稱": "完", "程式": "const ONLY = '0';" + sc % _LS.replace("\n", " ")}], data=d)["完"]
-    assert "這一頁看完了" in got["lower"] and "還要確認的" in got["lower"] and "已通過的" in got["lower"]
+    assert "這一頁都看完了" in got["lower2"] and 'data-sf="已通過"' in got["lower2"] and "fc-passed" in got["lowerP"]
 
 
 # ---------- 10-15 總檢查修正（1015-7）：頂端張數、預設黃底、只看要仔細聽的、取消要重做、刪掉的卡、舊版小字、退路 ----------
@@ -1062,7 +1084,7 @@ def test_1015_7_pure():
         rows: [execRedoRows({"要重做": [{"卡號": "K0012", "類型": "學員段落", "原片": [61, 65], "原因": red}], "退回清單": [{"類型": "x"}, {"類型": "y"}]}),
                execRedoRows({"退回清單": [{"類型": "名字", "覆核名稱": ["名字 1"], "原因": "念錯字", "說明": "重新生成"}]}), execRedoRows({})]}));""")
     assert got["left"] == [40, 7]
-    assert got["st"] == ["還有 40 張沒看", "有 2 張要重做（到最新版按『重做這幾張』）", "還有 1 張沒看"], got["st"]
+    assert got["st"] == ["還有 40 張沒看", "2 張要重做", "還有 1 張沒看"], got["st"]
     assert got["passed"] == [True, False, True]
     assert got["pick"] == ["b", "b"]
     assert got["fix"] == [False, True, False, True, "這張卡已併到 #3", "這張卡已刪掉，沒有可以重做的", "先選一張卡"]
@@ -1136,7 +1158,7 @@ def test_1015_7_page():
     assert "錯誤" not in o, o
     assert "最新版：要重做（聲音不像、不自然：太快）" in o["right"]
     assert "哪裡出問題：<b>聲音不像、不自然</b>" in o["fixed"] and 'value="太快"' in o["fixed"]
-    assert re.search(r"有 \d+ 張要重做（到最新版按『重做這幾張』）", o["top"]), o["top"]
+    assert re.search(r"\d+ 張要重做", o["top"]) and "到最新版，回第 4 步按「更新成品」" in o["top"], o["top"]
 
 
 def test_1015_7_name_spots_pad_switch():
@@ -1227,6 +1249,68 @@ def test_attention_head_text():
     assert "目前成品裡還留著原聲的部分，不會擋輸出，但請多留意此部分；想確認就按「跳過去聽」，要改就「回第 3 步改」，改完要重新組裝。" in got
     assert "這一頁會顯示學員本名，截圖或分享螢幕時請注意。" in got
     assert "開始前總檢查" not in got and "『" not in got
+
+
+def test_1025_3_menu_state_card_and_filters():
+    """1025-3（#294）：右上「⋯」選單（開、點外面關、Esc 關、輸出成品走原本的確認流程）、狀態卡三種長相、篩選列、卡片頂端換張。"""
+    if not NODE:
+        return
+    d = json.loads(json.dumps(_api_final()[0]))
+    allok = json.loads(json.dumps(d))
+    for c in allok["卡片"]:
+        c["狀態"], c["已通過的"] = "通過", True
+    allok["跨版本卡片"] = []
+    allok["卡片統計"] = {"還沒看": 0, "要重做": 0, "還要確認": 0}
+    allok["需留意"] = {"列": []}
+    todo = json.loads(json.dumps(allok))
+    todo["卡片"][0]["狀態"], todo["卡片"][0]["已通過的"] = "還沒看", False
+    todo["卡片統計"] = {"還沒看": 1, "要重做": 0, "還要確認": 1}
+    menu = """
+          await renderFinal();
+          const m = () => document.getElementById("fc-menu");
+          const out = {start: m().hidden, expanded0: document.getElementById("fc-more").attrs && 0};
+          await H.fireAll((l) => l.el.id === "fc-more");
+          out.opened = m().hidden;
+          const clicks = H.docListeners.filter((l) => l.type === "click"), keys = H.docListeners.filter((l) => l.type === "keydown");
+          clicks.forEach((l) => l.fn({target: document.getElementById("fc-now")}));
+          out.outside = m().hidden;
+          await H.fireAll((l) => l.el.id === "fc-more");
+          const reopened = m().hidden;
+          keys.forEach((l) => l.fn({key: "Escape", target: {tagName: "BODY"}, stopPropagation() {}, preventDefault() {}}));
+          out.esc = [reopened, m().hidden];
+          await H.fireAll((l) => l.el.id === "fc-more"); H.log.length = 0;
+          await H.fireAll((l) => l.el.id === "fc-menu-export");
+          out.exp = H.log.filter((x) => x[0] === "POST").map((x) => x[1]); out.closedAfter = m().hidden;
+          return out;"""
+    got = _run_page([{"名稱": "選單", "程式": menu},
+                     {"名稱": "全過", "程式": 'await renderFinal(); return {st: document.getElementById("fc-status").innerHTML, bar: document.getElementById("fc-lower").innerHTML};'}], data=allok)
+    m = got["選單"]
+    assert "錯誤" not in m, m
+    assert m["start"] is True and m["opened"] is False and m["outside"] is True and m["esc"] == [False, True], m
+    assert m["exp"] == ["/api/final/export"] and m["closedAfter"] is True, m
+    a = got["全過"]
+    assert "全部看完了" in a["st"] and 'id="fc-export"' in a["st"] and "輸出成品" in a["st"] and "fc-go4" not in a["st"]
+    assert 'data-sf="已通過">已通過' in a["bar"] and 'class="on" data-sf="已通過"' in a["bar"]   # 沒有還沒看的：第一次畫停在已通過
+    t = _run_page([{"名稱": "沒看完", "程式": 'await renderFinal(); return {st: document.getElementById("fc-status").innerHTML, right: document.getElementById("fc-right").innerHTML};'}], data=todo)["沒看完"]
+    assert "還有 1 張沒看" in t["st"] and "fc-export" not in t["st"] and "fc-go4" not in t["st"]    # 只有一句，不放大按鈕
+    r = t["right"]   # 換張搬到卡片頂端，底部只剩通過／要修改
+    assert r.index('id="fc-prev"') < r.index('id="fc-pass"') and r.index('id="fc-next"') < r.index('id="fc-pass"') and r.index("第 1／") < r.index('id="fc-pass"')
+    assert r.index('id="fc-fix"') < r.index('id="fc-back-undo"') if 'id="fc-back-undo"' in r else True
+
+
+def test_1025_3_menu_handoff_states_pure():
+    """交接兩項：已結案、交接框讀不到、打包中（改成「停止打包」）、不能打包的原因。"""
+    if not NODE:
+        return
+    src = FCJS[FCJS.index("const FC_MENU_HINT = {"):FCJS.index("function fcMenuHtml")] + _fn(FCJS, "fcMenuHandoff")
+    got = _node(src + """
+      const ok = {closed: false, hasBox: true, running: false, packWhy: "", off: false};
+      console.log(JSON.stringify([fcMenuHandoff("pack", {...ok, closed: true}), fcMenuHandoff("imp", {...ok, hasBox: false}),
+        fcMenuHandoff("pack", {...ok, running: true}), fcMenuHandoff("imp", {...ok, running: true}),
+        fcMenuHandoff("pack", {...ok, packWhy: "還沒有成品", packOff: true}), fcMenuHandoff("imp", ok)]));""")
+    assert got[0]["off"] and "已結案" in got[0]["hint"] and got[1]["off"] and "讀不到" in got[1]["hint"]
+    assert got[2] == {"label": "停止打包", "hint": "正在打包；按了會停下來", "off": False} and got[3]["off"]
+    assert got[4]["off"] and got[4]["hint"] == "還沒有成品" and got[5] == {"label": "匯入交接包…", "hint": "收到別人傳來的交接包時用。", "off": False}
 
 
 def test_fill_defaults_pure():
