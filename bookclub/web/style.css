@@ -1265,3 +1265,8 @@ details.exec-direct > summary { cursor: pointer; color: var(--accent); text-deco
 .rv-others .rv-meta { margin: 0; font-size: 13px; }
 .rv2 .rv-others button { font-size: 13px; padding: 3px 10px; }
 .rv-timebar .fc-pad { font-size: 13px; white-space: nowrap; }
+/* 1025-2 第3步：窄螢幕（1280 以下）3-1 改上下一欄，播放器縮成小的放在小步驟內容下方 */
+@media (max-width: 1280px) {
+  .rv2.rv-prepmode { display: flex; flex-direction: column; }
+  .rv2.rv-prepmode > .rv-upper { order: 10; margin-top: 18px; max-width: 360px; }
+}

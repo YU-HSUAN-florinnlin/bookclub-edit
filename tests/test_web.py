@@ -859,7 +859,7 @@ def test_step3_ux_1025_2():
     assert 'e.key !== "Escape" || !m || m.hidden' in rv                            # Esc 關選單
     # 3-1：一排小步驟、每件底部一顆按鈕、最後一件接「開始逐筆確認」；全部照建議通過降成連結並先確認
     assert "rv-prepchips" in rv and "這一件好了 → 下一件" in rv and "開始逐筆確認 →" in rv and 'id="rv-prepundo"' in rv
-    assert 'class="linkish" id="rv-passall"' in rv and "筆都照 AI 建議" in rv and "uiConfirm({ title: `把還沒確認的" in rv
+    assert 'class="linkish" id="rv-passall"' in rv and "筆照 AI 建議（不能自動通過的會留著）" in rv and "uiConfirm({ title: `把還沒確認的" in rv
     # 3-2：卡片頂端一行、AI 建議在文字框上面、兩顆大的、其他收成一排小字、內部代號只放提示
     card = rv[rv.index("function rvRenderCard"):rv.index("function rvPrefill")]
     assert card.index('class="rv-cardnav"') < card.index("rv-sug") < card.index('class="rv-body"') < card.index('id="rv-pass"')

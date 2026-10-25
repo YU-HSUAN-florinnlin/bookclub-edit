@@ -162,7 +162,7 @@ async function renderReview() {
           <dt>↑ ↓</dt><dd>上一筆／下一筆（影片跳到那筆前 2 秒）</dd>
           <dt>空白鍵</dt><dd>播放／暫停</dd>
           <dt>J　L</dt><dd>往前／往後 5 秒</dd>
-          <dt>I　O</dt><dd>把目前播放位置填進「新增修改」的起點／終點（面板沒開會自動打開）</dd>
+          <dt>I　O</dt><dd>逐筆確認時才有：把目前播放位置填進「新增修改」的起點／終點（面板沒開會自動打開）</dd>
           <dt>Esc</dt><dd>在文字框裡：從頭播這一筆</dd>
         </dl>
         </div>
@@ -659,7 +659,7 @@ function rvPassAllHtml() {
   const left = rvLeft();
   // 1025-2（#292）：降成文字連結，旁邊小字說明；按下去先問一次
   return `<span class="rv-passlink"><button class="linkish" id="rv-passall" ${left ? "" : "disabled"} data-tip="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>
-    <span class="rv-meta">${left} 筆都照 AI 建議</span></span>`;
+    ${left ? `<span class="rv-meta">還沒確認的 ${left} 筆照 AI 建議（不能自動通過的會留著）</span>` : ""}</span>`;
 }
 
 function rvBindPassAll(box) {
@@ -672,7 +672,7 @@ function rvPassAllMsg(r) {
   const kinds = (r && r["依類型"]) || [];
   return { title: `通過了 ${(r && r["通過"]) || 0} 張`, left: (r && r["還要看"]) || 0,
     lines: kinds.map((k) => `${k["說明"]}：${k["筆數"]} 張`),
-    note: (r && r["還要看"]) ? "剩下的不擋「開始 AI 修改」，沒看的照目前的設定做。清單上方的篩選選「還沒確認」看得到是哪幾張。" : "卡片都處理好了。" };
+    note: (r && r["還要看"]) ? "剩下的不擋「開始 AI 修改」，沒看的照目前的設定做。到「逐筆確認」，篩選選「還沒確認」看得到是哪幾張。" : "卡片都處理好了。" };
 }
 
 async function rvPassAll() {
