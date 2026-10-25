@@ -29,7 +29,6 @@ const rv = {
 
 const RV_CARD_CTX = {
   mode: "第3步",
-  padInPlayer: true,   // 1025-2：「前後多聽 2 秒」開關放在播放器旁（整頁一顆），卡片上不放
   data: () => rv.data,
   reload: () => rvReload(),
   post: (url, body, opts) => apiPost(url, body, opts),
@@ -183,7 +182,6 @@ async function renderReview() {
             : `<div class="rv-novideo">找不到原片（${esc(v["檔名"] || "沒有記錄影片路徑")}）。用 <code>bookclub serve &lt;工作區&gt; --video &lt;影片&gt;</code> 重開。</div>`}
           <div class="rv-timebar">
             <span class="rv-clock"><b id="rv-clock">0:00</b> ／ ${esc(rvFmt(v["長度"]))}</span>
-            ${cvPadHtml("rv-pad")}
             <input id="rv-goto" class="rv-goto" placeholder="跳到 43:15" aria-label="跳到時間（例如 43:15，按 Enter）">
             <select id="rv-rate" aria-label="播放速度"><option value="1">1 倍速</option><option value="1.25">1.25 倍速</option><option value="1.5">1.5 倍速</option><option value="2">2 倍速</option></select>
           </div>
@@ -208,7 +206,6 @@ async function renderReview() {
   document.getElementById("rv-rate").addEventListener("change", (e) => { if (rv.video) rv.video.playbackRate = Number(e.target.value); });
   document.getElementById("rv-prep-btn").addEventListener("click", () => { rv.prepOpen = true; rvRenderMain(); });
   document.getElementById("rv-cards-btn").addEventListener("click", () => { rv.prepOpen = false; rvRenderMain(); });
-  cvBindPad("rv-pad");   // 前後多聽 2 秒：1025-2 起放在播放器旁（整頁一顆，不再每張卡各放一顆）
   // 10-16 宇軒（乙方案）：設定、快捷鍵改成蓋版視窗（後面模糊，「關閉」收起）；代號對照改成左側側欄（後面照常能操作；放左邊才不會擋住右上角的卡片）
   // 1025-2：這三項收進右上「⋯」選單（視窗關掉後焦點回到「⋯」）
   const moreBtn = document.getElementById("rv-more-btn");
@@ -782,6 +779,7 @@ function rvRenderCard() {
   document.getElementById("rv-prev").addEventListener("click", () => rvStep(-1));
   document.getElementById("rv-next").addEventListener("click", () => rvStep(1));
   cvBindPlayShrink(it);
+  cvBindPad("rv-pad");   // 前後多聽 2 秒：在卡片上「聽這一段」右邊（跟第 5 步一樣，1025-2 宇軒 10-25）
   rvBindBody(it);
   rvBindOutQ(it);
   rvBindMore(it);

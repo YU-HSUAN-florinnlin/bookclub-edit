@@ -19,9 +19,10 @@
 1022-2：成功通知改 Toast（#264）、按鈕說明改 Tooltip（#265）。維護者同意重產；差異只在按鈕的 title= 改成 data-tip=
 （說明文字不變），「開始前 4 件事」按鈕的 title 跟按鈕字一樣、直接拿掉；送出的 API、按鈕事件都沒變（#264 的成功通知這份資料沒有觸發到）。
 1025-2（#292、#293）：宇軒同意（10-25 勾選）改第 3 步畫面，快照重產。改了什麼：卡片頂端一行「上一筆　第 N／M 筆　下一筆」、內部代號（T047 之類）改放滑鼠移上去的提示、
-AI 建議藍框放在文字框上面、決定按鈕兩顆大的（通過、改做法）、「改時間」「這段其實是老師」等改成下面一排小字「其他：」、「前後多聽 2 秒」開關搬到播放器旁（卡片上不放）、
+AI 建議藍框放在文字框上面、決定按鈕兩顆大的（通過、改做法）、「改時間」「這段其實是老師」等改成下面一排小字「其他：」、
 清單篩選只顯示有筆數的、清單拿掉內部代號與上方那組重複入口（開始前 4 件事、全部照建議通過）與頁尾重疊說明、開始前 4 件事改成上方一排小步驟（右欄不再有總表）、
 每件底部「這一件好了 → 下一件」、「全部照建議通過」降成連結。送出的 API、按鈕動作沒變（按鈕的 id 都在）。
+1025-2：前後 2 秒開關放回卡片上（宇軒 10-25）：先搬到播放器旁又改回，卡片、名字卡多處列的開關位置與 10-16 的快照相同（緊接在「聽這一段」右邊，跟第 5 步一樣）。
 獨立可跑：.venv/bin/python tests/test_cards_snapshot.py
 """
 
@@ -48,7 +49,7 @@ NODE = shutil.which("node")
 STEP3_FILES = [p for p in ("cards.js", "review.js") if (WEB / p).is_file()]
 
 SKELETON = ["rv-right", "rv-lower", "rv-tl", "rv-progress", "rv-legend", "rv-io", "rv-export-msg", "rv-busy",
-            "rv-prep-btn", "rv-cards-btn", "rv-pad", "rv-go4", "rv-settings", "rv-codes", "rv-clock", "rv-head"]
+            "rv-prep-btn", "rv-cards-btn", "rv-go4", "rv-settings", "rv-codes", "rv-clock", "rv-head"]
 
 
 def _items() -> dict:
@@ -219,11 +220,10 @@ def test_step3_pad_switch():
       rvOpenEditor(T3); H.listeners.length = 0; rvRenderIO();
       const te = H.listeners.filter((x) => "tePlay" in x.el.dataset && x.type === "click").pop();
       await te.fn({}); shots.te = [[rv.video.currentTime, rv.stopAt], rv.ed.a, rv.ed.b];
-      rv.cur = "名字:3"; rvRenderCard(); cvBindPad("rv-pad");
-      const padHtml = cvPadHtml("rv-pad");
+      rv.cur = "名字:3"; rvRenderCard();
       const pad = document.getElementById("rv-pad"); pad.checked = !ON;
       await H.listeners.filter((x) => x.el.id === "rv-pad" && x.type === "change").pop().fn({});
-      return {shots, cards, padHtml, stored: LS.store["fc-ab-pad"], padOn: cvPad()};"""
+      return {shots, cards, stored: LS.store["fc-ab-pad"], padOn: cvPad()};"""
     spec["情境"] = [{"名稱": n, "程式": f"const ON = {o};" + body} for n, o in (("關", "false"), ("開", "true"))]
     d = Path(tempfile.mkdtemp())
     (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
@@ -236,10 +236,10 @@ def test_step3_pad_switch():
         for what, (seen, a, b) in v["shots"].items():
             assert [round(x, 3) for x in seen] == [round(max(0, a - k), 3), round(b + k, 3)], (name, what, seen, a, b)
         for key, html in v["cards"].items():
-            assert html.count("data-cv-pad") == 0, (name, key)   # 1025-2：開關搬到播放器旁（整頁一顆），卡片上不放
+            assert html.count("data-cv-pad") == 1, (name, key)   # 一張卡一顆
+            assert ("checked" in html.split('id="rv-pad"')[1].split(">")[0]) == (k == 2), (name, key)
             for old in ("只播這一段", "只播重念範圍", "播這一段", "試聽這幾秒", "試聽這段"):
                 assert old not in html.replace("聽這一段", ""), (name, key, old)
-        assert v["padHtml"].count("data-cv-pad") == 1 and ("checked" in v["padHtml"].split('id="rv-pad"')[1].split(">")[0]) == (k == 2), name
         assert 'rv-namefold' not in v["cards"]["名字:3"] and 'rv-edge' not in v["cards"]["名字:3"]   # 不是名字：沒有調整區、不提醒縮範圍
         nm = v["cards"]["名字:3 要重念"]
         assert 'class="rv-namefold"' in nm and 'class="linkish rv-reset" id="rv-rangereset"' in nm
