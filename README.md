@@ -476,7 +476,7 @@ bash install.sh
   - `serve.sh`：第 7 步，背景開網頁並確認 8766 有回應。
   - `list-old-backups.sh [這次備份的時間]`：第 9 步，只列出舊備份候選與大小，不刪。
   - 腳本失敗時，把輸出原樣給使用者看，不要改寫指令重試、不要自己改腳本。
-  - 從沒有 `scripts/` 的舊版（例如 0.2.2b3）第一次更新時，腳本還不在工具資料夾裡：先 `git fetch --tags`，再用 `git show v新版:scripts/update-to.sh` 取出到 Ubuntu 家目錄執行（`status.sh`、`backup-before-update.sh` 也一樣取出）。
+  - 從沒有 `scripts/` 的舊版（例如 0.2.2b3）第一次更新時，腳本還不在工具資料夾裡：先 `git fetch --tags`，再用 `wsl -d Ubuntu -- bash -lc "mkdir -p ~/bookclub-update && git -C ~/bookclub-edit archive v新版 scripts | tar -x -C ~/bookclub-update"` 把新版的 `scripts/` 取到 `~/bookclub-update/scripts/`（這行沒有 `$` 和單引號，可以直接打），之後用 `wsl -d Ubuntu -- bash -lc "bash ~/bookclub-update/scripts/update-to.sh v新版"` 這樣的格式跑。更新完成後 `~/bookclub-update/` 可以刪掉。
 - Ubuntu 26.04 的 `ls` 會把中文名字顯示成 `$'\350…'` 這種代號：列資料夾時在腳本裡用萬用字元（例如 `for d in ~/bookclub-edit-舊版*`），不要解析 `ls` 的輸出；回報給使用者時寫回中文名字。
 
 **步驟**（macOS 與 WSL2 一樣，差別寫在步驟裡）：
