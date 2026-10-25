@@ -285,14 +285,15 @@ def test_web_lower_wiring():
     """10-15 第5步2.0 第2段：分頁列沿用第 3 步的 .rv-filters（分頁、上一張下一張的純函式在 test_final_cards_web.py）；
     頁面記在瀏覽器；「第 3 步選定不修改」「需留意」收在最右邊、按鈕照舊接到只播那一段與回第 3 步。"""
     lower = _fn("fcRenderLower")
-    assert 'class="rv-filters fc-tabs"' in lower and "fcTabSet(b.dataset.tab)" in lower
-    assert 'id="fc-only"' in lower and "fcShown()" in lower
+    # 1025-3（#294）：上面一排改成「還沒看｜要重做｜已通過｜需留意」（fc-sf），原本依類型的分頁收進「依類型」下拉（fc-type）
+    assert 'class="rv-filters fc-tabs fc-sf"' in lower and "fcTabSet(typeSel.value)" in lower and "fcSetStatusFilter(b.dataset.sf)" in lower
+    assert 'id="fc-only"' in lower and 'id="fc-type"' in lower
     assert 'const FC_TAB_KEY = "fc-tab"' in FCJS and "localStorage.getItem(FC_TAB_KEY)" in FCJS
     # 10-15 宇軒驗證回饋六：兩個清單（fcLists）；上一張／下一張走上面清單接下面清單（fcNavList）
     shown = _fn("fcLists")
     assert "fcTab()" in shown and "fcOnlyLook()" in shown and "fcLists().todo" in _fn("fcShown")
     assert "fcNavList()" in _fn("fcStep") and "fcStepPick(" in _fn("fcStep")
-    assert "fcTabSet(FC_TAB_KEEP)" in _fn("renderFinal")
+    assert 'fc.sf = "需留意"' in _fn("renderFinal")
     assert "fcPlaySpan(" in lower and "rvJump({ key: u[\"第3步\"] || null, back: \"step5\", backKey: u[\"鍵\"]" in lower
     assert 'id="fc-list"' in lower and 'id="fc-ulist"' in _fn("fcKeepTabHtml") and "fcSpanTick(v.currentTime)" in FCJS
     assert FCJS.count("fileOutInit(") >= 1 and 'id="fc-fileout"' in FCJS   # 10-07 加的檔案進出照留

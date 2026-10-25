@@ -142,8 +142,8 @@ def test_no_promises_of_unbuilt_redo():
     app = (WEB / "app.js").read_text(encoding="utf-8")
     # 10-01 第三批：一鍵只重做做好了；畫面上不再叫人照指令手動重做、也不出現指令
     assert "手動重做" not in fc and "只重做這幾張" not in app   # 1024-3（#285）：「只重做這幾張」那顆跟主要按鈕送同一個請求，拿掉；10-15 總檢查修正（1015-7）：「只重做退回的這幾筆」→「只重做這幾張」
-    # 10-15 第5步2.0 第2段：第 5 步只有一顆「重做這幾張」（「送回 AI 重做」拿掉）
-    assert "重做這幾張" in fc and "送回 AI 重做" not in fc and "/api/final/sendback" not in fc
+    # 10-15 第5步2.0 第2段：「送回 AI 重做」拿掉；1025-3（#294）：第 5 步的「重做這幾張」也拿掉，改由狀態卡「到第 4 步 →」去按第 4 步的「更新成品」
+    assert "送回 AI 重做" not in fc and "/api/final/sendback" not in fc
     assert "bookclub gen" not in app and "<code>${esc(it[\"建議指令\"])}" not in app
     assert "能省掉的是第 2、3 步的人工" not in app and 'id="btnAutoCode"' in app
     skill = (REPO_ROOT / "skills" / "bookclub-edit" / "SKILL.md").read_text(encoding="utf-8")
