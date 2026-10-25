@@ -469,17 +469,28 @@ bash install.sh
 
 - 指令裡有中文路徑（例如 `~/讀書會剪輯資料`）、`$` 變數、單引號雙引號混用時，**一律先寫成一個 `.sh` 檔**，放在 Ubuntu 家目錄（例如從 Windows 寫到 `\\wsl.localhost\Ubuntu\home\<Ubuntu 使用者名稱>\bookclub-update.sh`），再用 `wsl -d Ubuntu -- bash -lc "bash ~/bookclub-update.sh"` 執行。直接寫在 wsl 指令裡的中文可能會變字，`$` 變數會先被 PowerShell 換成空白，引號也常對不起來；`.sh` 檔內容裡的中文沒問題。路徑讓腳本自己找，不要放在指令參數裡。這些 `.sh` 檔是這次更新自己寫的，做完可以刪掉。
 - 第 3、7、9 步都會用到中文路徑，直接寫成 `.sh` 檔。
+- **固定動作已經做成現成的腳本**，在工具資料夾的 `scripts/`，不要現場自己寫一行指令。用法一律是 `wsl -d Ubuntu -- bash -l "/home/<Ubuntu 使用者名稱>/bookclub-edit/scripts/<檔名>" [參數]`（`bash -l` 登入模式才讀得到 `~/.profile` 的環境設定，Groq 金鑰要放在 `~/.profile`）：
+  - `status.sh`：只查看。網頁有沒有開、第 4 步有沒有在跑、網頁的程式編號。
+  - `backup-before-update.sh`：第 3 步備份。
+  - `update-to.sh <版本標籤>`：第 1、4、5、6 步（檢查、記檢查碼、切版本、比對套件）。結束碼 0＝套件沒變、10＝套件有變要跑 `install.sh`、1＝出錯。不給標籤時，用 GitHub main 上 `STABLE` 檔寫的穩定版。
+  - `serve.sh`：第 7 步，背景開網頁並確認 8766 有回應。
+  - `list-old-backups.sh [這次備份的時間]`：第 9 步，只列出舊備份候選與大小，不刪。
+  - 腳本失敗時，把輸出原樣給使用者看，不要改寫指令重試、不要自己改腳本。
+  - 從沒有 `scripts/` 的舊版（例如 0.2.2b3）第一次更新時，腳本還不在工具資料夾裡：先 `git fetch --tags`，再用 `wsl -d Ubuntu -- bash -lc "mkdir -p ~/bookclub-update && git -C ~/bookclub-edit archive v新版 scripts | tar -x -C ~/bookclub-update"` 把新版的 `scripts/` 取到 `~/bookclub-update/scripts/`（這行沒有 `$` 和單引號，可以直接打），之後用 `wsl -d Ubuntu -- bash -lc "bash ~/bookclub-update/scripts/update-to.sh v新版"` 這樣的格式跑。更新完成後 `~/bookclub-update/` 可以刪掉。
 - Ubuntu 26.04 的 `ls` 會把中文名字顯示成 `$'\350…'` 這種代號：列資料夾時在腳本裡用萬用字元（例如 `for d in ~/bookclub-edit-舊版*`），不要解析 `ls` 的輸出；回報給使用者時寫回中文名字。
 
 **步驟**（macOS 與 WSL2 一樣，差別寫在步驟裡）：
 
 1. **確認是用 git 下載的**：`~/bookclub-edit` 裡面要有 `.git` 資料夾。沒有的話先停下來通知開發者，不要往下做。
 2. **看第 4 步有沒有在跑，沒在跑才關網頁**：
+   - WSL2 請 Claude Code 幫忙時，直接跑 `status.sh`，它會告訴你網頁有沒有開、第 4 步有沒有在跑、網頁的程式編號。
+   - Claude Code 結束程式可能被它自己的安全機制擋下。被擋時，查好程式編號，請使用者自己在 Ubuntu 視窗打 `kill <編號>`，不要改用別的方式硬關。
    - 查 <http://localhost:8766/api/run/status>（例如 `curl -s http://localhost:8766/api/run/status`），看回應裡的 `第4步執行中`。（這一欄在 0.2.3 起才有。從 0.2.2b4 或更舊的版本更新時，正在跑的是舊版，回應裡沒有這一欄：問使用者第 4 步有沒有在跑。回應只有 `沒有專案` 而沒有這一欄（0.2.4b1 以前、還沒選影片時會這樣）：沒有選影片就不可能在跑第 4 步，當作 `false`。0.2.4b2 起沒有專案也會回這一欄。）
    - 沒有回應：網頁本來就沒開，直接往下。
    - `第4步執行中` 是 `true`（或使用者說在跑）：先停下來，問使用者要等它跑完、還是自己按停止。不要替使用者按停止。
    - 是 `false`（或使用者說沒在跑）：把網頁關掉。macOS 在跑網頁的那個終端機視窗（雙擊「啟動.command」開出來的）按 `Ctrl＋C`；WSL2 在跑網頁的 Ubuntu 視窗按 `Ctrl＋C`，網頁是在背景跑的話，結束 `bookclub serve` 這個程序（先用一般的結束訊號，不要一開始就強制）。再查一次 8766，沒有回應才算關好。
 3. **更新前備份（只備份紀錄，不備份大檔）**：
+   - WSL2：跑 `backup-before-update.sh` 就做完下面全部（略過 `影片/`、`備份/`、`舊測試工作區/`、聲音檔；紀錄超過 2GB 會自己停下來，請通知開發者）。
    - 先記下現在已經有的「更新前備份」：家目錄底下、以及每個工作區旁邊，名字含 `_更新前備份_` 的資料夾。第 9 步會用到。
    - 把 `~/讀書會剪輯資料` 複製成 `~/讀書會剪輯資料_更新前備份_<日期時間>_只有紀錄`，**跳過 `影片/`**。
    - 找不到 `~/讀書會剪輯資料/專案清單.json` 時：先看 `~/讀書會剪輯資料/影片/` 底下有沒有名字含 `_剪輯工作區` 的資料夾；都沒有＝還沒做過任何影片，下一點跳過；有的話停下來問使用者，不要自己猜。
@@ -490,6 +501,7 @@ bash install.sh
    - `requirements.lock`、`requirements.txt`、`constraints.txt`、`build-constraints.txt`、`install.sh` 五個檔：整個檔案的檢查碼。舊版沒有、新版有的檔（例如從 0.2.2b3 更新時的 `requirements.lock`）也算有變。
    - `pyproject.toml` 每一版的版本號（`version` 那一行）都會變，不要比整個檔的檢查碼：把 `version` 以外的行另外存一份（例如 `grep -v '^version' pyproject.toml > /tmp/pyproject-舊.txt`），等一下比內容。只改版本號不算套件有變。
 5. **切到新版本**（`v新版` 換成更新說明裡寫的標籤）：
+   - WSL2：跑 `update-to.sh v新版`，它會做完第 4～6 步的檢查碼記錄、切版本、比對（網頁還開著會拒絕執行）。
 
    ```bash
    cd ~/bookclub-edit
@@ -507,6 +519,7 @@ bash install.sh
 
    WSL2 如果畫面跳出密碼提示，輸入 Ubuntu 的登入密碼（請 Claude Code 幫忙時，這一步要使用者自己打，Claude 不代打）。
 7. **重開網頁、確認版本**：
+   - WSL2：跑 `serve.sh`（已經在跑不會重複開，最多等 40 秒，失敗會印紀錄最後 15 行）。下面寫的手動做法是 `serve.sh` 背後做的事，或腳本不能用時的備案。
    - macOS：雙擊工具資料夾裡的「啟動.command」。
    - WSL2：Claude Code 幫忙時，由它在 Ubuntu 裡用登入模式、脫離對話在背景啟動。指令有中文路徑，直接寫成 `.sh` 檔（見上面「Windows 請 Claude Code 幫忙時」），內容是 `cd ~/bookclub-edit && setsid nohup .venv/bin/bookclub serve >> ~/讀書會剪輯資料/serve.log 2>&1 < /dev/null &`，再用 `wsl -d Ubuntu -- bash -lc "bash ~/bookclub-update.sh"` 執行；確認 8766 有回應，並告訴使用者：「網頁在背景跑，關掉 Claude 對話也不會停；要關網頁跟 Claude 說。」（Windows 測試機實測過：關掉 Claude 後 1.5 小時網頁還在。閒置好幾個小時可能會被 WSL 關掉，原因還在追查，待辦 #273；打不開時照下一句自己開。）Claude 開不起來、或使用者想自己開：在 Ubuntu 視窗打 `cd ~/bookclub-edit` 和 `.venv/bin/bookclub serve`，視窗開著不要關。
    - 用瀏覽器（WSL2 用 Windows 的瀏覽器）開 <http://localhost:8766>，有畫面才算開好。「總覽」看得到原本的專案、左下角「工具設定」→「初始化設定」的名冊筆數跟以前一樣，就是設定與資料都接上了。
@@ -520,6 +533,7 @@ bash install.sh
 
    必要項目要全部 ✅。有沒過的，第 9 步就整個不做，先照畫面上的「修法」處理。
 9. **清掉用不到的舊東西**（健檢全 ✅、網頁開得起來之後才做；Claude Code 幫忙時不再問使用者，做完說空出多少）。刪之前、刪之後各量一次大小（`du -sh`）：
+   - WSL2：先跑 `list-old-backups.sh <這次備份的時間>`（時間在第 3 步輸出裡，例如 `20261025-1503`），它只列候選、標「保留」或「候選」，不刪。再照下面的條件逐項確認才刪。
    - **舊的工具資料夾一份都不留**：家目錄底下名字以 `bookclub-edit-舊版` 開頭的資料夾（以前「改名留著」的做法留下來的，裡面只有程式和 `.venv/`，每份約 1.3–2.4GB）。每一個都要三項全部符合才刪：
      1. 名字以 `bookclub-edit-舊版` 開頭；絕不碰 `~/bookclub-edit` 本身和 `~/讀書會剪輯資料/`。
      2. 那個資料夾裡沒有名字含 `_剪輯工作區` 的資料夾，也沒有影片檔（mp4、mov、m4a、mkv 等）。
@@ -932,7 +946,7 @@ Windows 上的 Ubuntu 整個裝在一個虛擬硬碟檔（`ext4.vhdx`，在 C �
 
 先看佔了多少：在工具資料夾跑 `.venv/bin/bookclub disk`（只看、不刪），會列出每支影片的工作區、模型快取、舊版工具、更新前備份各多大，WSL 上最後一行是虛擬硬碟多大、C 槽還剩多少。
 
-1. 先在 Ubuntu 裡清好：做完的影片在第 5 步按「結案打包…」（存好就清掉那支影片的暫存）、`uv cache clean`（安裝工具時的下載暫存；下次更新會重新下載一部分，慢一點但不會壞）。
+1. 先在 Ubuntu 裡清好：做完的影片在第 5 步按「結案打包…」（存好就清掉那支影片的暫存）。`~/.cache/uv`（安裝工具時的下載暫存）不用特地清：裡面的檔案多數跟工具資料夾的 `.venv/` 是同一份，2026-10-25 在 Windows 測試機實測清掉只少約 0.2GB（`bookclub disk` 顯示的 2.5GB 不是真的多佔的空間）。
 2. 關掉讀書會剪輯工具，在 PowerShell 打 `wsl --shutdown`。
 3. 縮小，兩種做法擇一：
    - 新版 WSL：`wsl --manage Ubuntu --set-sparse true`（之後刪檔會自動還空間給 C 槽）。
