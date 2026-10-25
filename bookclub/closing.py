@@ -339,7 +339,7 @@ def disk_report(home: Path | None = None, data: Path | None = None, *, wsl: bool
         rows.append((1, "~/讀書會剪輯資料/影片/", human(n), "匯入的影片副本；已結案的那支可以刪（Windows 那邊有原檔）"))
     for sub, note in ((".cache/bookclub", "AI 聲音模型，別刪（刪了要重新下載）"),
                       (".cache/huggingface", "分析用的模型，別刪"),
-                      (".cache/uv", "安裝工具時的下載暫存，可以清：uv cache clean")):
+                      (".cache/uv", "安裝工具時的下載暫存；多數跟工具共用同一份檔案，清了只省很少（實測約 0.2GB），不用特地清")):
         p = home / sub
         if p.is_dir():
             n = dir_size(p, seen)

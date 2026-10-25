@@ -10,6 +10,7 @@
 - `update-to.sh` 不給標籤時，讀 GitHub main 上的 `STABLE` 檔當穩定版（`STABLE` 由維護者決定放行時才改）
 - `.gitattributes`：`*.sh` 固定用 LF 換行，避免在 Windows 被轉成 CRLF 而無法執行
 - README 補一句：Claude Code 結束網頁程式可能被擋，被擋時請使用者自己打 `kill <編號>`
+- `bookclub disk` 的 `~/.cache/uv` 說明改成「不用特地清」：暫存多數跟 `.venv/` 共用同一份檔案，清了只省約 0.2GB（待辦 #254）
 - 從 0.2.4b4 更新不用跑 install.sh
 
 ## 0.2.4b4（2026-10-25，測試版 beta4）
