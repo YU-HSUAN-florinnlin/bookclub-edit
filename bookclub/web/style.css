@@ -1213,3 +1213,94 @@ details.exec-detail > summary { font-size: 16px; }
 details.exec-direct { margin: 12px 0 24px; }
 details.exec-direct > summary { cursor: pointer; color: var(--accent); text-decoration: underline; font-size: 15px; }
 .exec-direct-body { margin-top: 8px; line-height: 1.7; font-size: 14px; }
+
+/* 1025-2 第3步 */
+.rv-bar { gap: 14px 20px; padding-bottom: 8px; }
+.rv-bar-btns { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; margin-left: auto; }
+.rv-progress .rv-sub { font-size: 13px; }
+.rv-menu-wrap { position: relative; }
+.rv2 #rv-more-btn { min-width: 44px; font-size: 18px; line-height: 1; padding: 6px 12px; }
+.rv-menu { position: absolute; top: calc(100% + 6px); right: 0; left: auto; bottom: auto; min-width: 240px; max-width: 320px; }
+.rv2 .rv-menu button.tool-menu-item { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left;
+  background: transparent; border: none; border-radius: 6px; padding: 8px 10px; font-size: 14px; color: var(--fg); font-weight: normal; }
+.rv2 .rv-menu button.tool-menu-item:hover:not(:disabled), .rv2 .rv-menu button.tool-menu-item:focus-visible { background: var(--hover-bg); }
+.rv2 .rv-menu button.tool-menu-item:disabled { opacity: .45; cursor: default; }
+.rv-menu-sep { border: none; border-top: 1px solid var(--border); margin: 6px 0; }
+/* 分頁：開始前 4 件事｜逐筆確認 */
+.rv-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--rv-line); margin-bottom: 14px; }
+.rv2 .rv-tab { background: transparent; border: none; border-bottom: 3px solid transparent; border-radius: 0; padding: 8px 16px; color: var(--muted); font-size: 16px; }
+.rv2 .rv-tab:hover:not(.on) { color: var(--fg); }
+.rv2 .rv-tab.on { color: var(--fg); font-weight: 700; border-bottom-color: var(--fg); }
+.rv-msgs:empty { display: none; }
+.rv-handoff { margin: 0; font-size: 14px; }
+.rv-handoff h3, .rv-handoff > .hint, .rv-handoff #ho-pack, .rv-handoff #ho-imp, .rv-handoff .fo-row > .muted { display: none; }   /* 按鈕與說明在「⋯」選單裡，這裡只留進度、輸入路徑、清掉暫存 */
+.rv-handoff .fo-row { margin: 0 0 6px; }
+/* 3-1：四件事一排小步驟；播放器縮小放右側，時間軸、圖例、＋新增修改收起來 */
+.rv2.rv-prepmode { display: grid; grid-template-columns: minmax(0, 1fr) 300px; column-gap: 28px; align-items: start;
+  grid-template-areas: "bar bar" "tabs tabs" "msgs msgs" "lower upper"; }
+.rv2.rv-prepmode > .rv-bar { grid-area: bar; } .rv2.rv-prepmode > .rv-tabs { grid-area: tabs; } .rv2.rv-prepmode > .rv-msgs { grid-area: msgs; }
+.rv2.rv-prepmode > .rv-upper { grid-area: upper; display: block; } .rv2.rv-prepmode > .rv-lower { grid-area: lower; margin-top: 0; }
+.rv2.rv-prepmode #rv-right:empty, .rv2.rv-prepmode #rv-tl, .rv2.rv-prepmode #rv-legend, .rv2.rv-prepmode #rv-io,
+.rv2.rv-prepmode .rv-goto { display: none; }
+.rv2.rv-prepmode .rv-left video, .rv2.rv-prepmode .rv-novideo { max-height: 170px; }
+.rv2.rv-prepmode .rv-timebar { font-size: 13px; }
+.rv-prepchips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 16px; }
+.rv2 .rv-pchip { border: 1px solid var(--ghost-border); background: transparent; color: var(--fg); border-radius: 20px; padding: 6px 14px; font-size: 14px; }
+.rv2 .rv-pchip:hover:not(.on) { background: var(--hover-bg); }
+.rv2 .rv-pchip.ok { color: var(--rv-stu); }
+.rv2 .rv-pchip.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.rv-prepact { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rv-line); }
+.rv2 button.rv-small { font-size: 13px; color: var(--muted); padding: 2px 4px; }
+.rv-passlink { display: inline-flex; align-items: baseline; gap: 8px; font-size: 14px; }
+.rv-passlink .rv-meta { margin: 0; font-size: 13px; }
+.rv2 .rv-passlink button.linkish:disabled { opacity: .4; }
+/* 3-2：卡片頂端一行「上一筆　第 N／M 筆　下一筆」、決定兩顆大的、其他小字 */
+.rv-cardnav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.rv-cardnav .rv-count { margin: 0; font-size: 15px; color: var(--fg); }
+.rv-card > header { margin-bottom: 4px; }
+.rv-sug { margin: 8px 0 12px; }
+.rv-decide { gap: 10px; margin-top: 12px; }
+.rv2 button.rv-big { flex: 1 1 0; font-size: 17px; padding: 11px 16px; }
+.rv-others { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 10px; }
+.rv-others .rv-meta { margin: 0; font-size: 13px; }
+.rv2 .rv-others button { font-size: 13px; padding: 3px 10px; }
+/* 1025-2 第3步：窄螢幕（1280 以下）3-1 改上下一欄，播放器縮成小的放在小步驟內容下方 */
+@media (max-width: 1280px) {
+  .rv2.rv-prepmode { display: flex; flex-direction: column; }
+  .rv2.rv-prepmode > .rv-upper { order: 10; margin-top: 18px; max-width: 360px; }
+}
+/* 1025-3 第5步 */
+.fc-bar { gap: 16px; }
+.fc-prog { display: flex; align-items: center; gap: 10px; flex: 1 1 200px; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.fc-prog b { color: var(--fg); font-size: 16px; }
+.fc-progbar { flex: 0 1 180px; width: 180px; height: 6px; border-radius: 3px; background: var(--rv-line); overflow: hidden; display: block; }
+.fc-progbar i { display: block; height: 100%; width: 0; background: var(--fc-ok); }
+.fc-more-wrap { position: relative; margin-left: auto; }
+.fc-menu { position: absolute; right: 0; top: 100%; margin-top: 6px; left: auto; width: max-content; }
+.fc-menu .tool-menu-item { width: 100%; box-sizing: border-box; background: transparent; border: 0; text-align: left; cursor: pointer; font: inherit; font-size: 14px; }
+.fc-menu .tool-menu-item:hover:not(:disabled), .fc-menu .tool-menu-item:focus-visible { background: var(--hover-bg); }
+.fc-menu .tool-menu-item:disabled { opacity: .45; cursor: not-allowed; }
+.fc-menu .fc-menu-ver { cursor: default; }
+.fc-menu .fc-menu-ver:hover { background: transparent; }
+.fc-menu .fc-ver { display: flex; flex-direction: column; gap: 4px; }
+.tool-menu-sep { border: 0; border-top: 1px solid var(--pop-border); margin: 4px 6px; }
+.fo-hidden, .ho-compact #ho-pack, .ho-compact #ho-imp { display: none; }
+.cl-box.ho-compact { border: 0; background: none; padding: 0; margin: 0; box-shadow: none; }
+.ho-compact .fo-row { margin: 0; }
+.fc > .fc-status { margin: 0 0 12px; font-size: inherit; font-weight: normal; flex: none; }
+.fc-state { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 0; }
+.fc-state-main { flex: 1 1 260px; min-width: 0; }
+.fc-state .exec-now { margin: 0 0 4px; }
+.fc-state .muted { margin: 4px 0 0; }
+.fc-state .fc-state-warn { margin: 6px 0 0; font-size: 15px; }
+.fc-state > button { flex: none; }
+.fc-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; }
+.fc-nav .rv-count { font-weight: 600; font-variant-numeric: tabular-nums; }
+.fc-card .rv-actions { flex-wrap: nowrap; }
+.fc-card .rv-actions #fc-pass, .fc-card .rv-actions #fc-fix { flex: 1 1 0; min-height: 48px; font-size: 16px; }
+.fc-card .rv-actions #fc-pass { flex-grow: 1.6; }
+.fc-sf { align-items: center; }
+.fc-typesel { margin-left: auto; font-size: 14px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.fc-typesel select { font-size: 14px; }
+body.ws-closed #fc-menu-export, body.ws-closed #fc-go4 { pointer-events: none; opacity: .45; }
+.rv-playwrap { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }

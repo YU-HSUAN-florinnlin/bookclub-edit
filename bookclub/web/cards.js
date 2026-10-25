@@ -340,7 +340,7 @@ function rvPlayOnlyHtml(it) {
   const w = it["整句"];
   if (it["類型"] === "名字" && (!w || it["老師整段"] || (cv.ctx && cv.ctx.mode === "第5步"))) return "";
   const [s0, e0] = it["類型"] === "名字" ? [Number(w.start), Number(w.end)] : [a, b];
-  return ` <button class="ghost small" id="rv-playonly" data-s="${s0}" data-e="${e0}" data-tip="聽 ${esc(rvFmt(s0, 1))}–${esc(rvFmt(e0, 1))}（開了「前後多聽 2 秒」就前後各多 2 秒）">聽這一段</button>${cvPadHtml("rv-pad")}`;
+  return ` <span class="rv-playwrap"><button class="ghost small" id="rv-playonly" data-s="${s0}" data-e="${e0}" data-tip="聽 ${esc(rvFmt(s0, 1))}–${esc(rvFmt(e0, 1))}（開了「前後多聽 2 秒」就前後各多 2 秒）">聽這一段</button>${cvPadHtml("rv-pad")}</span>`;   // 1025-2：按鈕與開關綁成一組不拆行（跟第 5 步「原本 ▶／現在 ▶」＋開關同一排的樣子一致）
 }
 
 // 10-02 第六批：老師重念範圍開頭或結尾有一段沒有人講話：提醒＋「照建議縮小」（不自動改；改了這一句要重新生成）

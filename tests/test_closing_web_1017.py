@@ -207,14 +207,14 @@ def test_4_closed_step3_nav_buttons_not_greyed():
     rule = CSS[CSS.index("body.ws-closed-all #content button"):]
     rule = rule[:rule.index("{")]
     assert "body.ws-closed-all #content button:not(.ws-nav)" in rule, rule
-    # 已結案時畫面（rvApplyReadonly）替只看不改的按鈕補上 ws-nav：開始前 4 件事 ①～④ 分頁與開關、篩選、上一筆下一筆、
+    # 已結案時畫面（rvApplyReadonly）替只看不改的按鈕補上 ws-nav：開始前 4 件事 ①～④ 分頁與「開始前 4 件事／逐筆確認」兩個分頁、右上「⋯」、篩選、上一筆下一筆、
     # 設定、快捷鍵、代號對照；播放（聲音清掉了）、匯出（會寫檔）、開始逐筆看不在內。沒結案時畫面一個字都不變（快照）
     m = re.search(r'^const RV_CLOSED_NAV = "([^"]+)";', REVJS, re.M)
     assert m, "RV_CLOSED_NAV"
     nav = [x.strip() for x in m.group(1).split(",")]
-    for want in ("[data-tab]", "#rv-prep-btn", ".rv-filters [data-f]", "#rv-prev", "#rv-next", "#rv-key-btn"):
+    for want in ("[data-tab]", "#rv-prep-btn", "#rv-cards-btn", "#rv-more-btn", "#rv-prepnext", ".rv-filters [data-f]", "#rv-prev", "#rv-next", "#rv-key-btn"):
         assert want in nav, want
-    for no in ("#rv-export", "#rv-start", ".rv-segplay", "#rv-playonly", "[data-te-play]"):
+    for no in ("#rv-export", "#rv-start", "#rv-prepdone", ".rv-segplay", "#rv-playonly", "[data-te-play]"):
         assert no not in nav, no
     body = tc._fn(REVJS, "rvApplyReadonly")
     assert "RV_CLOSED_NAV" in body and "wsClosed()" in body
@@ -230,9 +230,9 @@ def test_4_closed_step3_prep_tabs_get_ws_nav_on_page():
     spec = cs._scenarios(cs._items())[0]
     pre = spec["前置"] + "H.els['rvroot'] = H.makeEl('div', {id: 'rvroot', class: 'rv2'}, '');\n"
     prog = """
-          setup(); rv.prepOpen = true; rv.prepTab = "刪除"; rvRenderPrepSide();
+          setup(); rv.prepOpen = true; rv.prepTab = "刪除"; rvRenderPrepSide(); rvRenderPrep();
           const tabs = document.querySelectorAll("[data-tab]").map((b) => b.classList.contains("ws-nav"));
-          const start = document.getElementById("rv-start").classList.contains("ws-nav");
+          const start = document.getElementById("rv-prepdone").classList.contains("ws-nav");
           return {tabs, start};"""
     got = _harness(cs.STEP3_FILES and [Path(f).name for f in cs.STEP3_FILES], pre, [
         {"名稱": "已結案", "程式": "wsClosed = () => true;" + prog},

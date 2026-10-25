@@ -314,11 +314,11 @@ def test_inspect_prints_attention_numbers_not_names():
 
 def test_web_step3_buttons():
     rv = ((WEB / "review.js").read_text(encoding="utf-8") + (WEB / "cards.js").read_text(encoding="utf-8"))   # 10-15：卡片在 cards.js
-    assert 'id="rv-go4" disabled>開始 AI 修改<' in rv and "全部通過，開始 AI 修改" not in rv
+    assert 'id="rv-go4" disabled>開始 AI 修改 →<' in rv and "全部通過，開始 AI 修改" not in rv
     assert "/api/execute/finalcheck" not in rv                       # 開始前不再先查總檢查
-    side = _fn(rv, "rvRenderPrepSide")
-    assert side.index('id="rv-start"') < side.index("rvPassAllHtml()")   # 跟「開始逐筆看」同一列
-    assert "rvPassAllHtml()" in _fn(rv, "rvRenderList")              # 逐筆清單頂端也有
+    prep = _fn(rv, "rvRenderPrep")
+    assert prep.index('id="rv-start"') < prep.index("rvPassAllHtml()")   # 1025-2：跟「開始逐筆確認」同一列（連結在 3-1 底部）
+    assert "rvPassAllHtml()" not in _fn(rv, "rvRenderList")          # 1025-2：逐筆清單上方那組重複入口拿掉
     if not NODE:
         return
     got = _node(_ESC + _fn(rv, "rvGo4State") + _const(rv, "RV_PREP_DEFAULT") + _fn(rv, "rvGo4Notes") + _fn(rv, "rvPassAllMsg") + """

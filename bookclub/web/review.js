@@ -52,6 +52,15 @@ function rvUseCardCtx() { cvUse(RV_CARD_CTX); }
 function rvItem(key) { return rv.data["項目"].find((x) => rvKey(x) === key); }
 function rvItems() { return rv.data["項目"]; }
 
+// 內部編號（T047、名字 35 這類）不放在畫面上，只放滑鼠移上去的提示（1025-2 #293）
+function rvIdText(it) {
+  try {
+    const id = it && it.id != null ? String(it.id) : "";
+    const pre = it ? RV_ID_LABEL[it["類型"]] : undefined;
+    return pre === undefined || !RV_ID_RE.test(id) ? "" : pre + id;
+  } catch (e) { return ""; }
+}
+
 function rvPrepDone() {
   const p = rv.data["開始前確認"] || {};
   return RV_PREP.every(([k]) => p[k]);
@@ -112,6 +121,7 @@ async function renderReview() {
   rv.goNote = null;
   if (go) rvApplyGoto(go);
   const v = rv.data["影片"];
+  const wsIsClosed = typeof wsClosed === "function" && wsClosed();
   contentEl.classList.add("wide");
   contentEl.innerHTML = `
     <div class="rv2">
@@ -119,15 +129,29 @@ async function renderReview() {
         <h1>3　覆核工作台</h1>
         <div class="rv-progress" id="rv-progress"></div>
         <div class="rv-bar-btns">
-          <button class="ghost" id="rv-prep-btn">開始前 4 件事</button>
-          <button class="ghost" id="rv-set-btn" aria-expanded="false">設定</button>
-          <button class="ghost" id="rv-key-btn" aria-expanded="false">快捷鍵</button>
-          <button class="ghost" id="rv-code-btn" aria-expanded="false" data-tip="本名和代號的對照（截圖或分享螢幕時會露出本名）">代號對照</button>
-          <button class="primary" id="rv-go4" disabled>開始 AI 修改</button>
+          <div class="rv-menu-wrap">
+            <button class="secondary" id="rv-more-btn" aria-label="更多" aria-haspopup="menu" aria-expanded="false">⋯</button>
+            <div class="tool-menu rv-menu" id="rv-menu" role="menu" hidden>
+              <button class="tool-menu-item" role="menuitem" id="rv-set-btn" aria-expanded="false">設定</button>
+              <button class="tool-menu-item" role="menuitem" id="rv-key-btn" aria-expanded="false">快捷鍵</button>
+              <button class="tool-menu-item" role="menuitem" id="rv-code-btn" aria-expanded="false" data-tip="本名和代號的對照（截圖或分享螢幕時會露出本名）">代號對照</button>
+              ${wsIsClosed ? "" : `<hr class="rv-menu-sep">
+              <button class="tool-menu-item" role="menuitem" id="rv-m-pack" disabled><span class="tool-menu-label">交接打包…</span><span class="tool-menu-hint" id="rv-m-pack-hint">存成交接包，交給夥伴接手</span></button>
+              <button class="tool-menu-item" role="menuitem" id="rv-m-imp" disabled><span class="tool-menu-label">匯入交接包…</span><span class="tool-menu-hint">收到夥伴交回來的包時用</span></button>`}
+            </div>
+          </div>
+          <button class="primary" id="rv-go4" disabled>開始 AI 修改 →</button>
         </div>
       </header>
-      <div class="rv-busy" id="rv-busy" role="status" hidden></div>
-      <div class="cl-box ho-box3" id="rv-handoff" hidden></div>
+      <nav class="rv-tabs" aria-label="第 3 步的兩個階段">
+        <button class="rv-tab" id="rv-prep-btn">開始前 4 件事</button>
+        <button class="rv-tab" id="rv-cards-btn">逐筆確認</button>
+      </nav>
+      <div class="rv-msgs">
+        <div class="rv-busy" id="rv-busy" role="status" hidden></div>
+        <div class="rv-handoff" id="rv-handoff" hidden></div>
+        <div class="rv-export-msg" id="rv-export-msg"></div>
+      </div>
       <dialog class="rv-modal" id="rv-modal-keys" aria-labelledby="rv-modal-keys-h">
         <div class="rv-modal-head"><h2 id="rv-modal-keys-h">快捷鍵</h2><button class="ghost rv-modal-x" data-modal-close aria-label="關閉">✕</button></div>
         <div class="rv-modal-body" id="rv-keys">
@@ -137,7 +161,7 @@ async function renderReview() {
           <dt>↑ ↓</dt><dd>上一筆／下一筆（影片跳到那筆前 2 秒）</dd>
           <dt>空白鍵</dt><dd>播放／暫停</dd>
           <dt>J　L</dt><dd>往前／往後 5 秒</dd>
-          <dt>I　O</dt><dd>把目前播放位置填進「新增修改」的起點／終點（面板沒開會自動打開）</dd>
+          <dt>I　O</dt><dd>逐筆確認時才有：把目前播放位置填進「新增修改」的起點／終點（面板沒開會自動打開）</dd>
           <dt>Esc</dt><dd>在文字框裡：從頭播這一筆</dd>
         </dl>
         </div>
@@ -152,7 +176,6 @@ async function renderReview() {
         <div class="rv-modal-head"><h2 id="rv-side-codes-h">代號對照</h2><button class="ghost rv-modal-x" id="rv-side-x" aria-label="關閉代號對照">✕</button></div>
         <div class="rv-side-body" id="rv-codes"></div>
       </aside>
-      <div class="rv-export-msg" id="rv-export-msg"></div>
       <section class="rv-upper">
         <div class="rv-left">
           ${v["有影片"] ? `<video id="rv-video" controls preload="metadata" src="${esc(v["網址"])}"></video>`
@@ -181,12 +204,16 @@ async function renderReview() {
     if (t != null) { rvSeek(t); e.target.blur(); }
   });
   document.getElementById("rv-rate").addEventListener("change", (e) => { if (rv.video) rv.video.playbackRate = Number(e.target.value); });
-  document.getElementById("rv-prep-btn").addEventListener("click", () => { rv.prepOpen = !rv.prepOpen; rvRenderMain(); });
+  document.getElementById("rv-prep-btn").addEventListener("click", () => { rv.prepOpen = true; rvRenderMain(); });
+  document.getElementById("rv-cards-btn").addEventListener("click", () => { rv.prepOpen = false; rvRenderMain(); });
   // 10-16 宇軒（乙方案）：設定、快捷鍵改成蓋版視窗（後面模糊，「關閉」收起）；代號對照改成左側側欄（後面照常能操作；放左邊才不會擋住右上角的卡片）
-  document.getElementById("rv-set-btn").addEventListener("click", (e) => rvOpenModal("rv-modal-settings", e.currentTarget));
-  document.getElementById("rv-key-btn").addEventListener("click", (e) => rvOpenModal("rv-modal-keys", e.currentTarget));
-  document.getElementById("rv-code-btn").addEventListener("click", (e) => rvToggleSide(e.currentTarget));
+  // 1025-2：這三項收進右上「⋯」選單（視窗關掉後焦點回到「⋯」）
+  const moreBtn = document.getElementById("rv-more-btn");
+  document.getElementById("rv-set-btn").addEventListener("click", () => { rvMenuShow(false); rvOpenModal("rv-modal-settings", moreBtn); });
+  document.getElementById("rv-key-btn").addEventListener("click", () => { rvMenuShow(false); rvOpenModal("rv-modal-keys", moreBtn); });
+  document.getElementById("rv-code-btn").addEventListener("click", (e) => { rvMenuShow(false); rvToggleSide(e.currentTarget); });
   document.getElementById("rv-side-x").addEventListener("click", () => rvToggleSide(document.getElementById("rv-code-btn"), false));
+  moreBtn.addEventListener("click", () => rvMenuShow(document.getElementById("rv-menu").hidden));
   // 1022-1 審查修正：工具自己的視窗（ui.js，class 也有 rv-modal）自己管關閉，不綁這裡的「點背景關掉」
   document.querySelectorAll(".rv-modal:not(.ui-dialog)").forEach((d) => {
     d.querySelectorAll("[data-modal-close]").forEach((b) => b.addEventListener("click", () => d.close()));
@@ -195,7 +222,7 @@ async function renderReview() {
   });
   document.getElementById("rv-go4").addEventListener("click", rvConfirmGo4);
   // 33 號設計：交接打包、匯入交接包（handoff.js）；已結案不顯示
-  if (typeof hoBoxInit === "function" && !(typeof wsClosed === "function" && wsClosed())) hoBoxInit(document.getElementById("rv-handoff"), "第3步");
+  if (typeof hoBoxInit === "function" && !wsIsClosed) { rvHandoffMenuBind(); hoBoxInit(document.getElementById("rv-handoff"), "第3步"); }
   rvBindTimeline(document.getElementById("rv-tl"));
   window.addEventListener("resize", rvRenderTimeline);
 
@@ -235,6 +262,53 @@ function rvOpenModal(id, btn) {
   d.showModal();
   const x = d.querySelector(".rv-modal-foot [data-modal-close]");
   if (x) x.focus();
+}
+
+// ---------------------------------------------------------------------------
+// 1025-2（#292）右上「⋯」選單：設定、快捷鍵、代號對照、交接打包、匯入交接包。樣式沿用工具設定選單（.tool-menu）。點選單外、按 Esc 關。
+// 交接的按鈕與狀態仍由 handoff.js 的 hoBoxInit 畫在 #rv-handoff（打包中的進度、輸入路徑、清掉暫存都在那裡出現）；
+// 選單裡這兩項把點擊轉給 #rv-handoff 裡的按鈕，並跟著它的可不可按、原因同步。
+// ---------------------------------------------------------------------------
+
+function rvMenuShow(on) {
+  const m = document.getElementById("rv-menu"), b = document.getElementById("rv-more-btn");
+  if (!m || !b) return;
+  m.hidden = !on;
+  b.setAttribute("aria-expanded", String(on));
+}
+
+function rvHandoffMenuBind() {
+  const host = document.getElementById("rv-handoff"), mp = document.getElementById("rv-m-pack"), mi = document.getElementById("rv-m-imp");
+  if (!host || !mp || !mi) return;
+  const target = (a, b) => host.querySelector(a) || (b && host.querySelector(b));
+  mp.addEventListener("click", () => { rvMenuShow(false); const t = target("#ho-pack", "#ho-stop"); if (t && !t.disabled) t.click(); });
+  mi.addEventListener("click", () => { rvMenuShow(false); const t = target("#ho-imp"); if (t && !t.disabled) t.click(); });
+  const sync = () => {
+    const pack = target("#ho-pack"), stop = target("#ho-stop"), imp = target("#ho-imp");
+    const why = host.querySelector(".fo-row > .muted");
+    mp.disabled = !(pack || stop) || !!(pack && pack.disabled);
+    const lab = mp.querySelector(".tool-menu-label"), hint = document.getElementById("rv-m-pack-hint");
+    if (lab) lab.textContent = stop ? "停止打包" : "交接打包…";
+    if (hint) hint.textContent = stop ? "正在打包，按這裡可以停下來" : pack && pack.disabled && why ? why.textContent : "存成交接包，交給夥伴接手";
+    mi.disabled = !imp || !!imp.disabled;
+  };
+  if (typeof MutationObserver === "function") new MutationObserver(sync).observe(host, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled"] });
+}
+
+if (typeof document !== "undefined") {   // 整個程式只綁一次（renderReview 每次進第 3 步都會跑）
+  document.addEventListener("click", (e) => {
+    const m = document.getElementById("rv-menu");
+    if (!m || m.hidden) return;
+    if (e.target.closest && (e.target.closest("#rv-menu") || e.target.closest("#rv-more-btn"))) return;
+    rvMenuShow(false);
+  });
+  document.addEventListener("keydown", (e) => {
+    const m = document.getElementById("rv-menu");
+    if (e.key !== "Escape" || !m || m.hidden) return;
+    rvMenuShow(false);
+    const b = document.getElementById("rv-more-btn");
+    if (b) b.focus();
+  }, true);
 }
 
 function rvToggleSide(btn, want) {
@@ -292,13 +366,13 @@ function rvRenderAll() {
 // 看、播放、篩選、上一筆下一筆照常；其他按鈕與輸入框鎖住，上方橫幅說明。後端也擋（409）。
 // ---------------------------------------------------------------------------
 
-const RV_RO_ALLOW = ".help-tip-btn, [data-modal-close], #rv-side-x, #rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-prev, #rv-next, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
+const RV_RO_ALLOW = ".help-tip-btn, [data-modal-close], #rv-side-x, #rv-prep-btn, #rv-cards-btn, #rv-more-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-m-pack, #rv-m-imp, #rv-prev, #rv-next, #rv-prepnext, .rv-filters button, [data-tab], .rv-segplay, .rv-sample, #rv-playonly, [data-te-play], [data-te-close], #rv-busy button";
 
 function rvReadonly() { return !!(rv.data && rv.data["AI執行中"]); }
 
 // 10-17 畫面測試：已結案（瘦身版）第 3 步所有按鈕灰掉（style.css body.ws-closed-all），只看不改的導覽按鈕例外——
 // 「開始前 4 件事」開關與 ①～④ 分頁、篩選、上一筆下一筆、設定／快捷鍵／代號對照、說明與關閉。播放（聲音清掉了）不在內。
-const RV_CLOSED_NAV = ".help-tip-btn, [data-modal-close], #rv-side-x, #rv-prep-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-prev, #rv-next, .rv-filters [data-f], [data-tab]";
+const RV_CLOSED_NAV = ".help-tip-btn, [data-modal-close], #rv-side-x, #rv-prep-btn, #rv-cards-btn, #rv-more-btn, #rv-set-btn, #rv-key-btn, #rv-code-btn, #rv-prev, #rv-next, #rv-prepnext, .rv-filters [data-f], [data-tab]";
 
 function rvApplyReadonly() {
   const ro = rvReadonly();
@@ -326,6 +400,10 @@ function rvApplyReadonly() {
 
 function rvRenderMain() {
   document.getElementById("rv-prep-btn").classList.toggle("on", rv.prepOpen);
+  const cardsTab = document.getElementById("rv-cards-btn");
+  if (cardsTab) cardsTab.classList.toggle("on", !rv.prepOpen);
+  const root = document.querySelector(".rv2");
+  if (root) root.classList.toggle("rv-prepmode", rv.prepOpen);   // 3-1：播放器縮小放右側，時間軸、圖例、＋新增修改收起來
   if (typeof navSubSync === "function") navSubSync();   // 10-16：左邊子步驟跟著亮、打勾
   if (rv.prepOpen) { rvRenderPrepSide(); rvRenderPrep(); rvApplyReadonly(); return; }
   rvRenderCard();
@@ -487,7 +565,7 @@ function rvRenderProgress() {
   const est = p["推算全部秒數"] != null ? rvHm(p["推算全部秒數"]) : "先通過幾筆";
   document.getElementById("rv-progress").innerHTML = `
     <div class="bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>
-    <span><b>${p["已確認"]}</b>／${p["總數"]} 筆</span><span>花了 ${rvHm(p["已花秒數"])}</span><span>推算整支 ${est}</span>`;
+    <span><b>${p["已確認"]}</b>／${p["總數"]} 筆</span><span class="rv-sub">花了 ${rvHm(p["已花秒數"])}　推算整支 ${est}</span>`;
   rvUpdateGo4();
 }
 
@@ -576,7 +654,9 @@ async function rvConfirmGo4() {
 
 function rvPassAllHtml() {
   const left = rvLeft();
-  return `<button class="secondary" id="rv-passall" ${left ? "" : "disabled"} data-tip="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>`;
+  // 1025-2（#292）：降成文字連結，旁邊小字說明；按下去先問一次
+  return `<span class="rv-passlink"><button class="linkish" id="rv-passall" ${left ? "" : "disabled"} data-tip="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>
+    ${left ? `<span class="rv-meta">還沒確認的 ${left} 筆照 AI 建議（不能自動通過的會留著）</span>` : ""}</span>`;
 }
 
 function rvBindPassAll(box) {
@@ -589,11 +669,13 @@ function rvPassAllMsg(r) {
   const kinds = (r && r["依類型"]) || [];
   return { title: `通過了 ${(r && r["通過"]) || 0} 張`, left: (r && r["還要看"]) || 0,
     lines: kinds.map((k) => `${k["說明"]}：${k["筆數"]} 張`),
-    note: (r && r["還要看"]) ? "剩下的不擋「開始 AI 修改」，沒看的照目前的設定做。清單上方的篩選選「還沒確認」看得到是哪幾張。" : "卡片都處理好了。" };
+    note: (r && r["還要看"]) ? "剩下的不擋「開始 AI 修改」，沒看的照目前的設定做。到「逐筆確認」，篩選選「還沒確認」看得到是哪幾張。" : "卡片都處理好了。" };
 }
 
 async function rvPassAll() {
   if (rvReadonly()) return;
+  if (!(await uiConfirm({ title: `把還沒確認的 ${rvLeft()} 筆照 AI 建議通過？`, ok: "全部照建議通過", cancel: "先不要",
+    message: "建議剪掉、文字裡還有本名、名字換不了代號、人工新增的不會幫你按。通過後第 5 步還可以再檢查。" }))) return;
   const b = document.getElementById("rv-passall");
   if (b) { b.disabled = true; b.textContent = "通過中…"; }
   let r;
@@ -664,28 +746,31 @@ function rvRenderCard() {
   const nameSkip = it["類型"] === "名字" && (rvNotName(it) || rvInCut(it));   // 10-16 #225：不會重念的名字卡不提醒縮範圍
   const coverNote = back + lack + (nameSkip ? "" : rvEdgeHtml(it)) + (it["涵蓋消失"] ? `<p class="rv-warnline">原本由〈${esc(it["涵蓋消失"]["名稱"] || it["涵蓋消失"].id)}〉涵蓋，現在沒有了（那一筆改了時間、做法或被還原），請重新看。</p>`
     : it["涵蓋待通過"] ? `<p class="rv-note">這一處整個落在〈${esc(it["涵蓋待通過"]["名稱"])}〉裡；那一筆通過之後，這一處就自動算處理好。</p>` : "");
+  const others = cvToolBtnsHtml(it).trim();
+  const idText = rvIdText(it);
   box.innerHTML = `
     <article class="rv-card" data-key="${esc(rv.cur)}">
+      <div class="rv-cardnav">
+        <button class="ghost small" id="rv-prev" aria-label="上一筆">〈 上一筆</button>
+        <span class="rv-count">第 ${idx + 1}／${all.length} 筆</span>
+        <button class="ghost small" id="rv-next" aria-label="下一筆">下一筆 〉</button>
+      </div>
       <header>
         ${rvChip(it)}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}
-        <span class="rv-when">${esc(when)}</span>${rvPlayOnlyHtml(it)}${rvIdTag(it)}
-        <span class="rv-count">第 ${idx + 1}／${all.length} 筆</span>
+        <span class="rv-when"${idText ? ` title="${esc(`編號 ${idText}（跟 AI 助手溝通用）`)}"` : ""}>${esc(when)}</span>${rvPlayOnlyHtml(it)}
       </header>
-      <div class="rv-body">${coverNote}${rvBodyHtml(it)}${rvAlignLine(it)}</div>
       ${rvInCut(it) ? "" : `<div class="rv-sug">
-        <p class="what">建議：${esc(rvSuggestText(it))}</p>
+        <p class="what">AI 建議：${esc(rvSuggestText(it))}</p>
         <p class="why">${esc(sug["原因"] || "")}</p>
         ${changed ? `<p class="mine">改成：${esc(rvHowLabel(chosen))}</p>` : ""}
       </div>`}
+      <div class="rv-body">${coverNote}${rvBodyHtml(it)}${rvAlignLine(it)}</div>
       ${state ? `<div class="rv-statebox">${state}</div>` : ""}
-      <div class="rv-actions">
-        <button class="primary" id="rv-pass" data-tip="已通過的再按一次會取消">${rvInCut(it) || it["涵蓋"] ? "✓ 已處理" : it["類型"] === "改成老師" ? "不用處理" : it["已確認"] ? "✓ 已通過（再按取消）" : rvPassCuts(it) ? "通過（這一段會整段剪掉，畫面也剪）" : "通過"}<kbd>Enter</kbd></button>
-        <button class="ghost" id="rv-change" aria-expanded="${rv.open}">改做法<kbd>E</kbd></button>
-        ${cvToolBtnsHtml(it)}
-        <span class="spacer"></span>
-        <button class="ghost" id="rv-prev" aria-label="上一筆">上一筆</button>
-        <button class="ghost" id="rv-next" aria-label="下一筆">下一筆</button>
+      <div class="rv-actions rv-decide">
+        <button class="primary rv-big" id="rv-pass" data-tip="已通過的再按一次會取消">${rvInCut(it) || it["涵蓋"] ? "✓ 已處理" : it["類型"] === "改成老師" ? "不用處理" : it["已確認"] ? "✓ 已通過（再按取消）" : rvPassCuts(it) ? "通過（這一段會整段剪掉，畫面也剪）" : "通過"}<kbd>Enter</kbd></button>
+        <button class="ghost rv-big" id="rv-change" aria-expanded="${rv.open}">改做法<kbd>E</kbd></button>
       </div>
+      ${others ? `<div class="rv-others"><span class="rv-meta">其他：</span>${others}</div>` : ""}
       <div class="rv-more" id="rv-more" ${rv.open ? "" : "hidden"}>${rvMoreHtml(it)}</div>
     </article>`;
   document.getElementById("rv-pass").addEventListener("click", () => rvPass());
@@ -694,7 +779,7 @@ function rvRenderCard() {
   document.getElementById("rv-prev").addEventListener("click", () => rvStep(-1));
   document.getElementById("rv-next").addEventListener("click", () => rvStep(1));
   cvBindPlayShrink(it);
-  cvBindPad("rv-pad");   // 10-15 前後 2 秒開關統一（1015-5）：這張卡唯一的一顆（標題列或名字卡的重念範圍那一列）
+  cvBindPad("rv-pad");   // 前後多聽 2 秒：在卡片上「聽這一段」右邊（跟第 5 步一樣，1025-2 宇軒 10-25）
   rvBindBody(it);
   rvBindOutQ(it);
   rvBindMore(it);
@@ -849,21 +934,17 @@ function rvRenderList() {
     return `<li class="${key === rv.cur ? "cur" : ""} ${rvDone(it) ? "done" : ""}" data-key="${esc(key)}" tabindex="-1">
       <span class="tm">${esc(rvFmt(it.start))}</span>
       <span class="ty">${rvChip(it)}</span>
-      <span class="tx">${rvIdTag(it)}${(it["段落外"] || []).some((q) => !q["答案"]) ? `<span class="rv-tag warn">段落外面有幾秒還沒回答</span>` : ""}${it["第5步退回"] ? `<span class="rv-tag warn" title="${esc(it["第5步退回"].join("；"))}">第 5 步要重做</span>` : ""}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}${esc(rvPreview(it))}</span>
+      <span class="tx">${(it["段落外"] || []).some((q) => !q["答案"]) ? `<span class="rv-tag warn">段落外面有幾秒還沒回答</span>` : ""}${it["第5步退回"] ? `<span class="rv-tag warn" title="${esc(it["第5步退回"].join("；"))}">第 5 步要重做</span>` : ""}${it["人工新增"] ? `<span class="rv-tag">人工新增</span>` : ""}${it["代號改過"] ? `<span class="rv-tag warn">代號改過，請再看一次</span>` : ""}${esc(rvPreview(it))}</span>
       <span class="sg">${esc(sug)}</span>
       ${st}</li>`;
   }).join("");
+  // 1025-2（#293）：篩選只顯示有筆數的（目前選中的、「全部」不管幾筆都留著）；上方那組重複入口拿掉；
+  // 「另外有 N 處重疊自動跳過」搬進「設定」（那裡本來就有完整的清單與救回）
   lower.innerHTML = `
-    <div class="rv-row rv-passbar"><button class="ghost small" id="rv-tostart">開始前 4 件事${rvWhoDone() ? "" : "（② 還沒做）"}</button>${rvPassAllHtml()}
-      <span class="rv-meta">還沒確認 ${rvLeft()} 張；不用全部看完也能「開始 AI 修改」，沒看的照建議做</span></div>
-    <nav class="rv-filters" aria-label="篩選">${RV_FILTERS.map(([f, label]) =>
+    <nav class="rv-filters" aria-label="篩選">${RV_FILTERS.filter(([f]) => f === "全部" || f === rv.filter || count(f) > 0).map(([f, label]) =>
       `<button class="${rv.filter === f ? "on" : ""}" data-f="${esc(f)}">${esc(label)} <span>${count(f)}</span></button>`).join("")}</nav>
-    <ol class="rv-list" id="rv-list">${rows || `<li class="empty">這個篩選沒有項目。</li>`}</ol>
-    ${(rv.data["已自動跳過的重疊"] || []).length ? `<p class="rv-foot">另外有 ${rv.data["已自動跳過的重疊"].length} 處重疊自動跳過（兩位學員之間、短附和、邊界誤差、學員段落裡沒有老師的），在「設定」裡可以救回。</p>` : ""}`;
+    <ol class="rv-list" id="rv-list">${rows || `<li class="empty">這個篩選沒有項目。</li>`}</ol>`;
   lower.querySelectorAll(".rv-filters button").forEach((b) => b.addEventListener("click", () => { rv.filter = b.dataset.f; rvRenderList(); }));
-  rvBindPassAll(lower);
-  const toStart = document.getElementById("rv-tostart");
-  if (toStart) toStart.addEventListener("click", () => { rv.prepOpen = true; rvRenderMain(); });
   lower.querySelectorAll(".rv-list li[data-key]").forEach((li) => li.addEventListener("click", () => rvSelect(li.dataset.key)));
   rvMarkListRow(true);
 }
@@ -893,29 +974,21 @@ function rvMarkListRow(scroll) {
 
 const RV_PREP = [["刪除", "① 建議刪除段落"], ["學員", "② 辨識學員聲音是誰"], ["名字", "③ 辨識其他名稱如何替換"], ["保留原聲", "④ 誰保留原聲"]];   // 09-29 宇軒：刪除先做，學員是誰才看得出誰只在要刪的段落裡
 
+// 1025-2（#292）：3-1 不再用右欄的總表；四件事改成上方一排小步驟（在 rvRenderPrep 畫），右欄清空（版面上是縮小的播放器）
+const RV_PREP_SHORT = { "刪除": "① 建議刪除段落", "學員": "② 學員是誰", "名字": "③ 其他名字", "保留原聲": "④ 誰保留原聲" };
+
 function rvRenderPrepSide() {
-  const p = rv.data["開始前確認"];
   const box = document.getElementById("rv-right");
-  box.innerHTML = `<article class="rv-card rv-prepside">
-      <header><span class="rv-chip"><i></i>開始前 4 件事</span></header>
-      <p class="rv-meta">先把整體定下來，逐筆看的時候就不用再想：哪些段落整段刪掉、學員換成誰、其他人名怎麼處理、誰不用重念。</p>
-      ${rvRevertedHtml()}
-      <ol class="rv-prepsteps">${RV_PREP.map(([k, label]) => `<li class="${p[k] ? "ok" : ""} ${rv.prepTab === k ? "on" : ""}">
-        <button class="linkish" data-tab="${esc(k)}">${esc(label)}</button><span>${p[k] ? "✓ 做完了" : k === "學員" ? "還沒做（要做）" : "還沒做（照預設，不擋）"}</span>
-        ${!p[k] && rvPrepLeft(k).length ? `<span class="rv-meta">${esc(rvPrepLeft(k).join("；"))}</span>` : ""}</li>`).join("")}</ol>
-      <div class="rv-actions"><button class="primary" id="rv-start" ${rvWhoDone() ? "" : "disabled"}>開始逐筆看</button>
-        ${rvPassAllHtml()}
-        ${rvWhoDone() ? `<span class="rv-meta">${rvPrepDone() ? "" : "①③④ 沒做的照預設（不擋）"}</span>` : `<span class="rv-meta">② 學員是誰做完才能開始；①③④ 沒做的照預設</span>`}</div>
-    </article>`;
-  box.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { rv.prepTab = b.dataset.tab; rvRenderPrepSide(); rvRenderPrep(); }));
-  rvBindPassAll(box);
-  document.getElementById("rv-start").addEventListener("click", () => {
-    rv.prepOpen = false;
-    if (!rv.cur || rvDone(rvItem(rv.cur) || {})) rv.cur = rvFirstPending();
-    rvRenderMain();
-    if (rv.cur) rvSelect(rv.cur);
-  });
+  if (box) box.innerHTML = "";
   rvApplyReadonly();
+}
+
+// 從 3-1 進逐筆確認（最後一件好了、或按「開始逐筆確認」）
+function rvStartCards() {
+  rv.prepOpen = false;
+  if (!rv.cur || rvDone(rvItem(rv.cur) || {})) rv.cur = rvFirstPending();
+  rvRenderMain();
+  if (rv.cur) rvSelect(rv.cur);
 }
 
 // 09-30：每一件底下還沒處理的（後端 review.prep_pending）；有的話不能標完成
@@ -931,27 +1004,61 @@ function rvRevertedHtml() {   // 讀資料時冒出新項目、自動改回還�
 function rvRenderPrep() {
   const lower = document.getElementById("rv-lower");
   const k = rv.prepTab;
-  const done = rv.data["開始前確認"][k];
+  const p = rv.data["開始前確認"];
+  const done = p[k];
   let body = "";
   if (k === "學員") body = rvPrepPeopleHtml();
   else if (k === "名字") body = rvPrepNamesHtml();
   else if (k === "保留原聲") body = rvPrepVoiceHtml();
   else body = rvPrepCutHtml();
   const label = RV_PREP.find((x) => x[0] === k)[1];
+  const idx = RV_PREP.findIndex((x) => x[0] === k), last = idx === RV_PREP.length - 1;
+  const left = rvPrepLeft(k);
+  const whoOk = rvWhoDone();
+  const chips = RV_PREP.map(([kk]) => `<button class="rv-pchip${rv.prepTab === kk ? " on" : ""}${p[kk] ? " ok" : ""}" data-tab="${esc(kk)}" aria-pressed="${rv.prepTab === kk}">${esc(RV_PREP_SHORT[kk])}${p[kk] ? " ✓" : ""}</button>`).join("");
+  // 每件底部一顆主要按鈕：還沒做＝「這一件好了 → 下一件」（最後一件好了就接著「開始逐筆確認」）；做完了＝「下一件 →」（最後一件＝「開始逐筆確認 →」），改回還沒做用小字
+  const main = done
+    ? (last ? `<button class="primary" id="rv-start" ${whoOk ? "" : "disabled"}>開始逐筆確認 →</button>` : `<button class="primary" id="rv-prepnext">下一件 →</button>`)
+    : `<button class="primary" id="rv-prepdone" ${left.length ? "disabled" : ""}>${last ? (whoOk ? "這一件好了，開始逐筆確認 →" : "這一件好了") : "這一件好了 → 下一件"}</button>`;
   lower.innerHTML = `<section class="rv-prep">
-      <h2>${esc(label)}</h2>${body}
-      <div class="rv-actions"><button class="primary" id="rv-prepdone" ${!done && rvPrepLeft(k).length ? "disabled" : ""}>${done ? "✓ 這一件做完了（再按一次改回還沒做）" : "這一件做完了"}</button>
-        ${!done && rvPrepLeft(k).length ? `<span class="rv-warnline" id="rv-prepwhy">還不能標完成：${esc(rvPrepLeft(k).join("；"))}</span>` : `<span class="rv-warnline" id="rv-prepwhy"></span>`}</div>
+      <p class="rv-meta">先把整體定下來，逐筆確認的時候就不用再想。${whoOk ? (rvPrepDone() ? "" : "①③④ 沒做的照預設，不擋。") : "② 學員是誰一定要做；①③④ 沒做的照預設。"}</p>
+      ${rvRevertedHtml()}
+      <nav class="rv-prepchips" aria-label="開始前 4 件事">${chips}</nav>
+      <h2>${label}</h2>${body}
+      <div class="rv-actions rv-prepact">${main}
+        ${done ? `<button class="linkish rv-small" id="rv-prepundo">這一件改回還沒做</button>` : ""}
+        ${!done && left.length ? `<span class="rv-warnline" id="rv-prepwhy">還不能標完成：${esc(left.join("；"))}</span>` : `<span class="rv-warnline" id="rv-prepwhy"></span>`}
+        ${done && last && !whoOk ? `<span class="rv-meta">② 學員是誰做完才能開始</span>` : ""}
+        <span class="spacer"></span>${rvPassAllHtml()}</div>
     </section>`;
-  document.getElementById("rv-prepdone").addEventListener("click", async () => {
+  lower.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { rv.prepTab = b.dataset.tab; rvRenderPrepSide(); rvRenderPrep(); }));
+  rvBindPassAll(lower);
+  const setDone = async (want) => {
     let r;
-    try { r = await apiPost("/api/review/prep", { "項目": k, "完成": !done }, { quiet: true }); }
-    catch (err) { document.getElementById("rv-prepwhy").textContent = err.message; if (!/還不能標完成/.test(err.message)) showSaveError(err.message); return; }
+    try { r = await apiPost("/api/review/prep", { "項目": k, "完成": want }, { quiet: true }); }
+    catch (err) { const w = document.getElementById("rv-prepwhy"); if (w) w.textContent = err.message; if (!/還不能標完成/.test(err.message)) showSaveError(err.message); return false; }
     rv.data["開始前確認"] = r["開始前確認"];
-    if (!done) { const i = RV_PREP.findIndex((x) => x[0] === k); const next = RV_PREP.slice(i + 1).concat(RV_PREP).find((x) => !rv.data["開始前確認"][x[0]]); if (next) rv.prepTab = next[0]; }
+    return true;
+  };
+  const doneBtn = document.getElementById("rv-prepdone");
+  if (doneBtn) doneBtn.addEventListener("click", async () => {
+    if (!(await setDone(true))) return;
+    if (last && rvWhoDone()) { if (typeof navSubSync === "function") navSubSync(); rvStartCards(); return; }
+    const next = RV_PREP.slice(idx + 1).concat(RV_PREP).find((x) => !rv.data["開始前確認"][x[0]]);
+    if (next) rv.prepTab = next[0];
     rvRenderPrepSide(); rvRenderPrep();
     if (typeof navSubSync === "function") navSubSync();   // 審查必修 2：標完最後一件時左邊 3-1 馬上打勾
   });
+  const undo = document.getElementById("rv-prepundo");
+  if (undo) undo.addEventListener("click", async () => {
+    if (!(await setDone(false))) return;
+    rvRenderPrepSide(); rvRenderPrep();
+    if (typeof navSubSync === "function") navSubSync();
+  });
+  const nextBtn = document.getElementById("rv-prepnext");
+  if (nextBtn) nextBtn.addEventListener("click", () => { rv.prepTab = RV_PREP[idx + 1][0]; rvRenderPrepSide(); rvRenderPrep(); });
+  const start = document.getElementById("rv-start");
+  if (start) start.addEventListener("click", rvStartCards);
   rvBindPrep(lower);
   rvApplyReadonly();
 }
@@ -1705,7 +1812,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === " ") { e.preventDefault(); if (rv.video) rv.video.paused ? rv.video.play().catch(() => {}) : rv.video.pause(); }
   else if (k === "j" && rv.video) { rvSeek(rv.video.currentTime - 5); }
   else if (k === "l" && rv.video) { rvSeek(rv.video.currentTime + 5); }
-  else if ((k === "i" || k === "o") && rv.video && !rvReadonly()) {   // I／O：把目前時間填進「新增修改」的起點／終點
+  else if ((k === "i" || k === "o") && rv.video && !rvReadonly() && !rv.prepOpen) {   // I／O：把目前時間填進「新增修改」的起點／終點
     if (!rv.ed.open) rvOpenEditor(null);
     rvEdSet(k === "i" ? "a" : "b", rv.video.currentTime);
   }

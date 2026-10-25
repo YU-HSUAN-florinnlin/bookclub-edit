@@ -16,6 +16,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WEB = REPO_ROOT / "bookclub" / "web"
+import shutil
+NODE = shutil.which("node")
 
 
 def _step_defs() -> list[tuple[int, str]]:
@@ -142,8 +144,8 @@ def test_no_promises_of_unbuilt_redo():
     app = (WEB / "app.js").read_text(encoding="utf-8")
     # 10-01 第三批：一鍵只重做做好了；畫面上不再叫人照指令手動重做、也不出現指令
     assert "手動重做" not in fc and "只重做這幾張" not in app   # 1024-3（#285）：「只重做這幾張」那顆跟主要按鈕送同一個請求，拿掉；10-15 總檢查修正（1015-7）：「只重做退回的這幾筆」→「只重做這幾張」
-    # 10-15 第5步2.0 第2段：第 5 步只有一顆「重做這幾張」（「送回 AI 重做」拿掉）
-    assert "重做這幾張" in fc and "送回 AI 重做" not in fc and "/api/final/sendback" not in fc
+    # 10-15 第5步2.0 第2段：「送回 AI 重做」拿掉；1025-3（#294）：第 5 步的「重做這幾張」也拿掉，改由狀態卡「到第 4 步 →」去按第 4 步的「更新成品」
+    assert "送回 AI 重做" not in fc and "/api/final/sendback" not in fc
     assert "bookclub gen" not in app and "<code>${esc(it[\"建議指令\"])}" not in app
     assert "能省掉的是第 2、3 步的人工" not in app and 'id="btnAutoCode"' in app
     skill = (REPO_ROOT / "skills" / "bookclub-edit" / "SKILL.md").read_text(encoding="utf-8")
@@ -839,6 +841,59 @@ def test_step4_status_card_1024_3():
     assert "上次沒跑完，按「繼續執行」接著做。" in body and 'id="execLastState"' in body
     assert '!pre["缺"].length ? "done" : "todo"' in body and "${dev && (redo.length" in body and "!items.length ? \"\" :" in body
     assert "進行中" in got["html"] and "等前面做完才開始" in got["html"]
+
+
+def test_step3_ux_1025_2():
+    """1025-2（#292、#293）第 3 步介面減量：頂部分頁與「⋯」選單、3-1 一排小步驟、3-2 卡片頂端一行／決定按鈕／清單篩選。"""
+    rv = (WEB / "review.js").read_text(encoding="utf-8")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    # 頂部：標題＋進度一行；分頁；右上「⋯」只放設定、快捷鍵、代號對照、分隔線、交接打包、匯入交接包；主要按鈕只留一顆
+    assert 'id="rv-more-btn" aria-label="更多"' in rv and ">⋯</button>" in rv
+    menu = rv[rv.index('id="rv-menu"'):rv.index("</header>")]
+    order = [menu.index(x) for x in ('id="rv-set-btn"', 'id="rv-key-btn"', 'id="rv-code-btn"', 'class="rv-menu-sep"', 'id="rv-m-pack"', 'id="rv-m-imp"')]
+    assert order == sorted(order)
+    assert "tool-menu-hint" in menu and 'class="tool-menu rv-menu"' in rv         # 樣式沿用工具設定選單
+    assert 'id="rv-go4" disabled>開始 AI 修改 →</button>' in rv and rv.count('class="primary"') >= 1
+    assert 'id="rv-prep-btn">開始前 4 件事</button>' in rv and 'id="rv-cards-btn">逐筆確認</button>' in rv
+    assert 'class="cl-box ho-box3"' not in rv                                      # 交接黃框拿掉
+    assert 'e.key !== "Escape" || !m || m.hidden' in rv                            # Esc 關選單
+    # 3-1：一排小步驟、每件底部一顆按鈕、最後一件接「開始逐筆確認」；全部照建議通過降成連結並先確認
+    assert "rv-prepchips" in rv and "這一件好了 → 下一件" in rv and "開始逐筆確認 →" in rv and 'id="rv-prepundo"' in rv
+    assert 'class="linkish" id="rv-passall"' in rv and "筆照 AI 建議（不能自動通過的會留著）" in rv and "uiConfirm({ title: `把還沒確認的" in rv
+    # 3-2：卡片頂端一行、AI 建議在文字框上面、兩顆大的、其他收成一排小字、內部代號只放提示
+    card = rv[rv.index("function rvRenderCard"):rv.index("function rvPrefill")]
+    assert card.index('class="rv-cardnav"') < card.index("rv-sug") < card.index('class="rv-body"') < card.index('id="rv-pass"')
+    assert "rvIdTag" not in card and "rvIdTag" not in rv[rv.index("function rvRenderList"):rv.index("function rvMarkListRow")]
+    assert 'class="rv-others"' in card and 'id="rv-prev"' in card and 'id="rv-next"' in card
+    lst = rv[rv.index("function rvRenderList"):rv.index("function rvMarkListRow")]
+    assert "count(f) > 0" in lst and "rvPassAllHtml" not in lst and "rv-tostart" not in lst and "rv-foot" not in lst
+    assert "/* 1025-2 第3步 */" in css
+    if not NODE:
+        print("（沒有 node，略過）")
+        return
+    import test_cards_snapshot as cs
+    spec = cs._scenarios(cs._items())[0]
+    prog = """
+      setup(); rv.cur = "學員段落:T003"; rv.filter = "全部"; rvRenderList();
+      const all = document.getElementById("rv-lower").innerHTML;
+      rv.filter = "還沒確認"; rvRenderList(); const chosen = document.getElementById("rv-lower").innerHTML;
+      rvRenderCard(); const card = document.getElementById("rv-right").innerHTML;
+      return {all, chosen, card, tabs: (all.match(/data-f="([^"]+)"/g) || []).length};"""
+    import json, subprocess, tempfile
+    spec["情境"] = [{"名稱": "清單", "程式": prog}]
+    d = Path(tempfile.mkdtemp())
+    (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    out = subprocess.run([cs.NODE, str(cs.HARNESS), ",".join(str(WEB / f) for f in cs.STEP3_FILES), str(d / "spec.json")],
+                         capture_output=True, text=True, check=True)
+    r = json.loads(out.stdout)
+    v = r["清單"]
+    assert "錯誤" not in v, v
+    assert not re.search(r'class="idtag"', v["all"] + v["card"])                   # 畫面上沒有 T003 這類代號
+    assert re.search(r'class="rv-when" title="編號 T003', v["card"])                # 只在滑鼠移上去的提示
+    filters = re.findall(r'data-f="([^"]+)"[^>]*>[^<]*<span>(\d+)</span>', v["all"])
+    assert filters and all(n != "0" or f == "全部" for f, n in filters), filters      # 0 筆的分頁不顯示
+    assert 'data-f="還沒確認"' in v["chosen"]                                         # 目前選中的就算變 0 也留著
+    assert v["card"].count("data-cv-pad") == 1 and "第 " in v["card"] and "筆</span>" in v["card"]
 
 
 if __name__ == "__main__":
