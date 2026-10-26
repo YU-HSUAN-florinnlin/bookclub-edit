@@ -88,6 +88,28 @@ def replace_name(sentence: str, cand: dict) -> str | None:
     return None if new is None else finish_drops(new)[0]
 
 
+HOME_NEAR_S = 0.6   # 名字的聲音離鄰句邊界這麼近（秒）、鄰句的字裡有這個名字，名字算鄰句的（#298）
+
+
+def home_sentence(ordered: list[dict], pos: dict, c: dict) -> str | None:
+    """名字候選的聲音落在哪一句的時間裡，句子文字卻不含這個名字、緊鄰的前一句或後一句含有 → 回傳鄰句的 id（純函式）。
+
+    1026 #298 實例：老師點名句的最後一個名字，逐字時間比句子結束晚 0.1 秒，被算進下一句（學員開口的那一句），
+    下一句的字裡沒有這個名字，要念的字就從逐字稿拼成「我 代號剛剛本來想到…」。其餘照舊回傳候選自己的句子。"""
+    sid = c.get("sentence_id")
+    k = pos.get(sid)
+    if k is None or mark_name(ordered[k].get("text") or "", c) is not None:
+        return sid
+    for j in (k - 1, k + 1):
+        if not 0 <= j < len(ordered):
+            continue
+        nb = ordered[j]
+        gap = c["start"] - nb["end"] if j < k else nb["start"] - c["end"]
+        if -0.05 <= gap <= HOME_NEAR_S and ok_teacher(nb) and mark_name(nb.get("text") or "", c) is not None:
+            return nb["id"]
+    return sid
+
+
 END_PUNCT = "。！？!?﹖﹗…"          # 句子結束
 CONT_PUNCT = "，,、；;：:﹐﹑"        # 句子還沒完（Groq 在這裡切開的是半句）
 MAX_SENTENCE_S = 25.0               # 擴句的上限：整句不超過這麼長
@@ -536,7 +558,7 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
             gen.append({"id": f"N{_num(i)}", "text": c["代號"], "slot": [c["start"] - pad, c["end"] + pad], "候選": [i]})
             continue
 
-        sid = c.get("sentence_id")
+        sid = home_sentence(ordered, pos, c)
         if sid not in pos:
             manual.append({"候選": i, "原因": "逐字稿裡找不到這個名字所在的句子"})   # 10-01 1-5：不寫內部編號
             continue
@@ -904,6 +926,7 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
     extend = extend_enabled(merged)
     plan = build_plan(candidates, decisions, sentences, words=words, cut=cut, extend=extend,
                       avoid=student_name_ranges(workdir) if extend else ())
+    cap_at_student_turns(plan, workdir, sentences)
     if not only:   # 09-30：重疊選「生成老師聲音」的，老師整句一起排進生成清單
         choices = [o for o in review.overlap_choices(workdir) if not review._in_ranges(o["start"], o["end"], cuts)]
         picks = [o for o in choices if o["做法"] == "只留老師"]
@@ -925,6 +948,36 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
         plan["略過"] = [s for s in plan["略過"] if s["候選"] in set(only)]
         plan["只處理"] = sorted(set(only))
     return plan
+
+
+def cap_end_at_turns(items: list[dict], group_ends: dict, starts: list[float]) -> None:
+    """整句重念的時間格，因為名字的聲音比句子結束晚而往後延，延進了會整段重念的學員段落（純函式，就地改 items，#298）：
+    延進去的那一點會跟學員那一格搶，整句被扣成消音，老師點名的話不見 → 時間格收回到句子結束。
+    延進去的那一點由學員那一格蓋掉（跟以前一樣）。`group_ends`：{生成編號: 句子結束}；沒有記就不動。"""
+    for g in items:
+        end0 = group_ends.get(g.get("id"))
+        if end0 is None:
+            continue
+        for t0 in starts:
+            if end0 - 0.05 <= t0 < g["slot"][1] and g["slot"][0] < t0:
+                g["slot"] = [g["slot"][0], round(t0, 3)]
+                break
+
+
+def cap_at_student_turns(plan: dict, workdir: Path, sentences: dict[str, dict]) -> None:
+    """`cap_end_at_turns` 的呼叫端：只看會整段重念（不是保留原聲）的學員段落；還沒有段落資料就不動。"""
+    from bookclub import review
+    from bookclub import turns as turns_mod
+
+    tdata = turns_mod.page_data(workdir)
+    if tdata.get("尚未準備"):
+        return
+    kept = {k for k, v in review.load_decisions(workdir)["學員聲音"].items() if v == "保留原聲"}
+    starts = sorted(float(t["start"]) for t in tdata.get("段落", [])
+                    if t.get("說話者") not in (None, "老師") and t.get("說話者") not in kept)
+    ends = {g["id"]: max(sentences[i]["end"] for i in g["句子"] if i in sentences)
+            for g in plan["生成"] if any(i in sentences for i in g.get("句子") or [])}
+    cap_end_at_turns(plan["生成"], ends, starts)
 
 
 BLANK_KEY = "拿掉後沒有字"   # 10-20 總審查：消音那一筆是「要念的整句拿掉後沒有字」改來的（第 5 步「需留意」列出來）
