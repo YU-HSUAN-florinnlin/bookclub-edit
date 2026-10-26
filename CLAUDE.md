@@ -55,6 +55,7 @@
 
 - 工作區格式見 `docs/工作區格式.md`；每支影片一個工作區，建在影片旁邊（`<影片檔名>_剪輯工作區/`）。
 - 設定與資料在 `~/讀書會剪輯資料/`、模型快取在 `~/.cache/bookclub/` 等處，都不在倉庫裡，也不能進 git。
+- **測試與註解的句子一律自編**，不要因為「貼近真實」抄逐字稿原句（抄了之後只改檔案，歷史 commit 裡還在）。
 - **任何學員姓名、名冊、Email、電話、影片、音檔、逐字稿都不能進 repo**，commit 訊息、CHANGELOG、測試資料也一樣。測試一律用虛構名字與合成聲音。
 - `.gitignore` 已擋 `*.wav`、`*.aiff`、`tests/smoke/out/`、`prototype/audio/`；**不要用 `git add -f` 繞過**。commit 前看一次 `git status`，有不該出現的檔就停下來問。
 - 查工作區資料**只能用 `.venv/bin/bookclub inspect <工作區> <主題>`**（規則見 `docs/給AI助手-查工作區資料.md`），不要 `cat`、`Read`、`jq` 或自己寫 Python 讀工作區 JSON。inspect 沒有的欄位，在 `safeview.py` 白名單加數字、編號、固定說法，或先問使用者。
