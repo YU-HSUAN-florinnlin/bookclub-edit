@@ -231,7 +231,7 @@ def test_time_mapping_matches_backend_and_ab_plan():
     got = _node(_PURE + f"""
       const P = {json.dumps(plist)};
       console.log(JSON.stringify({{out: {json.dumps(pts)}.map((t) => fcOutTime(t, P)), cut: fcOutTime(14.0, P), none: fcOutTime(5, null),
-        go: [fcGotoOut(12.5, P), fcGotoOut(14.0, P), fcGotoOut(5, P), fcGotoOut(41, P), fcGotoOut(null, P), fcGotoOut(-1, P)],
+        go: [fcGotoOut(12.5, 30), fcGotoOut(30, 30), fcGotoOut(31, 30), fcGotoOut(null, 30), fcGotoOut(-1, 30), fcGotoOut(99, 0)],
         goTo: [fcOutTime(15.0, P), fcOutTime(10.0, P)],
         back: {json.dumps(pts)}.map((t) => fcOutTime(t, P)).map((o) => fcSrcTime(o, P)),
         now: fcCardAbPlan({{"原片": [100, 104], "成品": [80, 85]}}, "現在"), orig: fcCardAbPlan({{"原片": [100, 104], "成品": [80, 85]}}, "原本"),
@@ -242,8 +242,8 @@ def test_time_mapping_matches_backend_and_ab_plan():
     want = [round(fc.to_output_time(t, plist), 3) for t in pts]
     assert [round(x, 3) for x in got["out"]] == want, (got["out"], want)
     assert got["cut"] is None and got["none"] == 5
-    # 10-15 宇軒驗證回饋二：「跳到」框（原片時間）：留著的照換算；剪掉的跳到下一段開頭；片頭之前＝第一段開頭；片尾之後、空的、負的＝null
-    assert got["go"][:3] == [got["out"][1], got["goTo"][0], got["goTo"][1]] and got["go"][3:] == [None, None, None], got["go"]
+    # 10-26 宇軒：「跳到」框打的是成品（修改後影片）時間，原樣跳；空的、負的、比成品長度晚＝null；長度未知（0）不限
+    assert got["go"] == [12.5, 30, None, None, None, 99], got["go"]
     assert [round(x, 3) for x in got["back"]] == [round(fc.from_output_time(o, plist), 3) for o in want]
     assert got["now"] == {"video": {"from": 78, "to": 87, "muted": False}, "audio": None}
     assert got["orig"]["video"] == {"from": 78, "to": 86, "muted": True} and got["orig"]["audio"] == "/api/audio?start=98.00&end=106.00"
@@ -418,7 +418,7 @@ def test_page_renders_and_buttons_post_right_things():
           const box = document.getElementById("fc-goto"); const left = contentEl.innerHTML;
           const l = H.listeners.filter((x) => x.el.id === "fc-goto" && x.type === "keydown").pop();
           box.value = "1:05"; await l.fn({key: "Enter", isComposing: false, target: box, preventDefault() {}});
-          const t1 = fc.video.currentTime, want = fcGotoOut(65);
+          const t1 = fc.video.currentTime, want = 65;
           box.value = "亂打"; await l.fn({key: "Enter", isComposing: false, target: box, preventDefault() {}});
           return {left, t1, want, bad: box.classList.contains("bad"), t2: fc.video.currentTime};"""},
         {"名稱": "標題時間", "程式": """

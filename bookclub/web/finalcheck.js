@@ -531,7 +531,7 @@ async function renderFinal() {
           ${closed ? `<p class="muted fc-gone">影片已經清掉了。</p>` : d["影片清掉了"] ? `<p class="rv-warnline">這一版的影片清掉了</p>` : ""}
           <video id="fc-video" controls preload="metadata" ${closed ? "hidden" : ""} ${d["影片網址"] && !closed ? `src="${esc(d["影片網址"])}${String(d["影片網址"]).includes("?") ? "&" : "?"}v=${encodeURIComponent(d["成品影片"] + "|" + (d["成品版本"] || ""))}"` : ""}></video>
           <div class="rv-timebar"><span class="rv-clock"><b id="fc-clock">0:00</b> ／ ${esc(fcFmt(d["成品長度"], 0))}</span>
-            <input id="fc-goto" class="rv-goto" placeholder="跳到 43:15" aria-label="跳到原片時間（例如 43:15，按 Enter）">
+            <input id="fc-goto" class="rv-goto" placeholder="跳到 43:15" aria-label="跳到成品時間（例如 43:15，按 Enter）">
             <select id="fc-rate" aria-label="播放速度"><option value="1">1 倍速</option><option value="1.25">1.25 倍速</option><option value="1.5">1.5 倍速</option><option value="2">2 倍速</option></select></div>
           <div class="rv-tl fc-tl" id="fc-tl" title="點一下或拖拉，跳到那個時間"></div>
           <div class="rv-legend"><span><i class="sw fc-todo"></i>還沒看</span><span><i class="sw fc-ok"></i>通過</span><span><i class="sw fc-back"></i>要重做</span></div>
@@ -553,12 +553,11 @@ async function renderFinal() {
   fcBindVersionMenu();
   fileOutInit(document.getElementById("fc-fileout"));   // 10-07：打開成品資料夾、複製到 Windows
   document.getElementById("fc-rate").addEventListener("change", (e) => { fc.video.playbackRate = Number(e.target.value); });
-  // 10-15 宇軒驗證回饋二：「跳到」框加回來（照第 3 步：打原片時間按 Enter 跳過去；打錯框變紅）
+  // 10-15 宇軒驗證回饋二：「跳到」框加回來（打時間按 Enter 跳過去；打錯框變紅）。10-26 宇軒：框裡打的是成品（修改後影片）時間，不是原片時間
   document.getElementById("fc-goto").addEventListener("keydown", (e) => {
     if (e.key !== "Enter" || e.isComposing) return;
     e.preventDefault();
-    const src = rvParseTime(e.target.value);
-    const t = src == null ? null : fcGotoOut(src);
+    const t = fcGotoOut(rvParseTime(e.target.value));
     e.target.classList.toggle("bad", t == null);
     if (t != null) { fcSeek(t); e.target.blur(); }
   });
@@ -752,19 +751,11 @@ function fcFollow(t) {   // 影片照常播、跨過某張卡的起點，右邊�
   if (hit && hit.id !== fc.cur) { fc.cur = hit.id; fcRenderRight(); fcRenderTimeline(); fcMarkRow(); }
 }
 
-// 10-15 宇軒驗證回饋二：（純函式）「跳到」框打的原片時間 → 成品時間。那裡在成品裡剪掉了就跳到下一段留下來的開頭；
-// 比成品最後一段還晚回 null（框變紅）
-function fcGotoOut(t, plist) {
-  if (plist === undefined) plist = fc.data && fc.data["片段"];
-  if (t == null || t < 0) return null;
-  const o = fcOutTime(t, plist);
-  if (o != null || !plist || !plist.length) return o;
-  let acc = 0;
-  for (const p of plist) {
-    if (p.src[0] >= t) return acc;
-    acc += p.src[1] - p.src[0] + p.freeze;
-  }
-  return null;
+// 10-15 宇軒驗證回饋二：（純函式）「跳到」框打的成品時間 → 要跳到的成品秒數。空的、負的、比成品長度還晚回 null（框變紅）
+function fcGotoOut(t, dur) {
+  if (dur === undefined) dur = fc.data && fc.data["成品長度"];
+  if (t == null || t < 0 || (dur && t > dur)) return null;
+  return t;
 }
 
 function fcSeek(t, play = false) {
