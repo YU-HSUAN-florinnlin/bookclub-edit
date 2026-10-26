@@ -28,7 +28,7 @@ def _cand(sid, a, b):
 
 
 def _sents():
-    return [_s("a", 0, 2, "等一下 小安先好嗎 小安"), _s("b", 2, 8, "我剛剛本來想到都還沒有回答")]
+    return [_s("a", 0, 2, "等一下 小安先好嗎 小安"), _s("b", 2, 8, "我先想到另一件事要補充")]
 
 
 def test_home_sentence_goes_to_previous():
@@ -37,9 +37,9 @@ def test_home_sentence_goes_to_previous():
     assert nameplan.home_sentence(sents, pos, _cand("b", 2.1, 2.4)) == "a"        # 名字的聲音在 b 的時間裡、字在 a
     assert nameplan.home_sentence(sents, pos, _cand("a", 0.5, 0.8)) == "a"        # 字就在自己這一句
     assert nameplan.home_sentence(sents, pos, _cand("b", 5.0, 5.3)) == "b"        # 離 a 的邊界太遠，不動
-    far = [_s("a", 0, 2, "等一下 小安先好嗎 小安"), _s("b", 2, 8, "我剛剛本來想到都還沒有回答", "不是老師")]
+    far = [_s("a", 0, 2, "等一下 小安先好嗎 小安"), _s("b", 2, 8, "我先想到另一件事要補充", "不是老師")]
     assert nameplan.home_sentence(far, pos, _cand("b", 2.1, 2.4)) == "a"          # 鄰句是 a（老師），b 自己的標籤不影響
-    stu = [_s("a", 0, 2, "等一下 小安先好嗎 小安", "不是老師"), _s("b", 2, 8, "我剛剛本來想到都還沒有回答")]
+    stu = [_s("a", 0, 2, "等一下 小安先好嗎 小安", "不是老師"), _s("b", 2, 8, "我先想到另一件事要補充")]
     assert nameplan.home_sentence(stu, pos, _cand("b", 2.1, 2.4)) == "b"          # 鄰句不是老師的話，不歸過去
 
 
@@ -65,7 +65,7 @@ def test_edited_text_not_overwritten_by_later_card():
 
 
 def test_neighbor_must_be_teacher_label():
-    sents = [_s("a", 0, 2, "等一下 小安先好嗎 小安", "太短"), _s("b", 2, 8, "我剛剛本來想到都還沒有回答")]
+    sents = [_s("a", 0, 2, "等一下 小安先好嗎 小安", "太短"), _s("b", 2, 8, "我先想到另一件事要補充")]
     pos = {s["id"]: k for k, s in enumerate(sents)}
     assert nameplan.home_sentence(sents, pos, _cand("b", 2.1, 2.4)) == "b"
 
