@@ -554,6 +554,10 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         item = whole.get(key)
         # 名字只在原本那一段裡換（避免換到前後段同音的字），再接成整句
         texts = item["_texts"] if item else {g["id"]: g["text"] for g in group}
+        if item:   # #296：先建的那一組沒含這一組的某幾句（例如名字所在句標「不是老師」，往前接上老師句）→ 補進去再查
+            for g in group:
+                texts.setdefault(g["id"], g["text"])
+            item["句子"] = sorted(set(item["句子"]) | {g["id"] for g in group}, key=lambda k: pos.get(k, 0))
         new = mark_name(texts[sid], c)   # 10-18 #245：小段裡先留記號，接成整句後才去句首句尾的空白
         edited = (d.get("改稿") or "").strip()
         if new is None and not item and words:

@@ -396,6 +396,16 @@ def test_web_card_shows_drop_mark_only_on_screen():
     assert re.search(r"會念成</span>我跟<mark class=\"rv-drop\"[^>]*>（拿掉）</mark>說過了", got[keys[1]]["card"]), got[keys[1]]["card"]
 
 
+def test_build_plan_name_in_non_teacher_sentence():
+    """#296：名字所在句標「不是老師」，往前接上同組的老師句；前面老師句的名字先建了一組 → 不能 KeyError。"""
+    sents = [_sent("a", 0, 1, "請 小安，"), {**_sent("b", 1.2, 2, "和 小安 說話。"), "label": "不是老師"}]
+    cands = [{**_drop("小安"), "sentence_id": "a", "start": 0.2, "end": 0.6},
+             {**_drop("小安"), "sentence_id": "b", "start": 1.3, "end": 1.6}]
+    plan = nameplan.build_plan(cands, {}, {x["id"]: x for x in sents})
+    assert len(plan["生成"]) == 1 and plan["生成"][0]["句子"] == ["a", "b"], plan
+    assert plan["生成"][0]["候選"] == [1, 2] and not plan["要人處理"], plan
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
