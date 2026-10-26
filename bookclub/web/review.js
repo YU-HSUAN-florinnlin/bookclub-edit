@@ -654,8 +654,8 @@ async function rvConfirmGo4() {
 
 function rvPassAllHtml() {
   const left = rvLeft();
-  // 1025-2（#292）：降成文字連結，旁邊小字說明；按下去先問一次
-  return `<span class="rv-passlink"><button class="linkish" id="rv-passall" ${left ? "" : "disabled"} data-tip="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>
+  // 1025-2（#292）：旁邊小字說明；按下去先問一次。1026-1（#297）宇軒：改回按鈕樣子，大小跟文字連結差不多
+  return `<span class="rv-passlink"><button class="secondary rv-passbtn" id="rv-passall" ${left ? "" : "disabled"} data-tip="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>
     ${left ? `<span class="rv-meta">還沒確認的 ${left} 筆照 AI 建議（不能自動通過的會留著）</span>` : ""}</span>`;
 }
 
@@ -940,11 +940,15 @@ function rvRenderList() {
   }).join("");
   // 1025-2（#293）：篩選只顯示有筆數的（目前選中的、「全部」不管幾筆都留著）；上方那組重複入口拿掉；
   // 「另外有 N 處重疊自動跳過」搬進「設定」（那裡本來就有完整的清單與救回）
+  // 1026-1（#297）宇軒：老師在逐筆確認找不到「全部照建議通過」→ 篩選列右邊補回（3-1 那顆照舊）
   lower.innerHTML = `
-    <nav class="rv-filters" aria-label="篩選">${RV_FILTERS.filter(([f]) => f === "全部" || f === rv.filter || count(f) > 0).map(([f, label]) =>
-      `<button class="${rv.filter === f ? "on" : ""}" data-f="${esc(f)}">${esc(label)} <span>${count(f)}</span></button>`).join("")}</nav>
+    <div class="rv-listbar">
+      <nav class="rv-filters" aria-label="篩選">${RV_FILTERS.filter(([f]) => f === "全部" || f === rv.filter || count(f) > 0).map(([f, label]) =>
+        `<button class="${rv.filter === f ? "on" : ""}" data-f="${esc(f)}">${esc(label)} <span>${count(f)}</span></button>`).join("")}</nav>
+      <span class="spacer"></span>${rvPassAllHtml()}</div>
     <ol class="rv-list" id="rv-list">${rows || `<li class="empty">這個篩選沒有項目。</li>`}</ol>`;
   lower.querySelectorAll(".rv-filters button").forEach((b) => b.addEventListener("click", () => { rv.filter = b.dataset.f; rvRenderList(); }));
+  rvBindPassAll(lower);
   lower.querySelectorAll(".rv-list li[data-key]").forEach((li) => li.addEventListener("click", () => rvSelect(li.dataset.key)));
   rvMarkListRow(true);
 }

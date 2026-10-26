@@ -318,7 +318,7 @@ def test_web_step3_buttons():
     assert "/api/execute/finalcheck" not in rv                       # 開始前不再先查總檢查
     prep = _fn(rv, "rvRenderPrep")
     assert prep.index('id="rv-start"') < prep.index("rvPassAllHtml()")   # 1025-2：跟「開始逐筆確認」同一列（連結在 3-1 底部）
-    assert "rvPassAllHtml()" not in _fn(rv, "rvRenderList")          # 1025-2：逐筆清單上方那組重複入口拿掉
+    assert "rvPassAllHtml()" in _fn(rv, "rvRenderList") and "rvBindPassAll(lower)" in _fn(rv, "rvRenderList")   # 1026-1（#297）：逐筆確認的篩選列右邊補回「全部照建議通過」（「開始前 4 件事」那顆照舊拿掉）
     if not NODE:
         return
     got = _node(_ESC + _fn(rv, "rvGo4State") + _const(rv, "RV_PREP_DEFAULT") + _fn(rv, "rvGo4Notes") + _fn(rv, "rvPassAllMsg") + """
