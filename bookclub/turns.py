@@ -387,6 +387,86 @@ def correct_labels(sentences: list[dict], text: dict) -> dict:
             "冥想導讀秒數": round(sum(e - s for s, e in regions), 1), "冥想導讀區域": regions}
 
 
+# ---------- 學員段落開頭其實是老師（#298） ----------
+
+HEAD_TEACHER_MIN_S = 2.0    # 開頭連續聲紋判老師的句子至少這麼多秒（一兩個字的誤判不算）
+HEAD_TEACHER_SIM = 0.7      # 這些句子跟老師聲紋中心的相似度每一句都要到這麼高
+HEAD_REST_NOT_TEACHER = 0.7  # 這些句子後面，聲紋判得出老師／不是老師的句子裡，不是老師的要占這麼多
+
+
+def _voice(s: dict) -> str | None:
+    return s.get("聲紋判斷", s.get("label"))
+
+
+def trim_teacher_heads(turns: list[dict], by_id: dict[str, dict]) -> list[dict]:
+    """學員段落最前面連續幾句聲紋明明是老師，起點往後推、那幾句還給前一個老師段落（純函式，就地改 turns，#298）。
+
+    起因：文字判斷看到老師點名、下一句像回答，就把起點切在那一句，但那一句其實還是老師在講（第二堂實例：
+    聲紋相似度 0.81，整段 34 句只有這一句像老師，整段投票是學員，沒人注意到）。聲音原本只用來分群、整段投票，
+    不修起點。宇軒 10-26 選自動修正：學員沒抓出來的聲音，老師最後會聽、用「新增修改」補；起點要人工抓時間更累。
+    條件（保守）：前一段是老師而且緊接著；這一段還沒確認、校對稿沒人改過；開頭連續的老師聲紋句每句相似度都夠高、
+    合計夠長；後面的句子大多聲紋是不是老師。回傳每一處改了什麼（段落、移走的句數、秒數）。"""
+    changes = []
+    for i, t in enumerate(turns):
+        who = t.get("說話者") or t.get("文字判斷")
+        prev = turns[i - 1] if i else None
+        if prev is None or who == "老師" or (prev.get("說話者") or prev.get("文字判斷")) != "老師":
+            continue
+        if abs(prev["end"] - t["start"]) > 0.5 or t.get("已確認") or t.get("校對稿") not in (None, t.get("原文")):
+            continue
+        if t.get("說話者是人改的") or t.get("句尾切點") or t.get("手動標記") or t.get("人工新增"):
+            continue   # 人標過、改過說話者、切在句子中間的段落不動（審查：I／O 標記就是用來救聲紋判老師的學員）
+        ss = [by_id[k] for k in t.get("句子") or [] if k in by_id]
+        if ss and abs(float(t["start"]) - float(ss[0]["start"])) > 0.05:
+            continue   # 起點跟第一句的開頭對不上＝人改過起訖
+        run = []
+        for x in ss:
+            if _voice(x) == "老師" and float(x.get("sim") or 0) >= HEAD_TEACHER_SIM:
+                run.append(x)
+            else:
+                break
+        secs = sum(x["end"] - x["start"] for x in run)
+        rest = ss[len(run):]
+        if not run or not rest or secs < HEAD_TEACHER_MIN_S:
+            continue
+        judged = [x for x in rest if _voice(x) in ("老師", "不是老師")]
+        if not judged or sum(1 for x in judged if _voice(x) == "不是老師") / len(judged) < HEAD_REST_NOT_TEACHER:
+            continue
+        moved = "".join(x["text"] for x in run)
+        if prev.get("校對稿") in (None, prev.get("原文")):
+            prev["校對稿"] = (prev.get("原文") or "") + moved
+        prev["原文"] = (prev.get("原文") or "") + moved
+        prev["句子"] = list(prev.get("句子") or []) + [x["id"] for x in run]
+        prev["end"] = run[-1]["end"]
+        t["句子"] = [x["id"] for x in rest]
+        t["start"] = rest[0]["start"]
+        t["原文"] = "".join(x["text"] for x in rest)
+        if "校對稿" in t:
+            t["校對稿"] = t["原文"]
+        t["起點修正"] = {"移給前一段句數": len(run), "秒數": round(secs, 1)}
+        changes.append({"段落": t["id"], "句數": len(run), "秒數": round(secs, 1)})
+    return changes
+
+
+def repair_teacher_heads(workdir: str | Path, log=print) -> list[dict]:
+    """舊工作區（匯入的、第 1 步已跑完的）第一次開第 3 步時補做一次 `trim_teacher_heads`，之後不再動
+    （`起點自動修正` 記號），人自己改回去的起點不會被改掉。"""
+    workdir = Path(workdir)
+    with _lock:
+        data = wd.read_json(turns_path(workdir))
+        if not data or not data.get("段落") or data.get("起點自動修正"):
+            return []
+        sp = wd.read_json(wd.speakers_path(workdir)) or {}
+        changes = trim_teacher_heads(data["段落"], {x["id"]: x for x in sp.get("sentences", [])})
+        data["起點自動修正"] = True
+        if changes:
+            _recount_people(data)
+        wd.write_json(turns_path(workdir), data)
+    if changes:
+        log(f"[段落] 學員段落開頭其實是老師，起點已往後推：{'、'.join(c['段落'] + '（' + str(c['秒數']) + ' 秒）' for c in changes)}")
+    return changes
+
+
 # ---------- 聲音認人 ----------
 
 def cluster_turns(embs: np.ndarray, durs: list[float]) -> list[int]:
@@ -437,6 +517,8 @@ def build_turns(workdir: str | Path, *, model: str | None = None, roster_path: s
             "聲音判斷": _voice_role(ss),
         })
 
+    for c in trim_teacher_heads(turns, {x["id"]: x for x in sents}):
+        log(f"[段落] {c['段落']} 開頭 {c['秒數']} 秒聲紋是老師，起點往後推（#298）")
     # 聲音認人：文字判斷為學員的段落，整段抽聲紋分群
     t1 = time.time()
     from pyannote.core import Segment
@@ -497,6 +579,7 @@ def build_turns(workdir: str | Path, *, model: str | None = None, roster_path: s
         "段落": turns,
         "學員": dict(sorted(by_person.items(), key=lambda kv: -kv[1]["秒數"])),
         "比對": {**compare_with_voice(turns), **same_person_agreement(turns)},
+        "起點自動修正": True,
         "統計": {"段落數": len(turns), "學員段落數": len(stu), "學員人數": len(by_person),
                 "文字判斷秒": round(text_s), "聲紋分群秒": round(voice_s), "模型": model},
     }
@@ -597,6 +680,7 @@ def page_data(workdir: str | Path) -> dict:
 
     workdir = Path(workdir)
     repair_turn_ids(workdir)   # 10-03 第八批（#13）：舊檔有重複編號就先修好
+    repair_teacher_heads(workdir)   # #298：舊檔學員段落開頭其實是老師的，第一次開頁時修一次
     data = wd.read_json(turns_path(workdir))
     if not data:
         return {"尚未準備": True}
