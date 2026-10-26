@@ -1035,7 +1035,7 @@ def _names_items(workdir: Path, sents: list[dict]) -> list[dict]:
             continue
         d = decisions.get(cid, {}) or {}
         mates = [cands[int(k) - 1] for k in c.get("同一張卡候選") or [] if k != cid and not cands[int(k) - 1].get("同一處")]
-        c = {**c, "sentence_id": nameplan.home_sentence(ordered, pos, c)}   # 跟 nameplan.build_plan 一樣（#298）
+        c = {**c, "sentence_id": nameplan.home_sentence(ordered, pos, c)}   # 跟 nameplan.build_plan 一樣（#300）
         group = nameplan.expand_sentence(ordered, pos[c["sentence_id"]]) if c.get("sentence_id") in pos else []
         if group and c.get("改過時間"):   # 跟 nameplan.build_plan 一樣：改時間納進來的句子一起重念
             group = [g for g in ordered if g["end"] > min(c["start"], group[0]["start"]) + 0.05

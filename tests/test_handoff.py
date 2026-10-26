@@ -434,7 +434,7 @@ def test_clean_episode_after_handover():
     seg = w2 / "校對" / "段落.json"
     orig = seg.read_bytes()
     changed = json.loads(orig.decode("utf-8"))
-    changed["測試改動"] = 1   # #298：段落.json 的比對看內容（不算起點自動修正的記號），不是看位元組，所以改一個欄位
+    changed["測試改動"] = 1   # #300：段落.json 的比對看內容（不算起點自動修正的記號），不是看位元組，所以改一個欄位
     seg.write_text(json.dumps(changed, ensure_ascii=False), encoding="utf-8")
     try:
         handoff.clean_episode(w2, kind="wsl", data=_DATA)

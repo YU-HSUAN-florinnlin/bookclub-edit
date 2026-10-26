@@ -387,7 +387,7 @@ def correct_labels(sentences: list[dict], text: dict) -> dict:
             "冥想導讀秒數": round(sum(e - s for s, e in regions), 1), "冥想導讀區域": regions}
 
 
-# ---------- 學員段落開頭其實是老師（#298） ----------
+# ---------- 學員段落開頭其實是老師（#300） ----------
 
 HEAD_TEACHER_MIN_S = 2.0    # 開頭連續聲紋判老師的句子至少這麼多秒（一兩個字的誤判不算）
 HEAD_TEACHER_SIM = 0.7      # 這些句子跟老師聲紋中心的相似度每一句都要到這麼高
@@ -399,7 +399,7 @@ def _voice(s: dict) -> str | None:
 
 
 def trim_teacher_heads(turns: list[dict], by_id: dict[str, dict]) -> list[dict]:
-    """學員段落最前面連續幾句聲紋明明是老師，起點往後推、那幾句還給前一個老師段落（純函式，就地改 turns，#298）。
+    """學員段落最前面連續幾句聲紋明明是老師，起點往後推、那幾句還給前一個老師段落（純函式，就地改 turns，#300）。
 
     起因：文字判斷看到老師點名、下一句像回答，就把起點切在那一句，但那一句其實還是老師在講（第二堂實例：
     聲紋相似度 0.81，整段 34 句只有這一句像老師，整段投票是學員，沒人注意到）。聲音原本只用來分群、整段投票，
@@ -518,7 +518,7 @@ def build_turns(workdir: str | Path, *, model: str | None = None, roster_path: s
         })
 
     for c in trim_teacher_heads(turns, {x["id"]: x for x in sents}):
-        log(f"[段落] {c['段落']} 開頭 {c['秒數']} 秒聲紋是老師，起點往後推（#298）")
+        log(f"[段落] {c['段落']} 開頭 {c['秒數']} 秒聲紋是老師，起點往後推（#300）")
     # 聲音認人：文字判斷為學員的段落，整段抽聲紋分群
     t1 = time.time()
     from pyannote.core import Segment
@@ -680,7 +680,7 @@ def page_data(workdir: str | Path) -> dict:
 
     workdir = Path(workdir)
     repair_turn_ids(workdir)   # 10-03 第八批（#13）：舊檔有重複編號就先修好
-    repair_teacher_heads(workdir)   # #298：舊檔學員段落開頭其實是老師的，第一次開頁時修一次
+    repair_teacher_heads(workdir)   # #300：舊檔學員段落開頭其實是老師的，第一次開頁時修一次
     data = wd.read_json(turns_path(workdir))
     if not data:
         return {"尚未準備": True}

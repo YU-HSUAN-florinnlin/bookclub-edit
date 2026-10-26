@@ -88,13 +88,13 @@ def replace_name(sentence: str, cand: dict) -> str | None:
     return None if new is None else finish_drops(new)[0]
 
 
-HOME_NEAR_S = 0.6   # 名字的聲音離鄰句邊界這麼近（秒）、鄰句的字裡有這個名字，名字算鄰句的（#298）
+HOME_NEAR_S = 0.6   # 名字的聲音離鄰句邊界這麼近（秒）、鄰句的字裡有這個名字，名字算鄰句的（#300）
 
 
 def home_sentence(ordered: list[dict], pos: dict, c: dict) -> str | None:
     """名字候選的聲音落在哪一句的時間裡，句子文字卻不含這個名字、緊鄰的前一句或後一句含有 → 回傳鄰句的 id（純函式）。
 
-    1026 #298 實例：老師點名句的最後一個名字，逐字時間比句子結束晚 0.1 秒，被算進下一句（學員開口的那一句），
+    1026 #300 實例：老師點名句的最後一個名字，逐字時間比句子結束晚 0.1 秒，被算進下一句（學員開口的那一句），
     下一句的字裡沒有這個名字，要念的字就從逐字稿拼成「我 代號剛剛本來想到…」。其餘照舊回傳候選自己的句子。"""
     sid = c.get("sentence_id")
     k = pos.get(sid)
@@ -952,7 +952,7 @@ def compute_plan(workdir: Path, names: dict | None = None, only: list[int] | Non
 
 
 def cap_end_at_turns(items: list[dict], group_ends: dict, starts: list[float]) -> None:
-    """整句重念的時間格，因為名字的聲音比句子結束晚而往後延，延進了會整段重念的學員段落（純函式，就地改 items，#298）：
+    """整句重念的時間格，因為名字的聲音比句子結束晚而往後延，延進了會整段重念的學員段落（純函式，就地改 items，#300）：
     延進去的那一點會跟學員那一格搶，整句被扣成消音，老師點名的話不見 → 時間格收回到句子結束。
     延進去的那一點由學員那一格蓋掉（跟以前一樣）。`group_ends`：{生成編號: 句子結束}；沒有記就不動。"""
     for g in items:
