@@ -414,7 +414,11 @@ def trim_teacher_heads(turns: list[dict], by_id: dict[str, dict]) -> list[dict]:
             continue
         if abs(prev["end"] - t["start"]) > 0.5 or t.get("已確認") or t.get("校對稿") not in (None, t.get("原文")):
             continue
+        if t.get("說話者是人改的") or t.get("句尾切點") or t.get("手動標記") or t.get("人工新增"):
+            continue   # 人標過、改過說話者、切在句子中間的段落不動（審查：I／O 標記就是用來救聲紋判老師的學員）
         ss = [by_id[k] for k in t.get("句子") or [] if k in by_id]
+        if ss and abs(float(t["start"]) - float(ss[0]["start"])) > 0.05:
+            continue   # 起點跟第一句的開頭對不上＝人改過起訖
         run = []
         for x in ss:
             if _voice(x) == "老師" and float(x.get("sim") or 0) >= HEAD_TEACHER_SIM:

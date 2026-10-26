@@ -54,6 +54,22 @@ def test_plan_text_and_slot():
     assert g["候選"] == [1, 2] and g["slot"][1] >= 2.4, g
 
 
+def test_edited_text_not_overwritten_by_later_card():
+    """審查：同一句另一張卡人已經改好要念的字，後到的卡併進來不能蓋掉。"""
+    sents = [_s("a", 0, 2, "請 小安 和 小美 先說"), _s("b", 2, 8, "我剛剛想到")]
+    c1 = {**_cand("a", 0.2, 0.5), "代號": "Amy"}
+    c2 = {"matched_text": "小美", "name": "小美", "canonical": "小美", "代號": "Bella", "sentence_id": "b", "start": 2.05, "end": 2.3}
+    sents[0]["text"] = "請 小安 和 小美"   # 小美在句尾，聲音溢進下一句
+    plan = nameplan.build_plan([c1, c2], {"1": {"改稿": "Amy 跟 Bella 請先說", "已確認": True}}, {s["id"]: s for s in sents})
+    assert len(plan["生成"]) == 1 and plan["生成"][0]["text"] == "Amy 跟 Bella 請先說" and plan["生成"][0].get("改稿"), plan
+
+
+def test_neighbor_must_be_teacher_label():
+    sents = [_s("a", 0, 2, "等一下 小安先好嗎 小安", "太短"), _s("b", 2, 8, "我剛剛本來想到都還沒有回答")]
+    pos = {s["id"]: k for k, s in enumerate(sents)}
+    assert nameplan.home_sentence(sents, pos, _cand("b", 2.1, 2.4)) == "b"
+
+
 def test_cap_end_at_turns():
     items = [{"id": "S1", "slot": [0.0, 2.4]}, {"id": "S2", "slot": [5.0, 9.0]}, {"id": "S3", "slot": [0.0, 2.0]}]
     nameplan.cap_end_at_turns(items, {"S1": 2.0, "S2": 8.9, "S3": 2.0}, [2.0, 9.5])

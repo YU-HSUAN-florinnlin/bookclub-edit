@@ -105,7 +105,7 @@ def home_sentence(ordered: list[dict], pos: dict, c: dict) -> str | None:
             continue
         nb = ordered[j]
         gap = c["start"] - nb["end"] if j < k else nb["start"] - c["end"]
-        if -0.05 <= gap <= HOME_NEAR_S and ok_teacher(nb) and mark_name(nb.get("text") or "", c) is not None:
+        if -0.05 <= gap <= HOME_NEAR_S and nb.get("label", "老師") == "老師" and mark_name(nb.get("text") or "", c) is not None:
             return nb["id"]
     return sid
 
@@ -603,7 +603,8 @@ def build_plan(candidates: list[dict], decisions: dict, sentences: dict[str, dic
         lo = min(group[0]["start"], c["start"])   # 名字本身一定包進時間格（句首的字可能比句子早開始）
         hi = max(group[-1]["end"], c["end"])
         if item:
-            item["text"] = full
+            if not item.get("改稿"):   # 審查：同一句另一張卡人已經改好要念的字，不能被後到的卡蓋掉
+                item["text"] = full
             item["候選"].append(i)
             item["slot"] = [min(item["slot"][0], lo), max(item["slot"][1], hi)]
         else:
@@ -973,8 +974,13 @@ def cap_at_student_turns(plan: dict, workdir: Path, sentences: dict[str, dict]) 
     if tdata.get("尚未準備"):
         return
     kept = {k for k, v in review.load_decisions(workdir)["學員聲音"].items() if v == "保留原聲"}
-    starts = sorted(float(t["start"]) for t in tdata.get("段落", [])
-                    if t.get("說話者") not in (None, "老師") and t.get("說話者") not in kept)
+    starts = []
+    for t in tdata.get("段落", []):
+        if t.get("說話者") in (None, "老師") or t.get("說話者") in kept:
+            continue
+        first = next((sentences[i]["start"] for i in t.get("句子") or [] if i in sentences), t["start"])
+        starts.append(max(float(t["start"]), float(first)))   # 學員那一格從第一句開始，收回到那裡才接得上
+    starts.sort()
     ends = {g["id"]: max(sentences[i]["end"] for i in g["句子"] if i in sentences)
             for g in plan["生成"] if any(i in sentences for i in g.get("句子") or [])}
     cap_end_at_turns(plan["生成"], ends, starts)

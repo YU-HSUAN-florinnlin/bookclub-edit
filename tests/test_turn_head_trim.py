@@ -70,6 +70,41 @@ def test_trim_conditions():
     assert turns.trim_teacher_heads(ts, by) == []
 
 
+def test_trim_skips_human_work():
+    for field, val in (("說話者是人改的", True), ("句尾切點", {"s2": 3}), ("手動標記", True), ("人工新增", True)):
+        ts, by, _ = _data()
+        ts[1][field] = val
+        assert turns.trim_teacher_heads(ts, by) == [], field
+    ts, by, _ = _data()
+    ts[1]["start"] = 10.4                      # 起點跟第一句開頭對不上＝人改過起訖
+    assert turns.trim_teacher_heads(ts, by) == []
+    ts, by, _ = _data()
+    ts[0]["end"] = 9.0                         # 前一段沒有緊接著
+    assert turns.trim_teacher_heads(ts, by) == []
+
+
+def test_repair_once_and_leave_manual_alone():
+    import tempfile
+
+    from bookclub import workdir as wd
+
+    ts, by, _ = _data()
+    with tempfile.TemporaryDirectory() as d:
+        w = Path(d)
+        (w / "校對").mkdir()
+        wd.write_json(turns.turns_path(w), {"段落": ts, "學員": {"學員1": {"秒數": 0, "段數": 1, "點名線索": {}, "代號": None}}})
+        wd.write_json(wd.speakers_path(w), {"sentences": list(by.values())})
+        assert [c["段落"] for c in turns.repair_teacher_heads(w, log=lambda *_: None)] == ["T2"]
+        data = wd.read_json(turns.turns_path(w))
+        assert data["起點自動修正"] is True and data["段落"][1]["start"] == 16.0
+        data["段落"][1]["start"] = 10.0         # 人把起點改回去
+        data["段落"][1]["句子"] = ["s2"] + data["段落"][1]["句子"]
+        data["段落"][0]["句子"] = ["s1"]
+        wd.write_json(turns.turns_path(w), data)
+        assert turns.repair_teacher_heads(w, log=lambda *_: None) == []   # 有記號，不再動
+        assert wd.read_json(turns.turns_path(w))["段落"][1]["start"] == 10.0
+
+
 if __name__ == "__main__":
     tests = [v for k, v in dict(globals()).items() if k.startswith("test_")]
     for fn in tests:
