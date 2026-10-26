@@ -654,8 +654,8 @@ async function rvConfirmGo4() {
 
 function rvPassAllHtml() {
   const left = rvLeft();
-  // 1025-2（#292）：降成文字連結，旁邊小字說明；按下去先問一次
-  return `<span class="rv-passlink"><button class="linkish" id="rv-passall" ${left ? "" : "disabled"} data-tip="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>
+  // 1025-2（#292）：旁邊小字說明；按下去先問一次。1026-1（#297）宇軒：改回按鈕樣子，大小跟文字連結差不多
+  return `<span class="rv-passlink"><button class="secondary rv-passbtn" id="rv-passall" ${left ? "" : "disabled"} data-tip="有建議、還沒確認的卡片一次照建議通過；建議剪掉、文字裡還有本名、名字換不了代號、人工新增的等等不會幫你按">全部照建議通過</button>
     ${left ? `<span class="rv-meta">還沒確認的 ${left} 筆照 AI 建議（不能自動通過的會留著）</span>` : ""}</span>`;
 }
 

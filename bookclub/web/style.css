@@ -1309,3 +1309,5 @@ body.ws-closed #fc-menu-export, body.ws-closed #fc-go4 { pointer-events: none; o
 .rv-listbar .rv-filters { flex: 1 1 auto; }
 .rv-listbar .spacer { flex: 1 1 0; }
 .rv-listbar .rv-passlink { padding-top: 4px; }
+.rv2 button.rv-passbtn { font-size: 13px; padding: 3px 10px; min-height: 0; line-height: 1.4; }
+.rv2 .rv-passlink button.rv-passbtn:disabled { opacity: .45; }
