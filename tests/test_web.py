@@ -866,7 +866,7 @@ def test_step3_ux_1025_2():
     assert "rvIdTag" not in card and "rvIdTag" not in rv[rv.index("function rvRenderList"):rv.index("function rvMarkListRow")]
     assert 'class="rv-others"' in card and 'id="rv-prev"' in card and 'id="rv-next"' in card
     lst = rv[rv.index("function rvRenderList"):rv.index("function rvMarkListRow")]
-    assert "count(f) > 0" in lst and "rvPassAllHtml" not in lst and "rv-tostart" not in lst and "rv-foot" not in lst
+    assert "count(f) > 0" in lst and "rvPassAllHtml" in lst and "rv-tostart" not in lst and "rv-foot" not in lst   # 1026-1（#297）：逐筆確認補回「全部照建議通過」
     assert "/* 1025-2 第3步 */" in css
     if not NODE:
         print("（沒有 node，略過）")

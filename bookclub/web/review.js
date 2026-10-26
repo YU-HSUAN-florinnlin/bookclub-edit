@@ -940,11 +940,15 @@ function rvRenderList() {
   }).join("");
   // 1025-2（#293）：篩選只顯示有筆數的（目前選中的、「全部」不管幾筆都留著）；上方那組重複入口拿掉；
   // 「另外有 N 處重疊自動跳過」搬進「設定」（那裡本來就有完整的清單與救回）
+  // 1026-1（#297）宇軒：老師在逐筆確認找不到「全部照建議通過」→ 篩選列右邊補回（3-1 那顆照舊）
   lower.innerHTML = `
-    <nav class="rv-filters" aria-label="篩選">${RV_FILTERS.filter(([f]) => f === "全部" || f === rv.filter || count(f) > 0).map(([f, label]) =>
-      `<button class="${rv.filter === f ? "on" : ""}" data-f="${esc(f)}">${esc(label)} <span>${count(f)}</span></button>`).join("")}</nav>
+    <div class="rv-listbar">
+      <nav class="rv-filters" aria-label="篩選">${RV_FILTERS.filter(([f]) => f === "全部" || f === rv.filter || count(f) > 0).map(([f, label]) =>
+        `<button class="${rv.filter === f ? "on" : ""}" data-f="${esc(f)}">${esc(label)} <span>${count(f)}</span></button>`).join("")}</nav>
+      <span class="spacer"></span>${rvPassAllHtml()}</div>
     <ol class="rv-list" id="rv-list">${rows || `<li class="empty">這個篩選沒有項目。</li>`}</ol>`;
   lower.querySelectorAll(".rv-filters button").forEach((b) => b.addEventListener("click", () => { rv.filter = b.dataset.f; rvRenderList(); }));
+  rvBindPassAll(lower);
   lower.querySelectorAll(".rv-list li[data-key]").forEach((li) => li.addEventListener("click", () => rvSelect(li.dataset.key)));
   rvMarkListRow(true);
 }

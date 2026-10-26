@@ -1304,3 +1304,8 @@ details.exec-direct > summary { cursor: pointer; color: var(--accent); text-deco
 .fc-typesel select { font-size: 14px; }
 body.ws-closed #fc-menu-export, body.ws-closed #fc-go4 { pointer-events: none; opacity: .45; }
 .rv-playwrap { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+/* 1026-1 逐筆確認補全部通過 */
+.rv-listbar { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.rv-listbar .rv-filters { flex: 1 1 auto; }
+.rv-listbar .spacer { flex: 1 1 0; }
+.rv-listbar .rv-passlink { padding-top: 4px; }
