@@ -1,0 +1,53 @@
+name: windows-native-trial
+
+# Feasibility experiment: can this tool install and run on native Windows (no WSL2)?
+# Not a real port. No bookclub/ code, install.sh or package files are changed.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 1123-3-Windows原生試裝
+
+permissions:
+  contents: read
+
+jobs:
+  trial:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        id: uv
+        continue-on-error: true
+        run: python -m pip install uv
+
+      - name: Install ffmpeg
+        id: ffmpeg
+        continue-on-error: true
+        run: |
+          choco install ffmpeg --no-progress -y
+          ffmpeg -version
+
+      - name: Run trial (every step continues on failure)
+        id: trial
+        continue-on-error: true
+        env:
+          PYTHONUTF8: "1"
+        run: python .github/windows-trial/run_trial.py
+
+      - name: Upload trial output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-trial-output
+          path: trial-out/
+          if-no-files-found: warn
