@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -201,11 +202,60 @@ def parse_pick(method: str, returncode: int, stdout, stderr) -> str | None:
     raise ValueError(f"不認得的選檔方式：{method}")
 
 
-def wsl_to_linux(win_path: str, run=None) -> str:
-    """`C:\\Users\\老師\\影片\\第一堂.mp4` → `/mnt/c/Users/老師/影片/第一堂.mp4`（`wslpath -u`）。已經是 Linux 路徑就照用。"""
+_DRIVE_RE = re.compile(r"^([A-Za-z]):[\\/]")     # `D:\…`；`\\server\share`、`D:` 單獨一個都不算，交給 wslpath
+NO_AUTOMOUNT_ENV = "BOOKCLUB_NO_AUTOMOUNT"
+WSL_CANDIDATES = ("/mnt/c/Windows/System32/wsl.exe",)
+
+
+def automount_enabled(env: dict | None = None) -> bool:
+    env = os.environ if env is None else env
+    return env.get(NO_AUTOMOUNT_ENV, "") != "1"
+
+
+def drive_missing_message(letter: str) -> str:
+    return (f"找不到 {letter.upper()} 槽的硬碟，請確認隨身硬碟已插上並能在檔案總管看到，再重新選一次。"
+            "請將錯誤訊息通知開發者。")
+
+
+def mount_drive(letter: str, run=None, which=None) -> bool:
+    """叫 Windows 的 wsl.exe 以 root 把 `X:` 掛到 `/mnt/x`（隨身硬碟在 Ubuntu 開了之後才插上時，/mnt/x 不會自己出現）。
+    槽代號只收單一英文字母；回傳指令有沒有正常結束（有沒有真的掛上由呼叫端再查）。輸出不看，所以不用管編碼。"""
+    if not (len(letter) == 1 and letter.isascii() and letter.isalpha()):
+        return False
+    run = run or subprocess.run
+    exe = _find_exe("wsl.exe", WSL_CANDIDATES, which)
+    if not exe:
+        return False
+    low, up = letter.lower(), letter.upper()
+    cmd = [exe, "-u", "root", "-e", "sh", "-c", f"mkdir -p /mnt/{low} && mount -t drvfs {up}: /mnt/{low}"]
+    kw = {"cwd": "/mnt/c"} if Path("/mnt/c").is_dir() else {}
+    try:
+        r = run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=QUICK_TIMEOUT_S, **kw)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+def wsl_to_linux(win_path: str, run=None, *, automount=False, ismount=None, exists=None, which=None, env: dict | None = None) -> str:
+    r"""`C:\Users\老師\影片\第一堂.mp4` → `/mnt/c/Users/老師/影片/第一堂.mp4`。已經是 Linux 路徑就照用。
+    `X:\…` 自己換（純字串，不靠 wslpath，硬碟晚插上也換得出來）；`automount=True`（選影片時）該槽沒掛上就試著掛（`BOOKCLUB_NO_AUTOMOUNT=1` 可關）；
+    其他寫法（例如 `\\server\share`）才叫 `wslpath -u`。"""
     run = run or subprocess.run
     if win_path.startswith("/"):
         return win_path
+    m = _DRIVE_RE.match(win_path) if automount else None   # 只有「選影片」走自己換＋掛載；其他呼叫處照舊用 wslpath
+    if m:
+        letter = m.group(1)
+        mnt = f"/mnt/{letter.lower()}"
+        out = f"{mnt}/" + win_path[3:].replace("\\", "/")
+        if automount_enabled(env):
+            ismount = ismount or os.path.ismount
+            exists = exists or os.path.exists
+            if not ismount(mnt):
+                mount_drive(letter, run=run, which=which)
+                if not ismount(mnt) or not exists(out):
+                    raise PickUnavailable(drive_missing_message(letter))
+        return out
     try:
         r = run(["wslpath", "-u", win_path], capture_output=True, timeout=QUICK_TIMEOUT_S)
     except (OSError, subprocess.TimeoutExpired) as e:   # 卡住或叫不起來：當作叫不起選檔視窗，退回網頁瀏覽
@@ -233,7 +283,7 @@ _pick_lock = threading.Lock()
 
 
 def pick_file(title: str, *, method: str | None = None, run=None, exts: tuple[str, ...] = VIDEO_EXTS,
-              which=None) -> Path | None:
+              which=None, ismount=None, exists=None, env: dict | None = None) -> Path | None:
     """叫系統的選檔視窗選一支影片，回傳 Ubuntu／Mac 這邊的路徑；按取消回 None；叫不起來丟 PickUnavailable。
     同一時間只開一個視窗（第二個丟 PickUnavailable：說已經開著了）。"""
     which = which or shutil.which
@@ -269,7 +319,7 @@ def pick_file(title: str, *, method: str | None = None, run=None, exts: tuple[st
         if got is None:
             return None
         if method == "wsl":
-            got = wsl_to_linux(got, run=run)
+            got = wsl_to_linux(got, run=run, automount=True, ismount=ismount, exists=exists, which=which, env=env)
         return Path(got)
     finally:
         _pick_lock.release()

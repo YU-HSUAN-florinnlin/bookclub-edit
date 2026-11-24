@@ -1103,7 +1103,7 @@ class BookclubServer(ThreadingHTTPServer):
             p = fileio.pick_file(title or PICK_TITLES[purpose])
         except fileio.PickUnavailable as e:
             fileio.timing_log(f"叫不起來，退回網頁瀏覽（{time.time() - t0:.1f} 秒）")
-            return {"退回網頁": True, "說明": f"{e}。改用下面的資料夾瀏覽選檔案。"}
+            return {"退回網頁": True, "說明": f"{str(e).rstrip('。')}。改用下面的資料夾瀏覽選檔案。"}
         fileio.timing_log(f"這次請求共 {time.time() - t0:.1f} 秒（含人在視窗裡選的時間）")
         if p is None:
             return {"取消": True, "退回網頁": True,

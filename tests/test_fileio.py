@@ -101,9 +101,10 @@ def _fake_wsl_run(calls, pick_out=None, pick_exc=None):
 
 def test_pick_file_wsl_simulated():
     calls = []
-    got = fileio.pick_file("選影片", method="wsl", run=_fake_wsl_run(calls), which=_which("powershell.exe"))
-    assert got == Path(LINUX_VIDEO)                     # 中文、空白都照原樣轉過來
-    assert calls[0][0] == "/fake/powershell.exe" and calls[1][:2] == ["wslpath", "-u"]
+    got = fileio.pick_file("選影片", method="wsl", run=_fake_wsl_run(calls), which=_which("powershell.exe"),
+                           ismount=lambda p: True)
+    assert got == Path(LINUX_VIDEO)                     # 中文、空白都照原樣轉過來（槽代號開頭的路徑自己換，不叫 wslpath）
+    assert len(calls) == 1 and calls[0][0] == "/fake/powershell.exe"
     # 按取消
     assert fileio.pick_file("選", method="wsl", run=_fake_wsl_run([], pick_out=fileio.CANCEL_MARK),
                             which=_which("powershell.exe")) is None
@@ -119,6 +120,84 @@ def test_pick_file_wsl_simulated():
         fileio.pick_file("選", run=_fake_wsl_run([]), which=_which())
     except fileio.PickUnavailable:
         pass
+
+
+def _mount_env(mounted, mount_ok=True, mount_exc=None):
+    """假的 ismount／exists／run：`mounted` 是已掛上的槽集合；掛載指令成功時把那一槽加進去。"""
+    cmds = []
+
+    def run(cmd, **kw):
+        cmds.append(cmd)
+        if mount_exc:
+            raise mount_exc
+        if mount_ok:
+            mounted.add(cmd[-1].split("mount -t drvfs ")[1].split(":")[0].lower())
+        return R(0 if mount_ok else 1, "".encode(), b"")
+
+    ismount = lambda p: p.split("/")[2] in mounted
+    exists = lambda p: p.split("/")[2] in mounted
+    return cmds, run, ismount, exists
+
+
+def test_wsl_drive_path_and_automount():
+    w2l = lambda *a, **k: fileio.wsl_to_linux(*a, automount=True, **k)
+    which = _which("wsl.exe")
+    p = "D:\\備份 硬碟\\第二集　全形空白\\讀書會 一.mp4"
+    want = "/mnt/d/備份 硬碟/第二集　全形空白/讀書會 一.mp4"
+    # 已掛上：直接過，不呼叫任何指令
+    cmds, run, ismount, exists = _mount_env({"d"})
+    assert w2l(p, run=run, ismount=ismount, exists=exists, which=which, env={}) == want and not cmds
+    # 小寫槽代號也行；正斜線也行
+    assert w2l("d:/甲/乙.mp4", run=run, ismount=ismount, exists=exists, which=which, env={}) == "/mnt/d/甲/乙.mp4"
+    # 沒掛上 → 呼叫 wsl.exe 掛載 → 成功
+    mounted = set()
+    cmds, run, ismount, exists = _mount_env(mounted)
+    assert w2l(p, run=run, ismount=ismount, exists=exists, which=which, env={}) == want
+    assert cmds == [["/fake/wsl.exe", "-u", "root", "-e", "sh", "-c", "mkdir -p /mnt/d && mount -t drvfs D: /mnt/d"]]
+    # 大寫小寫都掛同一槽
+    cmds, run, ismount, exists = _mount_env(set())
+    w2l("e:\\x.mp4", run=run, ismount=ismount, exists=exists, which=which, env={})
+    assert "mount -t drvfs E: /mnt/e" in cmds[0][-1]
+    # 掛載失敗、逾時、找不到 wsl.exe：PickUnavailable，訊息有槽代號與白話、結尾請通知開發者
+    for kw, wh in (({"mount_ok": False}, which), ({"mount_exc": subprocess.TimeoutExpired("wsl.exe", 1)}, which),
+                   ({"mount_exc": OSError(8, "Exec format error")}, which), ({}, _which())):
+        cmds, run, ismount, exists = _mount_env(set(), **kw)
+        try:
+            w2l(p, run=run, ismount=ismount, exists=exists, which=wh, env={})
+            raise AssertionError("要丟 PickUnavailable")
+        except fileio.PickUnavailable as e:
+            assert "D 槽" in str(e) and "重新選一次" in str(e) and str(e).endswith("請將錯誤訊息通知開發者。")
+            assert "網頁" not in str(e)
+    # 掛上了但檔案不在：一樣丟
+    cmds, run, ismount, _ = _mount_env(set())
+    try:
+        w2l(p, run=run, ismount=ismount, exists=lambda x: False, which=which, env={})
+        raise AssertionError("要丟 PickUnavailable")
+    except fileio.PickUnavailable:
+        pass
+    # 總開關：不掛載、不呼叫指令，只換路徑
+    cmds, run, ismount, exists = _mount_env(set())
+    assert w2l(p, run=run, ismount=ismount, exists=exists, which=which, env={"BOOKCLUB_NO_AUTOMOUNT": "1"}) == want
+    assert not cmds
+    # 沒要求掛載（下載資料夾、選資料夾）：照舊叫 wslpath，不掛載
+    calls = []
+    run0 = lambda cmd, **kw: (calls.append(cmd), R(0, b"/x/y\n", b""))[1]
+    assert fileio.wsl_to_linux(p, run=run0, which=which, env={}) == "/x/y" and calls == [["wslpath", "-u", p]]
+    # mount_drive 直接叫：非法槽代號不執行指令
+    for bad in ("", "DD", "1", "d;rm", "Ｄ", " "):
+        cmds, run, *_ = _mount_env(set())
+        assert fileio.mount_drive(bad, run=run, which=which) is False and not cmds
+    # 不是 `X:\`＋路徑的寫法（UNC、只有槽代號、數字槽）走 wslpath 備援，也不掛載
+    for odd in ("\\\\nas\\共用\\影片.mp4", "D:影片.mp4", "1:\\影片.mp4"):
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            return R(0, b"/mnt/x/ok.mp4\n", b"")
+        assert w2l(odd, run=run, ismount=lambda p: False, exists=lambda p: False, which=which, env={}) == "/mnt/x/ok.mp4"
+        assert calls == [["wslpath", "-u", odd]]
+    # 已是 Linux 路徑照舊
+    assert w2l("/home/a/b.mp4", run=None) == "/home/a/b.mp4"
 
 
 def test_pick_one_window_at_a_time():
