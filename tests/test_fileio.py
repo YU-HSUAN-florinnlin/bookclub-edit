@@ -102,7 +102,7 @@ def _fake_wsl_run(calls, pick_out=None, pick_exc=None):
 def test_pick_file_wsl_simulated():
     calls = []
     got = fileio.pick_file("選影片", method="wsl", run=_fake_wsl_run(calls), which=_which("powershell.exe"),
-                           ismount=lambda p: True)
+                           ismount=lambda p: True, exists=lambda p: True)
     assert got == Path(LINUX_VIDEO)                     # 中文、空白都照原樣轉過來（槽代號開頭的路徑自己換，不叫 wslpath）
     assert len(calls) == 1 and calls[0][0] == "/fake/powershell.exe"
     # 按取消
@@ -122,16 +122,17 @@ def test_pick_file_wsl_simulated():
         pass
 
 
-def _mount_env(mounted, mount_ok=True, mount_exc=None):
-    """假的 ismount／exists／run：`mounted` 是已掛上的槽集合；掛載指令成功時把那一槽加進去。"""
+def _mount_env(mounted, mount_ok=True, mount_exc=None, takes_effect=True):
+    """假的 ismount／exists／run：`mounted` 是已掛上的槽集合；掛載指令回 0 且 `takes_effect` 時才把那一槽加進去
+    （`takes_effect=False` 模擬「指令回 0 但掛到別的發行版，這邊還是沒掛上」）。"""
     cmds = []
 
     def run(cmd, **kw):
         cmds.append(cmd)
         if mount_exc:
             raise mount_exc
-        if mount_ok:
-            mounted.add(cmd[-1].split("mount -t drvfs ")[1].split(":")[0].lower())
+        if mount_ok and takes_effect:
+            mounted.add(cmd[-1].split(": /mnt/")[0][-1].lower())
         return R(0 if mount_ok else 1, "".encode(), b"")
 
     ismount = lambda p: p.split("/")[2] in mounted
@@ -153,11 +154,27 @@ def test_wsl_drive_path_and_automount():
     mounted = set()
     cmds, run, ismount, exists = _mount_env(mounted)
     assert w2l(p, run=run, ismount=ismount, exists=exists, which=which, env={}) == want
-    assert cmds == [["/fake/wsl.exe", "-u", "root", "-e", "sh", "-c", "mkdir -p /mnt/d && mount -t drvfs D: /mnt/d"]]
+    ug = f"-o uid={os.getuid()},gid={os.getgid()}"     # 推論，Windows 實機待驗：掛上後不被 root 擁有
+    assert cmds == [["/fake/wsl.exe", "-u", "root", "-e", "sh", "-c", f"mkdir -p /mnt/d && mount -t drvfs {ug} D: /mnt/d"]]
+    # WSL_DISTRO_NAME：有（安全字元）就加 -d；怪字元就不加、指令照原樣
+    for name, want_d in (("Ubuntu-22.04", ["-d", "Ubuntu-22.04"]), ("Ubuntu_a.b", ["-d", "Ubuntu_a.b"]),
+                         ("Ubuntu;rm -rf", []), ("甲 乙", []), ("", []), (None, [])):
+        cmds, run, ismount, exists = _mount_env(set())
+        e = {} if name is None else {"WSL_DISTRO_NAME": name}
+        w2l("d:\\x.mp4", run=run, ismount=ismount, exists=exists, which=which, env=e)
+        assert cmds[0][:1 + len(want_d)] == ["/fake/wsl.exe", *want_d] and cmds[0][1 + len(want_d):3 + len(want_d)] == ["-u", "root"], cmds
+        assert cmds[0][-1] == f"mkdir -p /mnt/d && mount -t drvfs {ug} D: /mnt/d"   # distro 名稱不進 sh -c 字串
+    # 指令回 0 但這邊還是沒掛上（掛到別的發行版）：要丟錯，不能當成功
+    cmds, run, ismount, exists = _mount_env(set(), takes_effect=False)
+    try:
+        w2l(p, run=run, ismount=ismount, exists=exists, which=which, env={})
+        raise AssertionError("要丟 PickUnavailable")
+    except fileio.PickUnavailable as e:
+        assert cmds and "找不到 D 槽的硬碟" in str(e)
     # 大寫小寫都掛同一槽
     cmds, run, ismount, exists = _mount_env(set())
     w2l("e:\\x.mp4", run=run, ismount=ismount, exists=exists, which=which, env={})
-    assert "mount -t drvfs E: /mnt/e" in cmds[0][-1]
+    assert "E: /mnt/e" in cmds[0][-1]
     # 掛載失敗、逾時、找不到 wsl.exe：PickUnavailable，訊息有槽代號與白話、結尾請通知開發者
     for kw, wh in (({"mount_ok": False}, which), ({"mount_exc": subprocess.TimeoutExpired("wsl.exe", 1)}, which),
                    ({"mount_exc": OSError(8, "Exec format error")}, which), ({}, _which())):
@@ -168,17 +185,29 @@ def test_wsl_drive_path_and_automount():
         except fileio.PickUnavailable as e:
             assert "D 槽" in str(e) and "重新選一次" in str(e) and str(e).endswith("請將錯誤訊息通知開發者。")
             assert "網頁" not in str(e)
-    # 掛上了但檔案不在：一樣丟
-    cmds, run, ismount, _ = _mount_env(set())
-    try:
-        w2l(p, run=run, ismount=ismount, exists=lambda x: False, which=which, env={})
-        raise AssertionError("要丟 PickUnavailable")
-    except fileio.PickUnavailable:
-        pass
-    # 總開關：不掛載、不呼叫指令，只換路徑
+    # 掛上了但檔案不在（掛載後、或舊的掛載）：白話訊息
+    for mounted in (set(), {"d"}):
+        cmds, run, ismount, _ = _mount_env(mounted)
+        try:
+            w2l(p, run=run, ismount=ismount, exists=lambda x: False, which=which, env={})
+            raise AssertionError("要丟 PickUnavailable")
+        except fileio.PickUnavailable as e:
+            assert "在 D 槽找不到這個檔案" in str(e) and "還插著" in str(e) and str(e).endswith("請將錯誤訊息通知開發者。")
+    # 總開關（1／true／yes，不分大小寫）：不掛載、不呼叫指令；槽已掛上就只換路徑
+    for v in ("1", "true", "TRUE", "Yes", " yes "):
+        cmds, run, ismount, exists = _mount_env({"d"})
+        assert w2l(p, run=run, ismount=ismount, exists=exists, which=which, env={"BOOKCLUB_NO_AUTOMOUNT": v}) == want
+        assert not cmds
+        assert not fileio.automount_enabled({"BOOKCLUB_NO_AUTOMOUNT": v})
+    for v in ("", "0", "no", "false"):
+        assert fileio.automount_enabled({"BOOKCLUB_NO_AUTOMOUNT": v})
+    # 總開關關著、槽沒掛上：不掛載，訊息說明手動掛載（指向 README）
     cmds, run, ismount, exists = _mount_env(set())
-    assert w2l(p, run=run, ismount=ismount, exists=exists, which=which, env={"BOOKCLUB_NO_AUTOMOUNT": "1"}) == want
-    assert not cmds
+    try:
+        w2l(p, run=run, ismount=ismount, exists=exists, which=which, env={"BOOKCLUB_NO_AUTOMOUNT": "true"})
+        raise AssertionError("要丟 PickUnavailable")
+    except fileio.PickUnavailable as e:
+        assert not cmds and "README" in str(e) and "手動" in str(e) and str(e).endswith("請將錯誤訊息通知開發者。")
     # 沒要求掛載（下載資料夾、選資料夾）：照舊叫 wslpath，不掛載
     calls = []
     run0 = lambda cmd, **kw: (calls.append(cmd), R(0, b"/x/y\n", b""))[1]
@@ -608,6 +637,13 @@ def test_mac_picker_kill_switch():
             _os.environ.pop("BOOKCLUB_MAC_PICKER", None)
         else:
             _os.environ["BOOKCLUB_MAC_PICKER"] = old
+
+
+def test_message_stem_no_double_period():
+    e = fileio.PickUnavailable(fileio.drive_missing_message("d"))
+    assert str(e).endswith("。") and not fileio.message_stem(e).endswith("。")
+    assert "。。" not in f"{fileio.message_stem(e)}。改在下面打路徑。"
+    assert fileio.message_stem(fileio.PickUnavailable("沒有句號")) == "沒有句號"
 
 
 def _run_all():

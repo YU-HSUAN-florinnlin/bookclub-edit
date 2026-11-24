@@ -104,6 +104,18 @@ def test_pick_fallback_and_cancel():
         assert code == 400 and "還沒選影片" in r["error"]
 
 
+def test_pickunavailable_message_no_double_period():
+    """選影片與交接包選 zip 兩個呼叫端：訊息已經以「。」結尾時，拼出來不能有「。。」。"""
+    with _server() as (httpd, call, _data):
+        def unavailable(title, **kw):
+            raise fileio.PickUnavailable(fileio.drive_missing_message("d"))
+        fileio.pick_file = unavailable
+        code, r = call("POST", "/api/pick", {"用途": "影片"})
+        assert code == 200 and r["退回網頁"] and "。。" not in r["說明"] and "改用下面" in r["說明"]
+        code, r = call("POST", "/api/handoff/import/zip", {})
+        assert code == 200 and r["退回網頁"] and "。。" not in r["說明"] and "改在下面" in r["說明"], r
+
+
 def test_wsl_pick_copies_into_ubuntu_then_start():
     with _server() as (httpd, call, data):
         win = Path(tempfile.mkdtemp()) / "C槽" / "我的 影片"

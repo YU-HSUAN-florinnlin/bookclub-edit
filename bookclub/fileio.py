@@ -209,17 +209,34 @@ WSL_CANDIDATES = ("/mnt/c/Windows/System32/wsl.exe",)
 
 def automount_enabled(env: dict | None = None) -> bool:
     env = os.environ if env is None else env
-    return env.get(NO_AUTOMOUNT_ENV, "") != "1"
+    return env.get(NO_AUTOMOUNT_ENV, "").strip().lower() not in ("1", "true", "yes")
 
 
-def drive_missing_message(letter: str) -> str:
+def message_stem(e: Exception) -> str:
+    """PickUnavailable 的訊息去掉結尾的「。」，讓呼叫端後面接自己的句子不會變成「。。」（所有拼接處共用）。"""
+    return str(e).rstrip("。")
+
+
+def drive_missing_message(letter: str, manual: bool = False) -> str:
+    if manual:   # 自動掛載被總開關關掉：指到 README 的手動做法
+        return (f"{letter.upper()} 槽還沒掛上，而且自動掛載已經關閉。請照 README 的手動備用做法把 {letter.upper()} 槽掛上，再重新選一次。"
+                "請將錯誤訊息通知開發者。")
     return (f"找不到 {letter.upper()} 槽的硬碟，請確認隨身硬碟已插上並能在檔案總管看到，再重新選一次。"
             "請將錯誤訊息通知開發者。")
 
 
-def mount_drive(letter: str, run=None, which=None) -> bool:
+def drive_file_missing_message(letter: str) -> str:
+    return (f"在 {letter.upper()} 槽找不到這個檔案，請確認隨身硬碟還插著，再重新選一次。"
+            "請將錯誤訊息通知開發者。")
+
+
+_SAFE_DISTRO_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def mount_drive(letter: str, run=None, which=None, env: dict | None = None) -> bool:
     """叫 Windows 的 wsl.exe 以 root 把 `X:` 掛到 `/mnt/x`（隨身硬碟在 Ubuntu 開了之後才插上時，/mnt/x 不會自己出現）。
-    槽代號只收單一英文字母；回傳指令有沒有正常結束（有沒有真的掛上由呼叫端再查）。輸出不看，所以不用管編碼。"""
+    槽代號只收單一英文字母；有 WSL_DISTRO_NAME（名稱只含英數、點、底線、減號）就加 `-d` 指定目前這個發行版，
+    否則 wsl.exe 會掛到預設發行版、這個 Ubuntu 的 /mnt/x 還是沒有；回傳指令有沒有正常結束（有沒有真的掛上由呼叫端再查）。輸出不看，所以不用管編碼。"""
     if not (len(letter) == 1 and letter.isascii() and letter.isalpha()):
         return False
     run = run or subprocess.run
@@ -227,7 +244,12 @@ def mount_drive(letter: str, run=None, which=None) -> bool:
     if not exe:
         return False
     low, up = letter.lower(), letter.upper()
-    cmd = [exe, "-u", "root", "-e", "sh", "-c", f"mkdir -p /mnt/{low} && mount -t drvfs {up}: /mnt/{low}"]
+    env = os.environ if env is None else env
+    distro = env.get("WSL_DISTRO_NAME", "")
+    d = ["-d", distro] if _SAFE_DISTRO_RE.match(distro) else []
+    # 推論，Windows 實機待驗：不帶 uid/gid 的話掛上後檔案會是 root 擁有，結案打包寫不進去；數字由 Python 取，不用 shell 展開
+    opt = f"-o uid={os.getuid()},gid={os.getgid()} "
+    cmd = [exe, *d, "-u", "root", "-e", "sh", "-c", f"mkdir -p /mnt/{low} && mount -t drvfs {opt}{up}: /mnt/{low}"]
     kw = {"cwd": "/mnt/c"} if Path("/mnt/c").is_dir() else {}
     try:
         r = run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=QUICK_TIMEOUT_S, **kw)
@@ -238,7 +260,7 @@ def mount_drive(letter: str, run=None, which=None) -> bool:
 
 def wsl_to_linux(win_path: str, run=None, *, automount=False, ismount=None, exists=None, which=None, env: dict | None = None) -> str:
     r"""`C:\Users\老師\影片\第一堂.mp4` → `/mnt/c/Users/老師/影片/第一堂.mp4`。已經是 Linux 路徑就照用。
-    `X:\…` 自己換（純字串，不靠 wslpath，硬碟晚插上也換得出來）；`automount=True`（選影片時）該槽沒掛上就試著掛（`BOOKCLUB_NO_AUTOMOUNT=1` 可關）；
+    `X:\…` 自己換（純字串，不靠 wslpath，硬碟晚插上也換得出來）；`automount=True`（選影片時）該槽沒掛上就試著掛（`BOOKCLUB_NO_AUTOMOUNT=1`／true／yes 可關）；
     其他寫法（例如 `\\server\share`）才叫 `wslpath -u`。"""
     run = run or subprocess.run
     if win_path.startswith("/"):
@@ -248,13 +270,16 @@ def wsl_to_linux(win_path: str, run=None, *, automount=False, ismount=None, exis
         letter = m.group(1)
         mnt = f"/mnt/{letter.lower()}"
         out = f"{mnt}/" + win_path[3:].replace("\\", "/")
-        if automount_enabled(env):
-            ismount = ismount or os.path.ismount
-            exists = exists or os.path.exists
+        enabled = automount_enabled(env)
+        ismount = ismount or os.path.ismount
+        exists = exists or os.path.exists
+        if not ismount(mnt):
+            if enabled:
+                mount_drive(letter, run=run, which=which, env=env)
             if not ismount(mnt):
-                mount_drive(letter, run=run, which=which)
-                if not ismount(mnt) or not exists(out):
-                    raise PickUnavailable(drive_missing_message(letter))
+                raise PickUnavailable(drive_missing_message(letter, manual=not enabled))
+        if not exists(out):   # 槽掛著但檔案不在：多半是隨身硬碟拔掉再插，留著舊的掛載
+            raise PickUnavailable(drive_file_missing_message(letter))
         return out
     try:
         r = run(["wslpath", "-u", win_path], capture_output=True, timeout=QUICK_TIMEOUT_S)
