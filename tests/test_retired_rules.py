@@ -21,6 +21,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _testtmp  # noqa: E402, F401 — 原生 Windows 的標準輸出改 UTF-8（印 ✓ 用）
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # （作廢的規則, [要找的字串（正規表示式）]）

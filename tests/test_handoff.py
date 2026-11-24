@@ -1016,7 +1016,8 @@ def test_272_codes_record_does_not_carry_whole_roster():
         texts = _zip_texts(z)
         roster = texts["工作區/交接/設定快照/名冊.csv"]
         assert "小美" in roster and "阿明" in roster
-        leaks = {n: [x for x in others if x in t] for n, t in texts.items() if any(x in t for x in others)}
+        leaks = {n: [x for x in others if x in t] for n, t in texts.items()
+                 if not n.endswith((".mp4", ".wav", ".flac")) and any(x in t for x in others)}   # 影音檔是二進位，剛好湊出 3 個字母不算
         assert not leaks, leaks
         rec = json.loads(texts["工作區/校對/代號表紀錄.json"].split("\n{")[0])
         assert rec == {"小美": "Amy", "阿明": "Tom"}, rec
@@ -1038,7 +1039,8 @@ def test_272_codes_record_does_not_carry_whole_roster():
 
         _partner_stage5(w2)
         z5 = _pack(w2, handoff.STAGE5)
-        leaks = {n: [x for x in others if x in t] for n, t in _zip_texts(z5).items() if any(x in t for x in others)}
+        leaks = {n: [x for x in others if x in t] for n, t in _zip_texts(z5).items()
+                 if not n.endswith((".mp4", ".wav", ".flac")) and any(x in t for x in others)}
         assert not leaks, leaks
 
         # 審查 B：代號表紀錄讀好之後、寫進包之前原檔被改了（例如第 3 步正在對齊代號）→ 停，不存

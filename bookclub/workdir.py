@@ -111,7 +111,13 @@ def read_json(path: Path, default=None):
     """檔案不存在就回傳 default（預設 None），存在就讀出來。"""
     if not path.exists():
         return default
-    return json.loads(path.read_text(encoding="utf-8"))
+    for i in range(10 if os.name == "nt" else 1):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:   # Windows：別的執行緒剛好在 replace_file 換這個檔的那一瞬間，讀的人會被拒絕；等一下再讀
+            if os.name != "nt" or i == 9:
+                raise
+            time.sleep(0.05)
 
 
 _quiet = threading.local()

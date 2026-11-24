@@ -1563,12 +1563,38 @@ def _child_rss_gb(pid: int) -> float | None:
         return None
 
 
+def _peak_working_set_gb_windows() -> float | None:
+    """原生 Windows：這支程式自己到目前為止的記憶體高峰（工作集高峰）。問不到回 None。只用標準函式庫的 ctypes。"""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _Counters(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                (n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                               "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                                               "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+
+        kernel32, psapi = ctypes.WinDLL("kernel32"), ctypes.WinDLL("psapi")
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(_Counters), wintypes.DWORD]
+        c = _Counters()
+        c.cb = ctypes.sizeof(c)
+        if not psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(c), c.cb):
+            return None
+        return c.PeakWorkingSetSize / GB
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
 def peak_rss_gb() -> float | None:
     """這支程式自己到目前為止的記憶體高峰（macOS 單位是 byte、Linux 是 KB）。"""
     try:
         import resource
-    except ImportError:   # Windows 原生沒有；夥伴用 WSL2 是 Linux，有
-        return None
+    except ImportError:   # Windows 原生沒有 resource：改問 Windows（psapi 的 PeakWorkingSetSize，單位 byte）
+        return _peak_working_set_gb_windows()
     v = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return v / GB if sys.platform == "darwin" else v * 1024 / GB
 

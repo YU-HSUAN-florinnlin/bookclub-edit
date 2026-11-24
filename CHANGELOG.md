@@ -14,6 +14,8 @@ Mac／WSL2 的行為不變；改的是原生 Windows 才會壞的地方。
 - 寫檔「先寫暫存檔再換上」統一走 `workdir.replace_file`：Windows 上目的檔剛好被防毒軟體開著時會丟 `PermissionError`，重試約 1 秒
 - 修改需求紀錄的跨程式檔案鎖：Windows 沒有 `fcntl`，改用 `msvcrt.locking`；升級最後改名資料夾前先放掉鎖（Windows 不能改名裡面有開著檔案的資料夾）
 - 網頁伺服器在 Windows 不開 `SO_REUSEADDR`（開了會讓第二支程式也綁得到同一個埠，「埠被占用」的提示不會出現）
+- `workdir.read_json` 在 Windows 讀到「剛好被換檔」的那一瞬間會重試（以前讀不到就當空的，結案狀態之類會閃一下錯）
+- 原生 Windows 的程式記憶體高峰改問 psapi（沒有 `resource` 模組）
 - `.gitattributes` 全部文字檔固定 LF（Windows 的 git 預設轉 CRLF，會讓快照與 node 測試抽函式失敗）
 
 ## 0.2.4b7（2026-10-27，測試版 beta7）

@@ -145,6 +145,8 @@ def test_install_sh_syntax_ok():
 
 
 def test_install_sh_check_only_runs_without_installing():
+    if sys.platform == "win32":   # 同上：install.sh 是 bash 腳本
+        return
     """--check-only 要能跑完、回傳 0，而且不碰安裝步驟（畫面上會有那句提示）。"""
     r = subprocess.run(["bash", "install.sh", "--check-only"], cwd=REPO_ROOT,
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
