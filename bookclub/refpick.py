@@ -91,6 +91,7 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+from bookclub.workdir import replace_file
 
 # ---------- 參數（各步驟門檻與常數，出處見上面流程說明） ----------
 
@@ -1824,7 +1825,7 @@ def recut_candidates(workdir: str | Path, video: str | Path | None = None,
             shutil.copy2(wav, backup / wav.name)
         tmp = rd / f"_重切中_{wav.name}"
         write_clip_wav(tmp, audio, CLIP_SR)
-        os.replace(tmp, wav)   # 寫完才換上，中斷時不會留下半個檔
+        replace_file(tmp, wav)   # 寫完才換上，中斷時不會留下半個檔
         row["結果"] = "已換成新格式"
         print(f"[重切] 候選{n}：{new_s:.2f} 秒（跟紀錄差 {diff:.2f} 秒），已換成新格式")
         rows.append(row)

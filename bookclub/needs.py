@@ -45,6 +45,7 @@ from datetime import datetime
 from pathlib import Path
 
 from bookclub import workdir as wd
+from bookclub.workdir import replace_file
 
 DIR_NAME = "修改需求"
 FORMAT_VERSION = 1
@@ -146,7 +147,39 @@ def _write(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.寫入中")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    replace_file(tmp, path)
+
+
+def _flock(fh, wait: bool = True) -> None:
+    """跨程式的檔案鎖。Mac／Linux 用 `fcntl.flock`；原生 Windows 沒有 fcntl，改用 `msvcrt.locking` 鎖檔頭 1 個位元組。
+    wait=False 拿不到就丟 BlockingIOError。"""
+    if os.name == "nt":
+        import msvcrt
+
+        while True:
+            fh.seek(0)
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if not wait:
+                    raise BlockingIOError() from None
+                time.sleep(0.05)
+    import fcntl
+
+    fcntl.flock(fh, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+
+
+def _funlock(fh) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 @contextmanager
@@ -159,10 +192,8 @@ def _locked(workdir: str | Path):
         try:
             d = needs_dir(workdir)
             if depth == 0 and d.is_dir():   # 同一個執行緒裡面又鎖一次（巢狀）：檔案鎖只拿最外層那一次
-                import fcntl
-
                 fh = open(d / LOCK_FILE, "a+")
-                fcntl.flock(fh, fcntl.LOCK_EX)
+                _flock(fh)
         except (ImportError, OSError):
             fh = None
         try:
@@ -171,9 +202,7 @@ def _locked(workdir: str | Path):
             _held.n = depth
             if fh is not None:
                 try:
-                    import fcntl
-
-                    fcntl.flock(fh, fcntl.LOCK_UN)
+                    _funlock(fh)
                 finally:
                     fh.close()
 
@@ -2056,29 +2085,28 @@ def _stage_lock(stage: Path, *, wait: bool = True):
     stage.mkdir(parents=True, exist_ok=True)
     fh = None
     try:
-        import fcntl
-
-        try:
-            fh = open(stage / LOCK_FILE, "a+")
-        except FileNotFoundError:   # 10-15 第1段審查二修正：別人剛把 `.升級中` 改名走（升級做完了）→ 當作正在忙，不記同步錯誤
-            raise Busy() from None
-        try:
-            fcntl.flock(fh, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
-        except BlockingIOError:
-            fh.close()
-            raise Busy() from None
-    except ImportError:
-        fh = None
+        fh = open(stage / LOCK_FILE, "a+")
+    except FileNotFoundError:   # 10-15 第1段審查二修正：別人剛把 `.升級中` 改名走（升級做完了）→ 當作正在忙，不記同步錯誤
+        raise Busy() from None
     try:
-        yield
-    finally:
-        if fh is not None:
-            try:
-                import fcntl
+        _flock(fh, wait)
+    except BlockingIOError:
+        fh.close()
+        raise Busy() from None
+    held = [fh]
 
-                fcntl.flock(fh, fcntl.LOCK_UN)
+    def release() -> None:   # 提早放掉鎖：Windows 不能改名「裡面有開著檔案」的資料夾（見 upgrade 最後的改名）
+        f, held[0] = held[0], None
+        if f is not None:
+            try:
+                _funlock(f)
             finally:
-                fh.close()
+                f.close()
+
+    try:
+        yield release
+    finally:
+        release()
 
 
 def _clear_stage(stage: Path) -> None:
@@ -2116,7 +2144,7 @@ def upgrade(workdir: str | Path, *, dry_run: bool = False, page: dict | None = N
         st, rep = plan_upgrade(w, page, snap)
         return {**rep, "升級了": False, "試跑": True}
     stage = w / STAGING
-    with _stage_lock(stage, wait=wait):
+    with _stage_lock(stage, wait=wait) as release_lock:
         if exists(w) and not force:
             _drop_stage(stage)
             return {"升級了": False, "原因": "已經升級過了"}
@@ -2136,6 +2164,8 @@ def upgrade(workdir: str | Path, *, dry_run: bool = False, page: dict | None = N
         final = needs_dir(w)
         if final.exists():   # 沒有 格式.json 的 修改需求/（舊版程式升級失敗留下的）或 force：搬開、不刪
             final.rename(w / f"{DIR_NAME}_升級前_{stamp}")
+        if os.name == "nt":
+            release_lock()   # shortcut: Windows 不能改名有開著檔案的資料夾，改名前先放掉鎖；中間這一瞬間沒有鎖，Mac／Linux 不受影響
         os.rename(stage, final)   # 一次換上：從這一刻起 exists() 才是 True
     return {**rep, "升級了": True, "備份": bk[0], "備份檔數": bk[1]}
 

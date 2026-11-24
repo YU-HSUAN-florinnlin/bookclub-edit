@@ -14,7 +14,9 @@ from __future__ import annotations
 import os
 import shutil
 from decimal import ROUND_HALF_UP, Decimal
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath
+
+from bookclub.workdir import replace_file
 
 from bookclub import workdir as wd
 
@@ -160,7 +162,7 @@ def _write_text(path: Path, text: str) -> None:
     tmp = path.with_name(f".{path.name}.寫入中")
     with open(tmp, "w", encoding="utf-8", newline="") as f:   # newline=""：照字串裡的 \r\n 寫，不再轉換
         f.write(text)
-    os.replace(tmp, path)
+    replace_file(tmp, path)
 
 
 def _inside(p: Path, root: Path) -> bool:
@@ -1142,7 +1144,7 @@ class PackJob:
                 # 第 2 段審查必修 2：複製前後來源的大小、修改時間、inode 有變＝存的時候被改了（又輸出、又組裝）
                 if src is not None and (not src.is_file() or stamp() != before or before[0] != size):
                     raise _SourceChanged()
-                os.replace(tmp, dst)
+                replace_file(tmp, dst)
             finally:
                 if tmp.exists():
                     tmp.unlink()   # 只清自己寫的暫存檔
@@ -1221,8 +1223,8 @@ def pack_state(workdir: str | Path) -> dict:
 
 def windows_display(p: Path | str) -> str:
     """（純函式）WSL 的 `/mnt/d/讀書會剪輯結案` → `D:\\讀書會剪輯結案`；其他照原樣。"""
-    s = str(p)
-    parts = Path(s).parts
+    s = p.as_posix() if isinstance(p, PurePath) else str(p)   # 只拿來解析 WSL 的 /mnt/<磁碟>/…；原生 Windows 的路徑不會是這種開頭
+    parts = PurePosixPath(s).parts
     if len(parts) >= 3 and parts[0] == "/" and parts[1] == "mnt" and len(parts[2]) == 1 and parts[2].isalpha():
         return parts[2].upper() + ":\\" + "\\".join(parts[3:])
     return s

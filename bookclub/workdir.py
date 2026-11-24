@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -134,6 +135,19 @@ def writes_blocked() -> bool:
     return bool(getattr(_quiet, "on", False))
 
 
+def replace_file(src, dst) -> None:
+    """`os.replace` 的 Windows 版：目的檔剛被寫過，防毒軟體、檔案總管索引常會短暫開著它，這時 `os.replace` 會丟
+    `PermissionError: [WinError 5]`（過一下就好）。所以 Windows 上最多重試約 1 秒；Mac／Linux 一次到底，跟原本一樣。"""
+    for i in range(20 if os.name == "nt" else 1):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if os.name != "nt" or i == 19:
+                raise
+            time.sleep(0.05)
+
+
 def write_json(path: Path, data) -> None:
     """統一存檔格式：不轉義中文、縮排 1 格，跟 refpick.py 的存檔方式一致。
     10-14 第5步2.0 第1段：在 `no_writes()` 裡面時不寫（見上）。"""
@@ -143,7 +157,7 @@ def write_json(path: Path, data) -> None:
     # 先寫暫存檔再換上（09-29）：寫到一半被中斷時，原本的檔案還是完整的，不會留下半個 JSON
     tmp = path.with_name(f".{path.name}.寫入中")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    replace_file(tmp, path)
 
 
 # ---------- 存下來的完整路徑（10-02 第五批） ----------

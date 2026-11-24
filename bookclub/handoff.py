@@ -29,6 +29,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from bookclub import workdir as wd
+from bookclub.workdir import replace_file
 
 FORMAT_VERSION = 1
 LIST_NAME = "交接清單.json"
@@ -738,7 +739,7 @@ class PackJob:
                 zf.writestr(README_NAME, readme_text(manifest).encode("utf-8"))
             with open(tmp, "rb+") as f:
                 os.fsync(f.fileno())
-            os.replace(tmp, dest)
+            replace_file(tmp, dest)
         finally:
             if tmp.exists():
                 tmp.unlink()   # 只清自己寫的暫存檔

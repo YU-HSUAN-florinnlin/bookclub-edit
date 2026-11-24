@@ -499,6 +499,7 @@ def _run_all() -> int:
         except Exception as exc:
             failed += 1
             print(f"✗ {name}：{exc!r}")
+            __import__("traceback").print_exc()   # 失敗時印出是哪一行（雲端 Windows 試裝用）
     print(f"{len(tests) - failed}/{len(tests)} 通過")
     return 1 if failed else 0
 
@@ -519,7 +520,7 @@ def test_record_stale_checks_text_pron_slot_and_ref():
     assert t.record_stale(rec, {**it, "生成用文字": "妳好"})          # 發音對照表改了
     assert t.record_stale(rec, {**it, "slot": [1.0, 2.3]})           # 時間格改了
     assert not t.record_stale(rec, {**it, "slot": [1.01, 2.02]})     # 差一點點不算
-    ref.write_bytes(b"B")                                            # 同一個檔名、內容換了
+    ref.write_bytes(b"BB")                                           # 同一個檔名、內容換了（長度也換：Windows 的修改時間格子較粗，快取鍵靠 mtime＋大小）
     assert t.record_stale(rec, it, ref)
 
 

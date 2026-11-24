@@ -309,5 +309,6 @@ if __name__ == "__main__":
         except Exception as e:  # noqa: BLE001
             bad += 1
             print(f"✗ {fn.__name__}: {type(e).__name__}: {str(e)[:300]}")
+            __import__("traceback").print_exc()   # 失敗時印出是哪一行（雲端 Windows 試裝用）
     print(f"{len(tests) - bad}/{len(tests)} 通過")
     sys.exit(1 if bad else 0)

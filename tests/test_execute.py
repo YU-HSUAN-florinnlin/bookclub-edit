@@ -321,7 +321,7 @@ if act in ("被結束", "被結束一次"):
     n.write_text(str(k + 1))
     if act == "被結束" or k == 0:
         if os.name == "nt":      # Windows 沒有訊號，被系統結束時結束碼是 0xC0000000 以上的 NT 狀態碼
-            os._exit(0xC0000409)
+            os._exit(-1073740791)   # = 0xC0000409（_exit 只收有號的 C int）
         os.kill(os.getpid(), 9)      # 模擬記憶體不夠被系統結束：沒有任何錯誤訊息
 mark = conf.get("做完標記", {}).get(label)
 if mark:

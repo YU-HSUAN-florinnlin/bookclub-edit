@@ -25,6 +25,7 @@ import threading
 import time
 import uuid
 from pathlib import Path, PurePosixPath
+from bookclub.workdir import replace_file
 
 VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi")   # bookclub/server.py 也用這一份
 CANCEL_MARK = "__BOOKCLUB_CANCEL__"
@@ -419,7 +420,7 @@ def swift_build(src: Path, name: str, which=None, run=None) -> Path | None:
         with _ignore_os():
             tmp.unlink()
         return None
-    os.replace(tmp, exe)
+    replace_file(tmp, exe)
     return exe
 
 
@@ -725,7 +726,7 @@ class CopyJob:
                 raise OSError(f"複製出來的大小不對（{self.tmp.stat().st_size} ≠ {self.total}）")
             with _ignore_os():
                 shutil.copystat(self.src, self.tmp)
-            os.replace(self.tmp, self.dest)
+            replace_file(self.tmp, self.dest)
             self._finish_ok()
         except CopyCancelled:
             self._cleanup()

@@ -25,6 +25,7 @@ import contextlib
 import csv
 import json
 import mimetypes
+import os
 import subprocess
 import sys
 import threading
@@ -53,6 +54,7 @@ from bookclub.workdir import (
     write_json,
     fmt_time,
 )
+from bookclub.workdir import replace_file
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 WEB_CACHE_DIR_NAME = "web快取"
@@ -924,7 +926,7 @@ def _remove_exclusion(term: str) -> bool:
         writer.writerow(["詞", "原因", "建立日期"])
         for r in keep:
             writer.writerow([r["詞"], r["原因"], r["建立日期"]])
-    os.replace(tmp, path)
+    replace_file(tmp, path)
     return True
 
 def _import_profile_bytes(raw: bytes) -> dict:
@@ -1006,7 +1008,8 @@ class _TeeWriter:
 
 class BookclubServer(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # Windows 的 SO_REUSEADDR 跟 Mac／Linux 不同：它讓第二支程式也綁得到同一個埠（不會丟「埠被占用」，兩支會搶連線）。所以 Windows 不開。
+    allow_reuse_address = os.name != "nt"
 
     def __init__(self, addr, handler_cls, *, workdir: Path | None, video: Path | None):
         super().__init__(addr, handler_cls)

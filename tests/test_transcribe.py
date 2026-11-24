@@ -546,7 +546,7 @@ def test_whole_mode_splits_chunk_over_groq_size_limit():
             n = 8 - len(_no_groq.queue)
             assert 2 <= n <= 4, n
             cache = sorted((Path(d) / "transcript").glob("whole_*.json"))
-            spans = [(json.loads(f.read_text())["_塊起"], json.loads(f.read_text())["_塊訖"]) for f in cache]
+            spans = [(json.loads(f.read_text(encoding="utf-8"))["_塊起"], json.loads(f.read_text(encoding="utf-8"))["_塊訖"]) for f in cache]
             assert spans[0] == (0.0, 75.0) or spans[0][1] <= 75.0
             assert spans[-1][1] == 150.0 and all(b == c for (_a, b), (c, _d) in zip(spans, spans[1:]))
             # 對切過的工作區重跑：吃到對切後的快取、Groq 0 次，也不印誤導人的「重轉」

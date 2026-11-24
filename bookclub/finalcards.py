@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from bookclub.workdir import replace_file
+
 from bookclub import finalcheck as fc
 from bookclub import needs, proclog
 
@@ -874,7 +876,7 @@ def export_version(workdir: str | Path, n: int, confirm: bool = False) -> dict:
     from bookclub.fileio import link_or_copy
 
     link_or_copy(src, tmp)   # #79（1017-2）：硬連結（同一份資料），跨磁碟、不支援才複製；前提同 finalcheck.export_final
-    os.replace(tmp, dst)
+    replace_file(tmp, dst)
     extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
     rec = {"時間": fc._now(), "來源": rel, "檔案": dst.relative_to(workdir).as_posix(),
            "片頭": (extras.get("片頭") or {}).get("檔名"), "片尾": (extras.get("片尾") or {}).get("檔名"), "接上片頭片尾": False,

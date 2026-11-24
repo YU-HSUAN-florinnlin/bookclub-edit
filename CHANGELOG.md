@@ -11,6 +11,9 @@ Mac／WSL2 的行為不變；改的是原生 Windows 才會壞的地方。
 - 硬連結遇到捷徑時先換成它指到的真檔（Windows 的 `os.link` 不會自己跟著捷徑走）
 - 子程式被系統結束的判斷多認 Windows 的 NT 狀態碼（0xC0000000 以上）；找 `claude` 也找 `claude.exe`
 - 原生 Windows：`bookclub` 指令發現沒開 UTF-8 模式就用 `-X utf8` 重開自己；套件載入時也把標準輸出入改 UTF-8，並請子程式用 UTF-8 模式；呼叫 ffmpeg／claude 的 `text=True` 都明寫 `encoding="utf-8"`
+- 寫檔「先寫暫存檔再換上」統一走 `workdir.replace_file`：Windows 上目的檔剛好被防毒軟體開著時會丟 `PermissionError`，重試約 1 秒
+- 修改需求紀錄的跨程式檔案鎖：Windows 沒有 `fcntl`，改用 `msvcrt.locking`；升級最後改名資料夾前先放掉鎖（Windows 不能改名裡面有開著檔案的資料夾）
+- 網頁伺服器在 Windows 不開 `SO_REUSEADDR`（開了會讓第二支程式也綁得到同一個埠，「埠被占用」的提示不會出現）
 - `.gitattributes` 全部文字檔固定 LF（Windows 的 git 預設轉 CRLF，會讓快照與 node 測試抽函式失敗）
 
 ## 0.2.4b7（2026-10-27，測試版 beta7）

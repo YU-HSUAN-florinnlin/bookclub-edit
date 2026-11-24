@@ -467,6 +467,7 @@ def _run_all() -> int:
 
             traceback.print_exc()
             print(f"✗ {name}：{exc!r}")
+            __import__("traceback").print_exc()   # 失敗時印出是哪一行（雲端 Windows 試裝用）
     print(f"{len(tests) - failed}/{len(tests)} 通過")
     return 1 if failed else 0
 

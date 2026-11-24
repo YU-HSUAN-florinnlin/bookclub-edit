@@ -138,6 +138,8 @@ def test_install_sh_intel_flag_rejected_on_linux():
 
 
 def test_install_sh_syntax_ok():
+    if sys.platform == "win32":   # install.sh 是 bash 腳本，原生 Windows 的安裝要另寫，見報告 (c) 類
+        return
     r = subprocess.run(["bash", "-n", str(REPO_ROOT / "install.sh")], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
 

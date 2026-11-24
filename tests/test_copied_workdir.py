@@ -113,7 +113,7 @@ def test_localize_and_legacy_keys():
     assert wd.same_stored_file(old / "參考音" / "ref.wav", new / "參考音" / "ref.wav")
     assert not wd.same_stored_file(old / "參考音" / "ref.wav", new / "參考音" / "候選1.wav")
     # 生成快取的舊鍵（完整路徑#指紋）→ 新寫法（參考音#指紋），路徑在哪裡都一樣
-    k = f"S016|1|42|1.0|甲乙|{old.as_posix()}/參考音/ref.wav#cb5c0059d453"
+    k = "S016|1|42|1.0|甲乙|/舊的位置/2025-04-09 第一堂_剪輯工作區/參考音/ref.wav#cb5c0059d453"   # 舊鍵是 10-01 以前 Mac／Linux 寫的 POSIX 路徑
     assert tts.normalize_cache_key(k) == "S016|1|42|1.0|甲乙|參考音#cb5c0059d453"
     pk = f"{k}|原文|[1.0, 2.0]"
     assert tts.normalize_cache_key(pk) == "S016|1|42|1.0|甲乙|參考音#cb5c0059d453|原文|[1.0, 2.0]"

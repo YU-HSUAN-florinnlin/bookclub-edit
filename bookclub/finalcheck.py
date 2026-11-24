@@ -27,6 +27,7 @@ from pathlib import Path
 
 from bookclub import proclog
 from bookclub import workdir as wd
+from bookclub.workdir import replace_file
 
 PASS, REDO = "通過", "退回重做"
 UNLOGGED_OK = "沒問題"
@@ -1840,7 +1841,7 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
         # 安全前提：第 4 步組裝是寫 `_輸出中_…` 再換名（新的檔），不會改到已經輸出的最終成品；標字版（ffmpeg 直接寫
         # 正式檔名）不能輸出（export_blocks 擋下）。以後任何程式都不可以原地改寫成品檔。
         link_or_copy(src, tmp)   # 先放到暫存檔名、完整了才換上（複製到一半中斷不會留下半個最終成品）
-        os.replace(tmp, dst)
+        replace_file(tmp, dst)
         extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
         rec = {"時間": _now(), "來源": check["成品影片"], "檔案": dst.relative_to(workdir).as_posix(),
                "片頭": (extras.get("片頭") or {}).get("檔名"), "片尾": (extras.get("片尾") or {}).get("檔名"),
