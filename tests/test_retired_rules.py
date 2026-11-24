@@ -78,7 +78,7 @@ def find_retired(files: list[Path] | None = None) -> list[tuple[str, str, int, s
             body = _strip_fields(line)
             for rule, pats in RETIRED:
                 if any(re.search(x, body) for x in pats):
-                    hits.append((rule, str(p.relative_to(REPO_ROOT)), i, line.strip()[:160]))
+                    hits.append((rule, p.relative_to(REPO_ROOT).as_posix(), i, line.strip()[:160]))
     return hits
 
 

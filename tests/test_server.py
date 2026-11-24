@@ -282,7 +282,7 @@ def _make_names_workdir(wd: Path) -> dict:
                 "name": "王小明", "canonical": "王小明", "代號": "S1", "敏感詞": False,
                 "matched_text": "王小明", "比對層級": "精確", "信心": "高", "位置": "句中",
                 "建議做法": "只換名字", "原因": None, "切點信心": "雙邊乾淨", "建議緩衝秒數": 0.05,
-                "候選音檔": str(clip_path.relative_to(wd)),
+                "候選音檔": clip_path.relative_to(wd).as_posix(),
             },
         ],
         "已自動排除": [{"start": 1.0, "matched_text": "風風", "原因": "命中排除清單"}],
@@ -559,7 +559,7 @@ def test_run_status_reports_step4_running_read_only():
                 return json.loads(r.read())
 
         def files():
-            return {str(p.relative_to(w)): p.stat().st_mtime_ns for p in w.rglob("*")}
+            return {p.relative_to(w).as_posix(): p.stat().st_mtime_ns for p in w.rglob("*")}
 
         try:
             before = files()

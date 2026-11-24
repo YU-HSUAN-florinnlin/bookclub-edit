@@ -209,11 +209,16 @@ def main() -> None:
             env_extra={"PYTHONUTF8": "1"}, group="test_utf8", timeout=300)
     core = ["test_detect.py", "test_fileio.py", "test_names.py", "test_keepawake.py",
             "test_assemble.py", "test_lockfile.py", "test_execute.py", "test_extract_audio.py"]
-    for name in core:
-        p = ROOT / "tests" / name
-        if p.exists():
-            run(f"test {name} [PYTHONUTF8 unset]", [VENV_PY, str(p.relative_to(ROOT))],
-                env_extra={"PYTHONUTF8": None, "PYTHONIOENCODING": None}, group="test_noutf8", timeout=300)
+    # 1124-5：不設 PYTHONUTF8 也要能跑——全部再跑一輪（核心 8 支另外標出來），並確認 `bookclub` 指令自己會重開 UTF-8 模式
+    for p in tests:
+        run(f"test {p.name} [PYTHONUTF8 unset]", [VENV_PY, str(p.relative_to(ROOT))],
+            env_extra={"PYTHONUTF8": None, "PYTHONIOENCODING": None},
+            group="test_noutf8_core" if p.name in core else "test_noutf8", timeout=300)
+    run("bookclub --help [PYTHONUTF8 unset]", [str(Path(VENV_BIN) / "bookclub.exe"), "--help"],
+        env_extra={"PYTHONUTF8": None, "PYTHONIOENCODING": None}, group="cli")
+    run("print Chinese after import bookclub [PYTHONUTF8 unset]",
+        [VENV_PY, "-c", "import bookclub,sys;print('中文 ✓', sys.flags.utf8_mode)"],
+        env_extra={"PYTHONUTF8": None, "PYTHONIOENCODING": None}, group="cli")
 
     write_summary()
 
@@ -259,7 +264,8 @@ def write_summary() -> None:
     if lp:
         bad = [r for r in lp if not r["ok"]]
         md += f"\n### Lock file per-package fallback\n\n{len(lp) - len(bad)} passed, {len(bad)} failed.\n"
-    for grp, title in [("test_utf8", "Unit tests, PYTHONUTF8=1"), ("test_noutf8", "Unit tests, PYTHONUTF8 unset (core subset)")]:
+    for grp, title in [("test_utf8", "Unit tests, PYTHONUTF8=1"), ("test_noutf8_core", "Unit tests, PYTHONUTF8 unset (core 8)"),
+                       ("test_noutf8", "Unit tests, PYTHONUTF8 unset (the rest)")]:
         rows = [r for r in results if r["group"] == grp]
         if rows:
             bad = [r for r in rows if not r["ok"]]

@@ -159,7 +159,7 @@ function makeEnv(files, setup) {
   H.listenerSig = () => H.listeners.map((l) => [l.el.id || "", l.el.className || "", l.el.tagName, l.type, JSON.stringify(l.el.dataset)]);
   vm.createContext(ctx);
   // 10-16 #225：問號說明 helpTip() 在 app.js（harness 不載 app.js），只抽這一個純函式進來
-  const appSrc = fs.readFileSync(path.join(__dirname, "..", "bookclub", "web", "app.js"), "utf8");
+  const appSrc = fs.readFileSync(path.join(__dirname, "..", "bookclub", "web", "app.js"), "utf8").replace(/\r\n/g, "\n");   // Windows 的 git 可能把換行換成 CRLF，下面找函式結尾要 LF
   const tipAt = appSrc.indexOf("function helpTip(");
   vm.runInContext(appSrc.slice(tipAt, appSrc.indexOf("\n}\n", tipAt) + 3), ctx, { filename: "app.js:helpTip" });
   for (const f of files) vm.runInContext(fs.readFileSync(f, "utf8"), ctx, { filename: f });

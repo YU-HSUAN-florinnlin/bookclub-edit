@@ -77,7 +77,7 @@ def test_web_attention_line():
       const on = fcAttentionHtml({"有紀錄": true, "列": [], "照原聲名字算不出來": true}, [], []);
       const off = fcAttentionHtml({"有紀錄": true, "列": []}, [], []);
       console.log(JSON.stringify({on, off}));"""
-    got = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
+    got = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
     assert TEXT + "。" in got["on"], got["on"]
     assert "算不出來" not in got["off"]
 

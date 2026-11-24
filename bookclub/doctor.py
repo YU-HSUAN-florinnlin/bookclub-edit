@@ -429,7 +429,7 @@ def check_claude_cli() -> Check:
 
 def check_claude_responds(timeout_s: int = 30) -> Check:
     try:
-        result = subprocess.run([system_info.find_claude() or "claude", "-p", "回覆 OK"], capture_output=True, text=True,
+        result = subprocess.run([system_info.find_claude() or "claude", "-p", "回覆 OK"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=timeout_s)
         if result.returncode == 0 and result.stdout.strip():
             return Check("claude 回應測試", True, result.stdout.strip()[:60], required=False)
@@ -625,7 +625,7 @@ def run_smoke() -> dict:
                 [sys.executable, str(script)],
                 cwd=str(repo_root()),
                 capture_output=True,
-                text=True,
+                text=True, encoding="utf-8", errors="replace",
                 timeout=timeout_s,
             )
             elapsed = time.time() - t0

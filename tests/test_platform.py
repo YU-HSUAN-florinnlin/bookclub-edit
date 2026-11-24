@@ -29,7 +29,7 @@ def _fake_read_text(mapping: dict[str, str]):
     """把 Path.read_text 換掉：對應到 mapping 的路徑回傳假內容，其餘拋 OSError。"""
 
     def fake(self, *args, **kwargs):  # noqa: ANN001
-        key = str(self)
+        key = self.as_posix()   # Windows 的 str(Path) 是反斜線
         if key in mapping:
             return mapping[key]
         raise OSError("測試裡沒有這個檔案")
@@ -138,14 +138,14 @@ def test_install_sh_intel_flag_rejected_on_linux():
 
 
 def test_install_sh_syntax_ok():
-    r = subprocess.run(["bash", "-n", str(REPO_ROOT / "install.sh")], capture_output=True, text=True)
+    r = subprocess.run(["bash", "-n", str(REPO_ROOT / "install.sh")], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
 
 
 def test_install_sh_check_only_runs_without_installing():
     """--check-only 要能跑完、回傳 0，而且不碰安裝步驟（畫面上會有那句提示）。"""
     r = subprocess.run(["bash", "install.sh", "--check-only"], cwd=REPO_ROOT,
-                       capture_output=True, text=True, timeout=180)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
     assert r.returncode == 0, r.stderr[-500:]
     assert "只檢查" in r.stdout
 
@@ -233,7 +233,7 @@ command() {
                    TEST_UID="0" if root else "1000", TEST_UNKNOWN=str(int(unknown)),
                    TEST_PYTHON=sys.executable, TEST_UV_MARKER=str(Path(tmp) / "uv-ready"))
         return subprocess.run(["bash", "-c", setup + prefix + '\necho "TARGET=$PY_TARGET"', "test", *args],
-                              cwd=REPO_ROOT, env=env, capture_output=True, text=True, errors="replace", timeout=20)
+                              cwd=REPO_ROOT, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
 
 
 def test_linux_shell_installs_packages_and_selects_python():

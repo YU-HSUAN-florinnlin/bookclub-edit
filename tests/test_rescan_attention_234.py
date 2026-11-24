@@ -83,7 +83,7 @@ def test_web_attention_line():
       const on = fcAttentionHtml({"有紀錄": true, "列": [], "補找沒做完": true}, [], []);
       const off = fcAttentionHtml({"有紀錄": true, "列": []}, [], []);
       console.log(JSON.stringify({on, off}));"""
-    got = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
+    got = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
     assert TEXT + "。" in got["on"] and "沒有要留意的地方" in got["on"]
     assert "補找沒做完" not in got["off"]
 

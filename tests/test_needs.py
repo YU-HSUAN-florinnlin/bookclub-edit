@@ -127,7 +127,7 @@ def _sha(w: Path) -> dict[str, str]:
     out = {}
     for p in sorted(w.rglob("*")):
         if p.is_file() and needs.DIR_NAME not in p.relative_to(w).parts:
-            out[str(p.relative_to(w))] = hashlib.sha1(p.read_bytes()).hexdigest()
+            out[p.relative_to(w).as_posix()] = hashlib.sha1(p.read_bytes()).hexdigest()
     return out
 
 

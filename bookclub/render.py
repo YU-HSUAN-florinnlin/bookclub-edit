@@ -582,7 +582,7 @@ def _gain(clip: np.ndarray, ref: np.ndarray, max_gain: float = 8.0) -> float:
 def keyframes(video: Path, a: float, b: float) -> list[float]:
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-skip_frame", "nokey", "-read_intervals",
                         f"{max(0, a - 60)}%{b + 60}", "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(video)],
-                       capture_output=True, text=True, check=True).stdout
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout
     return sorted({round(float(x), 6) for x in r.split() if x.strip()})
 
 
@@ -682,7 +682,7 @@ def quicktime_ok(path: Path) -> bool | None:
         return None
     with tempfile.TemporaryDirectory() as tmp:
         r = subprocess.run(["avconvert", "--source", str(path), "--preset", "Preset640x480",
-                            "--output", str(Path(tmp) / "t.mov"), "--replace"], capture_output=True, text=True)
+                            "--output", str(Path(tmp) / "t.mov"), "--replace"], capture_output=True, text=True, encoding="utf-8", errors="replace")
         return r.returncode == 0 and (Path(tmp) / "t.mov").is_file()
 
 
@@ -746,17 +746,17 @@ def render_smart(video: Path, d: dict, plist: list[dict], audio: Path, dst: Path
 
 def probe_len(path: Path, stream: str) -> float:
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", stream, "-show_entries", "stream=duration",
-                        "-of", "csv=p=0", str(path)], capture_output=True, text=True, check=True).stdout.strip()
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip()
     if r and r != "N/A":
         return float(r.splitlines()[0])
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
-                       capture_output=True, text=True, check=True).stdout.strip()
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip()
     return float(r)
 
 
 def count_frames(path: Path) -> int:
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries",
-                        "stream=nb_read_packets", "-of", "csv=p=0", str(path)], capture_output=True, text=True, check=True)
+                        "stream=nb_read_packets", "-of", "csv=p=0", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     return int(r.stdout.strip() or 0)
 
 
@@ -767,14 +767,14 @@ def black_near(path: Path, times: list[float], pad: float = 1.0) -> list[dict]:
         s = max(0.0, t - pad)
         r = subprocess.run(["ffmpeg", "-hide_banner", "-ss", f"{s:.3f}", "-t", f"{2 * pad:.3f}", "-i", str(path),
                             "-vf", "blackdetect=d=0.04:pix_th=0.10", "-an", "-f", "null", "-"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
         if "black_start" in r.stderr:
             found.append({"剪點": round(t, 2)})
     return found
 
 
 def decode_errors(path: Path) -> int:
-    r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "null", "-"], capture_output=True, text=True)
+    r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return len([ln for ln in r.stderr.splitlines() if ln.strip()])
 
 
@@ -1285,7 +1285,7 @@ def render_video(workdir: str | Path, start: float, end: float, *, video: str | 
             try:   # 10-14 第5步2.0 第1段：這一支成品記到這一版（修改需求紀錄的版本表）
                 from bookclub import needs
 
-                needs.add_product(workdir, log_data.get("產生時間"), str(dst.relative_to(workdir)))
+                needs.add_product(workdir, log_data.get("產生時間"), dst.relative_to(workdir).as_posix())
             except Exception as e:  # noqa: BLE001
                 needs.note_error(workdir, "成品記到版本", e)   # 10-15 第1段審查修正（建議）
                 print(f"[修改需求紀錄] ⚠️ 成品沒記到版本（不影響成品）：{type(e).__name__}")
@@ -1367,7 +1367,7 @@ def verify_problem(ver: dict) -> str:
 
 def _video_size(video: Path) -> tuple[int, int]:
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
-                        "-of", "csv=p=0", str(video)], capture_output=True, text=True, check=True).stdout.strip()
+                        "-of", "csv=p=0", str(video)], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip()
     w, h = r.split(",")[:2]
     return int(w), int(h)
 

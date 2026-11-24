@@ -40,7 +40,7 @@ NODE = shutil.which("node")
 
 
 def _snap(w: Path) -> dict:
-    return {str(p.relative_to(w)): hashlib.md5(p.read_bytes()).hexdigest() for p in sorted(w.rglob("*")) if p.is_file()}
+    return {p.relative_to(w).as_posix(): hashlib.md5(p.read_bytes()).hexdigest() for p in sorted(w.rglob("*")) if p.is_file()}
 
 
 def _closed_with_pending() -> Path:
@@ -292,7 +292,7 @@ def test_5_dropdown_labels_and_hint():
     (d / "t.js").write_text(_JS5, encoding="utf-8")
     files = ",".join(str(WEB / f) for f in ("cards.js", "review.js") if (WEB / f).is_file())
     r = subprocess.run([NODE, str(d / "t.js"), str(REPO_ROOT / "tests" / "web_harness.js"), files],
-                       capture_output=True, text=True, check=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     out = json.loads(r.stdout)
     assert 'value="how:不用處理" selected>不用處理（照原聲留著）</option>' in out["a"], out["a"]
     assert '>不是名字（照原聲留著）</option>' in out["a"], out["a"]

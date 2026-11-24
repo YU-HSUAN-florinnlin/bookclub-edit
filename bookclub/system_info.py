@@ -16,8 +16,11 @@ def find_claude() -> str | None:
     found = shutil.which("claude")
     if found:
         return found
-    local_bin = Path.home() / ".local" / "bin" / "claude"
-    return str(local_bin) if local_bin.exists() else None
+    for name in ("claude", "claude.exe"):   # 原生 Windows 的 Claude Code 是 claude.exe
+        local_bin = Path.home() / ".local" / "bin" / name
+        if local_bin.exists():
+            return str(local_bin)
+    return None
 
 
 def detect_os() -> str:

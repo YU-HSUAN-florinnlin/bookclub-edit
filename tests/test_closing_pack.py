@@ -58,13 +58,13 @@ def _workdir(root: Path, *, hardlink: bool = False) -> Path:
     _mk(w / "報告.md", "報告".encode())
     wd.write_json(w / "分析結果.json", {"video": str(root / "第一堂.mp4")})
     wd.write_json(w / "transcript" / "merged.json", {"sentences": [{"id": "1", "start": 0.0, "end": 1.0, "text": "甲"}]})
-    wd.write_json(w / "覆核" / "成品檢查.json", {"輸出成品": {"檔案": str(final.relative_to(w)), "來源": "輸出/成品_v1_0-3_sw.mp4",
+    wd.write_json(w / "覆核" / "成品檢查.json", {"輸出成品": {"檔案": final.relative_to(w).as_posix(), "來源": "輸出/成品_v1_0-3_sw.mp4",
                                                          "處理紀錄產生時間": "2026-10-16T10:00:00"}})
     return w
 
 
 def _snap(w: Path) -> dict:
-    return {str(p.relative_to(w)): (p.stat().st_size, p.stat().st_mtime_ns) for p in sorted(w.rglob("*"))
+    return {p.relative_to(w).as_posix(): (p.stat().st_size, p.stat().st_mtime_ns) for p in sorted(w.rglob("*"))
             if p.name != closing.RECORD_FILE}
 
 
@@ -87,7 +87,7 @@ def test_pack_contents_verified_and_workdir_untouched():
         assert job.state == "已存好", job.error
         out = loc / closing.PACK_ROOT / f"第一堂_{DAY}"
         assert out.is_dir() and not list((loc / closing.PACK_ROOT).glob(f"*{closing.PACKING_SUFFIX}"))
-        names = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())
+        names = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
         assert names == sorted(["最終成品_v1_0-3_sw_20261016-101500.mp4", "成品_v1_0-3_標字版.mp4", "逐字稿.srt", "逐字稿.txt",
                                 "逐字稿_成品時間.srt", "打包清單.txt", "紀錄/修改需求/卡片.json",
                                 "紀錄/修改需求/版本/v1/處理紀錄.json", "紀錄/處理標記_0-3.md", "紀錄/剪輯決策_0-3.json",
@@ -385,7 +385,7 @@ def test_js_close_box_view():
         clView({...base, "工作": {"狀態": "存檔中", "第幾個": 2, "共幾個": 9}}),
         clView({...base, "狀態": "已結案", "只有紀錄": true}),
       ]));"""
-    v = json.loads(subprocess.run([node, "-e", code], capture_output=True, text=True, check=True).stdout)
+    v = json.loads(subprocess.run([node, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
     # 第 3 段：接上 clean_plan 之後那一句補回「然後刪掉這裡的暫存檔（共 X GB）」（32 號設計 §1a 第 1 點）
     assert v[0]["btn"] == "結案打包…" and v[0]["line"] == "會把成品影片、逐字稿、修改紀錄存到你選的地方，然後刪掉這裡的暫存檔（共 2.6 GB）。"
     assert not v[0]["warn"] and not v[0]["status"]

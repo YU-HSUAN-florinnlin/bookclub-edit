@@ -47,7 +47,7 @@ OFFLINE = "暫時連不到工具，等一下會自動再試"
 
 
 def _node(code: str):
-    r = subprocess.run([NODE, "-e", code], capture_output=True, text=True)
+    r = subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
@@ -56,7 +56,7 @@ def _harness(files: list[str], pre: str, scenarios: list[dict]) -> dict:
     d = Path(tempfile.mkdtemp())
     (d / "spec.json").write_text(json.dumps({"前置": pre, "情境": scenarios}, ensure_ascii=False), encoding="utf-8")
     r = subprocess.run([NODE, str(HARNESS), ",".join(str(WEB / f) for f in files), str(d / "spec.json")],
-                       capture_output=True, text=True, check=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     return json.loads(r.stdout)
 
 
@@ -284,7 +284,7 @@ def test_5_new_export_after_pack_shown_up_front():
         assert not closing.pack_state(w).get("存好後又輸出")
         new = tc._mk(w / "輸出/最終成品_0-97_sw_20261017-090000.mp4", os.urandom(3000))
         chk = wd.read_json(w / "覆核/成品檢查.json")
-        chk["輸出成品"]["檔案"] = str(new.relative_to(w))
+        chk["輸出成品"]["檔案"] = new.relative_to(w).as_posix()
         wd.write_json(w / "覆核/成品檢查.json", chk)
         st = closing.pack_state(w)
     assert st["狀態"] == closing.PACKED and st["存好後又輸出"] == closing.NEW_EXPORT, st.get("存好後又輸出")

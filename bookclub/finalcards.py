@@ -876,7 +876,7 @@ def export_version(workdir: str | Path, n: int, confirm: bool = False) -> dict:
     link_or_copy(src, tmp)   # #79（1017-2）：硬連結（同一份資料），跨磁碟、不支援才複製；前提同 finalcheck.export_final
     os.replace(tmp, dst)
     extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
-    rec = {"時間": fc._now(), "來源": rel, "檔案": str(dst.relative_to(workdir)),
+    rec = {"時間": fc._now(), "來源": rel, "檔案": dst.relative_to(workdir).as_posix(),
            "片頭": (extras.get("片頭") or {}).get("檔名"), "片尾": (extras.get("片尾") or {}).get("檔名"), "接上片頭片尾": False,
            "看過百分比": pct, "沒通過筆數": left, "沒確認變動筆數": 0, "檢查完才輸出": not left,
            "成品檔指紋": fc.product_print(src), "處理紀錄產生時間": v.get("時間"), "版本號": int(n)}

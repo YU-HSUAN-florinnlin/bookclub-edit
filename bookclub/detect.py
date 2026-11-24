@@ -94,7 +94,7 @@ def _repo_root() -> Path:
 
 def _run(cmd: list[str], timeout: float = 5) -> str | None:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
         return (out.stdout or out.stderr or "").strip()
     except Exception:
         return None

@@ -526,7 +526,7 @@ def _scan_sentences(sents: list[dict], owned: dict, terms: list[dict], exclusion
                 "原因": reason,
                 "切點信心": confidence,
                 "建議緩衝秒數": DEFAULT_BUFFER_S,
-                "候選音檔": str(clip_path.relative_to(workdir)),
+                "候選音檔": clip_path.relative_to(workdir).as_posix(),
                 **({"逐字時間拉長秒數": round(raw_len, 3)} if stretched else {}),
                 **(annotate(sent) if annotate else {}),
             })

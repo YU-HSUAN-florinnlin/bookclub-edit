@@ -128,7 +128,7 @@ def build_review_page(workdir: Path, names_result: dict | None = None) -> Path:
         if orig_path is not None and orig_path.exists():
             muted_path = _mute_clip(orig_path, clip_start, c.get("start", 0.0), c.get("end", 0.0))
             if muted_path is not None:
-                muted_rel = str(muted_path.relative_to(workdir))
+                muted_rel = muted_path.relative_to(workdir).as_posix()
 
         row_classes = ["row"]
         low_conf = confidence == "低"

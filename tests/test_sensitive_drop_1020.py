@@ -125,7 +125,7 @@ def test_web_card_shows_drop_mark():
     d = Path(tempfile.mkdtemp())
     (d / "spec.json").write_text(json.dumps({"前置": pre, "情境": scen}, ensure_ascii=False), encoding="utf-8")
     files = ",".join(str(WEB / f) for f in ("cards.js", "review.js") if (WEB / f).is_file())
-    r = subprocess.run([NODE, str(HARNESS), files, str(d / "spec.json")], capture_output=True, text=True, check=True)
+    r = subprocess.run([NODE, str(HARNESS), files, str(d / "spec.json")], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     card = json.loads(r.stdout)[key]
     assert isinstance(card, str) and "（拿掉）" in card and f"「{WORD}」拿掉了" in card, card
 

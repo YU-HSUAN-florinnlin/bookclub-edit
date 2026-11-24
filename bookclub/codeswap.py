@@ -208,7 +208,7 @@ def apply(workdir: str | Path, mapping: dict[str, str] | None = None, *, dry_run
                 counts[o] += k
             s["容器"][s["鍵"]] = txt
         changed = [k for k in files if data.get(k) is not None and data[k] != before[k]]
-        result = {"對照": mp, "每個代號換了幾處": counts, "改到的檔": [str(files[k].relative_to(workdir)) for k in changed],
+        result = {"對照": mp, "每個代號換了幾處": counts, "改到的檔": [files[k].relative_to(workdir).as_posix() for k in changed],
                   "備份": None, "試跑": dry_run}
         if dry_run:
             return result
@@ -219,7 +219,7 @@ def apply(workdir: str | Path, mapping: dict[str, str] | None = None, *, dry_run
                 dst = bdir / files[k].relative_to(workdir)
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(files[k], dst)
-        result["備份"] = str(bdir.relative_to(workdir))
+        result["備份"] = bdir.relative_to(workdir).as_posix()
         for k in changed:
             wd.write_json(files[k], data[k])
     # 名冊上的代號（相容用，名冊不動）：上面換完這一集還是英文的，就是從名冊來的——改記在這一集：

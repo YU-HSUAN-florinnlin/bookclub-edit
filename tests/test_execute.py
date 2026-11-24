@@ -320,6 +320,8 @@ if act in ("被結束", "被結束一次"):
     k = int(n.read_text()) if n.exists() else 0
     n.write_text(str(k + 1))
     if act == "被結束" or k == 0:
+        if os.name == "nt":      # Windows 沒有訊號，被系統結束時結束碼是 0xC0000000 以上的 NT 狀態碼
+            os._exit(0xC0000409)
         os.kill(os.getpid(), 9)      # 模擬記憶體不夠被系統結束：沒有任何錯誤訊息
 mark = conf.get("做完標記", {}).get(label)
 if mark:
@@ -553,7 +555,7 @@ def test_real_child_command_runs_part():
     import subprocess
 
     w = _fresh()
-    p = subprocess.run(execute.default_part_command(w, ["保留原聲學員名字", "生成"]), capture_output=True, text=True,
+    p = subprocess.run(execute.default_part_command(w, ["保留原聲學員名字", "生成"]), capture_output=True, text=True, errors="replace",
                        encoding="utf-8", env=execute._child_env(), timeout=120)
     assert p.returncode == 0, p.stdout[-2000:] + p.stderr[-2000:]
     assert "沒有選「換成代號」" in p.stdout and execute.PEAK_PREFIX in p.stdout

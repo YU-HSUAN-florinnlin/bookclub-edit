@@ -701,7 +701,7 @@ def test_m4_roster_changes_on_teacher_machine():
         _open5(w)
         _open5(w)
         after = {p: (p.read_bytes() if p.is_file() else None) for p in watch}
-        assert after == before, [str(p.relative_to(w)) for p in watch if after[p] != before[p]]
+        assert after == before, [p.relative_to(w).as_posix() for p in watch if after[p] != before[p]]
         assert (needs.redo_list(w) if needs.exists(w) else None) == redo0
         # ③ 重跑第 4 步時才用「快照＋本機」：多換一個名字，不會丟錯
         plan = nameplan.compute_plan(w)

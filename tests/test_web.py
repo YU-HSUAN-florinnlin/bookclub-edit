@@ -262,7 +262,7 @@ def test_walkthrough_1001():
     if node:   # rvFmt 不會出現「:60.0」
         fn = rv[rv.index("function rvFmt"):rv.index("function rvParseTime")]
         out = subprocess.run([node, "-e", fn + "console.log(rvFmt(3299.96, 1), rvFmt(59.97, 1), rvFmt(59.97))"],
-                             capture_output=True, text=True, check=True).stdout.split()
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.split()
         assert out == ["55:00.0", "1:00.0", "0:59"], out
 
 
@@ -341,7 +341,7 @@ pollOk(); out.push(shown());
 pollFailed(net); out.push(shown());
 console.log(JSON.stringify(out), document.getElementById("connLost").innerHTML.includes("重新雙擊啟動"));
 """
-    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "[false,false,false,true,true,false,false] true", r.stdout
 
@@ -369,7 +369,7 @@ def test_step4_whole_check_folded_by_default():
               + f"const fc = {json.dumps(fc, ensure_ascii=False)};"
               + 'console.log(JSON.stringify([fcWholeHead(fc), fcWholeHead({"一定要處理": [{"處理好": true}], "請看一眼": [{"已看過": true}]}),'
               + ' fcWholeHead({"一定要處理": [], "請看一眼": []}), fcCheckOpen()]));')
-    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == ["建議先聽一下的地方（32 處，可以略過，第 5 步「需留意」還會列出）",
                                     "建議先聽一下的地方：都處理好了",
@@ -565,7 +565,7 @@ def test_review_fixes_1022_1():
   console.log(JSON.stringify({ r1, opened2, r2, repBlocked: ev.defaultPrevented && ev.stopped, firstPass: !ev2.defaultPrevented }));
 })();
 """
-    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert out.returncode == 0, out.stderr
     import json
 
@@ -602,7 +602,7 @@ def test_range_dialog_close_reverts_1022():
   console.log(JSON.stringify({ r1, r2 }));
 })();
 """
-    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert out.returncode == 0, out.stderr
     import json
 
@@ -660,7 +660,7 @@ uiTipShow(b3);
 out.noShowDetached = uiTipEl.hidden === true;
 console.log(JSON.stringify(out));
 """
-    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert r.returncode == 0, r.stderr
     got = json.loads(r.stdout.strip().splitlines()[-1])
     assert all(got.values()) and len(got) == 8, got
@@ -719,7 +719,7 @@ def test_import_errors_popup_only_when_unexpected_1023():
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
         json.dump(spec, f, ensure_ascii=False)
     harness = WEB.parent.parent / "tests" / "web_harness.js"
-    out = subprocess.run([node, str(harness), str(WEB / "handoff.js"), f.name], capture_output=True, text=True, timeout=60)
+    out = subprocess.run([node, str(harness), str(WEB / "handoff.js"), f.name], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert out.returncode == 0, out.stderr
     got = json.loads(out.stdout)
     assert got["原片不符"] == {"alerts": 0, "red": True, "startOk": True}, got
@@ -750,7 +750,7 @@ def test_close_box_errors_split_1023():
     cases = [{"message": closing.PLAN_CHANGED}, {"message": "找不到這個資料夾，換個位置再試。"},
              {"message": closing.TMP_THERE}, {"message": "存的地方滿了", "data": {"意外": True}}]
     out = subprocess.run([node, "-e", fn + f"console.log(JSON.stringify({json.dumps(cases, ensure_ascii=False)}.map(clUnexpected)));"],
-                         capture_output=True, text=True, timeout=30)
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout) == [False, False, True, True], out.stdout
 
@@ -778,7 +778,7 @@ def test_step4_block_lists_each_reason_with_step_link():
                                                  {"說明": "找不到原片影片", "步驟": None, "細節": "原本在：~/影片/假.mp4"}]}
     old = {"缺": ["舊伺服器的原文"]}   # 沒有「缺明細」：照原文列、沒有連結
     script = esc + pick("execBlockList") + f"console.log(JSON.stringify([execBlockList({json.dumps(pre, ensure_ascii=False)}), execBlockList({json.dumps(old, ensure_ascii=False)})]));"
-    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert r.returncode == 0, r.stderr
     html, html_old = json.loads(r.stdout)
     assert html.count("<li>") == 5 and html.count("data-gostep=") == 3 and html.count("data-gosub=") == 1
@@ -827,7 +827,7 @@ def test_step4_status_card_1024_3():
               console.log(JSON.stringify({ a: a.map((x) => x.title), now: execNowText("todo", d, a, redo, true), none: b, c: c.map((x) => [x.title, x.state, x.sub]),
                 run: execNowText("running", run, c, [], true), wait: execTaskItems(wait, [], true).map((x) => x.title), reasm: execTaskItems(reasm, [], true).map((x) => [x.title, x.state]),
                 cut: execTaskItems(cut, [], true).map((x) => x.title), plain: [execPlain("成品沒有通過驗證（sw），要重新組裝"), execPlain("x（sw、hw）y"), execPlain("保留（3 筆）")], done: execNowText("done", d, [], [], true), html: execTasksHtml(c, true) }));""")
-    r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    r = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert r.returncode == 0, r.stderr
     got = json.loads(r.stdout)
     assert got["a"] == ["第 5 步退回的 2 張：#27、#69", "學員聲音還差 1 段", "重新組裝成品"]   # 0／0、做好了的不列
@@ -884,7 +884,7 @@ def test_step3_ux_1025_2():
     d = Path(tempfile.mkdtemp())
     (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     out = subprocess.run([cs.NODE, str(cs.HARNESS), ",".join(str(WEB / f) for f in cs.STEP3_FILES), str(d / "spec.json")],
-                         capture_output=True, text=True, check=True)
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     r = json.loads(out.stdout)
     v = r["清單"]
     assert "錯誤" not in v, v

@@ -44,7 +44,7 @@ def _tree(root: Path) -> dict[str, str]:
     for dp, dns, fns in os.walk(root):
         for n in fns + [d for d in dns if (Path(dp) / d).is_symlink()]:
             p = Path(dp) / n
-            rel = str(p.relative_to(root))
+            rel = p.relative_to(root).as_posix()
             if p.is_symlink():
                 out[rel] = "連結→" + os.readlink(p)
             else:
@@ -94,15 +94,18 @@ def _make_original(root: Path) -> Path:
     return w
 
 
+_D = "C:" if sys.platform == "win32" else ""   # Windows 的絕對路徑要有磁碟機代號，不然 is_absolute() 是 False
+
+
 def test_localize_and_legacy_keys():
-    old = Path("/舊的位置/2025-04-09 第一堂_剪輯工作區")
-    new = Path("/新的位置/2025-04-09 第一堂_剪輯工作區")
+    old = Path(_D + "/舊的位置/2025-04-09 第一堂_剪輯工作區")
+    new = Path(_D + "/新的位置/2025-04-09 第一堂_剪輯工作區")
     # 在別的工作區裡的 → 換成這個工作區裡同一個位置；原片、設定資料夾的聲線照用；相對路徑接在這個工作區底下
     assert wd.localize(old / "參考音" / "ref.wav", new, [old]) == new / "參考音" / "ref.wav"
     assert wd.localize(old / "參考音" / "ref.wav", new, []) == new / "參考音" / "ref.wav"       # 沒有記舊位置也認得出來
-    assert wd.localize("/舊的位置/工作區/生成/老師/A.wav", new, []) == new / "生成" / "老師" / "A.wav"
-    assert wd.localize("/舊的位置/2025-04-09 第一堂.mp4", new, [old]) == Path("/舊的位置/2025-04-09 第一堂.mp4")
-    assert wd.localize("/Users/x/讀書會剪輯資料/聲線/女4.wav", new, [old]) == Path("/Users/x/讀書會剪輯資料/聲線/女4.wav")
+    assert wd.localize(_D + "/舊的位置/工作區/生成/老師/A.wav", new, []) == new / "生成" / "老師" / "A.wav"
+    assert wd.localize(_D + "/舊的位置/2025-04-09 第一堂.mp4", new, [old]) == Path(_D + "/舊的位置/2025-04-09 第一堂.mp4")
+    assert wd.localize(_D + "/Users/x/讀書會剪輯資料/聲線/女4.wav", new, [old]) == Path(_D + "/Users/x/讀書會剪輯資料/聲線/女4.wav")
     assert wd.localize(new / "參考音" / "ref.wav", new, [old]) == new / "參考音" / "ref.wav"
     assert wd.localize("生成/老師/A.wav", new) == new / "生成" / "老師" / "A.wav"
     assert wd.localize(None, new) is None
@@ -110,7 +113,7 @@ def test_localize_and_legacy_keys():
     assert wd.same_stored_file(old / "參考音" / "ref.wav", new / "參考音" / "ref.wav")
     assert not wd.same_stored_file(old / "參考音" / "ref.wav", new / "參考音" / "候選1.wav")
     # 生成快取的舊鍵（完整路徑#指紋）→ 新寫法（參考音#指紋），路徑在哪裡都一樣
-    k = f"S016|1|42|1.0|甲乙|{old}/參考音/ref.wav#cb5c0059d453"
+    k = f"S016|1|42|1.0|甲乙|{old.as_posix()}/參考音/ref.wav#cb5c0059d453"
     assert tts.normalize_cache_key(k) == "S016|1|42|1.0|甲乙|參考音#cb5c0059d453"
     pk = f"{k}|原文|[1.0, 2.0]"
     assert tts.normalize_cache_key(pk) == "S016|1|42|1.0|甲乙|參考音#cb5c0059d453|原文|[1.0, 2.0]"
@@ -169,7 +172,7 @@ def test_copy_then_write_leaves_original_untouched():
     assert review.video_path(copy) == base / "原本" / "假影片.mp4"
     inside = w / "原片.mp4"
     inside.write_bytes(b"fake")
-    before[str(inside.relative_to(w))] = _tree(w)[str(inside.relative_to(w))]
+    before[inside.relative_to(w).as_posix()] = _tree(w)[inside.relative_to(w).as_posix()]
     an = json.loads((copy / "分析結果.json").read_text(encoding="utf-8"))
     (copy / "分析結果.json").write_text(json.dumps({**an, "video": str(inside)}, ensure_ascii=False), encoding="utf-8")
     merged = json.loads((copy / "transcript" / "merged.json").read_text(encoding="utf-8"))

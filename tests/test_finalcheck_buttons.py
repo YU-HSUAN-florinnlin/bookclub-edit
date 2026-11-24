@@ -63,7 +63,7 @@ def _fn(src: str, name: str) -> str:
 
 
 def _node(code: str):
-    out = subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout
     return json.loads(out)
 
 

@@ -298,7 +298,7 @@ def test_inspect_does_not_write():
     before = {p: p.stat().st_mtime_ns for p in w.rglob("*") if p.is_file()}
     _all_output(w)
     after = {p: p.stat().st_mtime_ns for p in w.rglob("*") if p.is_file()}
-    assert before == after, "查詢改到了檔案：" + str([str(p.relative_to(w)) for p in after if before.get(p) != after[p]][:5])
+    assert before == after, "查詢改到了檔案：" + str([p.relative_to(w).as_posix() for p in after if before.get(p) != after[p]][:5])
     assert wd.write_json.__name__ == "write_json"                # 跑完換回來
 
 

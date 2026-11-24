@@ -140,7 +140,7 @@ def _mk(p: Path, size: int) -> None:
 
 
 def _tree(root: Path) -> dict:
-    return {str(p.relative_to(root)): (p.stat().st_size, p.stat().st_mtime_ns) for p in sorted(root.rglob("*"))}
+    return {p.relative_to(root).as_posix(): (p.stat().st_size, p.stat().st_mtime_ns) for p in sorted(root.rglob("*"))}
 
 
 def test_disk_report_lists_and_never_deletes():

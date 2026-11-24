@@ -79,7 +79,7 @@ def _wait(base, key):
 
 
 def _files(w: Path) -> dict:
-    return {str(p.relative_to(w)): (p.stat().st_size, p.stat().st_mtime_ns) for p in sorted(w.rglob("*")) if p.is_file()}
+    return {p.relative_to(w).as_posix(): (p.stat().st_size, p.stat().st_mtime_ns) for p in sorted(w.rglob("*")) if p.is_file()}
 
 
 def test_pack_api_and_clean():

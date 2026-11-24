@@ -44,7 +44,7 @@ def _fn(src: str, name: str) -> str:
 
 
 def _node(code: str):
-    return json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
+    return json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
 
 
 def _with_product(w: Path) -> tuple[Path, dict]:

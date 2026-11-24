@@ -685,7 +685,7 @@ def _finalize(
         "發音對照": item.get("發音對照", []), "slot": item.get("slot"), "slot_s": slot_s,
         "嘗試": [a.to_dict(i + 1, slot_s, tolerance) for i, a in enumerate(history)],
         "選定": best + 1,
-        "檔案": str(chosen_path.relative_to(workdir)),
+        "檔案": chosen_path.relative_to(workdir).as_posix(),
         "要人聽": not chosen.content_ok() or chosen.check_failed,
         "內容已檢查": chosen.content is not None,
     }
@@ -698,7 +698,7 @@ def _finalize(
         record["原片停頓"] = [
             {"在這個字後面": ctx["chars"][i].text, "秒": d} for i, d in sorted(ctx["pauses"].items())
         ]
-        record["原聲檔案"] = str(ctx["clip"].relative_to(workdir))
+        record["原聲檔案"] = ctx["clip"].relative_to(workdir).as_posix()
 
     base_i = _base_index(history)
     base = history[base_i]
@@ -722,7 +722,7 @@ def _finalize(
         v = {
             "版本": name, "來源第幾次": n, "長度秒": round(length, 2), "放回做法": plan["做法"],
             "差異比例": plan["差異比例"], "atempo": plan["atempo"], "原因": plan["原因"],
-            "檔案": str(dst.relative_to(workdir)), "來源檔案": str(Path(src).relative_to(workdir)),
+            "檔案": dst.relative_to(workdir).as_posix(), "來源檔案": Path(src).relative_to(workdir).as_posix(),
             "開頭對齊秒": round(lead, 3),
         }
         variants.append(v)
@@ -757,7 +757,7 @@ def _finalize(
     shutil.copyfile(workdir / rec["檔案"], out_dir / f"{sid}_放回時間格.wav")
     record["候選做法"] = variants
     record["建議做法"] = rec["版本"]
-    record["放回時間格"] = {**rec, "檔案": str((out_dir / f"{sid}_放回時間格.wav").relative_to(workdir))}
+    record["放回時間格"] = {**rec, "檔案": (out_dir / f"{sid}_放回時間格.wav").relative_to(workdir).as_posix()}
     # 10-02 第六批：白話（「+12%」→「長 12%」）
     summary = "、".join(f"{v['版本']}（{'跟原本差不多' if abs(v['差異比例']) < 0.005 else ('長' if v['差異比例'] > 0 else '短') + format(abs(v['差異比例']), '.0%')}）"
                         for v in variants)

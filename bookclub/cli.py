@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 
 
@@ -245,7 +247,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _reexec_in_utf8_mode(argv: list[str]) -> int | None:
+    """原生 Windows 的預設編碼不是 UTF-8（美式 cp1252、台灣 cp950），第三方套件裡沒寫 encoding 的 open() 會讀壞中文或丟錯。
+    官方建議的解法（PEP 540）是 UTF-8 模式，但只能在 Python 啟動時開；`bookclub` 是 pip 做的執行檔，沒辦法加 `-X utf8`，
+    所以第一次進來發現沒開，就用 UTF-8 模式再開一支同樣的指令、把它的結束碼傳回來（多約 0.1 秒）。已經開了、不是 Windows 回 None。"""
+    if sys.platform != "win32" or sys.flags.utf8_mode:
+        return None
+    try:
+        return subprocess.call([sys.executable, "-X", "utf8", "-m", "bookclub.cli", *argv], env={**os.environ, "PYTHONUTF8": "1"})
+    except KeyboardInterrupt:
+        return 130
+
+
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        code = _reexec_in_utf8_mode(sys.argv[1:])
+        if code is not None:
+            return code
     argv = sys.argv[1:] if argv is None else argv
     parser = build_parser()
     args = parser.parse_args(argv)

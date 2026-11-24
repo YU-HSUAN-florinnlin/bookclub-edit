@@ -549,13 +549,13 @@ def pack_items(workdir: str | Path, *, records_only: bool = False, strict: bool 
                 p = Path(root) / f
                 if f.startswith(".") or p.is_symlink() or not p.is_file():   # .寫入鎖、.寫入中 之類的不打包
                     continue
-                out.append({"相對路徑": str(Path("紀錄") / p.relative_to(w)), "來源": p})
+                out.append({"相對路徑": (Path("紀錄") / p.relative_to(w)).as_posix(), "來源": p})
     outdir = w / "輸出"
     if outdir.is_dir():
         for pat in OUTPUT_RECORD_GLOBS:
             for p in sorted(outdir.glob(pat)):
                 if p.is_file() and not p.is_symlink():
-                    out.append({"相對路徑": str(Path("紀錄") / p.name), "來源": p})
+                    out.append({"相對路徑": (Path("紀錄") / p.name).as_posix(), "來源": p})
     for rel, dst in RECORD_FILES:
         p = w / rel
         if p.is_file() and not p.is_symlink():
@@ -603,7 +603,7 @@ def voice_items(workdir: str | Path, taken: list[dict]) -> list[dict]:
     dsts = {it["相對路徑"] for it in taken}
     out = []
     for p in voice_files(w):
-        dst = str(Path("紀錄") / p.relative_to(w))
+        dst = (Path("紀錄") / p.relative_to(w)).as_posix()
         if p.resolve() in srcs or dst in dsts:
             continue
         dsts.add(dst)
@@ -778,7 +778,7 @@ def extra_record_items(workdir: str | Path, taken: list[dict]) -> list[dict]:
             continue
         if classify(rel.as_posix())[0] == "清":
             continue
-        dst = str(Path("紀錄") / rel)
+        dst = (Path("紀錄") / rel).as_posix()
         if dst in dsts:
             continue
         dsts.add(dst)
@@ -1121,7 +1121,7 @@ class PackJob:
         known = hashlib.sha256(data).hexdigest() if data is not None else None
 
         def row(sha: str) -> dict:
-            return {"相對路徑": rel, "來源": str(src.relative_to(self.workdir)) if src else None, "大小": size,
+            return {"相對路徑": rel, "來源": src.relative_to(self.workdir).as_posix() if src else None, "大小": size,
                     "sha256": sha}
 
         if dst.is_file() and dst.stat().st_size == size:   # 繼續：已經在的重算，對得上就跳過
@@ -1725,7 +1725,7 @@ def reopen(workdir: str | Path) -> Path:
     if read_record(w).get("狀態") == CLEANING and (w / CLEAN_DIR).exists():
         raise CleanError("清到一半：先用 --restore 搬回去，或在網頁按「繼續清」清完再取消。")
     new = w / f"結案_取消_{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
-    os.rename(p, new)
+    os.replace(p, new)
     return new
 
 

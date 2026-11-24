@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - 1123-3-Windows原生試裝
+      - 1124-5-Windows測試修正
 
 permissions:
   contents: read

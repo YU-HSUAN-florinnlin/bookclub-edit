@@ -673,12 +673,12 @@ def products(workdir: Path) -> list[str]:
              and "_驗證沒過" not in p.stem]   # 09-29：驗證沒過的成品不拿來檢查
     # 標字版是給人看 AI 改了哪裡的輔助版，排在正式成品後面，免得被預設選去檢查
     files.sort(key=lambda p: ("標字版" in p.stem, -p.stat().st_mtime))
-    return [str(p.relative_to(workdir)) for p in files]
+    return [p.relative_to(workdir).as_posix() for p in files]
 
 
 def probe_duration(path: Path) -> float:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     try:
         return float(r.stdout.strip())
     except ValueError:
@@ -1842,7 +1842,7 @@ def export_final(workdir: str | Path, confirm: bool = False) -> dict:
         link_or_copy(src, tmp)   # 先放到暫存檔名、完整了才換上（複製到一半中斷不會留下半個最終成品）
         os.replace(tmp, dst)
         extras = wd.read_json(workdir / "工作區設定.json", default=None) or {}
-        rec = {"時間": _now(), "來源": check["成品影片"], "檔案": str(dst.relative_to(workdir)),
+        rec = {"時間": _now(), "來源": check["成品影片"], "檔案": dst.relative_to(workdir).as_posix(),
                "片頭": (extras.get("片頭") or {}).get("檔名"), "片尾": (extras.get("片尾") or {}).get("檔名"),
                "接上片頭片尾": False,
                # 10-08：輸出當時的檢查狀態（沒看完、沒全部通過也能輸出，第 5 步會提示「這次輸出時還沒看完」）
@@ -2086,7 +2086,7 @@ def note_versions(workdir: Path, role: str, ids: list[str], stamp: str, reasons:
     recs = {r.get("id"): r for r in (wd.read_json(log_path, default=None) or {}).get("句子") or []}
     path = od / tts.REDO_VERSIONS
     data = wd.read_json(path, default=None) or {}
-    folder = str((od / redo_folder(stamp)).relative_to(workdir))
+    folder = (od / redo_folder(stamp)).relative_to(workdir).as_posix()
     out: dict[str, dict] = {}
     for i in ids:
         r = recs.get(i)
@@ -2145,7 +2145,7 @@ def clear_generated(workdir: Path, role: str, ids: list[str], stamp: str) -> dic
             for f in [*od.glob(f"{i}_*"), od / f"{i}.wav"]:
                 if f.is_file():
                     dst.mkdir(parents=True, exist_ok=True)
-                    f.rename(dst / f.name)
+                    os.replace(f, dst / f.name)
                     n["檔案"] += 1
     return n
 

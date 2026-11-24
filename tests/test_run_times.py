@@ -128,7 +128,7 @@ def test_web_exec_time_html():
     code = (esc + pick("fmtStamp") + pick("execDur") + stop + pick("execTimeHtml")
             + f"const t = {json.dumps(t, ensure_ascii=False)}, r = {json.dumps(run, ensure_ascii=False)};"
             + "console.log(JSON.stringify([execTimeHtml(t), execTimeHtml(r), execTimeHtml(null)]));")
-    done, running, none = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
+    done, running, none = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
     assert "總經過時間</td><td>3 小時 0 分" in done and "實際執行時間</td><td>1 小時 50 分" in done
     assert "2 次：10-08 10:30（按了停止）、10-08 11:20（伺服器被關掉）" in done and "老師名字 1 小時 0 分；組裝 20 分 0 秒" in done
     assert "已執行 10 分 0 秒" in running and "舊版沒有記錄更早的執行" in running and none == ""

@@ -865,7 +865,7 @@ def test_web_seen_fail_no_alert_loop():
     d = Path(tempfile.mkdtemp())
     (d / "t.js").write_text(_JS_SEEN, encoding="utf-8")
     files = ",".join(str(WEB / f) for f in ("cards.js", "review.js") if (WEB / f).is_file())
-    r = subprocess.run([NODE, str(d / "t.js"), str(HARNESS), files], capture_output=True, text=True, check=True)
+    r = subprocess.run([NODE, str(d / "t.js"), str(HARNESS), files], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     out = json.loads(r.stdout)
     assert out["ok"] == {"alerts": 1, "mute": False} and out["fail"] == {"alerts": 0, "mute": True}, out
 
@@ -877,7 +877,7 @@ def test_web_one_dropdown_and_parallel_saves():
     d = Path(tempfile.mkdtemp())
     (d / "t.js").write_text(_JS, encoding="utf-8")
     files = ",".join(str(WEB / f) for f in ("cards.js", "review.js") if (WEB / f).is_file())
-    r = subprocess.run([NODE, str(d / "t.js"), str(HARNESS), files], capture_output=True, text=True, check=True)
+    r = subprocess.run([NODE, str(d / "t.js"), str(HARNESS), files], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     out = json.loads(r.stdout)
     html = out["html"]
     # 一個下拉選單：② 的學員（同一人）、英文名、不是名字、不用處理；沒有以前的「換成代號」「是上面的學員」字樣
@@ -939,7 +939,7 @@ def test_web_same_person_row_and_two_summary():
     d = Path(tempfile.mkdtemp())
     (d / "t.js").write_text(_JS_SAME, encoding="utf-8")
     files = ",".join(str(WEB / f) for f in ("cards.js", "review.js") if (WEB / f).is_file())
-    r = subprocess.run([NODE, str(d / "t.js"), str(HARNESS), files], capture_output=True, text=True, check=True)
+    r = subprocess.run([NODE, str(d / "t.js"), str(HARNESS), files], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     out = json.loads(r.stdout)
     html = out["html"]
     # 阿德在 ③ 列出、下拉選單是「同一人：小美（艾瑪）」，可以改成別的

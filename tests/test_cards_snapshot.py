@@ -166,7 +166,7 @@ def _run(files: list[str]) -> dict:
     d = Path(tempfile.mkdtemp())
     (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     r = subprocess.run([NODE, str(HARNESS), ",".join(str(WEB / f) for f in files), str(d / "spec.json")],
-                       capture_output=True, text=True, check=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     return json.loads(r.stdout)
 
 
@@ -229,7 +229,7 @@ def test_step3_pad_switch():
     d = Path(tempfile.mkdtemp())
     (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     r = subprocess.run([NODE, str(HARNESS), ",".join(str(WEB / f) for f in STEP3_FILES), str(d / "spec.json")],
-                       capture_output=True, text=True, check=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     got = json.loads(r.stdout)
     for name, k in (("關", 0), ("開", 2)):
         v = got[name]

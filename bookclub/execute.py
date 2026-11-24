@@ -72,7 +72,7 @@ def method_options() -> list[list[str]]:
     out = [["sw", "標準輸出"]]
     if sys.platform == "darwin" and shutil.which("ffmpeg"):
         try:
-            enc = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=10).stdout
+            enc = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10).stdout
         except (OSError, subprocess.SubprocessError):
             enc = ""
         if "h264_videotoolbox" in enc:
@@ -1546,6 +1546,14 @@ def memory_status(swap: float | None = ..., limit: float | None = None, avail: f
             "說明": text, "怎麼處理": tip_text if tight else ""}
 
 
+def killed_by_system(rc: int | None) -> bool:
+    """子程式是不是被系統結束（記憶體不夠之類，沒有留下錯誤訊息）。Mac／Linux 是被訊號結束（結束碼為負）；
+    Windows 沒有訊號，程式當掉或被結束時結束碼是 0xC0000000 以上的 NT 狀態碼（例如 0xC0000005 存取違規、0xC0000409 堆疊／記憶體錯誤）。"""
+    if rc is None:
+        return False
+    return rc < 0 or (os.name == "nt" and rc >= 0xC0000000)
+
+
 def _child_rss_gb(pid: int) -> float | None:
     """從外面看子程式現在用了多少記憶體（`ps`，Mac、Linux 都有）；讀不到回 None。被系統結束時這是唯一的數字。"""
     try:
@@ -1735,7 +1743,7 @@ def _part_runners(opts: PartOptions, say: Callable[[str], None]) -> dict[str, Ca
         swap_max, rss_max, disk_min = peak["swap"], peak["rss"], peak["disk"]
         rc = p.returncode
         rec = {"名稱": label, "參數": args, "開始": started, "結束": _now(), "秒": round(time.time() - t0, 1),
-               "結束碼": rc, "被系統結束": rc is not None and rc < 0,
+               "結束碼": rc, "被系統結束": killed_by_system(rc),
                "記憶體高峰GB": round(seen["自己量"], 2) if seen["自己量"] is not None else None,
                "從外面看到的最高記憶體GB": round(rss_max, 2) if rss_max is not None else None,
                "swap最高GB": round(swap_max, 2) if swap_max is not None else None,

@@ -739,7 +739,7 @@ def build_refs(workdir: Path, ref_dir_name: str = "參考音") -> dict:
             transcript = (rd / "ref.txt").read_text(encoding="utf-8")
         audio_url = None
         if wav_path.exists():
-            rel = str(wav_path.relative_to(workdir))
+            rel = wav_path.relative_to(workdir).as_posix()
             audio_url = f"/api/audio?path={quote(rel)}"
         same = None
         if rank == record.get("選定名次"):
@@ -819,7 +819,7 @@ def build_names(workdir: Path) -> dict:
             orig_url = f"/api/audio?path={quote(orig_rel)}"
             muted_path = namespage_mod._mute_clip(orig_path, clip_start, start, end)
             if muted_path is not None:
-                muted_rel = str(muted_path.relative_to(workdir))
+                muted_rel = muted_path.relative_to(workdir).as_posix()
                 muted_url = f"/api/audio?path={quote(muted_rel)}"
 
         decision = decisions.get(cid, {})

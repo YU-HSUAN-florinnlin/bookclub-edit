@@ -54,7 +54,7 @@ def _files(w: Path) -> set[str]:
     out = set()
     for root, dirs, files in os.walk(w, followlinks=False):
         for n in files + [d for d in dirs if os.path.islink(os.path.join(root, d))]:
-            out.add(str(Path(root, n).relative_to(w)))
+            out.add(Path(root, n).relative_to(w).as_posix())
     return out
 
 
@@ -436,7 +436,7 @@ def test_versions_marked_video_gone_and_history():
     fin = w / "輸出" / "最終成品_0-3_sw_20261016-101500.mp4"
     shutil.copy2(w / rel, fin)
     chk = wd.read_json(w / "覆核/成品檢查.json")
-    chk["輸出成品"] = {"檔案": str(fin.relative_to(w)), "來源": rel, "處理紀錄產生時間": log["產生時間"]}
+    chk["輸出成品"] = {"檔案": fin.relative_to(w).as_posix(), "來源": rel, "處理紀錄產生時間": log["產生時間"]}
     wd.write_json(w / "覆核/成品檢查.json", chk)
     assert needs.load(w).versions and all(v.get("影片還在") is not False for v in needs.load(w).versions.values())
     _pack(w, w.parent / "存這裡")
@@ -669,7 +669,7 @@ def _closed_fresh() -> Path:
     fin = w / "輸出" / "最終成品_0-3_sw_20261016-101500.mp4"
     shutil.copy2(w / rel, fin)
     chk = wd.read_json(w / "覆核/成品檢查.json")
-    chk["輸出成品"] = {"檔案": str(fin.relative_to(w)), "來源": rel, "處理紀錄產生時間": log["產生時間"]}
+    chk["輸出成品"] = {"檔案": fin.relative_to(w).as_posix(), "來源": rel, "處理紀錄產生時間": log["產生時間"]}
     wd.write_json(w / "覆核/成品檢查.json", chk)
     with redirect_stdout(io.StringIO()):
         _pack(w, w.parent / "存這裡")
@@ -886,7 +886,7 @@ def test_js_close_box_texts():
         clView({...base, "工作": {"狀態": "已存好", "清理錯誤": "清單變了，請重新看一次。"}, "狀態": "已打包", "核對通過的": {"資料夾": "D:\\\\x"}}),
         clView({...base, "狀態": "清理中", "可以繼續清": false}),
       ]));"""
-    v = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
+    v = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
     assert v[0]["line"] == "會把成品影片、逐字稿、修改紀錄存到你選的地方，然後刪掉這裡的暫存檔（共 2.6 GB）。", v[0]
     assert v[1]["line"] == "會把成品影片、逐字稿、修改紀錄存到你選的地方，然後刪掉這裡的暫存檔（共 2.6 GB，含複製進來的那支原始影片）。"
     assert v[2]["running"] and v[2]["status"] == "正在清…" and not v[2]["stop"]          # 清理開始後不給停止
@@ -905,7 +905,7 @@ def test_js_overview_groups_closed_last():
       const list = [{"名稱": "a", "已結案": null}, {"名稱": "b", "已結案": {"日期": "10-16", "位置顯示": "D:\\\\x"}},
                     {"名稱": "c", "已結案": null}];
       console.log(JSON.stringify(pjGroups(list)));"""
-    g = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
+    g = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
     assert [p["名稱"] for p in g["進行中"]] == ["a", "c"] and [p["名稱"] for p in g["已結案"]] == ["b"]
     assert "已結案（" in APPJS and "這支影片已結案" in APPJS
 
@@ -946,7 +946,7 @@ def test_fixA_new_export_after_pack_refused():
         _pack(w, root / "D槽")
         new = _mk(w / "輸出/最終成品_0-97_sw_20261017-090000.mp4", os.urandom(3000))
         chk = wd.read_json(w / "覆核/成品檢查.json")
-        chk["輸出成品"]["檔案"] = str(new.relative_to(w))
+        chk["輸出成品"]["檔案"] = new.relative_to(w).as_posix()
         wd.write_json(w / "覆核/成品檢查.json", chk)
         _refused(w, _plan(w)["清單指紋"], want="存好之後又輸出了新的成品")
         assert new.is_file()

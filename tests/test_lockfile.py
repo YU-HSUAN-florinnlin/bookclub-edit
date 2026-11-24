@@ -179,7 +179,7 @@ def test_lock_mismatch_lists_differences():
         "pyarrow==25.0.1          # via -r requirements.txt\n"
         "numpy==1.26.4\n"
         "torch==2.2.2\n"
-        "colorama==0.4.6 ; sys_platform == 'win32'\n"
+        "colorama==0.4.6 ; sys_platform == 'emscripten'\n"
         "missing-pkg==1.0\n",
         encoding="utf-8",
     )

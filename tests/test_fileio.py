@@ -371,6 +371,8 @@ for line in sys.stdin:
 
 
 def test_mac_resident_picker_protocol():
+    if sys.platform == "win32":   # Mac 專用的選檔小程式（Swift），原生 Windows 沒有，要另外設計，見報告 (c) 類
+        return
     # 10-08：Mac 改用常駐的選檔小程式（預熱好之後約 0.3～0.7 秒出視窗）。這裡用假的小程式測溝通方式，不會跳出視窗
     fake = Path(tempfile.mkdtemp()) / "fake_picker"
     fake.write_text(FAKE_PICKER.format(py=sys.executable), encoding="utf-8")
@@ -408,6 +410,8 @@ def test_mac_resident_picker_protocol():
 
 
 def test_filepicker_swift_compiles():
+    if sys.platform == "win32":   # Mac 專用的選檔小程式（Swift），原生 Windows 沒有，要另外設計，見報告 (c) 類
+        return
     # 原始碼編得過（不執行，不會跳出視窗）。沒有 swiftc 的電腦略過
     import shutil as _sh
 
@@ -419,11 +423,13 @@ def test_filepicker_swift_compiles():
 
     env = {k: v for k, v in _os.environ.items() if k not in ("TMPDIR", "TEMP", "TMP")}   # swiftc 遇到中文暫存路徑會當掉
     r = subprocess.run(["swiftc", "-O", "-o", str(out), str(REPO_ROOT / "bookclub" / "filepicker.swift")],
-                       capture_output=True, text=True, env=env)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
     assert r.returncode == 0 and out.is_file(), r.stderr[-500:]
 
 
 def test_mac_picker_timeout_really_works():
+    if sys.platform == "win32":   # Mac 專用的選檔小程式（Swift），原生 Windows 沒有，要另外設計，見報告 (c) 類
+        return
     # 1008-4 審查：15 分鐘逾時要真的生效（以前 readline 會一直等）。逾時就關掉小程式、放掉鎖，下次再重開
     fake = Path(tempfile.mkdtemp()) / "fake_picker"
     fake.write_text(FAKE_PICKER.format(py=sys.executable), encoding="utf-8")
@@ -445,6 +451,8 @@ def test_mac_picker_timeout_really_works():
 
 
 def test_swift_build_checks_dev_tools_hash_and_timeout():
+    if sys.platform == "win32":   # Mac 專用的選檔小程式（Swift），原生 Windows 沒有，要另外設計，見報告 (c) 類
+        return
     # 1008-4 審查：沒裝 Xcode 命令列工具不叫 swiftc（免得跳安裝視窗）；檔名帶原始碼雜湊；編譯逾時算失敗
     import os as _os
 
@@ -495,6 +503,8 @@ def test_swift_build_checks_dev_tools_hash_and_timeout():
 
 
 def test_mac_picker_kill_switch():
+    if sys.platform == "win32":   # Mac 專用的選檔小程式（Swift），原生 Windows 沒有，要另外設計，見報告 (c) 類
+        return
     # 1008-5：BOOKCLUB_MAC_PICKER=0 完全不用常駐小程式（不編譯、不開），退回 osascript
     import os as _os
 

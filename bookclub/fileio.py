@@ -661,7 +661,7 @@ def link_or_copy(src: Path, dst: Path) -> bool:
         raise shutil.SameFileError(f"{src} 和 {dst} 是同一個檔")
     dst.unlink(missing_ok=True)   # 只拿掉這個名字（捷徑就拿掉捷徑本身），別的名字的資料不動
     try:
-        os.link(src, dst)
+        os.link(os.path.realpath(src), dst)   # 捷徑先換成它指到的檔：Windows 的 os.link 不會自己跟著捷徑走
         return True
     except OSError:
         shutil.copy2(src, dst)

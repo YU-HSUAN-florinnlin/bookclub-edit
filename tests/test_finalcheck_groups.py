@@ -140,7 +140,7 @@ def _fake_workdir() -> Path:
 
 
 def _snapshot(w: Path) -> dict:
-    return {str(p.relative_to(w)): p.read_bytes() for p in w.rglob("*") if p.is_file()}
+    return {p.relative_to(w).as_posix(): p.read_bytes() for p in w.rglob("*") if p.is_file()}
 
 
 def test_unchanged_sources_from_step3_files():
@@ -239,7 +239,7 @@ def _fn(name: str) -> str:
 
 
 def _node(code: str):
-    return json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
+    return json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
 
 
 def test_web_unchanged_groups():

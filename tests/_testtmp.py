@@ -12,7 +12,7 @@ import os
 import shutil
 import tempfile
 
-ROOT = tempfile.mkdtemp(prefix="bookclub-測試-")
+ROOT = os.path.realpath(tempfile.mkdtemp(prefix="bookclub-測試-"))   # realpath：Windows 的暫存資料夾常是 8.3 短名（RUNNER~1），程式 resolve() 之後會變長名，不換掉路徑比對會對不起來
 tempfile.tempdir = ROOT
 for _k in ("TMPDIR", "TEMP", "TMP"):   # 子程式（測試開的假子程式、ffmpeg）也放這裡
     os.environ[_k] = ROOT

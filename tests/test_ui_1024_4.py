@@ -27,7 +27,7 @@ def _fn(name: str) -> str:
 
 
 def _run(code: str):
-    r = subprocess.run([NODE, "-e", code], capture_output=True, text=True)
+    r = subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 

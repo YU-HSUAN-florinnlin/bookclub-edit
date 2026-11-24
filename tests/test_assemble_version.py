@@ -36,7 +36,7 @@ TAG = "0-3"
 # 組裝相關程式 → 記下的雜湊（SHA-256 前 16 碼）。改了請看檔頭說明。
 ASSEMBLE_FILES_VERSION = 1
 ASSEMBLE_FILES = {   # 10-17 #122 第 1 版的起點
-    "bookclub/render.py": "4b6ba50d0447bb5a",   # 10-20 總審查 1020-1：輸出摘要多記老師、學員名字計畫指紋，這次沒改成品的聲音和畫面
+    "bookclub/render.py": "1b359d2740a4a379",   # 1124-5：呼叫 ffmpeg／ffprobe 的 text=True 都明寫 encoding=utf-8（原生 Windows），這次沒改成品的聲音和畫面（前一版 10-20 1020-1：4b6ba50d0447bb5a）
     "bookclub/assemble.py": "c29a103f9b113d70",
     "bookclub/roomtone.py": "4ea9c4a050cbe090",
     "bookclub/silentedge.py": "6715c0e2b51c5ee8",

@@ -74,7 +74,7 @@ def _workdir(root: Path, *, versions: int | None = 3, out_ver: int | None = 2) -
     _mk(w / "報告.md", "報告".encode())
     wd.write_json(w / "分析結果.json", {"video": str(root / "第一堂.mp4")})
     wd.write_json(w / "transcript" / "merged.json", {"sentences": [{"id": "1", "start": 0.0, "end": 1.0, "text": "甲"}]})
-    out = {"檔案": str(final.relative_to(w)), "來源": "輸出/成品_v2_0-3_sw.mp4", "處理紀錄產生時間": "2026-10-19T10:00:00"}
+    out = {"檔案": final.relative_to(w).as_posix(), "來源": "輸出/成品_v2_0-3_sw.mp4", "處理紀錄產生時間": "2026-10-19T10:00:00"}
     if out_ver is not None:
         out["版本號"] = out_ver
     wd.write_json(w / "覆核" / "成品檢查.json", {"輸出成品": out})
@@ -169,7 +169,7 @@ def test_252_js_pick_hint():
         clView({...base, "狀態": "已結案", "只有紀錄": true}),
         clView({...base, "狀態": "清理中"}),
       ]));"""
-    v = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
+    v = json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
     hint = "選放結案資料的地方（例如下載、D 槽）；選上次的「讀書會剪輯結案」也可以。"
     assert v[0]["pickHint"] == hint and v[1]["pickHint"] == hint
     assert not v[2]["pickHint"] and not v[3]["pickHint"] and not v[4]["pickHint"]
@@ -198,7 +198,7 @@ def test_253_small_records_packed_big_files_not():
             job = _run(w, loc)
             assert job.state == "已存好", job.error
             out = Path(job.folder)
-            names = sorted(str(p.relative_to(out)) for p in out.rglob("*") if p.is_file())
+            names = sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file())
             for rel in EXTRA:
                 assert rel in names, rel
                 assert (out / rel).read_bytes() == (w / rel.removeprefix("紀錄/")).read_bytes(), rel

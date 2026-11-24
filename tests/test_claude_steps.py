@@ -43,13 +43,15 @@ def test_find_claude_same_for_doctor_and_call():
     exe.write_text("#!/bin/sh\necho '{\"段落\": []}'\n", encoding="utf-8")
     exe.chmod(0o755)
     old_home, old_which = os.environ.get("HOME"), shutil.which
-    os.environ["HOME"] = str(home)
+    old_profile = os.environ.get("USERPROFILE")
+    os.environ["HOME"] = os.environ["USERPROFILE"] = str(home)   # Windows 的家目錄看 USERPROFILE
     shutil.which = lambda name, *a, **k: None
     try:
         assert system_info.find_claude() == str(exe)
         chk = doctor.check_claude_cli()
         assert chk.ok and chk.detail == str(exe)
-        assert "段落" in turns.call_claude("hi", "假的模型")   # 用的是 ~/.local/bin/claude
+        if sys.platform != "win32":   # 假的 claude 是 #!/bin/sh 腳本，Windows 不能直接執行
+            assert "段落" in turns.call_claude("hi", "假的模型")   # 用的是 ~/.local/bin/claude
         exe.unlink()
         assert system_info.find_claude() is None and not doctor.check_claude_cli().ok
         try:
@@ -63,6 +65,10 @@ def test_find_claude_same_for_doctor_and_call():
             os.environ.pop("HOME", None)
         else:
             os.environ["HOME"] = old_home
+        if old_profile is None:
+            os.environ.pop("USERPROFILE", None)
+        else:
+            os.environ["USERPROFILE"] = old_profile
 
 
 def test_claude_steps_failed_are_visible():

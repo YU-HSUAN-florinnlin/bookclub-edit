@@ -48,7 +48,7 @@ def _const(src: str, name: str) -> str:
 
 
 def _node(code: str):
-    return json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, check=True).stdout)
+    return json.loads(subprocess.run([NODE, "-e", code], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
 
 
 _PURE = (_ESC + _const(FCJS, "FC_AB_CONTEXT") + _const(FCJS, "FC_ST") + _const(FCJS, "FC_TODO") + _const(FCJS, "FC_REDO")
@@ -340,7 +340,7 @@ def _run_page(scenarios: list[dict], data: dict | None = None) -> dict:
            "function bare(k, patch) { const x = {...k, ...(patch || {})}; delete x['有第3步卡片']; return x; }\n")
     d = Path(tempfile.mkdtemp())
     (d / "spec.json").write_text(json.dumps({"前置": pre, "情境": scenarios}, ensure_ascii=False), encoding="utf-8")
-    r = subprocess.run([NODE, str(HARNESS), ",".join(files), str(d / "spec.json")], capture_output=True, text=True, check=True)
+    r = subprocess.run([NODE, str(HARNESS), ",".join(files), str(d / "spec.json")], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     return json.loads(r.stdout)
 
 

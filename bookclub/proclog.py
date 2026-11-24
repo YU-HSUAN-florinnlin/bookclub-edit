@@ -446,7 +446,7 @@ def build_render_log(workdir: str | Path, d: dict, plist: list[dict], orig_path:
     chk = check_render_files(orig_path, new_path, plist, a, recs)   # 09-30：分段讀、分段比，不整條讀進來
     return {"版本": 1, "來源": f"render video {tag}", "範圍": d["範圍"],
             "產生時間": datetime.now().isoformat(timespec="seconds"),
-            "原聲": str(Path(orig_path).relative_to(workdir)), "新聲音": str(Path(new_path).relative_to(workdir)),
+            "原聲": Path(orig_path).relative_to(workdir).as_posix(), "新聲音": Path(new_path).relative_to(workdir).as_posix(),
             "片段": plist, "紀錄": recs, **chk}
 
 
@@ -469,7 +469,7 @@ def write_audio_log(workdir: str | Path, edits: list[dict], orig_path: Path, new
     # 10-15 第1段審查修正（建議）：render audio（開發者指令，只組聲音軌、沒有成品影片）不在修改需求紀錄建版本
     return _write(workdir, {"版本": 1, "來源": "render audio", "範圍": None,
                             "產生時間": datetime.now().isoformat(timespec="seconds"),
-                            "原聲": str(Path(orig_path).relative_to(workdir)), "新聲音": str(Path(new_path).relative_to(workdir)),
+                            "原聲": Path(orig_path).relative_to(workdir).as_posix(), "新聲音": Path(new_path).relative_to(workdir).as_posix(),
                             "片段": None, "紀錄": recs, **chk}, version=False)
 
 

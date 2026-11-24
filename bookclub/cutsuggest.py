@@ -131,7 +131,7 @@ def frozen_ratio(video: Path, start: float, end: float) -> float | None:
     cmd = ["ffmpeg", "-hide_banner", "-nostats", "-hwaccel", "auto", "-ss", f"{a:.2f}", "-t", f"{length:.2f}",
            "-i", str(video), "-an", "-vf", "fps=2,scale=160:-2,freezedetect=n=0.003:d=2", "-f", "null", "-"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=max(120, length))
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=max(120, length))
     except (OSError, subprocess.TimeoutExpired):
         return None
     starts = [float(x) for x in re.findall(r"freeze_start: ([\d.]+)", r.stderr)]

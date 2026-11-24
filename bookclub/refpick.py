@@ -81,6 +81,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -223,7 +224,7 @@ def video_audio_len_s(video: Path) -> float | None:
                  ["-show_entries", "format=duration"]):
         try:
             r = subprocess.run(["ffprobe", "-v", "error", *args, "-of", "csv=p=0", str(video)],
-                               capture_output=True, text=True, timeout=60)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
             v = float(r.stdout.strip().splitlines()[0])
             if v > 0:
                 return v
@@ -252,7 +253,7 @@ def ensure_audio(video: str | Path, workdir: str | Path, *, log=print) -> tuple[
         if want is None or abs(got - want) <= AUDIO_LEN_TOLERANCE_S:
             return out, 0.0
         keep = out.with_name(f"audio.殘檔-{time.strftime('%Y%m%d-%H%M%S')}.flac")
-        out.rename(keep)
+        os.replace(out, keep)   # Windows 的 rename 遇到同名檔會失敗；同一秒內第二次殘檔跟 Mac 一樣蓋掉
         log(f"⚠️ [抽音] audio.flac 只有 {got:.1f} 秒、影片的聲音是 {want:.1f} 秒（差超過 {AUDIO_LEN_TOLERANCE_S:.0f} 秒），"
             f"多半是上次抽音被中斷：舊檔改名成 {keep.name} 留著，重新抽")
     tmp = workdir / AUDIO_TMP_NAME
@@ -990,7 +991,7 @@ def audio_channels(video: Path) -> int:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels",
          "-of", "default=noprint_wrappers=1:nokey=1", str(video)],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
     ).stdout.strip().splitlines()
     if not out or not out[0].strip().isdigit():
         raise RuntimeError(f"讀不到 {Path(video).name} 的聲道數（ffprobe 沒有回傳音軌資訊）")

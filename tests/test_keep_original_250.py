@@ -334,7 +334,7 @@ def test_web_row_text_for_english_name():
     (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     files = ",".join(str(web / f) for f in ("cards.js", "review.js"))
     out = json.loads(subprocess.run([node, str(REPO_ROOT / "tests" / "web_harness.js"), files, str(d / "spec.json")],
-                                    capture_output=True, text=True, check=True).stdout)["row"]
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)["row"]
     assert "這位這一集有英文名，照樣換成 艾瑪" in out and "不用處理（照樣換成 艾瑪）" in out and "照原聲留著" not in out, out
 
 
@@ -362,7 +362,7 @@ def test_web_row_similar_names_label():
     (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     files = ",".join(str(web / f) for f in ("cards.js", "review.js"))
     out = json.loads(subprocess.run([node, str(REPO_ROOT / "tests" / "web_harness.js"), files, str(d / "spec.json")],
-                                    capture_output=True, text=True, check=True).stdout)
+                                    capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)
     assert "逐字稿中出現的相似名稱：美美、阿美、曉美（讀音相近）" in out["both"], out["both"]
     assert "也寫成" not in out["both"] and "卡片上寫成" not in out["both"], out["both"]
     assert "逐字稿中出現的相似名稱" not in out["none"], out["none"]
@@ -465,7 +465,7 @@ def test_student_name_card_without_english_name_says_keep():
     d = Path(tempfile.mkdtemp())
     (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     out = json.loads(subprocess.run([node, str(REPO_ROOT / "tests" / "web_harness.js"), ",".join(str(web / f) for f in ("cards.js", "review.js")),
-                                     str(d / "spec.json")], capture_output=True, text=True, check=True).stdout)["c"]
+                                     str(d / "spec.json")], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout)["c"]
     assert "照原聲留著：這個名字這一集還沒有英文名，到「開始前 4 件事」③ 選" in out and "自己的聲音重念這句" not in out, out
 
 
