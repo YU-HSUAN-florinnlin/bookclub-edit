@@ -1,0 +1,91 @@
+name: windows-model-trial
+
+# Feasibility experiment: on native Windows (no WSL2), can the models actually load and run on CPU?
+# Reuses run_trial.py for the install (TRIAL_INSTALL_ONLY=1), then downloads models and runs inference.
+# pyannote is skipped (needs a Hugging Face token; no secrets are used). No bookclub/ code is changed.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 1124-4-Windows模型試跑
+
+permissions:
+  contents: read
+
+jobs:
+  model-trial:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        continue-on-error: true
+        run: python -m pip install uv
+
+      - name: Install ffmpeg
+        continue-on-error: true
+        run: |
+          choco install ffmpeg --no-progress -y
+          ffmpeg -version
+
+      - name: Install packages (install + import checks only)
+        id: install
+        continue-on-error: true
+        env:
+          TRIAL_INSTALL_ONLY: "1"
+        run: python .github/windows-trial/run_trial.py
+
+      - name: Restore model cache
+        id: cache
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bookclub
+            ~/.cache/huggingface
+          key: windows-models-v1-${{ hashFiles('bookclub/models.py') }}
+          restore-keys: windows-models-v1-
+
+      - name: Free disk space
+        continue-on-error: true
+        run: |
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
+          Remove-Item -Recurse -Force "C:\Android" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\hostedtoolcache\windows\Java*" -ErrorAction SilentlyContinue
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free
+
+      - name: Download models and run CPU inference
+        id: model
+        continue-on-error: true
+        run: python .github/windows-trial/run_model_trial.py
+
+      - name: Save model cache
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bookclub
+            ~/.cache/huggingface
+          key: windows-models-v1-${{ hashFiles('bookclub/models.py') }}
+
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-model-trial-output
+          path: |
+            model-out/
+            trial-out/summary.md
+          if-no-files-found: warn

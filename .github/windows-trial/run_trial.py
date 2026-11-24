@@ -202,6 +202,10 @@ def main() -> None:
     run("bookclub --help", [str(Path(VENV_BIN) / "bookclub.exe"), "--help"], group="cli")
     run("bookclub doctor (informational)", [str(Path(VENV_BIN) / "bookclub.exe"), "doctor"], group="cli", timeout=600)
 
+    if os.environ.get("TRIAL_INSTALL_ONLY"):  # used by windows-model-trial.yml: install + import checks only
+        write_summary()
+        return
+
     # 10. unit tests: each file separately, never stop
     tests = sorted(p for p in (ROOT / "tests").glob("test_*.py"))
     for p in tests:
