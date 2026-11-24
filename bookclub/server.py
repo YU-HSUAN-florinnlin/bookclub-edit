@@ -1783,7 +1783,28 @@ class BookclubServer(ThreadingHTTPServer):
             state.update({"沒有專案": True, "workdir": None, "video": {}, "substeps": {}, "proofread": {}})
         # 1015-8（#236：更新指令判斷能不能自己關網頁）：第 4 步有沒有在跑。只讀記憶體裡的 exec_state，不升級、不寫檔
         state["第4步執行中"] = self.exec_running()
+        # #290 審查：Windows 一鍵「縮小虛擬硬碟」要知道工具是不是在做任何會被 wsl --shutdown 打斷的事（不只第 4 步）
+        state["忙碌中"] = self.tool_busy()
         return state
+
+    def tool_busy(self) -> str | None:
+        """工具正在做哪一類事（會被關掉 Ubuntu 打斷的）；沒有＝None。只讀，沿用其他地方的判斷，不拿 pick_lock 以外的鎖。"""
+        if self.exec_running():
+            return "第 4 步"
+        if self.run_status_running():
+            return "影片分析"
+        if self._rescan_running():
+            return "找名字（重新掃描）"
+        with self.pick_lock:
+            if self.final_exporting or self.exporting:
+                return "輸出成品"
+            if any(getattr(j, "running", False) for j in self.copy_jobs.values()):
+                return "複製檔案"
+            if self.close_job is not None and self.close_job.running:
+                return "結案打包"
+        if self.handoff_running():
+            return "交接打包或匯入"
+        return None
 
     def start_execute(self, opts: dict) -> dict:
         """第 4 步「開始執行」：背景跑 `execute.run_execute`（老師名字 → 學員重念 → 組裝）。"""

@@ -149,28 +149,33 @@ try {
         Stop-Here '請關掉這個視窗，在檔案上按右鍵選「以系統管理員身分執行」。'
     }
 
-    # b. 第 4 步正在跑就不要關 Ubuntu
-    Step '確認讀書會剪輯工具沒有在跑第 4 步'
-    # 只有「連線被拒」才算工具沒開；逾時（第 4 步跑起來電腦很忙時會慢）或其他錯誤一律當成不確定，問人（審查 #1）
+    # b. 工具正在做事（第 4 步、分析、輸出、複製、打包…）就不要關 Ubuntu
+    Step '確認讀書會剪輯工具沒有在做事'
+    # 只有工具說「沒有在忙」才直接往下；連不上（改過連接埠、工具沒開、被擋住）或逾時、看不懂，一律請人自己確認，預設是停下來
     # 用 127.0.0.1 不用 localhost：localhost 會先試 IPv6，多等一段（審查 #4）
     $toolState = 'unknown'
+    $busyWhat = ''
     try {
         $resp = Invoke-WebRequest -Uri 'http://127.0.0.1:8766/api/run/status' -UseBasicParsing -TimeoutSec 10
         $txt = [Text.Encoding]::UTF8.GetString($resp.RawContentStream.ToArray())
-        if ($txt -match '"第4步執行中"\s*:\s*true' -or $txt -match '"\\u7b2c4\\u6b65\\u57f7\\u884c\\u4e2d"\s*:\s*true') { $toolState = 'busy' }
-        elseif ($txt -match '"第4步執行中"\s*:\s*false' -or $txt -match '"\\u7b2c4\\u6b65\\u57f7\\u884c\\u4e2d"\s*:\s*false') { $toolState = 'idle' }
+        $keyBusy = '(?:"忙碌中"|"\\u5fd9\\u788c\\u4e2d")'
+        $keyStep4 = '(?:"第4步執行中"|"\\u7b2c4\\u6b65\\u57f7\\u884c\\u4e2d")'
+        if ($txt -match ($keyBusy + '\s*:\s*"([^"]+)"')) { $toolState = 'busy'; $busyWhat = [regex]::Unescape($Matches[1]) }
+        elseif ($txt -match ($keyBusy + '\s*:\s*null')) { $toolState = 'idle' }
+        elseif ($txt -match ($keyStep4 + '\s*:\s*true')) { $toolState = 'busy'; $busyWhat = '第 4 步' }   # 舊版工具只回第 4 步，其他看不出來
     } catch {
         $ex = $_.Exception
         while ($ex -and -not ($ex -is [Net.WebException]) -and $ex.InnerException) { $ex = $ex.InnerException }
         if ($ex -is [Net.WebException] -and $ex.Status -eq [Net.WebExceptionStatus]::ConnectFailure) { $toolState = 'off' }
     }
-    if ($toolState -eq 'busy') { Stop-Here '第 4 步正在跑，等它跑完再縮小。' }
-    elseif ($toolState -eq 'idle') { Say '  工具開著，沒有在跑第 4 步（等一下會被關掉）。' }
-    elseif ($toolState -eq 'off') { Say '  工具沒有開著。' }
+    if ($toolState -eq 'busy') { Stop-Here "工具正在做事（$($busyWhat)），等它做完再縮小。" }
+    elseif ($toolState -eq 'idle') { Say '  工具開著，沒有在做事（等一下會被關掉）。' }
     else {
-        Say '  看不出工具有沒有在跑第 4 步（工具沒有回應，可能正在忙）。' 'Yellow'
-        Say '  第 4 步現在有沒有在跑？有在跑請直接關掉這個視窗。' 'Yellow'
-        Read-Host '  確定沒有在跑，按 Enter 繼續' | Out-Null
+        if ($toolState -eq 'off') { Say '  連不上讀書會剪輯工具：可能沒開，也可能改過連接埠、或被擋住了。' 'Yellow' }
+        else { Say '  看不出工具有沒有在做事（工具沒有回應，可能正在忙）。' 'Yellow' }
+        Say '  縮小會把 Ubuntu 關掉。工具如果開著，請先確認它沒有在跑第 4 步、分析影片、複製檔案或打包。' 'Yellow'
+        $sure = Read-Host '  確定都沒有在做，打 y 再按 Enter 繼續；直接按 Enter 就停在這裡'
+        if ($sure -notmatch '^\s*[yY]\s*$') { Stop-Here '已停止：沒有關掉 Ubuntu，也沒有縮小。' }
     }
 
     # c. 找 Ubuntu 和它的虛擬硬碟
@@ -216,13 +221,14 @@ try {
 
     Write-Host ''
     Say '接下來會關掉 Ubuntu 和其他在 WSL 裡跑的程式（讀書會剪輯工具也會一起關掉）。' 'Yellow'
-    Say '第 4 步正在跑的話，請直接關掉這個視窗，等它跑完再來。' 'Yellow'
-    $go = Read-Host '按 Enter 開始；不想縮小請打 n 再按 Enter（或直接關掉這個視窗）'
-    if ($go -match '^\s*(n|no|否|不|取消)\s*$') { Stop-Here '已取消：沒有關掉 Ubuntu，也沒有縮小。' }
+    Say '工具正在做事（第 4 步、複製檔案、打包…）的話，請直接關掉這個視窗，等它做完再來。' 'Yellow'
+    # 只有直接按 Enter 才開始；打任何字（n、全形ｎ、注音ㄙ、不要、q…）都當取消
+    $go = Read-Host '按 Enter 開始；打任何字再按 Enter 就取消（或直接關掉這個視窗）'
+    if ($go -ne '') { Stop-Here '已取消：沒有關掉 Ubuntu，也沒有縮小。' }
 
     # e. 先在 Ubuntu 裡把刪掉的空間標出來（root 執行，不用打密碼）
     Step '整理 Ubuntu 裡的空間（fstrim）'
-    if ($distro) { & wsl.exe -d $distro -u root -- fstrim -av } else { & wsl.exe -u root -- fstrim -av }
+    if ($distro) { & wsl.exe -d $distro -u root -- fstrim -v / } else { & wsl.exe -u root -- fstrim -v / }
     if ($LASTEXITCODE -ne 0) { Say '  這一步沒有成功，繼續縮小（可能縮得比較少）。' 'Yellow' }
 
     # f. sparse 開著時 compact 會失敗 → 先關掉
@@ -257,6 +263,8 @@ try {
         $short = (New-Object -ComObject Scripting.FileSystemObject).GetFile($vhdx).ShortPath
         if ($short -and $short -match '^[\x20-\x7E]+$') { $target = $short }   # 路徑有中文時改用短檔名，比較穩
     } catch { }
+    # 上一次縮小中途被 Ctrl+C 或關視窗打斷的話，虛擬硬碟可能還掛著：先卸下再開始（沒掛著時 noerr 不會報錯）
+    $null = Run-Diskpart @("select vdisk file=`"$target`"", 'detach vdisk noerr')
     $code = Run-Diskpart @("select vdisk file=`"$target`"", 'attach vdisk readonly', 'compact vdisk', 'detach vdisk')
     if ($code -ne 0) {
         Say '正在卸下虛擬硬碟…' 'Yellow'

@@ -604,6 +604,86 @@ def test_run_status_without_project_still_200_with_step4_flag():
         httpd.server_close()
 
 
+def test_tool_busy_merges_every_kind_of_work():
+    # #290 審查必修 1：縮小虛擬硬碟的腳本問這一欄。第 4 步以外，分析、找名字、輸出成品、複製、結案打包、交接打包與匯入都要算忙
+    from types import SimpleNamespace as NS
+
+    httpd = srv.BookclubServer(("127.0.0.1", 0), srv.Handler, workdir=None, video=None)
+    try:
+        def reset():
+            httpd.exec_state["running"] = False
+            httpd.run_state["running"] = False
+            httpd._rescan_running = lambda: False
+            httpd.final_exporting = 0
+            httpd.exporting = False
+            httpd.copy_jobs = {}
+            httpd.close_job = None
+            httpd.handoff_job = None
+            httpd.import_job = None
+
+        reset()
+        assert httpd.tool_busy() is None and httpd.run_status()["忙碌中"] is None   # 什麼都沒在做＝None（JSON 的 null）
+
+        def one(name, setup, expected):
+            reset()
+            setup()
+            assert httpd.tool_busy() == expected, (name, httpd.tool_busy())
+            assert httpd.run_status()["忙碌中"] == expected
+            reset()
+
+        one("第4步", lambda: httpd.exec_state.update(running=True), "第 4 步")
+        one("影片分析", lambda: httpd.run_state.update(running=True), "影片分析")
+        one("找名字", lambda: setattr(httpd, "_rescan_running", lambda: True), "找名字（重新掃描）")
+        one("輸出成品", lambda: setattr(httpd, "final_exporting", 1), "輸出成品")
+        one("準備複製成品", lambda: setattr(httpd, "exporting", True), "輸出成品")
+        one("複製中", lambda: httpd.copy_jobs.update(a=NS(running=True)), "複製檔案")
+        one("結案打包", lambda: setattr(httpd, "close_job", NS(running=True)), "結案打包")
+        one("交接打包", lambda: setattr(httpd, "handoff_job", NS(running=True)), "交接打包或匯入")
+        one("匯入交接包", lambda: setattr(httpd, "import_job", NS(running=True)), "交接打包或匯入")
+
+        # 做完的工作不算忙
+        reset()
+        httpd.copy_jobs["a"] = NS(running=False)
+        httpd.close_job = NS(running=False)
+        httpd.handoff_job = NS(running=False)
+        httpd.import_job = NS(running=False)
+        assert httpd.tool_busy() is None
+
+        # 同時有好幾件時，回最前面那一類（第 4 步優先），並且寫進 JSON 是字串，沒事時是 null
+        reset()
+        httpd.exec_state["running"] = True
+        httpd.close_job = NS(running=True)
+        assert httpd.tool_busy() == "第 4 步"
+        reset()
+        assert json.loads(json.dumps(httpd.run_status(), ensure_ascii=False))["忙碌中"] is None
+        httpd.import_job = NS(running=True)
+        assert json.loads(json.dumps(httpd.run_status(), ensure_ascii=True))["忙碌中"] == "交接打包或匯入"
+    finally:
+        httpd.server_close()
+
+
+def test_run_status_busy_field_over_http():
+    import threading
+    import urllib.request
+
+    httpd = srv.BookclubServer(("127.0.0.1", 0), srv.Handler, workdir=None, video=None)
+    th = threading.Thread(target=httpd.serve_forever, daemon=True)
+    th.start()
+    port = httpd.server_address[1]
+    try:
+        def get():
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/run/status") as r:
+                return json.loads(r.read())
+        assert get()["忙碌中"] is None
+        httpd.copy_jobs["a"] = type("J", (), {"running": True})()
+        assert get()["忙碌中"] == "複製檔案"
+        httpd.copy_jobs.clear()
+        assert get()["忙碌中"] is None
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def _run_all():
     tests = [v for k, v in globals().items() if k.startswith("test_") and callable(v)]
     for t in tests:

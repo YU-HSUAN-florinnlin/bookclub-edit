@@ -40,6 +40,7 @@ class ShrinkToolBusy(ValueError):
 
 
 BUSY_MSG = "桌面上的「縮小虛擬硬碟」正在使用中。先關掉縮小虛擬硬碟的視窗，再按一次「放到桌面」。"
+PERMISSION_MSG = "無法寫入桌面，可能被檔案正在使用或 Windows 資料夾保護擋住。請將錯誤訊息通知開發者。"
 
 
 def windows_desktop(run=None, which=None) -> Path:
@@ -78,9 +79,12 @@ def install(desktop: Path, src: Path | None = None) -> Path:
                 tmp.unlink()   # 審查 #11：Windows 不藏點開頭的檔，失敗時別把暫存留在桌面資料夾
             except OSError:
                 pass
-        if isinstance(e, PermissionError) or e.errno in (errno.EACCES, errno.EBUSY, errno.ETXTBSY, errno.EPERM):
+        if e.errno in (errno.EBUSY, errno.ETXTBSY):
             # 舊的「縮小虛擬硬碟」視窗還開著（檔案被占用）：使用者自己能改正
             raise ShrinkToolBusy(BUSY_MSG) from None
+        if isinstance(e, PermissionError) or e.errno in (errno.EACCES, errno.EPERM):
+            # 也可能是 Windows「受控資料夾存取」擋住寫入桌面，不能一口咬定是正在使用
+            raise ShrinkToolError(PERMISSION_MSG) from None
         raise ShrinkToolError(f"沒辦法放到桌面（{e.strerror or e}）。請將錯誤訊息通知開發者。") from None
     return dest
 

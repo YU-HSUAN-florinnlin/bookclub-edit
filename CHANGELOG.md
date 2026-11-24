@@ -8,7 +8,7 @@
 - Windows 上第 3 步交接後「清掉（建議）」、總覽「清掉這集」、第 5 步結案清完暫存，彈出的視窗多一段提醒怎麼把空間還給 C 槽；桌面還沒有那個檔時，同一個視窗有「放到桌面」。第 5 步清完以前只重畫畫面，現在 Mac、Windows 都會跳「清好了」的視窗（Mac 沒有還給 C 槽那一段）（待辦 #290）
 - `bookclub disk` 找得到新版 WSL 的虛擬硬碟（`%LOCALAPPDATA%\wsl\{…}\ext4.vhdx`，以前只找 Microsoft Store 裝的位置）；虛擬硬碟那一行加註「這是整個 Ubuntu（含系統）」，縮小改指向桌面的一鍵檔（待辦 #289）
 - 技術：新增 `windows/縮小虛擬硬碟.cmd`（只有 ASCII，用 `-ExecutionPolicy Bypass` 叫同名 `.ps1`）與 `.ps1`（UTF-8 BOM、CRLF；`.gitattributes` 設 `-text` 不轉換行）；`bookclub/shrinktool.py`（找 Windows 桌面、複製、`GET /api/shrink-tool`、`POST /api/shrink-tool/install`，已結案也能用）；`closing._vhdx` 多找 `Users/*/AppData/Local/wsl/*/ext4.vhdx`；`tests/test_shrinktool.py`；找 Windows 下載資料夾與桌面共用 `fileio.windows_folder`；`tests/test_handoff.py` 掃交接包時略過影音等二進位檔（成品 mp4 偶爾碰巧解出測試用的名字，測試不穩）（待辦 #289、#290）
-- 一鍵檔問不到工具（沒有回應、改過連接埠）時，不再當成工具沒開，會請你自己確認第 4 步沒在跑；有好幾個 Ubuntu 時會自動挑裝了工具的那個；放到桌面時舊檔正被使用，會提醒先關掉縮小的視窗再按一次（待辦 #290）
+- 一鍵檔不只擋第 4 步：影片分析、找名字、輸出成品、複製檔案、結案打包、交接打包與匯入在跑時也會停下來並說是哪一種（工具的 `/api/run/status` 多一欄「忙碌中」）；連不上工具（沒開、改過連接埠、被擋住）或工具沒回應時，會用黃字請你自己確認，打 y 再按 Enter 才繼續，預設停下來；開始前改成只有直接按 Enter 才開始，打任何字（n、全形ｎ、注音ㄙ、不要、q）都取消；縮小前先把可能還掛著的虛擬硬碟卸下（上次被 Ctrl+C 或關視窗打斷時）；整理空間改 `fstrim -v /`；有好幾個 Ubuntu 時會自動挑裝了工具的那個；放到桌面時舊檔正被使用，會提醒先關掉縮小的視窗再按一次，沒有寫入權限（例如 Windows 資料夾保護）改說「無法寫入桌面，可能被檔案正在使用或 Windows 資料夾保護擋住」（待辦 #290）
 - README 附錄「縮小虛擬硬碟」從草稿改成正式說明：一鍵檔怎麼拿、怎麼執行，手動 diskpart 做法留在後面當備用；sparse 不建議（實測不還空間、官方標示有資料損毀風險）（待辦 #290）
 - 從 0.2.4b7 更新不用重跑 install.sh（套件沒變）
 

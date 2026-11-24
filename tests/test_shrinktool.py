@@ -163,7 +163,7 @@ def test_install_copies_and_overwrites():
 
         def busy_replace(self, target):
             if str(target).endswith(".ps1"):
-                raise PermissionError(_errno.EACCES, "Permission denied")
+                raise OSError(_errno.EBUSY, "Device or resource busy")
             return real_replace(self, target)
         with mock.patch.object(Path, "replace", busy_replace):
             try:
@@ -173,6 +173,21 @@ def test_install_copies_and_overwrites():
             else:
                 raise AssertionError
         assert not any(".複製中" in p.name for p in dest.iterdir()), list(dest.iterdir())
+
+        # 審查建議 3：沒有寫入權限（例如 Windows 受控資料夾存取）不能說成「正在使用中」，改成中性白話＋句尾
+        def denied_replace(self, target):
+            raise PermissionError(_errno.EACCES, "Permission denied")
+        with mock.patch.object(Path, "replace", denied_replace):
+            try:
+                shrinktool.install(desk)
+            except shrinktool.ShrinkToolBusy:
+                raise AssertionError("沒有權限不該說成正在使用中")
+            except shrinktool.ShrinkToolError as e:
+                assert str(e) == shrinktool.PERMISSION_MSG and "正在使用" not in str(e).replace("檔案正在使用或", "")
+                assert "無法寫入桌面，可能被檔案正在使用或 Windows 資料夾保護擋住" in str(e) and str(e).endswith(TAIL)
+            else:
+                raise AssertionError
+        assert not any(".複製中" in p.name for p in dest.iterdir())
 
         def full_replace(self, target):
             raise OSError(_errno.ENOSPC, "No space left on device")
@@ -287,37 +302,50 @@ def test_ps1_bom_crlf_and_steps():
     assert "網頁" not in s and "set-sparse true" not in s.lower()
     assert "請截圖給開發者" not in s and "請截圖這個視窗。$Tail" in s        # 錯誤句尾統一（專案規則）
     assert "請關掉這個視窗，在檔案上按右鍵選「以系統管理員身分執行」。" in s
-    assert "第 4 步正在跑，等它跑完再縮小。" in s and "127.0.0.1:8766/api/run/status" in s and "第4步執行中" in s
+    assert "工具正在做事（$($busyWhat)），等它做完再縮小。" in s and "127.0.0.1:8766/api/run/status" in s and "忙碌中" in s
     assert "工具已經關掉了，要用的話請重新開（照平常的方式）。" in s
     assert "GetCompressedFileSizeW" in s and "SparseFile" in s and "--set-sparse false" in s
     assert r"Software\Microsoft\Windows\CurrentVersion\Lxss" in s and "LocalState" in s
-    assert "-u root -- fstrim -av" in s
+    assert "fstrim -v /" in s and "fstrim -av" not in s and "wsl.exe -d $distro -u root -- fstrim -v /" in s
     # 順序：admin → 第 4 步 → 找 → fstrim → sparse → shutdown → diskpart
-    order = ["IsInRole", "api/run/status", "Find-Distros |", "-u root -- fstrim -av", "--manage $distro --set-sparse false", "Running-Distros $names",
+    order = ["IsInRole", "api/run/status", "Find-Distros |", "-u root -- fstrim -v /", "--manage $distro --set-sparse false", "Running-Distros $names",
              "'attach vdisk readonly'"]
     pos = [s.index(k) for k in order]
     assert pos == sorted(pos), list(zip(order, pos))
-    m = re.search(r"Run-Diskpart @\((.*?)\)\r\n", s)
-    assert m and re.findall(r"'([a-z ]+)'", m.group(1)) == ["attach vdisk readonly", "compact vdisk", "detach vdisk"], m
+    runs = [re.findall(r"'([a-z ]+)'", m) for m in re.findall(r"Run-Diskpart @\((.*?)\)\r\n", s)]
+    # 審查建議 1：attach 之前先 detach vdisk noerr 預清（上次被 Ctrl+C／關視窗打斷時虛擬硬碟可能還掛著）
+    assert runs[0] == ["detach vdisk noerr"] and runs[1] == ["attach vdisk readonly", "compact vdisk", "detach vdisk"], runs
+    assert s.index("'detach vdisk noerr'") < s.index("'attach vdisk readonly'")
     assert "'detach vdisk noerr'" in s                    # 失敗時也一定卸下
     assert "$ErrorActionPreference = 'Continue'" in s
-    # 審查 #1：只有連線被拒才算沒開；逾時 10 秒；不確定時問人；不會先說「沒有在跑」再說「正在跑」
+    # 審查必修 1、2：逾時 10 秒；看「忙碌中」那一欄；連不上、逾時、看不懂都要人自己打 y 才繼續，預設停下來；不會先說「沒在做事」再說「正在做事」
     assert "-TimeoutSec 10" in s and "WebExceptionStatus]::ConnectFailure" in s
-    assert "第 4 步現在有沒有在跑？有在跑請直接關掉這個視窗。" in s
+    assert "if ($toolState -eq 'off')" in s and "連不上讀書會剪輯工具" in s
+    assert "Read-Host '  確定都沒有在做，打 y 再按 Enter 繼續；直接按 Enter 就停在這裡'" in s
+    sure_re = re.search(r"\$sure -notmatch '(.*?)'\)", s).group(1)       # 不符合就停下來
+    for ans in ("y", "Y", " y "):
+        assert re.match(sure_re, ans), ans
+    for ans in ("", "n", "好", "ｙ", "yes", "ㄑ"):
+        assert not re.match(sure_re, ans), ans
+    assert "$toolState = 'off'" in s and s.index("$toolState = 'off'") < s.index("連不上讀書會剪輯工具")
     i_busy = s.index("if ($toolState -eq 'busy') { Stop-Here")
-    assert s.index("工具開著，沒有在跑第 4 步") > i_busy
+    assert s.index("工具開著，沒有在做事") > i_busy
     enter = s[s.index("接下來會關掉 Ubuntu"):s.index("按 Enter 開始")]
-    assert "第 4 步正在跑的話，請直接關掉這個視窗" in enter
+    assert "工具正在做事（第 4 步、複製檔案、打包…）的話，請直接關掉這個視窗" in enter
     # 關掉 Ubuntu 之前一定有確認，而且能明確取消（打 n）；取消在 fstrim／shutdown 之前
-    i_ask = s.index("$go = Read-Host '按 Enter 開始")
+    i_ask = s.index("$go = Read-Host '按 Enter 開始；打任何字再按 Enter 就取消")
     i_cancel = s.index("已取消：沒有關掉 Ubuntu，也沒有縮小。")
-    assert s.index("Step '關掉 Ubuntu'") > i_cancel > i_ask and s.index("-u root -- fstrim -av") > i_cancel
+    assert s.index("Step '關掉 Ubuntu'") > i_cancel > i_ask and s.index("-u root -- fstrim -v /") > i_cancel
     assert s.count("wsl.exe --shutdown") == 2 and all(s.index("wsl.exe --shutdown") > i_cancel for _ in (0,))
-    cancel_re = re.search(r"\$go -match '(.*?)'", s).group(1)
-    for ans in ("n", "N", " no ", "否", "不", "取消"):
-        assert re.match(cancel_re, ans, re.I), ans
-    for ans in ("", "y", "好", "nope"):
-        assert not re.match(cancel_re, ans, re.I), ans
+    # 審查必修 3：只有直接按 Enter（空字串）才開始，打任何字都取消（注音輸入法的 ㄙ、全形 ｎ、「不要」、q 也算）
+    m = re.search(r"if \(\$go -ne '(.*?)'\) \{ Stop-Here", s)
+    assert m and m.group(1) == "", m                       # PowerShell 的 -ne 在字串上不分大小寫，這裡的比對對象就是空字串
+    def starts(ans: str) -> bool:                          # 照 ps1 的規則在 Python 重現：回 True＝開始縮小
+        return ans == m.group(1)
+    assert starts("")
+    for ans in ("n", "N", "ｎ", "Ｎ", "ㄙ", "不要", "q", "cancel", "n.", " ", "y", "好", "nope", "否", "取消"):
+        assert not starts(ans), ans
+    assert "按 Enter 開始；打任何字再按 Enter 就取消" in s and "-match '^\\s*(n|no" not in s
     # 審查 #5、#6：VhdFileName、沒有名稱時顯示資料夾、名稱都沒有 Ubuntu 時一律請人選
     assert "VhdFileName" in s and 'Label = "資料夾 $folder"' in s and "$mustAsk = $true" in s
     for line in s.splitlines():                           # 錯誤句尾都用 $Tail（「請將錯誤訊息通知開發者。」）
@@ -332,6 +360,19 @@ def _js_fn(src: str, name: str) -> str:
     m = re.search(rf"^(async )?function {name}\(.*?^\}}\n", src, re.S | re.M)
     assert m, name
     return m.group(0)
+
+
+def test_docs_match_ps1_behavior():
+    # 審查必修 2：README 附錄與 CHANGELOG 的說法要跟腳本一致（連不上也要請人確認；只有 Enter 開始；卸下的說法準確）
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    log = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    app = readme[readme.index("### 一鍵縮小（建議）"):]
+    app = app[:app.index("\n## ", 1)] if "\n## " in app[1:] else app
+    assert "連不上工具" in app and "打 y 再按 Enter 才繼續" in app and "直接按 Enter 就停下來" in app
+    assert "改過連接埠不是 8766" in app and "腳本問不到" not in app
+    assert "直接按 Enter 開始；打任何字再按 Enter 就取消" in app and "打 n" not in app
+    assert "最後一定把虛擬硬碟卸下" not in app and "再執行一次這個腳本，它會先自動把虛擬硬碟卸下" in app
+    assert "fstrim -v /" in app and "忙碌中" in log and "只有直接按 Enter 才開始" in log and "打 y 再按 Enter 才繼續" in log
 
 
 def test_js_cleaned_alert_opts():
