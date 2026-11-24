@@ -171,7 +171,8 @@ class Closed(Exception):
 
 CLOSED_MSG = "這支影片已結案，這裡只能看紀錄。"
 # 已結案時照樣放行的 POST（不寫這個工作區）：結案框（再存一份紀錄）、切換／開始別的專案、設定包、複製工作、給新影片的選檔
-CLOSED_POST_OK = ("/api/close/", "/api/projects/", "/api/handoff/import/", "/api/handoff/clean-episode")
+CLOSED_POST_OK = ("/api/close/", "/api/projects/", "/api/handoff/import/", "/api/handoff/clean-episode",
+                  "/api/shrink-tool/")   # #290：放到桌面不碰工作區
 CLOSED_POST_OK_EXACT = ("/api/profile/import", "/api/copy/cancel", "/api/pick/forget")
 # 已結案時擋的 GET（會在工作區裡切試聽檔、寫匯出檔）
 CLOSED_GET_BLOCK = ("/api/final/clip", "/api/final/vclip")   # 10-23：匯出覆核結果刪了（交接打包取代）
@@ -2226,6 +2227,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, server.close_locations())
         elif path == "/api/run/status":
             self._send_json(200, server.run_status())
+        elif path == "/api/shrink-tool":   # #290：WSL 上要不要顯示「縮小虛擬硬碟」提醒、桌面上有沒有那個檔（只讀）
+            from bookclub import shrinktool
+
+            self._send_json(200, shrinktool.status())
         elif path == "/api/execute":
             _needs_ensure(server)   # 10-14 第5步2.0 第1段
             self._send_json(200, server.exec_status())
@@ -2345,6 +2350,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/close/clean":   # 1015-8 第 3 段：清空間（再確認 → 搬 → 刪）、繼續清
             self._send_json(200, server.close_clean(body))
+            return
+        if path == "/api/shrink-tool/install":   # #290：把「縮小虛擬硬碟」放到 Windows 桌面（只在 WSL）
+            from bookclub import shrinktool
+
+            try:
+                self._send_json(200, shrinktool.put_on_desktop())
+            except shrinktool.ShrinkToolError as e:
+                raise Unexpected(str(e)) from None
             return
         if path.startswith("/api/handoff/"):   # 33 號設計 #257–#260：接力交接
             routes = {"/api/handoff/pick-folder": lambda: server.handoff_pick_folder(),

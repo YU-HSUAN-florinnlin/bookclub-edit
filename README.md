@@ -548,7 +548,7 @@ bash install.sh
 
      任一項不符合，那一個就不刪，說明原因。
    - 做完之後，更新前備份只留這一次的「只有紀錄」那幾份。
-   - 刪的方法：macOS 在 Finder 丟到垃圾桶；WSL2 用 `rm -rf <資料夾>`（刪了就救不回來，名字確認過再按 Enter）。WSL2 刪完，Windows 的 C 槽不會馬上多出空間，要另外縮小虛擬硬碟（見最後的附錄）。
+   - 刪的方法：macOS 在 Finder 丟到垃圾桶；WSL2 用 `rm -rf <資料夾>`（刪了就救不回來，名字確認過再按 Enter）。WSL2 刪完，Windows 的 C 槽不會馬上多出空間，要另外縮小虛擬硬碟（桌面「讀書會剪輯工具」資料夾裡的「縮小虛擬硬碟」，見最後的附錄）。
    - 現在各佔多少，可以在工具資料夾跑 `.venv/bin/bookclub disk` 看（只看、不刪）。
 
 **新版有問題、想先回到上一版**：照上面第 2 步關網頁，切回上一版的標籤（`v上一版` 換成實際的標籤，`git tag` 可以列出有哪些），套件有變再跑一次 `bash install.sh`，再照第 7 步開網頁。工作區不用還原。
@@ -938,21 +938,39 @@ WSL2 上找重疊比 M1 慢，是唯一的瓶頸（純本機運算）；聲音�
 4. **請不要附**：逐字稿內容、學員的名字（本名、代號對照都不要）、名冊、工作區裡的 JSON 檔、影片或聲音檔。截圖前先確認畫面上沒有逐字稿或名字。
 5. 把以上資訊回報給開發者，一起討論下一步。
 
-## 附錄：縮小虛擬硬碟（草稿，Windows 實機還沒驗過）
+## 附錄：縮小虛擬硬碟（Windows）
 
-> 草稿：下面的指令還沒在 Windows 實機驗過，驗過再定稿。
+Windows 上的 Ubuntu 整個裝在一個虛擬硬碟檔（`ext4.vhdx`，在 C 槽）。在 Ubuntu 裡清掉檔案（第 3 步交接後「清掉（建議）」、總覽「清掉這集」、第 5 步結案清暫存），這個檔**不會自己變小**，C 槽的空間要縮小虛擬硬碟才拿得回來。工具在 Windows 上清完會跳視窗提醒這件事。
 
-Windows 上的 Ubuntu 整個裝在一個虛擬硬碟檔（`ext4.vhdx`，在 C 槽）。在 Ubuntu 裡刪了檔案，這個檔**不會自己變小**，C 槽的空間要縮小虛擬硬碟才拿得回來。
+### 一鍵縮小（建議）
 
-先看佔了多少：在工具資料夾跑 `.venv/bin/bookclub disk`（只看、不刪），會列出每支影片的工作區、模型快取、舊版工具、更新前備份各多大，WSL 上最後一行是虛擬硬碟多大、C 槽還剩多少。
+1. **先拿到檔案**（第一次用才要）：在工具左下角「工具設定」按「把『縮小虛擬硬碟』放到桌面」。桌面會多一個「讀書會剪輯工具」資料夾，裡面有「縮小虛擬硬碟」兩個檔（`.cmd` 和 `.ps1`，要放在一起）。更新工具後再按一次，會換成新版。清完東西跳出的提醒視窗裡，桌面還沒有這個檔時也有「放到桌面」可以按。
+2. **確認第 4 步沒有在跑**（跑著的話腳本會停下來，等它跑完再做）。工具改過連接埠（不是 8766）時腳本問不到，會請你自己確認。
+3. 打開桌面「讀書會剪輯工具」資料夾，在「縮小虛擬硬碟」（`.cmd` 那個）上**按右鍵，選「以系統管理員身分執行」**，跳出「是否允許變更」時按「是」。
+4. 視窗會說找到哪個 Ubuntu、虛擬硬碟現在多大、C 槽還剩多少，按 Enter 開始。接下來它會自己做：
+   - 在 Ubuntu 裡整理已刪掉的空間（`fstrim`，不用打密碼）
+   - 虛擬硬碟開著 sparse 設定的話先關掉（原因見下面）
+   - 關掉 Ubuntu（`wsl --shutdown`，讀書會剪輯工具也會一起關掉）
+   - 用系統管理員身分的 diskpart 縮小，最後一定把虛擬硬碟卸下
+5. 做完會寫縮小前後多大、空出多少、C 槽還剩多少。照平常的方式重新打開工具就能繼續用。
+
+縮小失敗時，視窗會留著 diskpart 的原文，請截圖這個視窗，將錯誤訊息通知開發者。虛擬硬碟一樣會卸下，Ubuntu 照常能開。
+
+跑的時候**不要中途關掉縮小的視窗**。萬一關掉了、之後 Ubuntu 打不開，重新開機就好（虛擬硬碟可能還掛著，重新開機會放開）。
+
+腳本會先問工具第 4 步有沒有在跑；工具沒有回應（例如電腦正忙）時看不出來，會請你自己確認：第 4 步有在跑就直接關掉視窗，等它跑完再來。
+
+只想看各項佔多少：在工具資料夾跑 `.venv/bin/bookclub disk`（只看、不刪）。WSL 上最後幾行是虛擬硬碟多大、C 槽還剩多少；虛擬硬碟那一行是整個 Ubuntu（含系統），上面各項只算讀書會剪輯的資料。
+
+### 手動做法（一鍵檔不能用時的備用）
 
 1. 先在 Ubuntu 裡清好：做完的影片在第 5 步按「結案打包…」（存好就清掉那支影片的暫存）。`~/.cache/uv`（安裝工具時的下載暫存）不用特地清：裡面的檔案多數跟工具資料夾的 `.venv/` 是同一份，2026-10-25 在 Windows 測試機實測清掉只少約 0.2GB（`bookclub disk` 顯示的 2.5GB 不是真的多佔的空間）。
+   再在 PowerShell 打 `wsl -u root -- fstrim -av`（整理已刪掉的空間）。
 2. 關掉讀書會剪輯工具，在 PowerShell 打 `wsl --shutdown`。
-3. 縮小，兩種做法擇一：
-   - 新版 WSL：`wsl --manage Ubuntu --set-sparse true`（之後刪檔會自動還空間給 C 槽）。
-   - 系統管理員身分開 PowerShell，打 `diskpart`，再依序打：
-     `select vdisk file="<ext4.vhdx 的完整路徑>"`、`attach vdisk readonly`、`compact vdisk`、`detach vdisk`、`exit`。
-     （`ext4.vhdx` 的路徑通常在 `C:\Users\<你的帳號>\AppData\Local\Packages\<Ubuntu 那個資料夾>\LocalState\`）
+3. 用系統管理員身分開 PowerShell，打 `diskpart`，再依序打：
+   `select vdisk file="<ext4.vhdx 的完整路徑>"`、`attach vdisk readonly`、`compact vdisk`、`detach vdisk`、`exit`。
+   `ext4.vhdx` 通常在 `C:\Users\<你的帳號>\AppData\Local\wsl\{一串英數字}\`（新版 WSL）或 `C:\Users\<你的帳號>\AppData\Local\Packages\<Ubuntu 那個資料夾>\LocalState\`（從 Microsoft Store 裝的）。
 4. 再開 Ubuntu，確認工具還能打開。
 
-`wsl --shrink` 不是每個版本都有，所以主要寫 diskpart 那一套。
+**不建議用 sparse**（`wsl --manage Ubuntu --set-sparse true`，「刪檔自動還空間」）：實測刪檔＋`fstrim`＋`wsl --shutdown` 之後 C 槽空間沒有回來，網路上也有不少人回報同樣的狀況；WSL 2.5.6 起官方因為可能損壞資料，把它放到 `--allow-unsafe` 後面。而且 sparse 開著時 diskpart 的 `compact vdisk` 會失敗，要先 `wsl --manage Ubuntu --set-sparse false` 關掉（一鍵檔會自動做）。`wsl --shrink` 不是每個版本都有，所以用 diskpart。
+

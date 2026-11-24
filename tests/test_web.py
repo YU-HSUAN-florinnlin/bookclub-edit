@@ -675,6 +675,7 @@ def test_error_alert_everywhere_1023():
     web = {f: (WEB / f).read_text(encoding="utf-8") for f in ("app.js", "cards.js", "review.js", "finalcheck.js", "fileio.js", "handoff.js")}
     for f, src in web.items():   # 伺服器回的錯誤訊息不直接用 uiAlert（交接「清掉這集」可以改正的那種例外：一般提醒）
         src = src.replace('uiAlert({ title: "還不能清掉這集", message: e.message })', "")
+        src = src.replace('uiAlert({ title: "還不能放到桌面", message: e.message })', "")   # #290：舊檔被占用，關掉視窗再按就好
         assert not re.search(r"uiAlert\(\{ title: \"[^\"]+\", message: (?:e|err|e2)\.message", src), f
     for f, where in (("fileio.js", "第 5 步・結案打包"), ("fileio.js", "第 5 步・結案清空間"), ("app.js", "第 4 步・開始執行"),
                      ("finalcheck.js", "第 5 步・輸出成品")):

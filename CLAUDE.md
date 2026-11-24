@@ -18,7 +18,7 @@
   - 接力交接：`handoff.py`（交接打包、匯入交接包、設定快照、交接後清理）
   - 第 4 步生成與組裝：`execute.py`（一次跑完）、`tts.py`（老師 AI 聲音）、`nameplan.py`（名字處理計畫）、`students.py`（學員匿名聲線）、`studentgen.py`（學員自己聲音念代號）、`fit.py`（放回時間格）、`pauses.py`（插入停頓）、`assemble.py`（組新聲音軌）、`render.py`（組影片）、`proclog.py`（處理紀錄）、`execcounts.py`（逐類統計）、`timemap.py`（原片↔成品時間）
   - 第 5 步成品檢查：`finalcheck.py`、`finalcards.py`（卡片）、`needs.py`（修改需求紀錄、`bookclub upgrade`）
-  - 環境與共用：`config.py`、`profile.py`（第 0 步設定包）、`doctor.py`（健檢）、`detect.py`、`system_info.py`、`models.py`（模型下載）、`keepawake.py`（防睡眠）、`fileio.py`（選檔、Windows 檔案進出）、`csvfile.py`（Big5／UTF-8 CSV）、`safeview.py`（`bookclub inspect`）、`server.py`（網頁伺服器）、`_cosyvoice_compat.py`（CosyVoice 相容修補）
+  - 環境與共用：`config.py`、`profile.py`（第 0 步設定包）、`doctor.py`（健檢）、`detect.py`、`system_info.py`、`models.py`（模型下載）、`keepawake.py`（防睡眠）、`shrinktool.py`（Windows「縮小虛擬硬碟」放到桌面、清理後提醒）、`fileio.py`（選檔、Windows 檔案進出）、`csvfile.py`（Big5／UTF-8 CSV）、`safeview.py`（`bookclub inspect`）、`server.py`（網頁伺服器）、`_cosyvoice_compat.py`（CosyVoice 相容修補）
   - Swift 小工具（Mac 才用，伺服器啟動時編譯到 `~/.cache/bookclub/`）：`avconcat.swift`（AVFoundation 接片段）、`filepicker.swift`（常駐選檔視窗）
   - `web/`：網頁前端（`app.js`、`cards.js`、`review.js`、`finalcheck.js`、`fileio.js`、`index.html`、`style.css`）
 - `tests/`：每支 `test_*.py` 都能獨立跑；`fake_workdir.py` 建全合成的假工作區；`_testtmp.py` 讓暫存檔集中、跑完自動清；`smoke/` 實際跑模型；`snapshots/`＋`web_harness.js` 是網頁快照測試。
@@ -29,6 +29,7 @@
 - `spikes/`：早期實驗程式，**已列在 `.gitignore`**，只在維護者本機。
 - `third_party/`：CosyVoice 原始碼（`install.sh` 用 git clone 放進來），**已列在 `.gitignore`**，不要改。
 - `.venv/`：主要執行環境（uv 建的 Python 3.11）。`.venv-fw/`：只給 `spikes/nametest` 試 faster-whisper 用的另一個環境，主程式不用。兩者都不進 git。
+- `windows/`：Windows 一鍵檔（`縮小虛擬硬碟.cmd`＋`.ps1`，使用者右鍵以系統管理員身分執行；`.ps1` 要 UTF-8 BOM＋CRLF、`.cmd` 只用 ASCII，`.gitattributes` 設 `-text`）。
 - `install.sh`（安裝／重裝，macOS 與 Linux 共用）、`update-lock.sh`（開發者重產鎖定檔）、`啟動.command`（Mac 雙擊開網頁，用 `zsh -ic` 才讀得到 `~/.zshrc` 的 Groq 金鑰）。
 
 ## 開發環境

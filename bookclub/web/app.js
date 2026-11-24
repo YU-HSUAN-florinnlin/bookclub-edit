@@ -367,7 +367,51 @@ document.getElementById("navToggle").addEventListener("click", () => {
 
 const TOOL_MENU = [
   { route: "step0", label: "初始化設定", hint: "名冊、敏感詞、發音對照表、匿名聲線；設定包匯出匯入" },
+  // #290：只在 Windows（WSL）出現；按了把「縮小虛擬硬碟」複製到桌面「讀書會剪輯工具」資料夾
+  { action: "shrinkDesktop", label: "把『縮小虛擬硬碟』放到桌面", hint: "要把 Ubuntu 清出的空間還給 C 槽時用", wslOnly: true },
 ];
+
+// ---------------------------------------------------------------------------
+// #290 縮小虛擬硬碟（只在 WSL）：放到桌面、清理成功後的提醒
+// ---------------------------------------------------------------------------
+
+let shrinkInfo = null;   // /api/shrink-tool 的回覆；null＝還沒問過或問不到（當作不顯示）
+
+async function shrinkStatus(fresh = false) {
+  if (shrinkInfo && !fresh) return shrinkInfo;
+  try { shrinkInfo = await apiGet("/api/shrink-tool"); } catch (e) { return shrinkInfo; }
+  return shrinkInfo;
+}
+
+async function shrinkPutDesktop() {
+  let r;
+  try { r = await apiPost("/api/shrink-tool/install", {}, { quiet: true }); }
+  catch (e) {
+    // 意外（找不到桌面、寫不進去）跳錯誤視窗；舊檔被占用（縮小的視窗還開著）是自己能改正的，一般提醒視窗（選單沒地方放紅字）
+    if (e && e.data && e.data["意外"]) await uiErrorAlert({ title: "沒有放到桌面", message: e.message, where: "工具設定・放到桌面" });
+    else await uiAlert({ title: "還不能放到桌面", message: e.message });
+    return false;
+  }
+  if (shrinkInfo) shrinkInfo["已放到桌面"] = true;
+  await uiAlert({ title: "放好了", message: r["說明"] || "桌面多了「讀書會剪輯工具」資料夾。", ok: "好" });
+  return true;
+}
+
+// （純函式）清理成功的視窗內容：Windows 上多一段「還給 C 槽」的提醒；桌面還沒有那個檔時多一顆「放到桌面」
+function cleanedAlertOpts(title, message, info) {
+  if (!info || !info["顯示"]) return { kind: "alert", title, message, ok: "好" };
+  const text = `${message}\n${info["提醒"]}`;
+  if (info["已放到桌面"]) return { kind: "alert", title, message: text, ok: "好" };
+  return { kind: "confirm", title, message: `${text}\n桌面還沒有這個檔，可以先按「放到桌面」放一份。`, ok: "放到桌面", cancel: "好" };
+}
+
+// 清掉（交接後、總覽清掉這集、第 5 步結案）成功時用這個取代 uiAlert。
+// 審查 #13：用頁面載入時查到的結果（問 Windows 桌面要叫 powershell.exe，冷啟動要幾秒），沒查過才現在問
+async function cleanedAlert(title, message) {
+  const o = cleanedAlertOpts(title, message, await shrinkStatus());
+  if (o.kind === "alert") return uiAlert({ title: o.title, message: o.message, ok: o.ok });
+  if (await uiConfirm({ title: o.title, message: o.message, ok: o.ok, cancel: o.cancel })) await shrinkPutDesktop();
+}
 
 function toolMenuEls() {
   return { wrap: document.getElementById("toolMenuWrap"), btn: document.getElementById("toolMenuBtn"), menu: document.getElementById("toolMenu") };
@@ -379,8 +423,12 @@ function toolMenuRender() {
   const { menu } = toolMenuEls();
   if (!menu) return;
   const cur = currentRouteId();
-  menu.innerHTML = TOOL_MENU.map((m) => `<a role="menuitem" href="#${esc(m.route)}" class="tool-menu-item${m.route === cur ? " active" : ""}"${m.route === cur ? ' aria-current="page"' : ""}>
-    <span class="tool-menu-label">${esc(m.label)}</span>${m.hint ? `<span class="tool-menu-hint">${esc(m.hint)}</span>` : ""}</a>`).join("");
+  const wsl = !!(shrinkInfo && shrinkInfo["顯示"]);
+  menu.innerHTML = TOOL_MENU.filter((m) => !m.wslOnly || wsl).map((m) => {
+    const inner = `<span class="tool-menu-label">${esc(m.label)}</span>${m.hint ? `<span class="tool-menu-hint">${esc(m.hint)}</span>` : ""}`;
+    if (m.action) return `<button type="button" role="menuitem" class="tool-menu-item" data-action="${esc(m.action)}">${inner}</button>`;
+    return `<a role="menuitem" href="#${esc(m.route)}" class="tool-menu-item${m.route === cur ? " active" : ""}"${m.route === cur ? ' aria-current="page"' : ""}>${inner}</a>`;
+  }).join("");
 }
 
 // 選單用 fixed 定位貼在按鈕上方：步驟列收合後只有 64px 寬，放在裡面會被切掉
@@ -423,8 +471,12 @@ function toolMenuSync() {
     if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); toolMenuShow(true, { focus: true }); }
   });
   menu.addEventListener("click", (e) => {
-    if (e.target.closest && e.target.closest('[role="menuitem"]')) toolMenuShow(false);   // 照連結走 #step0，選單收起
+    const item = e.target.closest && e.target.closest('[role="menuitem"]');
+    if (!item) return;
+    toolMenuShow(false);   // 照連結走 #step0，選單收起
+    if (item.dataset && item.dataset.action === "shrinkDesktop") shrinkPutDesktop();
   });
+  shrinkStatus().then(() => { if (toolMenuOpen()) toolMenuRender(); });   // #290：問一次是不是 Windows，決定選單要不要多一項
   menu.addEventListener("keydown", (e) => {
     const items = [...menu.querySelectorAll('[role="menuitem"]')];
     const i = items.indexOf(document.activeElement);

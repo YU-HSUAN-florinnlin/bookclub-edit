@@ -687,7 +687,8 @@ def _api_paths(kind: str) -> list[str]:
     return sorted(paths)
 
 
-POST_OK = ("/api/close/", "/api/projects/", "/api/profile/import", "/api/copy/cancel", "/api/pick/forget")
+POST_OK = ("/api/close/", "/api/projects/", "/api/profile/import", "/api/copy/cancel", "/api/pick/forget",
+           "/api/shrink-tool/")   # #290：放到 Windows 桌面，不碰工作區
 
 
 def test_closed_every_post_409_every_get_no_500_files_unchanged():

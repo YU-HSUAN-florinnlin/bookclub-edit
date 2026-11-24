@@ -304,11 +304,20 @@ def _backups(home: Path, projects: list[Path]) -> list[Path]:
     return out
 
 
+VHDX_GLOBS = ("Users/*/AppData/Local/Packages/*/LocalState/ext4.vhdx",   # 從 Microsoft Store 裝的舊位置
+              "Users/*/AppData/Local/wsl/*/ext4.vhdx")                    # 新版 WSL（`wsl --install`）的位置（#289）
+
+
 def _vhdx(mnt_c: Path) -> list[Path]:
-    try:
-        return sorted(mnt_c.glob("Users/*/AppData/Local/Packages/*/LocalState/ext4.vhdx"))
-    except OSError:
-        return []
+    """Windows 上 Ubuntu 的虛擬硬碟檔（`ext4.vhdx`），新舊兩種位置都找；同一個檔不重複。"""
+    found: dict[str, Path] = {}
+    for pat in VHDX_GLOBS:
+        try:
+            for p in mnt_c.glob(pat):
+                found.setdefault(str(p), p)
+        except OSError:
+            continue
+    return sorted(found.values())
 
 
 def disk_report(home: Path | None = None, data: Path | None = None, *, wsl: bool | None = None,
@@ -372,7 +381,10 @@ def disk_report(home: Path | None = None, data: Path | None = None, *, wsl: bool
             except OSError:
                 free = ""
             lines.append(f"Windows 虛擬硬碟（ext4.vhdx）  {human(total)}{free}")
-            lines.append("  刪了檔虛擬硬碟不會自己變小，要縮小看 README 附錄「縮小虛擬硬碟」")
+            lines.append("  這是整個 Ubuntu（含系統），上面各項只算讀書會剪輯的資料")
+            lines.append("  刪了檔虛擬硬碟不會自己變小；要把空間還給 C 槽：關掉工具，到桌面「讀書會剪輯工具」資料夾，")
+            lines.append("  在「縮小虛擬硬碟」上按右鍵選「以系統管理員身分執行」"
+                         "（桌面還沒有的話，在左下角「工具設定」按「把『縮小虛擬硬碟』放到桌面」）")
     if len(lines) == 1:
         lines.append("  （沒有找到讀書會剪輯的資料夾）")
     return lines

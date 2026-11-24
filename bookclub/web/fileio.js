@@ -473,6 +473,14 @@ async function closeBoxInit(box) {
       where: cleaning ? "第 5 步・結案清空間" : "第 5 步・結案打包" });
   }
   // 剛清完（這一頁從「正在清…」變成已結案）：整頁重畫成瘦身版（頂端那一句、按鈕灰掉）
-  if (!v.running && clWasRunning && d["狀態"] === "已結案" && typeof render === "function") { clWasRunning = false; render(); return; }
+  if (!v.running && clWasRunning && d["狀態"] === "已結案" && typeof render === "function") {
+    clWasRunning = false;
+    render();
+    // #290（宇軒 10-25）：清完一律彈出成功視窗；Windows 上多一段提醒到桌面「縮小虛擬硬碟」把空間還給 C 槽（cleanedAlert 判斷）
+    const okMsg = `已結案，空出 ${clGB((d["清理"] || {})["省下位元組"])}。`;
+    if (typeof cleanedAlert === "function") cleanedAlert("清好了", okMsg);
+    else uiAlert({ title: "清好了", message: okMsg, ok: "好" });
+    return;
+  }
   clWasRunning = v.running;
 }
